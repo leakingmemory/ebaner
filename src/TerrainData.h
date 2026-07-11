@@ -1,0 +1,55 @@
+#pragma once
+
+#include <glm/glm.hpp>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+// One loaded terrain tile: a 256x256 grid of float32 elevations plus the
+// geometry needed to place it in the world (EPSG:25833, metres).
+struct Tile {
+    int lod = 0;
+    int col = 0;
+    int row = 0;
+    double originX = 0.0;   // world easting of SW corner
+    double originY = 0.0;   // world northing of SW corner
+    double resolution = 0.0; // metres per pixel
+    double extent = 0.0;     // tile size in metres (256 * resolution)
+    std::vector<float> heights; // 256*256, row 0 = north edge
+};
+
+// Loads terrainmapper export tiles around a start location and resolves the
+// camera start point from the railway track geometry.
+class TerrainData {
+public:
+    static constexpr int PIXELS = 256;
+    static constexpr float NODATA = -9999.0f;
+
+    // Loads tiles within `halfWindowMetres` of the Bodo track-1 terminus.
+    // Throws std::runtime_error on fatal problems (missing dataset root).
+    void load(const std::string& datasetRoot, double halfWindowMetres = 20000.0);
+
+    const std::vector<Tile>& tiles() const { return tiles_; }
+
+    // Scene origin (world coords) that all rendered geometry is relative to.
+    glm::dvec3 sceneOrigin() const { return sceneOrigin_; }
+
+    // Camera start, scene-relative (metres). z is terrain/track elevation.
+    glm::vec3 startPos() const { return startPos_; }
+
+    // Horizontal look direction down the line, scene-relative & normalised.
+    glm::vec3 startDir() const { return startDir_; }
+
+private:
+    // Resolves startWorld_/startDir_ by parsing the Bodo tile's tracks.bin.
+    void resolveStartPoint(const std::string& datasetRoot);
+
+    // Reads a single terrain.hm32 into `out`; returns false if unreadable.
+    bool loadHeightmap(const std::string& path, std::vector<float>& out) const;
+
+    std::vector<Tile> tiles_;
+    glm::dvec3 sceneOrigin_{0.0};
+    glm::dvec3 startWorld_{0.0};  // world coords of track-1 terminus
+    glm::vec3 startPos_{0.0f};
+    glm::vec3 startDir_{1.0f, 0.0f, 0.0f};
+};
