@@ -8,6 +8,9 @@ public:
     // Places the camera at `pos` looking along horizontal `dir`.
     void init(const glm::vec3& pos, const glm::vec3& dir);
 
+    // Directly sets position and orientation (radians). For scripted views.
+    void setPose(const glm::vec3& pos, float yawRad, float pitchRad);
+
     // Advances position from held movement keys (dt in seconds).
     void move(float forward, float right, float up, float dt, bool fast);
 

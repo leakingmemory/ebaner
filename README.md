@@ -51,9 +51,23 @@ and triangles were loaded.
 
 See `../terrainmapper/doc/game-export-format.md`. In short: 256×256 little-endian
 `float32` heightmaps (`terrain.hm32`, row 0 = north), EPSG:25833 (UTM 33N) metres,
-tiled across four LOD levels that don't overlap in coverage. World coordinates are
-stored relative to the start point to preserve float precision.
+tiled across four LOD levels. World coordinates are stored relative to the start
+point to preserve float precision.
+
+Note: contrary to the format doc, the LOD levels in this export **fully overlap**
+(the same ground is present at every LOD as a power-of-two quadtree). The renderer
+therefore de-overlaps — it keeps only the finest tile per ground area — and then
+watertight-stitches the resulting seams (edge bridges + corner fills) so there are
+no cracks or T-junctions between differing resolutions (see `src/TerrainMesh.cpp`).
+
+## Debug environment variables
+
+| Variable            | Effect                                                        |
+|---------------------|--------------------------------------------------------------|
+| `EBANER_SCREENSHOT` | Render ~20 frames, write that frame to the given PPM, exit.   |
+| `EBANER_CAM`        | Scripted camera `"x,y,z,yawDeg,pitchDeg"` (scene-relative m). |
+| `EBANER_NOSTITCH`   | Skip the seam-stitching pass (to inspect raw tile seams).     |
 
 ## Not yet implemented
 
-Track/road rendering, LOD-seam crack stitching, and streamed/dynamic tile loading.
+Track/road rendering and streamed/dynamic tile loading.

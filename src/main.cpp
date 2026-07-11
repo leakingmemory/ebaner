@@ -83,6 +83,18 @@ int main(int argc, char** argv) {
     glm::vec3 startPos = data.startPos() + glm::vec3(0.0f, 0.0f, 5.0f);
     g_camera.init(startPos, data.startDir());
 
+    // Optional scripted camera for verification:
+    // EBANER_CAM="x,y,z,yawDeg,pitchDeg" (scene-relative metres).
+    if (const char* cam = std::getenv("EBANER_CAM")) {
+        float x, y, z, yaw, pitch;
+        if (std::sscanf(cam, "%f,%f,%f,%f,%f", &x, &y, &z, &yaw, &pitch) == 5) {
+            g_camera.setPose(glm::vec3(x, y, z), glm::radians(yaw),
+                             glm::radians(pitch));
+            std::printf("[main] scripted camera: pos=(%.1f,%.1f,%.1f) "
+                        "yaw=%.1f pitch=%.1f\n", x, y, z, yaw, pitch);
+        }
+    }
+
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     glfwSetCursorPosCallback(window, cursorCallback);
     glfwSetKeyCallback(window, keyCallback);

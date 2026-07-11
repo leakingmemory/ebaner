@@ -15,6 +15,12 @@ void Camera::init(const glm::vec3& pos, const glm::vec3& dir) {
     pitch_ = glm::radians(-6.0f); // look slightly down the line
 }
 
+void Camera::setPose(const glm::vec3& pos, float yawRad, float pitchRad) {
+    pos_ = pos;
+    yaw_ = yawRad;
+    pitch_ = std::clamp(pitchRad, -kPitchLimit, kPitchLimit);
+}
+
 glm::vec3 Camera::forward() const {
     const float cp = std::cos(pitch_);
     return glm::vec3(cp * std::cos(yaw_), cp * std::sin(yaw_), std::sin(pitch_));
