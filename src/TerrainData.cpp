@@ -1,5 +1,6 @@
 #include "TerrainData.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -67,18 +68,32 @@ void TerrainData::load(const std::string& datasetRoot, double halfWindow) {
 
                 if (!loadHeightmap(dir + "/terrain.hm32", t.heights)) continue;
 
+                // Track the elevation range for the colour ramp.
+                for (float h : t.heights) {
+                    if (h <= NODATA + 1.0f) continue;
+                    minElev_ = std::min(minElev_, h);
+                    maxElev_ = std::max(maxElev_, h);
+                }
+
+                // Optional per-tile land cover (present only for AR50 exports).
+                if (loadLandCover(dir + "/landcover.u8", t.landcover))
+                    hasLandCover_ = true;
+
                 totalSamples += t.heights.size();
                 tiles_.push_back(std::move(t));
             }
         }
     }
+    if (maxElev_ <= minElev_) maxElev_ = minElev_ + 1.0f;
 
     std::printf("[TerrainData] start (world UTM33): x=%.2f y=%.2f z=%.2f\n",
                 startWorld_.x, startWorld_.y, startWorld_.z);
     std::printf("[TerrainData] look dir (scene): x=%.3f y=%.3f\n",
                 startDir_.x, startDir_.y);
-    std::printf("[TerrainData] loaded %zu tiles (%zu samples) within %.0f m\n",
-                tiles_.size(), totalSamples, halfWindow);
+    std::printf("[TerrainData] loaded %zu tiles (%zu samples) within %.0f m; "
+                "elev [%.1f, %.1f]; land cover: %s\n",
+                tiles_.size(), totalSamples, halfWindow, minElev_, maxElev_,
+                hasLandCover_ ? "yes" : "no");
 
     if (tiles_.empty()) {
         throw std::runtime_error("no terrain tiles loaded around start point");
@@ -191,6 +206,21 @@ bool TerrainData::loadHeightmap(const std::string& path,
     f.read(reinterpret_cast<char*>(out.data()),
            static_cast<std::streamsize>(out.size() * sizeof(float)));
     if (f.gcount() != static_cast<std::streamsize>(out.size() * sizeof(float))) {
+        out.clear();
+        return false;
+    }
+    return true;
+}
+
+bool TerrainData::loadLandCover(const std::string& path,
+                                std::vector<std::uint8_t>& out) const {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return false;
+
+    out.resize(static_cast<std::size_t>(PIXELS) * PIXELS);
+    f.read(reinterpret_cast<char*>(out.data()),
+           static_cast<std::streamsize>(out.size()));
+    if (f.gcount() != static_cast<std::streamsize>(out.size())) {
         out.clear();
         return false;
     }

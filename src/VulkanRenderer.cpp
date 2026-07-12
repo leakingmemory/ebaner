@@ -411,10 +411,11 @@ void VulkanRenderer::createGraphicsPipeline() {
     binding.stride = sizeof(Vertex);
     binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    std::array<VkVertexInputAttributeDescription, 3> attrs{};
+    std::array<VkVertexInputAttributeDescription, 4> attrs{};
     attrs[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, pos)};
     attrs[1] = {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)};
     attrs[2] = {2, 0, VK_FORMAT_R32_SFLOAT, offsetof(Vertex, elevation)};
+    attrs[3] = {3, 0, VK_FORMAT_R32_SFLOAT, offsetof(Vertex, landcover)};
 
     VkPipelineVertexInputStateCreateInfo vertexInput{
         VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};

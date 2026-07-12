@@ -149,8 +149,9 @@ int main(int argc, char** argv) {
         const float aspect = static_cast<float>(fbw) / static_cast<float>(fbh);
         PushConstants pc{};
         pc.viewProj = g_camera.projMatrix(aspect) * g_camera.viewMatrix();
-        pc.sunDir = glm::vec4(sunDir, 0.0f);
-        pc.camPos = glm::vec4(g_camera.position(), 0.0f);
+        // .w channels carry the elevation range for the colour ramp.
+        pc.sunDir = glm::vec4(sunDir, data.minElevation());
+        pc.camPos = glm::vec4(g_camera.position(), data.maxElevation());
 
         if (shotPath) {
             if (frame == 20) renderer.requestCapture(shotPath);

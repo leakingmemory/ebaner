@@ -6,8 +6,10 @@ a continuous 3D surface and lets you fly around it. The camera starts at the
 buffer-stop end of the Bodø main track ("track 1 end"), resolved from the
 `tracks.bin` geometry.
 
-This first version renders **terrain only** (hypsometric colouring + hillshade).
-Railway tracks and roads are not drawn yet.
+It renders **terrain only** (railway tracks and roads are not drawn yet), shaded
+with hillshade and coloured by **AR50 land cover** when the export provides it
+(forest, agriculture, open land, bog, glacier, water …), falling back to an
+elevation ramp otherwise.
 
 ## Requirements
 
@@ -53,6 +55,12 @@ See `../terrainmapper/doc/game-export-format.md`. In short: 256×256 little-endi
 `float32` heightmaps (`terrain.hm32`, row 0 = north), EPSG:25833 (UTM 33N) metres,
 tiled across four LOD levels. World coordinates are stored relative to the start
 point to preserve float precision.
+
+Land cover: if a tile has a `landcover.u8` file (256×256 uint8 AR50 `artype`
+codes, same grid as `terrain.hm32`), the terrain is coloured by land type
+(elevation ramp blended 60/40 with a per-class tint, water/glacier overriding).
+This requires exporting terrainmapper **with an AR50 dataset loaded**; plain
+exports omit the file and the viewer falls back to the elevation ramp.
 
 Note: contrary to the format doc, the LOD levels in this export **fully overlap**
 (the same ground is present at every LOD as a power-of-two quadtree). The renderer

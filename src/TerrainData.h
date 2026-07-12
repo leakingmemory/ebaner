@@ -15,7 +15,8 @@ struct Tile {
     double originY = 0.0;   // world northing of SW corner
     double resolution = 0.0; // metres per pixel
     double extent = 0.0;     // tile size in metres (256 * resolution)
-    std::vector<float> heights; // 256*256, row 0 = north edge
+    std::vector<float> heights;      // 256*256, row 0 = north edge
+    std::vector<std::uint8_t> landcover; // 256*256 AR50 artype, empty if absent
 };
 
 // Loads terrainmapper export tiles around a start location and resolves the
@@ -40,6 +41,13 @@ public:
     // Horizontal look direction down the line, scene-relative & normalised.
     glm::vec3 startDir() const { return startDir_; }
 
+    // Elevation range over loaded non-nodata samples (for the colour ramp).
+    float minElevation() const { return minElev_; }
+    float maxElevation() const { return maxElev_; }
+
+    // True if any loaded tile carried land-cover data.
+    bool hasLandCover() const { return hasLandCover_; }
+
 private:
     // Resolves startWorld_/startDir_ by parsing the Bodo tile's tracks.bin.
     void resolveStartPoint(const std::string& datasetRoot);
@@ -47,9 +55,16 @@ private:
     // Reads a single terrain.hm32 into `out`; returns false if unreadable.
     bool loadHeightmap(const std::string& path, std::vector<float>& out) const;
 
+    // Reads a single landcover.u8 into `out`; returns false if unreadable.
+    bool loadLandCover(const std::string& path,
+                       std::vector<std::uint8_t>& out) const;
+
     std::vector<Tile> tiles_;
     glm::dvec3 sceneOrigin_{0.0};
     glm::dvec3 startWorld_{0.0};  // world coords of track-1 terminus
     glm::vec3 startPos_{0.0f};
     glm::vec3 startDir_{1.0f, 0.0f, 0.0f};
+    float minElev_ = 0.0f;
+    float maxElev_ = 1.0f;
+    bool hasLandCover_ = false;
 };

@@ -37,6 +37,10 @@ void TerrainMesh::build(const TerrainData& data) {
     auto heightOf = [&](const Tile* t, int r, int c) -> float {
         return t->heights[static_cast<std::size_t>(r) * P + c];
     };
+    auto lcOf = [&](const Tile* t, int r, int c) -> float {
+        if (t->landcover.empty()) return 0.0f;
+        return static_cast<float>(t->landcover[static_cast<std::size_t>(r) * P + c]);
+    };
     // Finest loaded tile covering a world point (LODs form an overlapping pyramid).
     auto ownerAt = [&](double wx, double wy) -> const Tile* {
         for (int lod = 0; lod < 4; ++lod) {
@@ -87,13 +91,15 @@ void TerrainMesh::build(const TerrainData& data) {
     auto worldY = [&](const Tile* t, int row) {
         return t->originY + t->extent - (row + 0.5) * t->resolution;
     };
-    auto emit = [&](double wx, double wy, float z, glm::vec3 n) -> std::uint32_t {
+    auto emit = [&](double wx, double wy, float z, glm::vec3 n,
+                    float lc) -> std::uint32_t {
         Vertex v;
         v.pos = glm::vec3(static_cast<float>(wx - origin.x),
                           static_cast<float>(wy - origin.y),
                           static_cast<float>(z - origin.z));
         v.normal = n;
         v.elevation = z;
+        v.landcover = lc;
         const std::uint32_t idx = static_cast<std::uint32_t>(vertices_.size());
         vertices_.push_back(v);
         return idx;
@@ -107,7 +113,7 @@ void TerrainMesh::build(const TerrainData& data) {
         for (int row = 0; row < P; ++row)
             for (int col = 0; col < P; ++col)
                 emit(worldX(a, col), worldY(a, row), heightOf(a, row, col),
-                     tileNormal(a, row, col));
+                     tileNormal(a, row, col), lcOf(a, row, col));
 
         for (int row = 0; row < P - 1; ++row) {
             for (int col = 0; col < P - 1; ++col) {
@@ -188,7 +194,7 @@ void TerrainMesh::build(const TerrainData& data) {
                 // Outer bridge vertex: a point on B's border edge adjacent to A.
                 const double bres = b->resolution;
                 double ox, oy;
-                float oz;
+                float oz, olc;
                 glm::vec3 on;
                 bool ok = true;
                 if (edge == 1 || edge == 3) { // vertical border, vary along y
@@ -209,6 +215,7 @@ void TerrainMesh::build(const TerrainData& data) {
                     ox = b->originX + (cB + 0.5) * bres;
                     oy = t;
                     on = tileNormal(b, r0c, cB);
+                    olc = lcOf(b, r0c, cB);
                 } else { // horizontal border, vary along x
                     const double Yb =
                         (edge == 0) ? a->originY + a->extent : a->originY;
@@ -228,10 +235,11 @@ void TerrainMesh::build(const TerrainData& data) {
                     ox = t;
                     oy = b->originY + b->extent - (rB + 0.5) * bres;
                     on = tileNormal(b, rB, c0c);
+                    olc = lcOf(b, rB, c0c);
                 }
                 if (!ok) continue;
 
-                outIdx[i] = static_cast<long>(emit(ox, oy, oz, on));
+                outIdx[i] = static_cast<long>(emit(ox, oy, oz, on, olc));
                 nb[i] = b;
             }
 
@@ -293,8 +301,17 @@ void TerrainMesh::build(const TerrainData& data) {
                     const double py = cy + off[k][1] * res;
                     float z;
                     glm::vec3 n;
-                    if (sampleAt(q[k], px, py, z, n))
-                        idx[k] = static_cast<long>(emit(px, py, z, n));
+                    if (sampleAt(q[k], px, py, z, n)) {
+                        const int lcC = std::clamp(
+                            static_cast<int>(std::floor((px - q[k]->originX) / res)),
+                            0, P - 1);
+                        const int lcR = std::clamp(
+                            static_cast<int>(std::floor(
+                                (q[k]->originY + q[k]->extent - py) / res)),
+                            0, P - 1);
+                        idx[k] = static_cast<long>(
+                            emit(px, py, z, n, lcOf(q[k], lcR, lcC)));
+                    }
                 }
                 // Fan around the corner (CCW: SW,SE,NE,NW), skipping missing ones.
                 auto tri = [&](int i, int j, int k) {

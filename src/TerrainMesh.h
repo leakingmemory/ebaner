@@ -11,6 +11,7 @@ struct Vertex {
     glm::vec3 pos;      // scene-origin-relative metres (z up)
     glm::vec3 normal;
     float elevation;    // metres above sea level
+    float landcover;    // AR50 artype code (0 = none)
 };
 
 // Builds a single indexed triangle mesh from all loaded tiles.
