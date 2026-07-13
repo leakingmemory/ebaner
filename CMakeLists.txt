@@ -55,6 +55,7 @@ add_executable(ebaner
     src/TerrainData.cpp
     src/TerrainMesh.cpp
     src/Camera.cpp
+    src/Textures.cpp
     src/VulkanRenderer.cpp)
 
 add_dependencies(ebaner shaders)

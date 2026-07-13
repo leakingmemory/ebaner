@@ -57,10 +57,13 @@ tiled across four LOD levels. World coordinates are stored relative to the start
 point to preserve float precision.
 
 Land cover: if a tile has a `landcover.u8` file (256×256 uint8 AR50 `artype`
-codes, same grid as `terrain.hm32`), the terrain is coloured by land type
-(elevation ramp blended 60/40 with a per-class tint, water/glacier overriding).
-This requires exporting terrainmapper **with an AR50 dataset loaded**; plain
-exports omit the file and the viewer falls back to the elevation ramp.
+codes, same grid as `terrain.hm32`), the terrain is **textured by land type** —
+procedurally generated per-class surfaces (forest, agriculture, open land, bog,
+glacier, freshwater, ocean, built-up) uploaded as a Vulkan texture array and
+sampled in world space (`src/Textures.cpp`, `shaders/terrain.frag`). Pixels with
+no class (artype 0) fall back to the elevation ramp. This requires exporting
+terrainmapper **with an AR50 dataset loaded**; plain exports omit the file and the
+whole surface uses the elevation ramp.
 
 Note: contrary to the format doc, the LOD levels in this export **fully overlap**
 (the same ground is present at every LOD as a power-of-two quadtree). The renderer

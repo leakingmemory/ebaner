@@ -17,11 +17,20 @@ struct PushConstants {
     glm::vec4 camPos;  // xyz = scene-relative camera position
 };
 
+// Land-cover texture array to upload (RGBA8, layer-major).
+struct LandTextureData {
+    const std::uint8_t* pixels = nullptr;
+    std::uint32_t size = 0;    // per-layer width == height
+    std::uint32_t layers = 0;
+    std::size_t byteSize = 0;  // layers * size * size * 4
+};
+
 // Minimal single-pipeline Vulkan renderer for the terrain mesh.
 class VulkanRenderer {
 public:
     void init(GLFWwindow* window, const std::vector<Vertex>& vertices,
-              const std::vector<std::uint32_t>& indices);
+              const std::vector<std::uint32_t>& indices,
+              const LandTextureData& textures);
     void drawFrame(const PushConstants& pc);
     void waitIdle();
     void cleanup();
@@ -44,8 +53,11 @@ private:
     void createRenderPass();
     void createDepthResources();
     void createFramebuffers();
+    void createDescriptorSetLayout();
     void createGraphicsPipeline();
     void createCommandPool();
+    void createTextureArray(const LandTextureData& textures);
+    void createDescriptorSet();
     void createMeshBuffers(const std::vector<Vertex>& vertices,
                            const std::vector<std::uint32_t>& indices);
     void createCommandBuffers();
@@ -70,6 +82,8 @@ private:
                                 VkImageAspectFlags aspect) const;
     VkFormat findDepthFormat() const;
     VkShaderModule createShaderModule(const std::vector<char>& code) const;
+    VkCommandBuffer beginSingleTime() const;
+    void endSingleTime(VkCommandBuffer cmd) const;
 
     GLFWwindow* window_ = nullptr;
 
@@ -97,6 +111,17 @@ private:
 
     VkRenderPass renderPass_ = VK_NULL_HANDLE;
     std::vector<VkFramebuffer> framebuffers_;
+
+    VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
+    VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;
+    VkDescriptorSet descriptorSet_ = VK_NULL_HANDLE;
+
+    // Land-cover texture array.
+    VkImage landImage_ = VK_NULL_HANDLE;
+    VkDeviceMemory landMemory_ = VK_NULL_HANDLE;
+    VkImageView landView_ = VK_NULL_HANDLE;
+    VkSampler landSampler_ = VK_NULL_HANDLE;
+    uint32_t landMipLevels_ = 1;
 
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;

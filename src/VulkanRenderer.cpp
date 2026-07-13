@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -71,7 +72,8 @@ VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
 
 void VulkanRenderer::init(GLFWwindow* window,
                           const std::vector<Vertex>& vertices,
-                          const std::vector<std::uint32_t>& indices) {
+                          const std::vector<std::uint32_t>& indices,
+                          const LandTextureData& textures) {
     window_ = window;
     validationEnabled_ = validationLayersSupported();
 
@@ -85,8 +87,11 @@ void VulkanRenderer::init(GLFWwindow* window,
     createRenderPass();
     createDepthResources();
     createFramebuffers();
+    createDescriptorSetLayout();
     createGraphicsPipeline();
     createCommandPool();
+    createTextureArray(textures);
+    createDescriptorSet();
     createMeshBuffers(vertices, indices);
     createCommandBuffers();
     createSyncObjects();
@@ -204,7 +209,8 @@ void VulkanRenderer::createLogicalDevice() {
     }
 
     VkPhysicalDeviceFeatures features{};
-    features.fillModeNonSolid = VK_TRUE; // harmless; allows wireframe if desired
+    features.fillModeNonSolid = VK_TRUE;  // harmless; allows wireframe if desired
+    features.samplerAnisotropy = VK_TRUE; // anisotropic terrain-texture filtering
 
     VkDeviceCreateInfo ci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     ci.queueCreateInfoCount = static_cast<uint32_t>(queueInfos.size());
@@ -472,6 +478,8 @@ void VulkanRenderer::createGraphicsPipeline() {
     pcr.size = sizeof(PushConstants);
 
     VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    pl.setLayoutCount = 1;
+    pl.pSetLayouts = &descriptorSetLayout_;
     pl.pushConstantRangeCount = 1;
     pl.pPushConstantRanges = &pcr;
     check(vkCreatePipelineLayout(device_, &pl, nullptr, &pipelineLayout_),
@@ -506,6 +514,217 @@ void VulkanRenderer::createCommandPool() {
     ci.queueFamilyIndex = graphicsFamily_;
     check(vkCreateCommandPool(device_, &ci, nullptr, &commandPool_),
           "vkCreateCommandPool");
+}
+
+void VulkanRenderer::createDescriptorSetLayout() {
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding = 0;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutCreateInfo ci{
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    ci.bindingCount = 1;
+    ci.pBindings = &binding;
+    check(vkCreateDescriptorSetLayout(device_, &ci, nullptr, &descriptorSetLayout_),
+          "vkCreateDescriptorSetLayout");
+}
+
+VkCommandBuffer VulkanRenderer::beginSingleTime() const {
+    VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    ai.commandPool = commandPool_;
+    ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    ai.commandBufferCount = 1;
+    VkCommandBuffer cmd;
+    vkAllocateCommandBuffers(device_, &ai, &cmd);
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &bi);
+    return cmd;
+}
+
+void VulkanRenderer::endSingleTime(VkCommandBuffer cmd) const {
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    vkQueueSubmit(graphicsQueue_, 1, &submit, VK_NULL_HANDLE);
+    vkQueueWaitIdle(graphicsQueue_);
+    vkFreeCommandBuffers(device_, commandPool_, 1, &cmd);
+}
+
+void VulkanRenderer::createTextureArray(const LandTextureData& t) {
+    const uint32_t S = t.size;
+    const uint32_t L = t.layers;
+    landMipLevels_ = static_cast<uint32_t>(std::floor(std::log2(S))) + 1;
+    const VkDeviceSize bytes = static_cast<VkDeviceSize>(t.byteSize);
+
+    // Staging buffer with all layers (layer-major RGBA8).
+    VkBuffer staging;
+    VkDeviceMemory stagingMem;
+    createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                     VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                 staging, stagingMem);
+    void* mapped;
+    vkMapMemory(device_, stagingMem, 0, bytes, 0, &mapped);
+    std::memcpy(mapped, t.pixels, static_cast<std::size_t>(bytes));
+    vkUnmapMemory(device_, stagingMem);
+
+    // Array image with a full mip chain.
+    VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    ici.imageType = VK_IMAGE_TYPE_2D;
+    ici.extent = {S, S, 1};
+    ici.mipLevels = landMipLevels_;
+    ici.arrayLayers = L;
+    ici.format = VK_FORMAT_R8G8B8A8_UNORM;
+    ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    ici.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                VK_IMAGE_USAGE_SAMPLED_BIT;
+    ici.samples = VK_SAMPLE_COUNT_1_BIT;
+    ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    check(vkCreateImage(device_, &ici, nullptr, &landImage_), "vkCreateImage(land)");
+
+    VkMemoryRequirements req;
+    vkGetImageMemoryRequirements(device_, landImage_, &req);
+    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    mai.allocationSize = req.size;
+    mai.memoryTypeIndex =
+        findMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    check(vkAllocateMemory(device_, &mai, nullptr, &landMemory_), "alloc(land)");
+    vkBindImageMemory(device_, landImage_, landMemory_, 0);
+
+    // Upload mip 0 (all layers) then generate the rest by successive blits.
+    VkCommandBuffer cmd = beginSingleTime();
+
+    VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    barrier.image = landImage_;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = L;
+
+    // All mips: UNDEFINED -> TRANSFER_DST.
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = landMipLevels_;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.srcAccessMask = 0;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr,
+                         1, &barrier);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, L};
+    region.imageExtent = {S, S, 1};
+    vkCmdCopyBufferToImage(cmd, staging, landImage_,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+    barrier.subresourceRange.levelCount = 1;
+    int32_t mipW = static_cast<int32_t>(S), mipH = static_cast<int32_t>(S);
+    for (uint32_t i = 1; i < landMipLevels_; ++i) {
+        // Source mip i-1: TRANSFER_DST -> TRANSFER_SRC.
+        barrier.subresourceRange.baseMipLevel = i - 1;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                             nullptr, 1, &barrier);
+
+        VkImageBlit blit{};
+        blit.srcOffsets[1] = {mipW, mipH, 1};
+        blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i - 1, 0, L};
+        blit.dstOffsets[1] = {mipW > 1 ? mipW / 2 : 1, mipH > 1 ? mipH / 2 : 1, 1};
+        blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i, 0, L};
+        vkCmdBlitImage(cmd, landImage_, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                       landImage_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
+                       VK_FILTER_LINEAR);
+
+        // Source mip i-1 done: -> SHADER_READ_ONLY.
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr,
+                             0, nullptr, 1, &barrier);
+
+        if (mipW > 1) mipW /= 2;
+        if (mipH > 1) mipH /= 2;
+    }
+
+    // Last mip: TRANSFER_DST -> SHADER_READ_ONLY.
+    barrier.subresourceRange.baseMipLevel = landMipLevels_ - 1;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0,
+                         nullptr, 1, &barrier);
+
+    endSingleTime(cmd);
+    vkDestroyBuffer(device_, staging, nullptr);
+    vkFreeMemory(device_, stagingMem, nullptr);
+
+    // Array image view.
+    VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vi.image = landImage_;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+    vi.format = VK_FORMAT_R8G8B8A8_UNORM;
+    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, landMipLevels_, 0, L};
+    check(vkCreateImageView(device_, &vi, nullptr, &landView_), "landView");
+
+    // Sampler (repeat, trilinear, anisotropic).
+    VkPhysicalDeviceProperties props;
+    vkGetPhysicalDeviceProperties(physicalDevice_, &props);
+    VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    sci.magFilter = VK_FILTER_LINEAR;
+    sci.minFilter = VK_FILTER_LINEAR;
+    sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sci.anisotropyEnable = VK_TRUE;
+    sci.maxAnisotropy = props.limits.maxSamplerAnisotropy;
+    sci.minLod = 0.0f;
+    sci.maxLod = static_cast<float>(landMipLevels_);
+    check(vkCreateSampler(device_, &sci, nullptr, &landSampler_), "landSampler");
+}
+
+void VulkanRenderer::createDescriptorSet() {
+    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+    VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    pci.poolSizeCount = 1;
+    pci.pPoolSizes = &poolSize;
+    pci.maxSets = 1;
+    check(vkCreateDescriptorPool(device_, &pci, nullptr, &descriptorPool_),
+          "descriptorPool");
+
+    VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    ai.descriptorPool = descriptorPool_;
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts = &descriptorSetLayout_;
+    check(vkAllocateDescriptorSets(device_, &ai, &descriptorSet_),
+          "allocDescriptorSet");
+
+    VkDescriptorImageInfo img{};
+    img.sampler = landSampler_;
+    img.imageView = landView_;
+    img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w.dstSet = descriptorSet_;
+    w.dstBinding = 0;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w.descriptorCount = 1;
+    w.pImageInfo = &img;
+    vkUpdateDescriptorSets(device_, 1, &w, 0, nullptr);
 }
 
 void VulkanRenderer::createMeshBuffers(const std::vector<Vertex>& vertices,
@@ -584,6 +803,8 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageInde
 
     vkCmdBeginRenderPass(cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_,
+                            0, 1, &descriptorSet_, 0, nullptr);
 
     VkViewport viewport{};
     viewport.width = static_cast<float>(swapchainExtent_.width);
@@ -800,6 +1021,13 @@ void VulkanRenderer::cleanup() {
     vkFreeMemory(device_, indexMemory_, nullptr);
     vkDestroyBuffer(device_, vertexBuffer_, nullptr);
     vkFreeMemory(device_, vertexMemory_, nullptr);
+
+    vkDestroySampler(device_, landSampler_, nullptr);
+    vkDestroyImageView(device_, landView_, nullptr);
+    vkDestroyImage(device_, landImage_, nullptr);
+    vkFreeMemory(device_, landMemory_, nullptr);
+    vkDestroyDescriptorPool(device_, descriptorPool_, nullptr);
+    vkDestroyDescriptorSetLayout(device_, descriptorSetLayout_, nullptr);
 
     for (VkSemaphore s : renderFinished_) vkDestroySemaphore(device_, s, nullptr);
     for (VkSemaphore s : imageAvailable_) vkDestroySemaphore(device_, s, nullptr);

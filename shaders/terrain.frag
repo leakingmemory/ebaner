@@ -5,6 +5,8 @@ layout(location = 1) in float vElevation;
 layout(location = 2) in vec3 vWorldPos;
 layout(location = 3) flat in int vLandcover;
 
+layout(set = 0, binding = 0) uniform sampler2DArray uLand;
+
 layout(push_constant) uniform PushConstants {
     mat4 viewProj;
     vec4 sunDir;   // xyz = direction TO sun (normalised); w = min elevation
@@ -13,55 +15,39 @@ layout(push_constant) uniform PushConstants {
 
 layout(location = 0) out vec4 outColor;
 
-// AR50 land-cover tint (matches terrainmapper's palette).
-vec3 landCoverColor(int a) {
-    if (a == 10) return vec3(160.0, 160.0, 160.0) / 255.0; // built-up
-    if (a == 20) return vec3(240.0, 220.0, 130.0) / 255.0; // agriculture
-    if (a == 30) return vec3( 34.0, 139.0,  34.0) / 255.0; // forest
-    if (a == 50) return vec3(194.0, 178.0, 128.0) / 255.0; // open land
-    if (a == 60) return vec3(107.0, 142.0,  35.0) / 255.0; // bog
-    if (a == 70) return vec3(220.0, 240.0, 255.0) / 255.0; // glacier
-    if (a == 80) return vec3( 65.0, 105.0, 225.0) / 255.0; // freshwater
-    if (a == 81) return vec3( 30.0,  60.0, 150.0) / 255.0; // sea
-    return vec3(0.5);
+// AR50 artype -> texture-array layer (must match Textures.h landtex::Layer).
+int layerForArtype(int a) {
+    if (a == 10) return 1; // built-up
+    if (a == 20) return 2; // agriculture
+    if (a == 30) return 3; // forest
+    if (a == 50) return 4; // open land
+    if (a == 60) return 5; // bog
+    if (a == 70) return 6; // glacier
+    if (a == 81) return 7; // freshwater
+    if (a == 82) return 8; // ocean
+    return 0;              // unclassified / not mapped
 }
 
-// Elevation ramp normalised to [0,1] (terrainmapper's stops).
+// Elevation ramp (used where there is no land-cover class).
 vec3 elevRamp(float t) {
     const int N = 8;
     float pos[N] = float[](0.00, 0.15, 0.30, 0.45, 0.55, 0.70, 0.85, 1.00);
     vec3  col[N] = vec3[](
-        vec3(  1.0,  97.0,  69.0) / 255.0,  // dark green — lowland
-        vec3( 46.0, 153.0,  79.0) / 255.0,  // green
-        vec3(121.0, 200.0,  87.0) / 255.0,  // light green
-        vec3(233.0, 230.0, 110.0) / 255.0,  // yellow
-        vec3(205.0, 163.0,  69.0) / 255.0,  // tan
-        vec3(157.0, 110.0,  68.0) / 255.0,  // brown
-        vec3(185.0, 176.0, 172.0) / 255.0,  // grey — alpine
-        vec3(255.0, 255.0, 255.0) / 255.0); // white — peaks
+        vec3(  1.0,  97.0,  69.0) / 255.0,
+        vec3( 46.0, 153.0,  79.0) / 255.0,
+        vec3(121.0, 200.0,  87.0) / 255.0,
+        vec3(233.0, 230.0, 110.0) / 255.0,
+        vec3(205.0, 163.0,  69.0) / 255.0,
+        vec3(157.0, 110.0,  68.0) / 255.0,
+        vec3(185.0, 176.0, 172.0) / 255.0,
+        vec3(255.0, 255.0, 255.0) / 255.0);
     if (t <= pos[0]) return col[0];
-    for (int i = 1; i < N; ++i) {
+    for (int i = 1; i < N; ++i)
         if (t <= pos[i]) {
             float f = (t - pos[i-1]) / (pos[i] - pos[i-1]);
             return mix(col[i-1], col[i], f);
         }
-    }
     return col[N-1];
-}
-
-// Base terrain colour from elevation + land cover (mirrors terrainmapper).
-vec3 baseColor(float elev, int a, float mn, float mx) {
-    // Water / glacier override elevation entirely.
-    if (a == 80) return vec3( 65.0, 105.0, 225.0) / 255.0;
-    if (a == 81) return vec3( 30.0,  60.0, 150.0) / 255.0;
-    if (a == 70) return vec3(220.0, 240.0, 255.0) / 255.0;
-    // Below sea level → dark teal.
-    if (elev <= 0.0) return vec3(0.0, 80.0, 80.0) / 255.0;
-
-    float t = clamp((elev - mn) / max(mx - mn, 1.0), 0.0, 1.0);
-    vec3 ec = elevRamp(t);
-    if (a == 0) return ec;                       // no land cover → pure ramp
-    return mix(ec, landCoverColor(a), 0.4);      // 60% elevation, 40% land cover
 }
 
 void main() {
@@ -71,7 +57,20 @@ void main() {
     float ambient = 0.35;
     float shade = ambient + (1.0 - ambient) * diff;
 
-    vec3 base = baseColor(vElevation, vLandcover, pc.sunDir.w, pc.camPos.w);
+    vec3 base;
+    if (vLandcover == 0) {
+        // No land-cover data: colour by elevation.
+        float t = clamp((vElevation - pc.sunDir.w) /
+                        max(pc.camPos.w - pc.sunDir.w, 1.0), 0.0, 1.0);
+        base = elevRamp(t);
+    } else {
+        // Textured land class; mix two scales to break up obvious tiling.
+        float layer = float(layerForArtype(vLandcover));
+        vec3 t1 = texture(uLand, vec3(vWorldPos.xy / 48.0, layer)).rgb;
+        vec3 t2 = texture(uLand, vec3(vWorldPos.xy / 197.0, layer)).rgb;
+        base = mix(t1, t2, 0.35);
+    }
+
     vec3 color = base * shade;
 
     // Distance haze toward the horizon for depth cueing.

@@ -1,6 +1,7 @@
 #include "Camera.h"
 #include "TerrainData.h"
 #include "TerrainMesh.h"
+#include "Textures.h"
 #include "VulkanRenderer.h"
 
 #define GLFW_INCLUDE_VULKAN
@@ -9,10 +10,12 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -100,11 +103,19 @@ int main(int argc, char** argv) {
     glfwSetKeyCallback(window, keyCallback);
     glfwSetFramebufferSizeCallback(window, resizeCallback);
 
+    // --- Land-cover textures ---
+    std::vector<std::uint8_t> texPixels = landtex::generate();
+    LandTextureData texData;
+    texData.pixels = texPixels.data();
+    texData.size = landtex::SIZE;
+    texData.layers = landtex::LAYERS;
+    texData.byteSize = texPixels.size();
+
     // --- Renderer ---
     VulkanRenderer renderer;
     g_renderer = &renderer;
     try {
-        renderer.init(window, mesh.vertices(), mesh.indices());
+        renderer.init(window, mesh.vertices(), mesh.indices(), texData);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "Vulkan init failed: %s\n", e.what());
         glfwDestroyWindow(window);
