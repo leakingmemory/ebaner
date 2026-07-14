@@ -79,9 +79,10 @@ void TerrainData::load(const std::string& datasetRoot, double halfWindow) {
                 if (loadLandCover(dir + "/landcover.u8", t.landcover))
                     hasLandCover_ = true;
 
-                // Railway track + road segments intersecting this tile.
+                // Railway track + road + building geometry intersecting this tile.
                 parseTracksBin(dir + "/tracks.bin", t.tracks);
                 parseRoadsBin(dir + "/roads.bin", t.roads);
+                parseBuildingsBin(dir + "/buildings.bin", t.buildings);
 
                 totalSamples += t.heights.size();
                 tiles_.push_back(std::move(t));
@@ -252,6 +253,65 @@ bool TerrainData::parseRoadsBin(const std::string& path,
         }
         if (!ok) break;
         if (seg.pts.size() >= 2) out.push_back(std::move(seg));
+    }
+    return !out.empty();
+}
+
+bool TerrainData::parseBuildingsBin(const std::string& path,
+                                    std::vector<BuildingSegment>& out) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return false;
+
+    std::vector<char> buf((std::istreambuf_iterator<char>(f)),
+                          std::istreambuf_iterator<char>());
+    const char* p = buf.data();
+    const char* end = p + buf.size();
+
+    auto readU32 = [&](std::uint32_t& v) -> bool {
+        if (p + 4 > end) return false;
+        std::memcpy(&v, p, 4);
+        p += 4;
+        return true;
+    };
+    auto readF32 = [&](float& v) -> bool {
+        if (p + 4 > end) return false;
+        std::memcpy(&v, p, 4);
+        p += 4;
+        return true;
+    };
+
+    std::uint32_t numBuildings = 0;
+    if (!readU32(numBuildings)) return false;
+
+    for (std::uint32_t s = 0; s < numBuildings; ++s) {
+        if (p + 16 > end) break; // kind + reserved + baseZ + height + numVertices
+        const std::uint8_t kind = static_cast<std::uint8_t>(p[0]);
+        float baseZ = 0.0f, height = 0.0f;
+        std::uint32_t numVertices = 0;
+        std::memcpy(&baseZ, p + 4, 4);
+        std::memcpy(&height, p + 8, 4);
+        std::memcpy(&numVertices, p + 12, 4);
+        p += 16;
+
+        // Sanity: each footprint vertex is 8 bytes (x,y). Reject an implausible
+        // count before reserving.
+        if (static_cast<std::size_t>(numVertices) * 8u >
+            static_cast<std::size_t>(end - p))
+            break;
+
+        BuildingSegment b;
+        b.kind = kind;
+        b.baseZ = baseZ;
+        b.height = height;
+        b.footprint.reserve(numVertices);
+        bool ok = true;
+        for (std::uint32_t v = 0; v < numVertices; ++v) {
+            float x, y;
+            if (!readF32(x) || !readF32(y)) { ok = false; break; }
+            b.footprint.emplace_back(x, y);
+        }
+        if (!ok) break;
+        if (b.footprint.size() >= 3) out.push_back(std::move(b));
     }
     return !out.empty();
 }

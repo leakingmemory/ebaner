@@ -24,6 +24,16 @@ struct RoadSegment {
     std::vector<glm::dvec3> pts;
 };
 
+// One OSM building: an exterior-ring footprint (world coords, EPSG:25833) with a
+// ground base elevation and extrusion height. Buildings carry no id, so a
+// footprint straddling tile boundaries must be deduplicated by geometry.
+struct BuildingSegment {
+    std::uint8_t kind = 0; // 0=other,1=residential,2=commercial,3=industrial
+    float baseZ = 0.0f;    // ground elevation (m)
+    float height = 0.0f;   // extrusion height (m)
+    std::vector<glm::dvec2> footprint; // exterior ring, not closed
+};
+
 // One loaded terrain tile: a 256x256 grid of float32 elevations plus the
 // geometry needed to place it in the world (EPSG:25833, metres).
 struct Tile {
@@ -38,6 +48,7 @@ struct Tile {
     std::vector<std::uint8_t> landcover; // 256*256 AR50 artype, empty if absent
     std::vector<TrackSegment> tracks;    // railway segments intersecting this tile
     std::vector<RoadSegment> roads;      // road segments intersecting this tile
+    std::vector<BuildingSegment> buildings; // buildings intersecting this tile
 };
 
 // Loads terrainmapper export tiles around a start location and resolves the
@@ -87,6 +98,10 @@ private:
     // Parses a roads.bin into `out` (world coords); false if unreadable/empty.
     static bool parseRoadsBin(const std::string& path,
                               std::vector<RoadSegment>& out);
+
+    // Parses a buildings.bin into `out` (world coords); false if unreadable/empty.
+    static bool parseBuildingsBin(const std::string& path,
+                                  std::vector<BuildingSegment>& out);
 
     std::vector<Tile> tiles_;
     glm::dvec3 sceneOrigin_{0.0};

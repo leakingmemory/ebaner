@@ -1,5 +1,6 @@
 #include "Camera.h"
 #include "TerrainData.h"
+#include "BuildingMesh.h"
 #include "RoadMesh.h"
 #include "TerrainMesh.h"
 #include "Textures.h"
@@ -64,11 +65,13 @@ int main(int argc, char** argv) {
     TerrainMesh mesh;
     TrackMesh tracks;
     RoadMesh roads;
+    BuildingMesh buildings;
     try {
         data.load(datasetRoot);
         mesh.build(data);
         tracks.build(data);
         roads.build(data);
+        buildings.build(data);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "Failed to load terrain: %s\n", e.what());
         return EXIT_FAILURE;
@@ -124,7 +127,8 @@ int main(int argc, char** argv) {
         renderer.init(window, mesh.vertices(), mesh.indices(), texData,
                       tracks.vertices(), tracks.indices(),
                       tracks.alwaysIndexCount(), tracks.sleeperChunks(),
-                      roads.vertices(), roads.indices());
+                      roads.vertices(), roads.indices(),
+                      buildings.vertices(), buildings.indices());
     } catch (const std::exception& e) {
         std::fprintf(stderr, "Vulkan init failed: %s\n", e.what());
         glfwDestroyWindow(window);
