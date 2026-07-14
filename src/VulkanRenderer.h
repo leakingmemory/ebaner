@@ -3,13 +3,14 @@
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
 
+#include "TrackMesh.h" // TrackVertex, TrackDrawChunk
+
 #include <cstdint>
 #include <string>
 #include <vector>
 
 struct GLFWwindow;
 struct Vertex;
-struct TrackVertex;
 
 // Push-constant block shared with the terrain shaders (must match GLSL layout).
 struct PushConstants {
@@ -33,7 +34,9 @@ public:
               const std::vector<std::uint32_t>& indices,
               const LandTextureData& textures,
               const std::vector<TrackVertex>& trackVertices,
-              const std::vector<std::uint32_t>& trackIndices);
+              const std::vector<std::uint32_t>& trackIndices,
+              std::uint32_t trackAlwaysIndexCount,
+              const std::vector<TrackDrawChunk>& sleeperChunks);
     void drawFrame(const PushConstants& pc);
     void waitIdle();
     void cleanup();
@@ -147,6 +150,8 @@ private:
     VkBuffer trackIndexBuffer_ = VK_NULL_HANDLE;
     VkDeviceMemory trackIndexMemory_ = VK_NULL_HANDLE;
     uint32_t trackIndexCount_ = 0;
+    uint32_t trackAlwaysIndexCount_ = 0;       // ballast + rails, drawn always
+    std::vector<TrackDrawChunk> sleeperChunks_; // distance-culled sleeper runs
 
     std::vector<VkSemaphore> imageAvailable_;
     std::vector<VkSemaphore> renderFinished_;

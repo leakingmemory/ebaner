@@ -166,6 +166,30 @@ std::vector<std::uint8_t> generate() {
             putPixel(buf, OCEAN, x, y, {0.09f + d, 0.24f + d, 0.42f + d});
         }
 
+    // BALLAST — crushed-stone grey. Sampled with u (x) across the bed (0..1) and
+    // v (y) as distance along the track in sleeper-pitch units. Two variants,
+    // sharing the same gravel base so they cross-fade cleanly with distance:
+    //   BALLAST      — plain (used near the camera, where 3-D sleepers are drawn)
+    //   BALLAST_TIES — with a concrete sleeper band standing in for ties at range
+    // The tie band is kept off the texture edges so both variants tile seamlessly.
+    for (int y = 0; y < SIZE; ++y)
+        for (int x = 0; x < SIZE; ++x) {
+            const float fx = x / static_cast<float>(SIZE);
+            const float fy = y / static_cast<float>(SIZE);
+            const float gravel = 0.40f + fbm(x, y, 64) * 0.28f;
+            RGB stone{gravel, gravel * 0.98f, gravel * 0.92f}; // faintly warm
+            putPixel(buf, BALLAST, x, y, stone);
+
+            RGB ties = stone;
+            const bool tieU = (fx > 0.175f && fx < 0.825f); // sleeper 2.6 m / 4 m
+            const bool tieV = (fy > 0.285f && fy < 0.715f); // 0.26 m / 0.6 m pitch
+            if (tieU && tieV) {
+                const float c = 0.54f + fbm(x, y, 32) * 0.10f; // concrete grey
+                ties = {c, c, c * 0.98f};
+            }
+            putPixel(buf, BALLAST_TIES, x, y, ties);
+        }
+
     return buf;
 }
 

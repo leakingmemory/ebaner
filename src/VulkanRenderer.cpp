@@ -76,9 +76,13 @@ void VulkanRenderer::init(GLFWwindow* window,
                           const std::vector<std::uint32_t>& indices,
                           const LandTextureData& textures,
                           const std::vector<TrackVertex>& trackVertices,
-                          const std::vector<std::uint32_t>& trackIndices) {
+                          const std::vector<std::uint32_t>& trackIndices,
+                          std::uint32_t trackAlwaysIndexCount,
+                          const std::vector<TrackDrawChunk>& sleeperChunks) {
     window_ = window;
     validationEnabled_ = validationLayersSupported();
+    trackAlwaysIndexCount_ = trackAlwaysIndexCount;
+    sleeperChunks_ = sleeperChunks;
 
     createInstance();
     setupDebugMessenger();
@@ -537,15 +541,21 @@ void VulkanRenderer::createTrackPipeline() {
     binding.binding = 0;
     binding.stride = sizeof(TrackVertex);
     binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-    VkVertexInputAttributeDescription attr{0, 0, VK_FORMAT_R32G32B32_SFLOAT,
-                                           offsetof(TrackVertex, pos)};
+    std::array<VkVertexInputAttributeDescription, 5> attrs{{
+        {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(TrackVertex, pos)},
+        {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(TrackVertex, normal)},
+        {2, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(TrackVertex, color)},
+        {3, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(TrackVertex, uv)},
+        {4, 0, VK_FORMAT_R32_SFLOAT, offsetof(TrackVertex, texLayer)},
+    }};
 
     VkPipelineVertexInputStateCreateInfo vertexInput{
         VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
     vertexInput.vertexBindingDescriptionCount = 1;
     vertexInput.pVertexBindingDescriptions = &binding;
-    vertexInput.vertexAttributeDescriptionCount = 1;
-    vertexInput.pVertexAttributeDescriptions = &attr;
+    vertexInput.vertexAttributeDescriptionCount =
+        static_cast<uint32_t>(attrs.size());
+    vertexInput.pVertexAttributeDescriptions = attrs.data();
 
     VkPipelineInputAssemblyStateCreateInfo ia{
         VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
@@ -961,13 +971,22 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageInde
     vkCmdBindIndexBuffer(cmd, indexBuffer_, 0, VK_INDEX_TYPE_UINT32);
     vkCmdDrawIndexed(cmd, indexCount_, 1, 0, 0, 0);
 
-    // Railway ribbons — same layout/push constants; the descriptor set stays
-    // bound (unused by the track shaders).
+    // Railway geometry — same layout/push constants; the descriptor set stays
+    // bound (the track shaders sample the ballast layer from it). Ballast + rails
+    // are always drawn; sleeper boxes only for chunks near the camera (the ballast
+    // texture stands in for sleepers at distance).
     if (trackIndexCount_ > 0) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, trackPipeline_);
         vkCmdBindVertexBuffers(cmd, 0, 1, &trackVertexBuffer_, &offset);
         vkCmdBindIndexBuffer(cmd, trackIndexBuffer_, 0, VK_INDEX_TYPE_UINT32);
-        vkCmdDrawIndexed(cmd, trackIndexCount_, 1, 0, 0, 0);
+        vkCmdDrawIndexed(cmd, trackAlwaysIndexCount_, 1, 0, 0, 0);
+
+        constexpr float kSleeperLODRadius = 230.0f; // metres (ties fade in ~here)
+        const glm::vec3 cam = glm::vec3(lastPush_.camPos);
+        for (const TrackDrawChunk& c : sleeperChunks_) {
+            if (glm::distance(cam, c.centroid) < kSleeperLODRadius)
+                vkCmdDrawIndexed(cmd, c.indexCount, 1, c.firstIndex, 0, 0);
+        }
     }
 
     vkCmdEndRenderPass(cmd);

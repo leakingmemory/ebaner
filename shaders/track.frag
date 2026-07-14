@@ -1,6 +1,12 @@
 #version 450
 
 layout(location = 0) in vec3 vWorldPos;
+layout(location = 1) in vec3 vNormal;
+layout(location = 2) in vec3 vColor;
+layout(location = 3) in vec2 vUv;
+layout(location = 4) flat in float vTexLayer;
+
+layout(set = 0, binding = 0) uniform sampler2DArray uLand;
 
 layout(push_constant) uniform PushConstants {
     mat4 viewProj;
@@ -10,11 +16,31 @@ layout(push_constant) uniform PushConstants {
 
 layout(location = 0) out vec4 outColor;
 
-void main() {
-    vec3 color = vec3(0.45, 0.12, 0.12); // dark rail red (single track colour)
+// Ballast texture-array layers (must match Textures.h landtex::Layer).
+const int BALLAST = 9;       // plain crushed stone (near)
+const int BALLAST_TIES = 10; // ballast + sleeper stripe (distant)
 
-    // Match the terrain's distance haze so track recedes consistently.
+void main() {
     float dist = length(vWorldPos - pc.camPos.xyz);
+
+    vec3 base;
+    if (vTexLayer >= 0.0) {
+        // Ballast top: plain near the camera (real 3-D sleepers sit on it), fading
+        // to the sleeper-stripe texture at range as the 3-D sleeper boxes drop out.
+        vec3 plain = texture(uLand, vec3(vUv, float(BALLAST))).rgb;
+        vec3 ties = texture(uLand, vec3(vUv, float(BALLAST_TIES))).rgb;
+        float f = smoothstep(160.0, 240.0, dist);
+        base = mix(plain, ties, f) * vColor;
+    } else {
+        // Solid parts: rails, sleepers, ballast sides.
+        base = vColor;
+    }
+
+    // Simple sun lighting, matching the terrain's ambient/diffuse balance.
+    float ndl = max(dot(normalize(vNormal), normalize(pc.sunDir.xyz)), 0.0);
+    vec3 color = base * (0.35 + 0.65 * ndl);
+
+    // Same distance haze as the terrain so track recedes consistently.
     float haze = clamp(dist / 40000.0, 0.0, 0.65);
     color = mix(color, vec3(0.70, 0.78, 0.86), haze);
 

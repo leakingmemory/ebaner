@@ -119,7 +119,8 @@ int main(int argc, char** argv) {
     g_renderer = &renderer;
     try {
         renderer.init(window, mesh.vertices(), mesh.indices(), texData,
-                      tracks.vertices(), tracks.indices());
+                      tracks.vertices(), tracks.indices(),
+                      tracks.alwaysIndexCount(), tracks.sleeperChunks());
     } catch (const std::exception& e) {
         std::fprintf(stderr, "Vulkan init failed: %s\n", e.what());
         glfwDestroyWindow(window);
