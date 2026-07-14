@@ -15,6 +15,15 @@ struct TrackSegment {
     std::vector<std::uint16_t> speed; // per-vertex OSM speed km/h (0=unknown)
 };
 
+// One road segment: a polyline in world coords (EPSG:25833, metres). Roads carry
+// no unique id, so a segment crossing tile boundaries (included in full in every
+// tile it touches) must be deduplicated by geometry.
+struct RoadSegment {
+    std::uint8_t kategori = 0; // 'E','R','F','K','P' (road class)
+    std::uint32_t nummer = 0;  // road number (e.g. 6 for E6)
+    std::vector<glm::dvec3> pts;
+};
+
 // One loaded terrain tile: a 256x256 grid of float32 elevations plus the
 // geometry needed to place it in the world (EPSG:25833, metres).
 struct Tile {
@@ -28,6 +37,7 @@ struct Tile {
     std::vector<float> heights;      // 256*256, row 0 = north edge
     std::vector<std::uint8_t> landcover; // 256*256 AR50 artype, empty if absent
     std::vector<TrackSegment> tracks;    // railway segments intersecting this tile
+    std::vector<RoadSegment> roads;      // road segments intersecting this tile
 };
 
 // Loads terrainmapper export tiles around a start location and resolves the
@@ -73,6 +83,10 @@ private:
     // Parses a tracks.bin into `out` (world coords); false if unreadable/empty.
     static bool parseTracksBin(const std::string& path,
                                std::vector<TrackSegment>& out);
+
+    // Parses a roads.bin into `out` (world coords); false if unreadable/empty.
+    static bool parseRoadsBin(const std::string& path,
+                              std::vector<RoadSegment>& out);
 
     std::vector<Tile> tiles_;
     glm::dvec3 sceneOrigin_{0.0};

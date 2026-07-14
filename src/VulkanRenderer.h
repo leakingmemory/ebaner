@@ -36,7 +36,9 @@ public:
               const std::vector<TrackVertex>& trackVertices,
               const std::vector<std::uint32_t>& trackIndices,
               std::uint32_t trackAlwaysIndexCount,
-              const std::vector<TrackDrawChunk>& sleeperChunks);
+              const std::vector<TrackDrawChunk>& sleeperChunks,
+              const std::vector<TrackVertex>& roadVertices,
+              const std::vector<std::uint32_t>& roadIndices);
     void drawFrame(const PushConstants& pc);
     void waitIdle();
     void cleanup();
@@ -69,6 +71,8 @@ private:
                            const std::vector<std::uint32_t>& indices);
     void createTrackBuffers(const std::vector<TrackVertex>& vertices,
                             const std::vector<std::uint32_t>& indices);
+    void createRoadBuffers(const std::vector<TrackVertex>& vertices,
+                           const std::vector<std::uint32_t>& indices);
     void createCommandBuffers();
     void createSyncObjects();
 
@@ -152,6 +156,13 @@ private:
     uint32_t trackIndexCount_ = 0;
     uint32_t trackAlwaysIndexCount_ = 0;       // ballast + rails, drawn always
     std::vector<TrackDrawChunk> sleeperChunks_; // distance-culled sleeper runs
+
+    // Roads reuse the track pipeline (flat solid-colour lit ribbons).
+    VkBuffer roadVertexBuffer_ = VK_NULL_HANDLE;
+    VkDeviceMemory roadVertexMemory_ = VK_NULL_HANDLE;
+    VkBuffer roadIndexBuffer_ = VK_NULL_HANDLE;
+    VkDeviceMemory roadIndexMemory_ = VK_NULL_HANDLE;
+    uint32_t roadIndexCount_ = 0;
 
     std::vector<VkSemaphore> imageAvailable_;
     std::vector<VkSemaphore> renderFinished_;

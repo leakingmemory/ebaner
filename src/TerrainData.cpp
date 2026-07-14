@@ -79,8 +79,9 @@ void TerrainData::load(const std::string& datasetRoot, double halfWindow) {
                 if (loadLandCover(dir + "/landcover.u8", t.landcover))
                     hasLandCover_ = true;
 
-                // Railway track segments intersecting this tile.
+                // Railway track + road segments intersecting this tile.
                 parseTracksBin(dir + "/tracks.bin", t.tracks);
+                parseRoadsBin(dir + "/roads.bin", t.roads);
 
                 totalSamples += t.heights.size();
                 tiles_.push_back(std::move(t));
@@ -132,6 +133,30 @@ bool TerrainData::parseTracksBin(const std::string& path,
         return true;
     };
 
+    // The per-vertex speed block (uint16 each) was added to the format later.
+    // Detect whether this file carries it by checking which layout walks exactly
+    // to EOF, so both old (no speed) and new exports parse correctly.
+    auto validate = [&](bool hasSpeed) -> bool {
+        const char* q = buf.data();
+        const char* e = q + buf.size();
+        if (q + 4 > e) return false;
+        std::uint32_t n = 0;
+        std::memcpy(&n, q, 4);
+        q += 4;
+        for (std::uint32_t i = 0; i < n; ++i) {
+            if (q + 12 > e) return false;
+            std::uint32_t nv = 0;
+            std::memcpy(&nv, q + 8, 4);
+            q += 12;
+            const std::size_t need =
+                static_cast<std::size_t>(nv) * (hasSpeed ? 14u : 12u);
+            if (static_cast<std::size_t>(e - q) < need) return false;
+            q += need;
+        }
+        return q == e;
+    };
+    const bool hasSpeed = validate(true) ? true : !validate(false);
+
     std::uint32_t numSegments = 0;
     if (!readU32(numSegments)) return false;
 
@@ -144,9 +169,9 @@ bool TerrainData::parseTracksBin(const std::string& path,
         std::memcpy(&numVertices, p, 4);
         p += 4;
 
-        // Sanity: each vertex needs 12 bytes (x,y,z) + 2 bytes (speed). Reject an
-        // implausible count (truncated/corrupt/old-format file) before reserving.
-        if (static_cast<std::size_t>(numVertices) * 14u >
+        // Reject an implausible vertex count (truncated/corrupt) before reserving.
+        const std::size_t stride = hasSpeed ? 14u : 12u;
+        if (static_cast<std::size_t>(numVertices) * stride >
             static_cast<std::size_t>(end - p))
             break;
 
@@ -161,12 +186,69 @@ bool TerrainData::parseTracksBin(const std::string& path,
             seg.pts.emplace_back(x, y, z);
         }
         if (!ok) break;
-        // Per-vertex OSM speed (km/h, 0 = unknown), one uint16 each.
-        seg.speed.reserve(numVertices);
+        if (hasSpeed) {
+            // Per-vertex OSM speed (km/h, 0 = unknown), one uint16 each.
+            seg.speed.reserve(numVertices);
+            for (std::uint32_t v = 0; v < numVertices; ++v) {
+                std::uint16_t s16 = 0;
+                if (!readU16(s16)) { ok = false; break; }
+                seg.speed.push_back(s16);
+            }
+            if (!ok) break;
+        }
+        if (seg.pts.size() >= 2) out.push_back(std::move(seg));
+    }
+    return !out.empty();
+}
+
+bool TerrainData::parseRoadsBin(const std::string& path,
+                                std::vector<RoadSegment>& out) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return false;
+
+    std::vector<char> buf((std::istreambuf_iterator<char>(f)),
+                          std::istreambuf_iterator<char>());
+    const char* p = buf.data();
+    const char* end = p + buf.size();
+
+    auto readU32 = [&](std::uint32_t& v) -> bool {
+        if (p + 4 > end) return false;
+        std::memcpy(&v, p, 4);
+        p += 4;
+        return true;
+    };
+    auto readF32 = [&](float& v) -> bool {
+        if (p + 4 > end) return false;
+        std::memcpy(&v, p, 4);
+        p += 4;
+        return true;
+    };
+
+    std::uint32_t numSegments = 0;
+    if (!readU32(numSegments)) return false;
+
+    for (std::uint32_t s = 0; s < numSegments; ++s) {
+        if (p + 12 > end) break;
+        const std::uint8_t kategori = static_cast<std::uint8_t>(p[0]);
+        std::uint32_t nummer = 0, numVertices = 0;
+        std::memcpy(&nummer, p + 4, 4);  // skip kategori + 3 reserved
+        std::memcpy(&numVertices, p + 8, 4);
+        p += 12;
+
+        // Sanity: each vertex is 12 bytes (x,y,z). Reject an implausible count.
+        if (static_cast<std::size_t>(numVertices) * 12u >
+            static_cast<std::size_t>(end - p))
+            break;
+
+        RoadSegment seg;
+        seg.kategori = kategori;
+        seg.nummer = nummer;
+        seg.pts.reserve(numVertices);
+        bool ok = true;
         for (std::uint32_t v = 0; v < numVertices; ++v) {
-            std::uint16_t s16 = 0;
-            if (!readU16(s16)) { ok = false; break; }
-            seg.speed.push_back(s16);
+            float x, y, z;
+            if (!readF32(x) || !readF32(y) || !readF32(z)) { ok = false; break; }
+            seg.pts.emplace_back(x, y, z);
         }
         if (!ok) break;
         if (seg.pts.size() >= 2) out.push_back(std::move(seg));
