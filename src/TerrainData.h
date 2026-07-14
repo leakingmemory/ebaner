@@ -12,6 +12,7 @@ struct TrackSegment {
     std::uint32_t trackId = 0;
     std::uint8_t trackType = 0; // 0=main line, 1=siding, 2=yard
     std::vector<glm::dvec3> pts;
+    std::vector<std::uint16_t> speed; // per-vertex OSM speed km/h (0=unknown)
 };
 
 // One loaded terrain tile: a 256x256 grid of float32 elevations plus the

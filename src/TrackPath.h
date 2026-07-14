@@ -21,10 +21,12 @@ struct TrackPose {
 class TrackPath {
 public:
     TrackPath(std::uint32_t trackId, std::uint8_t trackType,
-              const std::vector<glm::vec3>& pts); // scene-relative input
+              const std::vector<glm::vec3>& pts,      // scene-relative input
+              const std::vector<std::uint16_t>& speed); // per-point km/h (0=?)
 
     float length() const { return length_; }
-    TrackPose poseAt(float s) const; // s clamped to [0, length]
+    TrackPose poseAt(float s) const;       // s clamped to [0, length]
+    float speedLimitAt(float s) const;     // km/h at s (0 = unknown)
 
     std::uint32_t trackId() const { return trackId_; }
     std::uint8_t trackType() const { return trackType_; }
@@ -44,9 +46,13 @@ private:
     std::vector<Sample> table_;
     float length_ = 0.0f;
 
+    std::vector<std::uint16_t> speed_; // one per surveyed point (aligned to pts)
+
     std::uint32_t trackId_ = 0;
     std::uint8_t trackType_ = 0;
 
+    // Map arc-length s -> interpolated span index and local u in [0,1].
+    void locate(float s, int& span, float& u) const;
     // Evaluate position / first / second derivative in knot space at span,u.
     void eval(int span, float u, glm::vec3* p, glm::vec3* d1, glm::vec3* d2) const;
 };

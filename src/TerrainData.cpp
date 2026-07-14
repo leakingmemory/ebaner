@@ -125,6 +125,12 @@ bool TerrainData::parseTracksBin(const std::string& path,
         p += 4;
         return true;
     };
+    auto readU16 = [&](std::uint16_t& v) -> bool {
+        if (p + 2 > end) return false;
+        std::memcpy(&v, p, 2);
+        p += 2;
+        return true;
+    };
 
     std::uint32_t numSegments = 0;
     if (!readU32(numSegments)) return false;
@@ -138,6 +144,12 @@ bool TerrainData::parseTracksBin(const std::string& path,
         std::memcpy(&numVertices, p, 4);
         p += 4;
 
+        // Sanity: each vertex needs 12 bytes (x,y,z) + 2 bytes (speed). Reject an
+        // implausible count (truncated/corrupt/old-format file) before reserving.
+        if (static_cast<std::size_t>(numVertices) * 14u >
+            static_cast<std::size_t>(end - p))
+            break;
+
         TrackSegment seg;
         seg.trackId = trackId;
         seg.trackType = trackType;
@@ -147,6 +159,14 @@ bool TerrainData::parseTracksBin(const std::string& path,
             float x, y, z;
             if (!readF32(x) || !readF32(y) || !readF32(z)) { ok = false; break; }
             seg.pts.emplace_back(x, y, z);
+        }
+        if (!ok) break;
+        // Per-vertex OSM speed (km/h, 0 = unknown), one uint16 each.
+        seg.speed.reserve(numVertices);
+        for (std::uint32_t v = 0; v < numVertices; ++v) {
+            std::uint16_t s16 = 0;
+            if (!readU16(s16)) { ok = false; break; }
+            seg.speed.push_back(s16);
         }
         if (!ok) break;
         if (seg.pts.size() >= 2) out.push_back(std::move(seg));

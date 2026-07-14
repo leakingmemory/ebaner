@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace {
@@ -11,8 +13,9 @@ constexpr int kSubStepsPerSpan = 20; // arc-length table resolution per span
 } // namespace
 
 TrackPath::TrackPath(std::uint32_t trackId, std::uint8_t trackType,
-                     const std::vector<glm::vec3>& pts)
-    : trackId_(trackId), trackType_(trackType) {
+                     const std::vector<glm::vec3>& pts,
+                     const std::vector<std::uint16_t>& speed)
+    : speed_(speed), trackId_(trackId), trackType_(trackType) {
     const int n = static_cast<int>(pts.size());
     // Control points with reflected phantom endpoints, so span i interpolates
     // ctrl_[i+1]..ctrl_[i+2] using neighbours ctrl_[i] and ctrl_[i+3].
@@ -81,17 +84,13 @@ void TrackPath::eval(int span, float u, glm::vec3* p, glm::vec3* d1,
     }
 }
 
-TrackPose TrackPath::poseAt(float s) const {
-    TrackPose pose;
+void TrackPath::locate(float s, int& span, float& u) const {
     const int numSpans = static_cast<int>(ctrl_.size()) - 3;
     if (numSpans < 1 || table_.size() < 2 || length_ <= 0.0f) {
-        pose.pos = ctrl_.size() > 1 ? ctrl_[1] : glm::vec3(0.0f);
-        pose.tangent = glm::vec3(1.0f, 0.0f, 0.0f);
-        pose.right = glm::vec3(0.0f, 1.0f, 0.0f);
-        pose.curvature = 0.0f;
-        return pose;
+        span = -1;
+        u = 0.0f;
+        return;
     }
-
     s = std::clamp(s, 0.0f, length_);
     // Binary search the arc-length table for the bracket around s.
     int lo = 0, hi = static_cast<int>(table_.size()) - 1;
@@ -106,8 +105,22 @@ TrackPose TrackPath::poseAt(float s) const {
     const Sample& b = table_[hi];
     const float frac = (b.s > a.s) ? (s - a.s) / (b.s - a.s) : 0.0f;
     const float g = a.g + frac * (b.g - a.g);
-    const int span = std::clamp(static_cast<int>(std::floor(g)), 0, numSpans - 1);
-    const float u = std::clamp(g - static_cast<float>(span), 0.0f, 1.0f);
+    span = std::clamp(static_cast<int>(std::floor(g)), 0, numSpans - 1);
+    u = std::clamp(g - static_cast<float>(span), 0.0f, 1.0f);
+}
+
+TrackPose TrackPath::poseAt(float s) const {
+    TrackPose pose;
+    int span;
+    float u;
+    locate(s, span, u);
+    if (span < 0) {
+        pose.pos = ctrl_.size() > 1 ? ctrl_[1] : glm::vec3(0.0f);
+        pose.tangent = glm::vec3(1.0f, 0.0f, 0.0f);
+        pose.right = glm::vec3(0.0f, 1.0f, 0.0f);
+        pose.curvature = 0.0f;
+        return pose;
+    }
 
     glm::vec3 P, D1, D2;
     eval(span, u, &P, &D1, &D2);
@@ -129,26 +142,71 @@ TrackPose TrackPath::poseAt(float s) const {
     return pose;
 }
 
+float TrackPath::speedLimitAt(float s) const {
+    if (speed_.empty()) return 0.0f;
+    int span;
+    float u;
+    locate(s, span, u);
+    const int n = static_cast<int>(speed_.size());
+    if (span < 0) return static_cast<float>(speed_.front());
+    // speed_ is per surveyed point; a span runs point[span]..point[span+1].
+    // Line speed is piecewise-constant, so snap to the nearer endpoint.
+    int i = std::clamp((u < 0.5f) ? span : span + 1, 0, n - 1);
+    if (speed_[i] != 0) return static_cast<float>(speed_[i]);
+    // Unknown here: fall back to the other endpoint of the span.
+    int j = std::clamp((i == span) ? span + 1 : span, 0, n - 1);
+    return static_cast<float>(speed_[j]);
+}
+
 std::vector<TrackPath> buildTrackPaths(const TerrainData& data) {
     const glm::dvec3 origin = data.sceneOrigin();
     std::unordered_set<std::uint32_t> seen;
     std::vector<TrackPath> paths;
+    std::size_t mainVerts = 0, knownVerts = 0; // speed-plumbing summary
+    int minSpeed = 0, maxSpeed = 0;
+    std::unordered_map<int, int> speedHist;
     for (const Tile& t : data.tiles()) {
         for (const TrackSegment& seg : t.tracks) {
             if (!seen.insert(seg.trackId).second) continue; // one per through-track
             if (seg.pts.size() < 2) continue;
             std::vector<glm::vec3> pts;
+            std::vector<std::uint16_t> speed;
             pts.reserve(seg.pts.size());
-            for (const glm::dvec3& w : seg.pts) {
+            speed.reserve(seg.pts.size());
+            for (std::size_t k = 0; k < seg.pts.size(); ++k) {
+                const glm::dvec3& w = seg.pts[k];
                 const glm::vec3 p(static_cast<float>(w.x - origin.x),
                                   static_cast<float>(w.y - origin.y),
                                   static_cast<float>(w.z - origin.z));
-                if (pts.empty() || glm::distance(pts.back(), p) > 1e-3f)
-                    pts.push_back(p); // drop coincident points
+                if (pts.empty() || glm::distance(pts.back(), p) > 1e-3f) {
+                    pts.push_back(p); // drop coincident points (and their speed)
+                    speed.push_back(k < seg.speed.size() ? seg.speed[k] : 0);
+                }
             }
             if (pts.size() < 2) continue;
-            paths.emplace_back(seg.trackId, seg.trackType, pts);
+            if (seg.trackType == 0) { // main line: tally speed coverage
+                for (std::uint16_t sp : speed) {
+                    ++mainVerts;
+                    if (sp > 0) {
+                        ++knownVerts;
+                        ++speedHist[sp];
+                        if (minSpeed == 0 || sp < minSpeed) minSpeed = sp;
+                        if (sp > maxSpeed) maxSpeed = sp;
+                    }
+                }
+            }
+            paths.emplace_back(seg.trackId, seg.trackType, pts, speed);
         }
     }
+
+    int modal = 0, modalCount = 0;
+    for (const auto& [sp, c] : speedHist)
+        if (c > modalCount) { modalCount = c; modal = sp; }
+    const double pct =
+        mainVerts ? 100.0 * static_cast<double>(knownVerts) / mainVerts : 0.0;
+    std::printf("[TrackPath] %zu paths; main-line speed known on %.0f%% of "
+                "vertices (%zu/%zu); range %d-%d km/h, modal %d\n",
+                paths.size(), pct, knownVerts, mainVerts, minSpeed, maxSpeed,
+                modal);
     return paths;
 }
