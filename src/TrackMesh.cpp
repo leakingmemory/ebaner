@@ -1,10 +1,8 @@
 #include "TrackMesh.h"
 
-#include "TerrainData.h"
-#include "Textures.h" // landtex::BALLAST
+#include "TrackPath.h"
 
 #include <cstdio>
-#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -12,6 +10,7 @@ namespace {
 // --- Cross-section dimensions (metres) -------------------------------------
 constexpr float kSleeperSpacing = 0.6f;  // tie pitch
 constexpr int kSleepersPerChunk = 48;    // ~29 m runs for distance LOD
+constexpr float kRailSampleStep = 3.0f;  // ballast/rail sweep step along the curve
 constexpr float kRailHalf = 0.7175f;     // half of 1.435 m standard gauge
 
 // Ballast trapezoid.
@@ -47,41 +46,19 @@ const glm::vec3 kBallastSide(0.42f, 0.40f, 0.36f);
 const glm::vec3 kSleeperCol(0.58f, 0.58f, 0.56f); // concrete
 const glm::vec3 kRailCol(0.40f, 0.25f, 0.18f);    // rusty steel
 
-// Horizontal perpendicular at centreline vertex i (mitred: average of adjacent
-// segment tangents).
-glm::vec3 perpAt(const std::vector<glm::vec3>& c, int i) {
-    const int n = static_cast<int>(c.size());
-    glm::vec2 tang(0.0f);
-    if (i > 0) tang += glm::vec2(c[i].x - c[i - 1].x, c[i].y - c[i - 1].y);
-    if (i < n - 1) tang += glm::vec2(c[i + 1].x - c[i].x, c[i + 1].y - c[i].y);
-    const float tl = glm::length(tang);
-    const glm::vec2 p =
-        (tl > 1e-6f) ? glm::vec2(-tang.y, tang.x) / tl : glm::vec2(1.0f, 0.0f);
-    return glm::vec3(p.x, p.y, 0.0f);
+// Sample distances along a path: 0, step, 2*step, ... , length (endpoint always
+// included so the sweep closes exactly).
+std::vector<float> sampleDistances(float length, float step) {
+    std::vector<float> ss;
+    for (float s = 0.0f; s < length; s += step) ss.push_back(s);
+    ss.push_back(length);
+    return ss;
 }
 
 } // namespace
 
 void TrackMesh::build(const TerrainData& data) {
-    const glm::dvec3 origin = data.sceneOrigin();
-    std::unordered_set<std::uint32_t> seen;
-
-    // Collect unique centrelines (scene-relative), deduped by trackId — a
-    // through-track appears in full in every tile it crosses.
-    std::vector<std::vector<glm::vec3>> lines;
-    for (const Tile& t : data.tiles()) {
-        for (const TrackSegment& seg : t.tracks) {
-            if (!seen.insert(seg.trackId).second) continue;
-            if (seg.pts.size() < 2) continue;
-            std::vector<glm::vec3> c;
-            c.reserve(seg.pts.size());
-            for (const glm::dvec3& w : seg.pts)
-                c.emplace_back(static_cast<float>(w.x - origin.x),
-                               static_cast<float>(w.y - origin.y),
-                               static_cast<float>(w.z - origin.z));
-            lines.push_back(std::move(c));
-        }
-    }
+    const std::vector<TrackPath> paths = buildTrackPaths(data);
 
     // Emit one quad (two triangles) with an outward-facing normal. The normal is
     // the geometric normal, flipped to point away from `inside` so lighting is
@@ -120,28 +97,24 @@ void TrackMesh::build(const TerrainData& data) {
     };
 
     // --- Pass 1: ballast bed + rails (always drawn) ------------------------
-    for (const auto& c : lines) {
-        const int n = static_cast<int>(c.size());
-        std::vector<glm::vec3> perp(n);
-        std::vector<float> cum(n, 0.0f);
-        for (int i = 0; i < n; ++i) perp[i] = perpAt(c, i);
-        for (int i = 1; i < n; ++i)
-            cum[i] = cum[i - 1] + glm::distance(c[i], c[i - 1]);
-
-        for (int i = 0; i + 1 < n; ++i) {
-            const glm::vec3 A = c[i], B = c[i + 1];
-            const glm::vec3 Ra = perp[i], Rb = perp[i + 1];
+    for (const TrackPath& path : paths) {
+        const std::vector<float> ss = sampleDistances(path.length(), kRailSampleStep);
+        for (std::size_t i = 0; i + 1 < ss.size(); ++i) {
+            const TrackPose pa = path.poseAt(ss[i]);
+            const TrackPose pb = path.poseAt(ss[i + 1]);
+            const glm::vec3 A = pa.pos, B = pb.pos;
+            const glm::vec3 Ra = pa.right, Rb = pb.right;
             const glm::vec3 mid = (A + B) * 0.5f;
-            const float vA = cum[i] / kSleeperSpacing;
-            const float vB = cum[i + 1] / kSleeperSpacing;
+            const float vA = ss[i] / kSleeperSpacing;
+            const float vB = ss[i + 1] / kSleeperSpacing;
 
             // Ballast top (textured with the ballast/sleeper layer).
             emitQuad(pt(A, Ra, -kBallastTopHalf, kBallastTopZ),
                      pt(A, Ra, kBallastTopHalf, kBallastTopZ),
                      pt(B, Rb, kBallastTopHalf, kBallastTopZ),
                      pt(B, Rb, -kBallastTopHalf, kBallastTopZ), mid, kBallastTint,
-                     static_cast<float>(landtex::BALLAST), glm::vec2(0.0f, vA),
-                     glm::vec2(1.0f, vA), glm::vec2(1.0f, vB), glm::vec2(0.0f, vB));
+                     0.0f, glm::vec2(0.0f, vA), glm::vec2(1.0f, vA),
+                     glm::vec2(1.0f, vB), glm::vec2(0.0f, vB));
 
             // Ballast side slopes.
             solidQuad(pt(A, Ra, -kBallastTopHalf, kBallastTopZ),
@@ -198,13 +171,8 @@ void TrackMesh::build(const TerrainData& data) {
                   kSleeperCol);
     };
 
-    for (const auto& c : lines) {
-        const int n = static_cast<int>(c.size());
-        std::vector<float> cum(n, 0.0f);
-        for (int i = 1; i < n; ++i)
-            cum[i] = cum[i - 1] + glm::distance(c[i], c[i - 1]);
-        const float total = cum[n - 1];
-
+    for (const TrackPath& path : paths) {
+        const float total = path.length();
         std::uint32_t chunkFirst = static_cast<std::uint32_t>(indices_.size());
         glm::vec3 accum(0.0f);
         int accumN = 0;
@@ -221,21 +189,10 @@ void TrackMesh::build(const TerrainData& data) {
             accumN = 0;
         };
 
-        int j = 0;
         for (float dist = 0.0f; dist <= total + 1e-3f; dist += kSleeperSpacing) {
-            while (j + 1 < n && cum[j + 1] < dist) ++j;
-            if (j + 1 >= n) break;
-            const float segLen = cum[j + 1] - cum[j];
-            const float t = (segLen > 1e-6f) ? (dist - cum[j]) / segLen : 0.0f;
-            const glm::vec3 P = glm::mix(c[j], c[j + 1], t);
-            const glm::vec3 dir = c[j + 1] - c[j];
-            const glm::vec2 h(dir.x, dir.y);
-            const float hl = glm::length(h);
-            const glm::vec3 T = (hl > 1e-6f) ? glm::vec3(h.x / hl, h.y / hl, 0.0f)
-                                             : glm::vec3(1.0f, 0.0f, 0.0f);
-            const glm::vec3 R(-T.y, T.x, 0.0f);
-            emitSleeper(P, R, T);
-            accum += P;
+            const TrackPose p = path.poseAt(dist);
+            emitSleeper(p.pos, p.right, p.tangent);
+            accum += p.pos;
             ++accumN;
             if (accumN >= kSleepersPerChunk) flush();
         }
@@ -244,5 +201,5 @@ void TrackMesh::build(const TerrainData& data) {
 
     std::printf(
         "[TrackMesh] %zu tracks, %zu vertices, %zu triangles, %zu sleeper chunks\n",
-        lines.size(), vertices_.size(), indices_.size() / 3, chunks_.size());
+        paths.size(), vertices_.size(), indices_.size() / 3, chunks_.size());
 }

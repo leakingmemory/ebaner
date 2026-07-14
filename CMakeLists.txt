@@ -56,6 +56,7 @@ add_executable(ebaner
     src/TerrainMesh.cpp
     src/Camera.cpp
     src/Textures.cpp
+    src/TrackPath.cpp
     src/TrackMesh.cpp
     src/VulkanRenderer.cpp)
 
