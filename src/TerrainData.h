@@ -5,6 +5,15 @@
 #include <string>
 #include <vector>
 
+// One railway track segment: a polyline in world coords (EPSG:25833, metres).
+// trackId is globally unique and consistent across tiles (a segment crossing a
+// tile boundary appears in full in every tile it touches).
+struct TrackSegment {
+    std::uint32_t trackId = 0;
+    std::uint8_t trackType = 0; // 0=main line, 1=siding, 2=yard
+    std::vector<glm::dvec3> pts;
+};
+
 // One loaded terrain tile: a 256x256 grid of float32 elevations plus the
 // geometry needed to place it in the world (EPSG:25833, metres).
 struct Tile {
@@ -17,6 +26,7 @@ struct Tile {
     double extent = 0.0;     // tile size in metres (256 * resolution)
     std::vector<float> heights;      // 256*256, row 0 = north edge
     std::vector<std::uint8_t> landcover; // 256*256 AR50 artype, empty if absent
+    std::vector<TrackSegment> tracks;    // railway segments intersecting this tile
 };
 
 // Loads terrainmapper export tiles around a start location and resolves the
@@ -58,6 +68,10 @@ private:
     // Reads a single landcover.u8 into `out`; returns false if unreadable.
     bool loadLandCover(const std::string& path,
                        std::vector<std::uint8_t>& out) const;
+
+    // Parses a tracks.bin into `out` (world coords); false if unreadable/empty.
+    static bool parseTracksBin(const std::string& path,
+                               std::vector<TrackSegment>& out);
 
     std::vector<Tile> tiles_;
     glm::dvec3 sceneOrigin_{0.0};

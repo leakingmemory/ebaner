@@ -36,7 +36,7 @@ set(SHADER_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
 file(MAKE_DIRECTORY ${SHADER_OUT_DIR})
 
 set(SHADER_SPV)
-foreach(shader terrain.vert terrain.frag)
+foreach(shader terrain.vert terrain.frag track.vert track.frag)
     set(src ${SHADER_DIR}/${shader})
     set(spv ${SHADER_OUT_DIR}/${shader}.spv)
     add_custom_command(
@@ -56,6 +56,7 @@ add_executable(ebaner
     src/TerrainMesh.cpp
     src/Camera.cpp
     src/Textures.cpp
+    src/TrackMesh.cpp
     src/VulkanRenderer.cpp)
 
 add_dependencies(ebaner shaders)

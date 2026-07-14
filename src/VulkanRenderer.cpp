@@ -1,6 +1,7 @@
 #include "VulkanRenderer.h"
 
 #include "TerrainMesh.h" // Vertex
+#include "TrackMesh.h"   // TrackVertex
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -73,7 +74,9 @@ VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
 void VulkanRenderer::init(GLFWwindow* window,
                           const std::vector<Vertex>& vertices,
                           const std::vector<std::uint32_t>& indices,
-                          const LandTextureData& textures) {
+                          const LandTextureData& textures,
+                          const std::vector<TrackVertex>& trackVertices,
+                          const std::vector<std::uint32_t>& trackIndices) {
     window_ = window;
     validationEnabled_ = validationLayersSupported();
 
@@ -89,10 +92,12 @@ void VulkanRenderer::init(GLFWwindow* window,
     createFramebuffers();
     createDescriptorSetLayout();
     createGraphicsPipeline();
+    createTrackPipeline();
     createCommandPool();
     createTextureArray(textures);
     createDescriptorSet();
     createMeshBuffers(vertices, indices);
+    createTrackBuffers(trackVertices, trackIndices);
     createCommandBuffers();
     createSyncObjects();
 }
@@ -508,6 +513,105 @@ void VulkanRenderer::createGraphicsPipeline() {
     vkDestroyShaderModule(device_, frag, nullptr);
 }
 
+void VulkanRenderer::createTrackPipeline() {
+    // Reuses pipelineLayout_ and renderPass_ (created by createGraphicsPipeline).
+    // Ribbons are triangles; vertex is position-only; a single solid colour.
+    auto vertCode = readFile(std::string(SHADER_DIR) + "/track.vert.spv");
+    auto fragCode = readFile(std::string(SHADER_DIR) + "/track.frag.spv");
+    VkShaderModule vert = createShaderModule(vertCode);
+    VkShaderModule frag = createShaderModule(fragCode);
+
+    VkPipelineShaderStageCreateInfo vs{
+        VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    vs.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    vs.module = vert;
+    vs.pName = "main";
+    VkPipelineShaderStageCreateInfo fs{
+        VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    fs.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    fs.module = frag;
+    fs.pName = "main";
+    VkPipelineShaderStageCreateInfo stages[] = {vs, fs};
+
+    VkVertexInputBindingDescription binding{};
+    binding.binding = 0;
+    binding.stride = sizeof(TrackVertex);
+    binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    VkVertexInputAttributeDescription attr{0, 0, VK_FORMAT_R32G32B32_SFLOAT,
+                                           offsetof(TrackVertex, pos)};
+
+    VkPipelineVertexInputStateCreateInfo vertexInput{
+        VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    vertexInput.vertexBindingDescriptionCount = 1;
+    vertexInput.pVertexBindingDescriptions = &binding;
+    vertexInput.vertexAttributeDescriptionCount = 1;
+    vertexInput.pVertexAttributeDescriptions = &attr;
+
+    VkPipelineInputAssemblyStateCreateInfo ia{
+        VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo vp{
+        VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    vp.viewportCount = 1;
+    vp.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rs{
+        VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.cullMode = VK_CULL_MODE_NONE;
+    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo ms{
+        VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineDepthStencilStateCreateInfo ds{
+        VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    ds.depthTestEnable = VK_TRUE;
+    ds.depthWriteEnable = VK_TRUE;
+    ds.depthCompareOp = VK_COMPARE_OP_LESS;
+
+    VkPipelineColorBlendAttachmentState cba{};
+    cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                         VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    cba.blendEnable = VK_FALSE;
+    VkPipelineColorBlendStateCreateInfo cb{
+        VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    cb.attachmentCount = 1;
+    cb.pAttachments = &cba;
+
+    std::array<VkDynamicState, 2> dynamics{VK_DYNAMIC_STATE_VIEWPORT,
+                                           VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dyn{
+        VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dyn.dynamicStateCount = static_cast<uint32_t>(dynamics.size());
+    dyn.pDynamicStates = dynamics.data();
+
+    VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    ci.stageCount = 2;
+    ci.pStages = stages;
+    ci.pVertexInputState = &vertexInput;
+    ci.pInputAssemblyState = &ia;
+    ci.pViewportState = &vp;
+    ci.pRasterizationState = &rs;
+    ci.pMultisampleState = &ms;
+    ci.pDepthStencilState = &ds;
+    ci.pColorBlendState = &cb;
+    ci.pDynamicState = &dyn;
+    ci.layout = pipelineLayout_;
+    ci.renderPass = renderPass_;
+    ci.subpass = 0;
+
+    check(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &ci, nullptr,
+                                    &trackPipeline_),
+          "vkCreateGraphicsPipelines(track)");
+
+    vkDestroyShaderModule(device_, vert, nullptr);
+    vkDestroyShaderModule(device_, frag, nullptr);
+}
+
 void VulkanRenderer::createCommandPool() {
     VkCommandPoolCreateInfo ci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     ci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -758,6 +862,40 @@ void VulkanRenderer::createMeshBuffers(const std::vector<Vertex>& vertices,
            VK_BUFFER_USAGE_INDEX_BUFFER_BIT, indexBuffer_, indexMemory_);
 }
 
+void VulkanRenderer::createTrackBuffers(
+    const std::vector<TrackVertex>& vertices,
+    const std::vector<std::uint32_t>& indices) {
+    trackIndexCount_ = static_cast<uint32_t>(indices.size());
+    if (indices.empty()) return; // no tracks in the loaded area
+
+    auto upload = [&](const void* data, VkDeviceSize size, VkBufferUsageFlags usage,
+                      VkBuffer& buffer, VkDeviceMemory& memory) {
+        VkBuffer staging;
+        VkDeviceMemory stagingMem;
+        createBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                     staging, stagingMem);
+        void* mapped;
+        vkMapMemory(device_, stagingMem, 0, size, 0, &mapped);
+        std::memcpy(mapped, data, static_cast<std::size_t>(size));
+        vkUnmapMemory(device_, stagingMem);
+
+        createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage,
+                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, buffer, memory);
+        copyBuffer(staging, buffer, size);
+
+        vkDestroyBuffer(device_, staging, nullptr);
+        vkFreeMemory(device_, stagingMem, nullptr);
+    };
+
+    upload(vertices.data(), sizeof(TrackVertex) * vertices.size(),
+           VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, trackVertexBuffer_,
+           trackVertexMemory_);
+    upload(indices.data(), sizeof(std::uint32_t) * indices.size(),
+           VK_BUFFER_USAGE_INDEX_BUFFER_BIT, trackIndexBuffer_, trackIndexMemory_);
+}
+
 void VulkanRenderer::createCommandBuffers() {
     commandBuffers_.resize(kMaxFramesInFlight);
     VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
@@ -822,6 +960,15 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageInde
     vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer_, &offset);
     vkCmdBindIndexBuffer(cmd, indexBuffer_, 0, VK_INDEX_TYPE_UINT32);
     vkCmdDrawIndexed(cmd, indexCount_, 1, 0, 0, 0);
+
+    // Railway ribbons — same layout/push constants; the descriptor set stays
+    // bound (unused by the track shaders).
+    if (trackIndexCount_ > 0) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, trackPipeline_);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &trackVertexBuffer_, &offset);
+        vkCmdBindIndexBuffer(cmd, trackIndexBuffer_, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, trackIndexCount_, 1, 0, 0, 0);
+    }
 
     vkCmdEndRenderPass(cmd);
     check(vkEndCommandBuffer(cmd), "vkEndCommandBuffer");
@@ -1013,6 +1160,7 @@ void VulkanRenderer::cleanup() {
 
     cleanupSwapchain();
 
+    vkDestroyPipeline(device_, trackPipeline_, nullptr);
     vkDestroyPipeline(device_, pipeline_, nullptr);
     vkDestroyPipelineLayout(device_, pipelineLayout_, nullptr);
     vkDestroyRenderPass(device_, renderPass_, nullptr);
@@ -1021,6 +1169,10 @@ void VulkanRenderer::cleanup() {
     vkFreeMemory(device_, indexMemory_, nullptr);
     vkDestroyBuffer(device_, vertexBuffer_, nullptr);
     vkFreeMemory(device_, vertexMemory_, nullptr);
+    vkDestroyBuffer(device_, trackIndexBuffer_, nullptr);
+    vkFreeMemory(device_, trackIndexMemory_, nullptr);
+    vkDestroyBuffer(device_, trackVertexBuffer_, nullptr);
+    vkFreeMemory(device_, trackVertexMemory_, nullptr);
 
     vkDestroySampler(device_, landSampler_, nullptr);
     vkDestroyImageView(device_, landView_, nullptr);

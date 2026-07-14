@@ -79,6 +79,9 @@ void TerrainData::load(const std::string& datasetRoot, double halfWindow) {
                 if (loadLandCover(dir + "/landcover.u8", t.landcover))
                     hasLandCover_ = true;
 
+                // Railway track segments intersecting this tile.
+                parseTracksBin(dir + "/tracks.bin", t.tracks);
+
                 totalSamples += t.heights.size();
                 tiles_.push_back(std::move(t));
             }
@@ -100,23 +103,10 @@ void TerrainData::load(const std::string& datasetRoot, double halfWindow) {
     }
 }
 
-void TerrainData::resolveStartPoint(const std::string& datasetRoot) {
-    // Default fallback: the station node itself.
-    startWorld_ = glm::dvec3(kBodoSeedX, kBodoSeedY, kBodoSeedZ);
-    startDir_ = glm::vec3(1.0f, 0.0f, 0.0f);
-
-    // The Bodo LOD0 tile that contains the seed.
-    const double extent0 = PIXELS * kLodResolution[0];
-    const int col = static_cast<int>(std::floor(kBodoSeedX / extent0));
-    const int row = static_cast<int>(std::floor(kBodoSeedY / extent0));
-    const std::string path = tileDir(datasetRoot, 0, col, row) + "/tracks.bin";
-
+bool TerrainData::parseTracksBin(const std::string& path,
+                                 std::vector<TrackSegment>& out) {
     std::ifstream f(path, std::ios::binary);
-    if (!f) {
-        std::printf("[TerrainData] tracks.bin missing (%s); using station node\n",
-                    path.c_str());
-        return;
-    }
+    if (!f) return false;
 
     std::vector<char> buf((std::istreambuf_iterator<char>(f)),
                           std::istreambuf_iterator<char>());
@@ -137,12 +127,7 @@ void TerrainData::resolveStartPoint(const std::string& datasetRoot) {
     };
 
     std::uint32_t numSegments = 0;
-    if (!readU32(numSegments)) return;
-
-    double bestDist = std::numeric_limits<double>::max();
-    glm::dvec3 bestEndpoint = startWorld_;
-    glm::dvec3 bestInterior = startWorld_;
-    bool found = false;
+    if (!readU32(numSegments)) return false;
 
     for (std::uint32_t s = 0; s < numSegments; ++s) {
         std::uint32_t trackId = 0, numVertices = 0;
@@ -153,24 +138,51 @@ void TerrainData::resolveStartPoint(const std::string& datasetRoot) {
         std::memcpy(&numVertices, p, 4);
         p += 4;
 
-        std::vector<glm::dvec3> verts;
-        verts.reserve(numVertices);
+        TrackSegment seg;
+        seg.trackId = trackId;
+        seg.trackType = trackType;
+        seg.pts.reserve(numVertices);
+        bool ok = true;
         for (std::uint32_t v = 0; v < numVertices; ++v) {
             float x, y, z;
-            if (!readF32(x) || !readF32(y) || !readF32(z)) { verts.clear(); break; }
-            verts.emplace_back(x, y, z);
+            if (!readF32(x) || !readF32(y) || !readF32(z)) { ok = false; break; }
+            seg.pts.emplace_back(x, y, z);
         }
-        if (verts.size() < 2) continue;
+        if (!ok) break;
+        if (seg.pts.size() >= 2) out.push_back(std::move(seg));
+    }
+    return !out.empty();
+}
 
-        // Main-line tracks only (trackType == 0). Consider both endpoints; the
-        // one nearest the station seed is the buffer-stop terminus ("track 1 end").
-        if (trackType != 0) continue;
+void TerrainData::resolveStartPoint(const std::string& datasetRoot) {
+    // Default fallback: the station node itself.
+    startWorld_ = glm::dvec3(kBodoSeedX, kBodoSeedY, kBodoSeedZ);
+    startDir_ = glm::vec3(1.0f, 0.0f, 0.0f);
 
+    // The Bodo LOD0 tile that contains the seed.
+    const double extent0 = PIXELS * kLodResolution[0];
+    const int col = static_cast<int>(std::floor(kBodoSeedX / extent0));
+    const int row = static_cast<int>(std::floor(kBodoSeedY / extent0));
+    const std::string path = tileDir(datasetRoot, 0, col, row) + "/tracks.bin";
+
+    std::vector<TrackSegment> segs;
+    if (!parseTracksBin(path, segs)) {
+        std::printf("[TerrainData] tracks.bin missing/empty (%s); using station node\n",
+                    path.c_str());
+        return;
+    }
+
+    // Among main-line segments, the endpoint nearest the station seed is the
+    // buffer-stop terminus ("track 1 end").
+    double bestDist = std::numeric_limits<double>::max();
+    glm::dvec3 bestEndpoint = startWorld_;
+    glm::dvec3 bestInterior = startWorld_;
+    bool found = false;
+    for (const TrackSegment& seg : segs) {
+        if (seg.trackType != 0) continue;
+        const auto& v = seg.pts;
         struct End { glm::dvec3 pt, next; };
-        const End ends[2] = {
-            {verts.front(), verts[1]},
-            {verts.back(), verts[verts.size() - 2]},
-        };
+        const End ends[2] = {{v.front(), v[1]}, {v.back(), v[v.size() - 2]}};
         for (const End& e : ends) {
             const double dx = e.pt.x - kBodoSeedX;
             const double dy = e.pt.y - kBodoSeedY;

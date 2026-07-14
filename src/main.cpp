@@ -2,6 +2,7 @@
 #include "TerrainData.h"
 #include "TerrainMesh.h"
 #include "Textures.h"
+#include "TrackMesh.h"
 #include "VulkanRenderer.h"
 
 #define GLFW_INCLUDE_VULKAN
@@ -60,9 +61,11 @@ int main(int argc, char** argv) {
     // --- Load terrain data ---
     TerrainData data;
     TerrainMesh mesh;
+    TrackMesh tracks;
     try {
         data.load(datasetRoot);
         mesh.build(data);
+        tracks.build(data);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "Failed to load terrain: %s\n", e.what());
         return EXIT_FAILURE;
@@ -115,7 +118,8 @@ int main(int argc, char** argv) {
     VulkanRenderer renderer;
     g_renderer = &renderer;
     try {
-        renderer.init(window, mesh.vertices(), mesh.indices(), texData);
+        renderer.init(window, mesh.vertices(), mesh.indices(), texData,
+                      tracks.vertices(), tracks.indices());
     } catch (const std::exception& e) {
         std::fprintf(stderr, "Vulkan init failed: %s\n", e.what());
         glfwDestroyWindow(window);

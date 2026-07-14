@@ -9,6 +9,7 @@
 
 struct GLFWwindow;
 struct Vertex;
+struct TrackVertex;
 
 // Push-constant block shared with the terrain shaders (must match GLSL layout).
 struct PushConstants {
@@ -30,7 +31,9 @@ class VulkanRenderer {
 public:
     void init(GLFWwindow* window, const std::vector<Vertex>& vertices,
               const std::vector<std::uint32_t>& indices,
-              const LandTextureData& textures);
+              const LandTextureData& textures,
+              const std::vector<TrackVertex>& trackVertices,
+              const std::vector<std::uint32_t>& trackIndices);
     void drawFrame(const PushConstants& pc);
     void waitIdle();
     void cleanup();
@@ -55,11 +58,14 @@ private:
     void createFramebuffers();
     void createDescriptorSetLayout();
     void createGraphicsPipeline();
+    void createTrackPipeline();
     void createCommandPool();
     void createTextureArray(const LandTextureData& textures);
     void createDescriptorSet();
     void createMeshBuffers(const std::vector<Vertex>& vertices,
                            const std::vector<std::uint32_t>& indices);
+    void createTrackBuffers(const std::vector<TrackVertex>& vertices,
+                            const std::vector<std::uint32_t>& indices);
     void createCommandBuffers();
     void createSyncObjects();
 
@@ -125,6 +131,7 @@ private:
 
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
+    VkPipeline trackPipeline_ = VK_NULL_HANDLE; // railway ribbons (reuses layout)
 
     VkCommandPool commandPool_ = VK_NULL_HANDLE;
     std::vector<VkCommandBuffer> commandBuffers_;
@@ -134,6 +141,12 @@ private:
     VkBuffer indexBuffer_ = VK_NULL_HANDLE;
     VkDeviceMemory indexMemory_ = VK_NULL_HANDLE;
     uint32_t indexCount_ = 0;
+
+    VkBuffer trackVertexBuffer_ = VK_NULL_HANDLE;
+    VkDeviceMemory trackVertexMemory_ = VK_NULL_HANDLE;
+    VkBuffer trackIndexBuffer_ = VK_NULL_HANDLE;
+    VkDeviceMemory trackIndexMemory_ = VK_NULL_HANDLE;
+    uint32_t trackIndexCount_ = 0;
 
     std::vector<VkSemaphore> imageAvailable_;
     std::vector<VkSemaphore> renderFinished_;
