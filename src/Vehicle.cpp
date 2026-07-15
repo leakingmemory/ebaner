@@ -5,20 +5,69 @@
 #include <limits>
 
 namespace {
-constexpr float kG = 9.81f;      // m/s^2
-constexpr float kGauge = 1.435f; // standard track gauge (tipping pivot width)
+constexpr float kG = 9.81f;         // m/s^2
+constexpr float kGauge = 1.435f;    // standard track gauge (tipping pivot width)
+constexpr float kFrictionMu = 0.6f; // derailed ground friction ("digging in")
+constexpr float kStopSpeed = 0.1f;  // m/s below which a derailed vehicle stops
 } // namespace
 
 Vehicle::Vehicle(const TrackPath* path, float s, float massKg, float length,
-                 float width, float height)
+                 float width, float height, float initialSpeed)
     : path_(path),
       s_(s),
       mass_(massKg),
       length_(length),
       width_(width),
-      height_(height) {}
+      height_(height),
+      v_(initialSpeed) {}
 
 TrackPose Vehicle::pose() const { return path_->poseAt(s_); }
+
+float Vehicle::speed() const {
+    return (state_ == VehicleState::OnRail) ? std::abs(v_) : glm::length(vel_);
+}
+
+VehicleFrame Vehicle::frame() const {
+    if (state_ == VehicleState::OnRail) {
+        const TrackPose p = path_->poseAt(s_);
+        return {p.pos, p.right, p.tangent, p.up};
+    }
+    return {pos_, fRight_, fTangent_, fUp_};
+}
+
+void Vehicle::update(float dt) {
+    if (state_ == VehicleState::OnRail) {
+        const TrackPose p = path_->poseAt(s_);
+        // Along-track gravity acceleration (downhill in +s direction is positive).
+        const float a = -kG * p.tangent.z;
+        v_ += a * dt;
+        s_ += v_ * dt;
+
+        const float L = path_->length();
+        if (s_ < 0.0f || s_ > L) { // ran off an end -> derail
+            const TrackPose e = path_->poseAt(s_ < 0.0f ? 0.0f : L);
+            pos_ = e.pos;
+            fRight_ = e.right;
+            fTangent_ = e.tangent;
+            fUp_ = e.up;
+            vel_ = v_ * e.tangent; // carry the exit velocity
+            state_ = VehicleState::Derailed;
+        }
+    } else if (state_ == VehicleState::Derailed) {
+        // Friction opposes velocity, magnitude proportional to weight
+        // (deceleration = mu * g); brings the vehicle to rest.
+        const float speed = glm::length(vel_);
+        if (speed > 1e-5f) {
+            const float drop = std::min(kFrictionMu * kG * dt, speed);
+            vel_ -= (vel_ / speed) * drop;
+            pos_ += vel_ * dt;
+        }
+        if (glm::length(vel_) < kStopSpeed) {
+            vel_ = glm::vec3(0.0f);
+            state_ = VehicleState::Stopped;
+        }
+    }
+}
 
 GravityResolution Vehicle::gravity() const {
     GravityResolution r{};

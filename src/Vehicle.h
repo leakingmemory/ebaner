@@ -26,6 +26,17 @@ struct TippingLimit {
     float critSpeed;     // m/s at the queried radius (inf on straight track)
 };
 
+// A rigid frame the wheelset mesh (and chase cam) can be built from, in any
+// vehicle state: origin plus the cross-track/forward/up axes.
+struct VehicleFrame {
+    glm::vec3 pos;
+    glm::vec3 right;
+    glm::vec3 tangent;
+    glm::vec3 up;
+};
+
+enum class VehicleState { OnRail, Derailed, Stopped };
+
 // A rail vehicle riding a TrackPath at arc-length s. For now a single wheelset
 // with a mass; velocity/integration comes later.
 class Vehicle {
@@ -33,7 +44,17 @@ public:
     // Dimensions are the vehicle bounding box: length along travel, width across
     // the track, height vertical (metres).
     Vehicle(const TrackPath* path, float s, float massKg, float length,
-            float width, float height);
+            float width, float height, float initialSpeed = 0.0f);
+
+    // Advance the simulation: gravity accelerates it along the rails; running off
+    // either end derails it; a derailed vehicle is slowed by ground friction
+    // (proportional to its weight) until it stops.
+    void update(float dt);
+
+    // Rigid frame for rendering/camera in the current state.
+    VehicleFrame frame() const;
+    VehicleState state() const { return state_; }
+    float speed() const; // m/s
 
     TrackPose pose() const;
     GravityResolution gravity() const;
@@ -62,4 +83,10 @@ private:
     float s_;
     float mass_;
     float length_, width_, height_;
+
+    VehicleState state_ = VehicleState::OnRail;
+    float v_ = 0.0f;                    // on-rail scalar speed (+ = increasing s)
+    glm::vec3 pos_{0.0f};               // derailed free-body position
+    glm::vec3 vel_{0.0f};               // derailed velocity
+    glm::vec3 fRight_{0.0f}, fTangent_{1.0f, 0.0f, 0.0f}, fUp_{0.0f, 0.0f, 1.0f};
 };

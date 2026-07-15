@@ -5,6 +5,7 @@
 
 #include "TrackMesh.h" // TrackVertex, TrackDrawChunk
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -81,6 +82,12 @@ private:
                                const std::vector<std::uint32_t>& indices);
     void createVehicleBuffers(const std::vector<TrackVertex>& vertices,
                               const std::vector<std::uint32_t>& indices);
+
+public:
+    // Replaces the wheelset vertices for the next frame (fixed topology).
+    void updateVehicleVertices(const std::vector<TrackVertex>& vertices);
+
+private:
     void createCommandBuffers();
     void createSyncObjects();
 
@@ -178,11 +185,16 @@ private:
     VkDeviceMemory buildingIndexMemory_ = VK_NULL_HANDLE;
     uint32_t buildingIndexCount_ = 0;
 
-    VkBuffer vehicleVertexBuffer_ = VK_NULL_HANDLE;
-    VkDeviceMemory vehicleVertexMemory_ = VK_NULL_HANDLE;
+    // Vehicle mesh is rebuilt every frame; one host-visible mapped vertex buffer
+    // per in-flight frame (written after that frame's fence), static index buffer.
+    std::array<VkBuffer, kMaxFramesInFlight> vehicleVertexBuffers_{};
+    std::array<VkDeviceMemory, kMaxFramesInFlight> vehicleVertexMemories_{};
+    std::array<void*, kMaxFramesInFlight> vehicleVertexMapped_{};
+    VkDeviceSize vehicleVertexBytes_ = 0;
     VkBuffer vehicleIndexBuffer_ = VK_NULL_HANDLE;
     VkDeviceMemory vehicleIndexMemory_ = VK_NULL_HANDLE;
     uint32_t vehicleIndexCount_ = 0;
+    std::vector<TrackVertex> pendingVehicleVertices_;
 
     std::vector<VkSemaphore> imageAvailable_;
     std::vector<VkSemaphore> renderFinished_;

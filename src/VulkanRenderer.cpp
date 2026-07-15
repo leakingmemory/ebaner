@@ -987,10 +987,11 @@ void VulkanRenderer::createVehicleBuffers(
     const std::vector<TrackVertex>& vertices,
     const std::vector<std::uint32_t>& indices) {
     vehicleIndexCount_ = static_cast<uint32_t>(indices.size());
-    if (indices.empty()) return; // no vehicle
+    if (indices.empty() || vertices.empty()) return; // no vehicle
 
-    auto upload = [&](const void* data, VkDeviceSize size, VkBufferUsageFlags usage,
-                      VkBuffer& buffer, VkDeviceMemory& memory) {
+    // Static index buffer (fixed topology) — staged upload.
+    {
+        const VkDeviceSize size = sizeof(std::uint32_t) * indices.size();
         VkBuffer staging;
         VkDeviceMemory stagingMem;
         createBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -999,23 +1000,39 @@ void VulkanRenderer::createVehicleBuffers(
                      staging, stagingMem);
         void* mapped;
         vkMapMemory(device_, stagingMem, 0, size, 0, &mapped);
-        std::memcpy(mapped, data, static_cast<std::size_t>(size));
+        std::memcpy(mapped, indices.data(), static_cast<std::size_t>(size));
         vkUnmapMemory(device_, stagingMem);
-
-        createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage,
-                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, buffer, memory);
-        copyBuffer(staging, buffer, size);
-
+        createBuffer(size,
+                     VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                         VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, vehicleIndexBuffer_,
+                     vehicleIndexMemory_);
+        copyBuffer(staging, vehicleIndexBuffer_, size);
         vkDestroyBuffer(device_, staging, nullptr);
         vkFreeMemory(device_, stagingMem, nullptr);
-    };
+    }
 
-    upload(vertices.data(), sizeof(TrackVertex) * vertices.size(),
-           VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, vehicleVertexBuffer_,
-           vehicleVertexMemory_);
-    upload(indices.data(), sizeof(std::uint32_t) * indices.size(),
-           VK_BUFFER_USAGE_INDEX_BUFFER_BIT, vehicleIndexBuffer_,
-           vehicleIndexMemory_);
+    // One host-visible, persistently-mapped vertex buffer per in-flight frame,
+    // seeded with the initial wheelset vertices.
+    vehicleVertexBytes_ = sizeof(TrackVertex) * vertices.size();
+    for (int i = 0; i < kMaxFramesInFlight; ++i) {
+        createBuffer(vehicleVertexBytes_, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                     vehicleVertexBuffers_[i], vehicleVertexMemories_[i]);
+        vkMapMemory(device_, vehicleVertexMemories_[i], 0, vehicleVertexBytes_, 0,
+                    &vehicleVertexMapped_[i]);
+        std::memcpy(vehicleVertexMapped_[i], vertices.data(),
+                    static_cast<std::size_t>(vehicleVertexBytes_));
+    }
+    pendingVehicleVertices_ = vertices;
+}
+
+void VulkanRenderer::updateVehicleVertices(
+    const std::vector<TrackVertex>& vertices) {
+    // Stored now; copied into the current frame's mapped buffer in drawFrame,
+    // after that frame's fence (so the GPU has finished reading it).
+    if (vehicleIndexCount_ > 0) pendingVehicleVertices_ = vertices;
 }
 
 void VulkanRenderer::createCommandBuffers() {
@@ -1100,10 +1117,11 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageInde
         vkCmdDrawIndexed(cmd, buildingIndexCount_, 1, 0, 0, 0);
     }
 
-    // Rail vehicle (wheelset) — same track pipeline.
+    // Rail vehicle (wheelset) — same track pipeline; per-frame dynamic buffer.
     if (vehicleIndexCount_ > 0) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, trackPipeline_);
-        vkCmdBindVertexBuffers(cmd, 0, 1, &vehicleVertexBuffer_, &offset);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &vehicleVertexBuffers_[currentFrame_],
+                               &offset);
         vkCmdBindIndexBuffer(cmd, vehicleIndexBuffer_, 0, VK_INDEX_TYPE_UINT32);
         vkCmdDrawIndexed(cmd, vehicleIndexCount_, 1, 0, 0, 0);
     }
@@ -1233,6 +1251,18 @@ void VulkanRenderer::drawFrame(const PushConstants& pc) {
     }
 
     vkResetFences(device_, 1, &inFlight_[currentFrame_]);
+
+    // This frame slot's previous GPU read is done (fence waited above), so it is
+    // safe to refresh its mapped vehicle vertex buffer for this frame.
+    if (vehicleIndexCount_ > 0 && !pendingVehicleVertices_.empty()) {
+        const VkDeviceSize bytes =
+            sizeof(TrackVertex) * pendingVehicleVertices_.size();
+        if (bytes == vehicleVertexBytes_ && vehicleVertexMapped_[currentFrame_])
+            std::memcpy(vehicleVertexMapped_[currentFrame_],
+                        pendingVehicleVertices_.data(),
+                        static_cast<std::size_t>(bytes));
+    }
+
     vkResetCommandBuffer(commandBuffers_[currentFrame_], 0);
     recordCommandBuffer(commandBuffers_[currentFrame_], imageIndex);
 
@@ -1335,8 +1365,11 @@ void VulkanRenderer::cleanup() {
     vkFreeMemory(device_, roadVertexMemory_, nullptr);
     vkDestroyBuffer(device_, vehicleIndexBuffer_, nullptr);
     vkFreeMemory(device_, vehicleIndexMemory_, nullptr);
-    vkDestroyBuffer(device_, vehicleVertexBuffer_, nullptr);
-    vkFreeMemory(device_, vehicleVertexMemory_, nullptr);
+    for (int i = 0; i < kMaxFramesInFlight; ++i) {
+        if (vehicleVertexMemories_[i]) vkUnmapMemory(device_, vehicleVertexMemories_[i]);
+        vkDestroyBuffer(device_, vehicleVertexBuffers_[i], nullptr);
+        vkFreeMemory(device_, vehicleVertexMemories_[i], nullptr);
+    }
     vkDestroyBuffer(device_, buildingIndexBuffer_, nullptr);
     vkFreeMemory(device_, buildingIndexMemory_, nullptr);
     vkDestroyBuffer(device_, buildingVertexBuffer_, nullptr);

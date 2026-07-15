@@ -116,7 +116,7 @@ int main(int argc, char** argv) {
                         kWheelsetHeight);
 
     WheelsetMesh wheelset;
-    if (vehicle) wheelset.build(vehicle->pose());
+    if (vehicle) wheelset.build(vehicle->frame());
 
     // Resolve gravity at the vehicle: along-track (drives acceleration) vs.
     // weight-on-rails (reacted by the rails; basis for future friction).
@@ -241,6 +241,22 @@ int main(int argc, char** argv) {
         const float dt = static_cast<float>(now - lastTime);
         lastTime = now;
 
+        // Advance the vehicle simulation and refresh its (moving) mesh.
+        if (vehicle) {
+            const float simDt = std::min(dt, 0.05f); // clamp for stability
+            const VehicleState prev = vehicle->state();
+            vehicle->update(simDt);
+            if (vehicle->state() != prev) {
+                static const char* kNames[] = {"OnRail", "Derailed", "Stopped"};
+                std::printf("[Vehicle] -> %s (speed %.1f m/s)\n",
+                            kNames[static_cast<int>(vehicle->state())],
+                            vehicle->speed());
+                std::fflush(stdout);
+            }
+            wheelset.build(vehicle->frame());
+            renderer.updateVehicleVertices(wheelset.vertices());
+        }
+
         // Movement input.
         float fwd = 0.0f, right = 0.0f, up = 0.0f;
         if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) fwd += 1.0f;
@@ -252,8 +268,8 @@ int main(int argc, char** argv) {
         const bool fast = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS;
         if (g_chase && vehicle) {
             // Ride behind + above the wheelset, looking at it. Recomputed from
-            // the vehicle pose each frame, so it follows once the vehicle moves.
-            const TrackPose vp = vehicle->pose();
+            // the vehicle frame each frame, so it follows through derailment.
+            const VehicleFrame vp = vehicle->frame();
             const glm::vec3 axle = vp.pos + vp.up * wheelset::kAxleCentreAboveBed;
             const glm::vec3 camPos =
                 axle - vp.tangent * 8.0f + vp.up * 3.0f;

@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <vector>
 
-struct TrackPose;
+struct VehicleFrame;
 
 // Shared wheelset dimensions (metres). kAxleCentreAboveBed is the height of the
 // axle centre above the rail-bed centreline (pose.pos) — rail top + wheel radius.
@@ -20,7 +20,7 @@ constexpr float kAxleCentreAboveBed = kRailTopZ + kWheelRadius;
 // scene coords, drawn by the track pipeline.
 class WheelsetMesh {
 public:
-    void build(const TrackPose& pose);
+    void build(const VehicleFrame& frame);
 
     const std::vector<TrackVertex>& vertices() const { return vertices_; }
     const std::vector<std::uint32_t>& indices() const { return indices_; }

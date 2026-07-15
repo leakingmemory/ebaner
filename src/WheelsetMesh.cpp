@@ -1,6 +1,6 @@
 #include "WheelsetMesh.h"
 
-#include "TrackPath.h" // TrackPose
+#include "Vehicle.h" // VehicleFrame
 
 #include <cmath>
 #include <cstdio>
@@ -16,11 +16,13 @@ constexpr int kSeg = 20;                        // segments per circle
 constexpr float kPi = 3.14159265358979f;
 } // namespace
 
-void WheelsetMesh::build(const TrackPose& pose) {
-    // Pose frame: X across (right), Y forward (tangent), Z up — all banked.
-    const glm::vec3 X = pose.right, Y = pose.tangent, Z = pose.up;
+void WheelsetMesh::build(const VehicleFrame& frame) {
+    // Frame: X across (right), Y forward (tangent), Z up — all banked.
+    vertices_.clear();
+    indices_.clear();
+    const glm::vec3 X = frame.right, Y = frame.tangent, Z = frame.up;
     const glm::vec3 origin =
-        pose.pos + Z * wheelset::kAxleCentreAboveBed; // axle centre
+        frame.pos + Z * wheelset::kAxleCentreAboveBed; // axle centre
 
     auto worldPt = [&](float lx, float ly, float lz) {
         return origin + X * lx + Y * ly + Z * lz;
@@ -79,7 +81,4 @@ void WheelsetMesh::build(const TrackPose& pose) {
     emitCylinder(0.0f, kAxleRadius, kAxleHalf, kAxleCol);
     emitCylinder(-kGauge * 0.5f, wheelset::kWheelRadius, kWheelWidth * 0.5f, kWheelCol);
     emitCylinder(kGauge * 0.5f, wheelset::kWheelRadius, kWheelWidth * 0.5f, kWheelCol);
-
-    std::printf("[WheelsetMesh] 1 wheelset, %zu vertices, %zu triangles\n",
-                vertices_.size(), indices_.size() / 3);
 }
