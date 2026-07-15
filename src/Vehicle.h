@@ -85,6 +85,12 @@ public:
     // Overturning limit at a given track curvature (1/m) and cant (rad).
     TippingLimit tippingLimit(float curvature, float cant) const;
 
+    // Davis-equation running resistance force (N) opposing motion at the given
+    // speed (m/s): A + B*|v| + C*v^2 — rolling/bearing (A, proportional to weight),
+    // flange/track (B*v, proportional to weight), aerodynamic drag (C*v^2, from
+    // the frontal area). Used as the on-rail rolling resistance.
+    float rollingResistance(float speed) const;
+
     float s() const { return s_; }
     float mass() const { return mass_; }
     float length() const { return length_; }

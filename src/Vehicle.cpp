@@ -23,7 +23,12 @@ constexpr float kGauge = 1.435f;    // standard track gauge (tipping pivot width
 constexpr float kFrictionMu = 0.6f; // derailed ground friction ("digging in")
 constexpr float kStopSpeed = 0.1f;  // m/s below which a derailed vehicle stops
 constexpr float kPushForce = 500.0f; // N, a person's sustained hand shove
-constexpr float kRollResist = 0.004f; // steel-wheel-on-rail rolling resistance
+// Davis running-resistance coefficients (SI). A and B scale with weight; C is
+// aerodynamic. Values are light, appropriate for steel wheel on rail.
+constexpr float kDavisA = 0.002f;    // rolling + bearing, per unit weight
+constexpr float kDavisB = 0.0001f;   // flange/track, per unit weight, s/m
+constexpr float kDragCd = 1.0f;      // aerodynamic drag coefficient (bluff box)
+constexpr float kAirDensity = 1.225f; // kg/m^3
 } // namespace
 
 Vehicle::Vehicle(const TrackPath* path, float s, float massKg, float length,
@@ -37,6 +42,15 @@ Vehicle::Vehicle(const TrackPath* path, float s, float massKg, float length,
       v_(initialSpeed) {}
 
 TrackPose Vehicle::pose() const { return path_->poseAt(s_); }
+
+float Vehicle::rollingResistance(float speed) const {
+    const float w = mass_ * kG;                     // weight (N)
+    const float A = kDavisA * w;                    // rolling + bearing (N)
+    const float B = kDavisB * w;                    // flange/track (N per m/s)
+    const float C = 0.5f * kAirDensity * kDragCd * (width_ * height_); // aero
+    const float v = std::abs(speed);
+    return A + B * v + C * v * v;
+}
 
 float Vehicle::speed() const {
     return (state_ == VehicleState::OnRail) ? std::abs(v_) : glm::length(vel_);
@@ -59,9 +73,10 @@ void Vehicle::update(float dt, float pushInput) {
         const float aPush = pushInput * kPushForce / mass_;
         v_ += (aGrav + aPush) * dt;
 
-        // Light rolling resistance opposes motion, capped so it can't reverse v_
+        // Davis running resistance opposes motion, capped so it can't reverse v_
         // (this also holds the axle on grades gentler than the resistance).
-        const float roll = std::min(kRollResist * kG * dt, std::abs(v_));
+        const float rollDecel = rollingResistance(v_) / mass_;
+        const float roll = std::min(rollDecel * dt, std::abs(v_));
         v_ -= std::copysign(roll, v_);
 
         s_ += v_ * dt;

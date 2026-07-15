@@ -157,6 +157,11 @@ int main(int argc, char** argv) {
                     "above rail\n",
                     vehicle->length(), vehicle->width(), vehicle->height(), I.x,
                     I.y, I.z, vehicle->comHeight());
+        std::printf("[Vehicle] Davis resistance: %.0f N @0, %.0f N @10 m/s, "
+                    "%.0f N @30 m/s\n",
+                    vehicle->rollingResistance(0.0f),
+                    vehicle->rollingResistance(10.0f),
+                    vehicle->rollingResistance(30.0f));
         float kMax = 0.0f, cantAtMax = 0.0f;
         for (float s = 0.0f; s <= vpath->length(); s += 5.0f) {
             const TrackPose p = vpath->poseAt(s);
