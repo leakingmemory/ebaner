@@ -40,7 +40,9 @@ public:
               const std::vector<TrackVertex>& roadVertices,
               const std::vector<std::uint32_t>& roadIndices,
               const std::vector<TrackVertex>& buildingVertices,
-              const std::vector<std::uint32_t>& buildingIndices);
+              const std::vector<std::uint32_t>& buildingIndices,
+              const std::vector<TrackVertex>& vehicleVertices,
+              const std::vector<std::uint32_t>& vehicleIndices);
     void drawFrame(const PushConstants& pc);
     void waitIdle();
     void cleanup();
@@ -77,6 +79,8 @@ private:
                            const std::vector<std::uint32_t>& indices);
     void createBuildingBuffers(const std::vector<TrackVertex>& vertices,
                                const std::vector<std::uint32_t>& indices);
+    void createVehicleBuffers(const std::vector<TrackVertex>& vertices,
+                              const std::vector<std::uint32_t>& indices);
     void createCommandBuffers();
     void createSyncObjects();
 
@@ -173,6 +177,12 @@ private:
     VkBuffer buildingIndexBuffer_ = VK_NULL_HANDLE;
     VkDeviceMemory buildingIndexMemory_ = VK_NULL_HANDLE;
     uint32_t buildingIndexCount_ = 0;
+
+    VkBuffer vehicleVertexBuffer_ = VK_NULL_HANDLE;
+    VkDeviceMemory vehicleVertexMemory_ = VK_NULL_HANDLE;
+    VkBuffer vehicleIndexBuffer_ = VK_NULL_HANDLE;
+    VkDeviceMemory vehicleIndexMemory_ = VK_NULL_HANDLE;
+    uint32_t vehicleIndexCount_ = 0;
 
     std::vector<VkSemaphore> imageAvailable_;
     std::vector<VkSemaphore> renderFinished_;

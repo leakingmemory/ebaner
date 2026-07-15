@@ -57,8 +57,7 @@ std::vector<float> sampleDistances(float length, float step) {
 
 } // namespace
 
-void TrackMesh::build(const TerrainData& data) {
-    const std::vector<TrackPath> paths = buildTrackPaths(data);
+void TrackMesh::build(const std::vector<TrackPath>& paths) {
 
     // Emit one quad (two triangles) with an outward-facing normal. The normal is
     // the geometric normal, flipped to point away from `inside` so lighting is

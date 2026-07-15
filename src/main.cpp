@@ -5,7 +5,9 @@
 #include "TerrainMesh.h"
 #include "Textures.h"
 #include "TrackMesh.h"
+#include "TrackPath.h"
 #include "VulkanRenderer.h"
+#include "WheelsetMesh.h"
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -13,6 +15,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -26,6 +29,7 @@ Camera g_camera;
 double g_lastX = 0.0, g_lastY = 0.0;
 bool g_firstMouse = true;
 bool g_mouseCaptured = true;
+bool g_chase = false; // chase-cam mode (ride the rail vehicle)
 
 void cursorCallback(GLFWwindow*, double x, double y) {
     if (!g_mouseCaptured) { g_firstMouse = true; return; }
@@ -48,6 +52,8 @@ void keyCallback(GLFWwindow* win, int key, int, int action, int) {
                          g_mouseCaptured ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
         g_firstMouse = true;
     }
+    // C toggles the chase camera (ride the rail vehicle).
+    if (key == GLFW_KEY_C && action == GLFW_PRESS) g_chase = !g_chase;
 }
 
 VulkanRenderer* g_renderer = nullptr;
@@ -66,16 +72,36 @@ int main(int argc, char** argv) {
     TrackMesh tracks;
     RoadMesh roads;
     BuildingMesh buildings;
+    std::vector<TrackPath> paths;
     try {
         data.load(datasetRoot);
+        paths = buildTrackPaths(data);
         mesh.build(data);
-        tracks.build(data);
+        tracks.build(paths);
         roads.build(data);
         buildings.build(data);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "Failed to load terrain: %s\n", e.what());
         return EXIT_FAILURE;
     }
+
+    // --- First rail vehicle: a wheelset on the main line near the start ---
+    const TrackPath* vpath = nullptr;
+    float vs = 0.0f;
+    {
+        float best = 1e30f;
+        for (const TrackPath& p : paths) {
+            if (p.trackType() != 0) continue; // main line only
+            for (float s = 0.0f; s <= p.length(); s += 5.0f) {
+                const glm::vec3 q = p.poseAt(s).pos; // nearest point to scene origin
+                const float d2 = q.x * q.x + q.y * q.y;
+                if (d2 < best) { best = d2; vpath = &p; vs = s; }
+            }
+        }
+        if (!vpath && !paths.empty()) vpath = &paths[0];
+    }
+    WheelsetMesh wheelset;
+    if (vpath) wheelset.build(vpath->poseAt(vs));
 
     // --- Window ---
     if (!glfwInit()) {
@@ -128,7 +154,8 @@ int main(int argc, char** argv) {
                       tracks.vertices(), tracks.indices(),
                       tracks.alwaysIndexCount(), tracks.sleeperChunks(),
                       roads.vertices(), roads.indices(),
-                      buildings.vertices(), buildings.indices());
+                      buildings.vertices(), buildings.indices(),
+                      wheelset.vertices(), wheelset.indices());
     } catch (const std::exception& e) {
         std::fprintf(stderr, "Vulkan init failed: %s\n", e.what());
         glfwDestroyWindow(window);
@@ -138,7 +165,7 @@ int main(int argc, char** argv) {
 
     std::printf(
         "\nControls: WASD move, Q/E down/up, mouse look, Shift boost, "
-        "Tab release cursor, Esc quit\n\n");
+        "C chase vehicle, Tab release cursor, Esc quit\n\n");
 
     // Directional sun (scene space): from the south-west, fairly high.
     const glm::vec3 sunDir = glm::normalize(glm::vec3(0.4f, -0.5f, 0.75f));
@@ -164,7 +191,19 @@ int main(int argc, char** argv) {
         if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) up += 1.0f;
         if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) up -= 1.0f;
         const bool fast = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS;
-        g_camera.move(fwd, right, up, dt, fast);
+        if (g_chase && vpath) {
+            // Ride behind + above the wheelset, looking at it. Recomputed from
+            // poseAt(vs) each frame, so it follows once the vehicle can move.
+            const TrackPose vp = vpath->poseAt(vs);
+            const glm::vec3 axle = vp.pos + vp.up * wheelset::kAxleCentreAboveBed;
+            const glm::vec3 camPos =
+                axle - vp.tangent * 8.0f + vp.up * 3.0f;
+            const glm::vec3 dir = glm::normalize(axle - camPos);
+            g_camera.setPose(camPos, std::atan2(dir.y, dir.x),
+                             std::asin(glm::clamp(dir.z, -1.0f, 1.0f)));
+        } else {
+            g_camera.move(fwd, right, up, dt, fast);
+        }
 
         int fbw = 0, fbh = 0;
         glfwGetFramebufferSize(window, &fbw, &fbh);

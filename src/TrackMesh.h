@@ -5,6 +5,7 @@
 #include <vector>
 
 class TerrainData;
+class TrackPath;
 
 // Vertex for the detailed railway geometry (ballast, sleepers, rails).
 struct TrackVertex {
@@ -32,7 +33,7 @@ struct TrackDrawChunk {
 // ballast standing in for them at distance.
 class TrackMesh {
 public:
-    void build(const TerrainData& data);
+    void build(const std::vector<TrackPath>& paths);
 
     const std::vector<TrackVertex>& vertices() const { return vertices_; }
     const std::vector<std::uint32_t>& indices() const { return indices_; }

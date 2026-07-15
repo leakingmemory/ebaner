@@ -82,7 +82,9 @@ void VulkanRenderer::init(GLFWwindow* window,
                           const std::vector<TrackVertex>& roadVertices,
                           const std::vector<std::uint32_t>& roadIndices,
                           const std::vector<TrackVertex>& buildingVertices,
-                          const std::vector<std::uint32_t>& buildingIndices) {
+                          const std::vector<std::uint32_t>& buildingIndices,
+                          const std::vector<TrackVertex>& vehicleVertices,
+                          const std::vector<std::uint32_t>& vehicleIndices) {
     window_ = window;
     validationEnabled_ = validationLayersSupported();
     trackAlwaysIndexCount_ = trackAlwaysIndexCount;
@@ -108,6 +110,7 @@ void VulkanRenderer::init(GLFWwindow* window,
     createTrackBuffers(trackVertices, trackIndices);
     createRoadBuffers(roadVertices, roadIndices);
     createBuildingBuffers(buildingVertices, buildingIndices);
+    createVehicleBuffers(vehicleVertices, vehicleIndices);
     createCommandBuffers();
     createSyncObjects();
 }
@@ -980,6 +983,41 @@ void VulkanRenderer::createBuildingBuffers(
            buildingIndexMemory_);
 }
 
+void VulkanRenderer::createVehicleBuffers(
+    const std::vector<TrackVertex>& vertices,
+    const std::vector<std::uint32_t>& indices) {
+    vehicleIndexCount_ = static_cast<uint32_t>(indices.size());
+    if (indices.empty()) return; // no vehicle
+
+    auto upload = [&](const void* data, VkDeviceSize size, VkBufferUsageFlags usage,
+                      VkBuffer& buffer, VkDeviceMemory& memory) {
+        VkBuffer staging;
+        VkDeviceMemory stagingMem;
+        createBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                     staging, stagingMem);
+        void* mapped;
+        vkMapMemory(device_, stagingMem, 0, size, 0, &mapped);
+        std::memcpy(mapped, data, static_cast<std::size_t>(size));
+        vkUnmapMemory(device_, stagingMem);
+
+        createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage,
+                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, buffer, memory);
+        copyBuffer(staging, buffer, size);
+
+        vkDestroyBuffer(device_, staging, nullptr);
+        vkFreeMemory(device_, stagingMem, nullptr);
+    };
+
+    upload(vertices.data(), sizeof(TrackVertex) * vertices.size(),
+           VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, vehicleVertexBuffer_,
+           vehicleVertexMemory_);
+    upload(indices.data(), sizeof(std::uint32_t) * indices.size(),
+           VK_BUFFER_USAGE_INDEX_BUFFER_BIT, vehicleIndexBuffer_,
+           vehicleIndexMemory_);
+}
+
 void VulkanRenderer::createCommandBuffers() {
     commandBuffers_.resize(kMaxFramesInFlight);
     VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
@@ -1060,6 +1098,14 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageInde
         vkCmdBindVertexBuffers(cmd, 0, 1, &buildingVertexBuffer_, &offset);
         vkCmdBindIndexBuffer(cmd, buildingIndexBuffer_, 0, VK_INDEX_TYPE_UINT32);
         vkCmdDrawIndexed(cmd, buildingIndexCount_, 1, 0, 0, 0);
+    }
+
+    // Rail vehicle (wheelset) — same track pipeline.
+    if (vehicleIndexCount_ > 0) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, trackPipeline_);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &vehicleVertexBuffer_, &offset);
+        vkCmdBindIndexBuffer(cmd, vehicleIndexBuffer_, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, vehicleIndexCount_, 1, 0, 0, 0);
     }
 
     // Railway geometry — same layout/push constants; the descriptor set stays
@@ -1287,6 +1333,10 @@ void VulkanRenderer::cleanup() {
     vkFreeMemory(device_, roadIndexMemory_, nullptr);
     vkDestroyBuffer(device_, roadVertexBuffer_, nullptr);
     vkFreeMemory(device_, roadVertexMemory_, nullptr);
+    vkDestroyBuffer(device_, vehicleIndexBuffer_, nullptr);
+    vkFreeMemory(device_, vehicleIndexMemory_, nullptr);
+    vkDestroyBuffer(device_, vehicleVertexBuffer_, nullptr);
+    vkFreeMemory(device_, vehicleVertexMemory_, nullptr);
     vkDestroyBuffer(device_, buildingIndexBuffer_, nullptr);
     vkFreeMemory(device_, buildingIndexMemory_, nullptr);
     vkDestroyBuffer(device_, buildingVertexBuffer_, nullptr);
