@@ -96,6 +96,7 @@ void TerrainData::load(const std::string& datasetRoot, double halfWindow) {
                 parseTracksBin(dir + "/tracks.bin", t.tracks);
                 parseRoadsBin(dir + "/roads.bin", t.roads);
                 parseBuildingsBin(dir + "/buildings.bin", t.buildings);
+                parsePlatformsBin(dir + "/platforms.bin", t.platforms);
 
                 totalSamples += t.heights.size();
                 tiles_.push_back(std::move(t));
@@ -116,6 +117,30 @@ void TerrainData::load(const std::string& datasetRoot, double halfWindow) {
     if (tiles_.empty()) {
         throw std::runtime_error("no terrain tiles loaded around start point");
     }
+}
+
+bool TerrainData::sampleGround(double worldX, double worldY,
+                               float& elevation) const {
+    bool found = false;
+    double bestRes = 1e30;
+    for (const Tile& t : tiles_) {
+        if (t.heights.empty()) continue;
+        if (worldX < t.originX || worldX >= t.originX + t.extent ||
+            worldY < t.originY || worldY >= t.originY + t.extent)
+            continue;
+        if (t.resolution >= bestRes) continue; // prefer the finest LOD
+        // Row 0 is the north edge (max Y); columns run west->east.
+        int col = static_cast<int>((worldX - t.originX) / t.resolution);
+        int row = static_cast<int>((t.originY + t.extent - worldY) / t.resolution);
+        col = std::clamp(col, 0, PIXELS - 1);
+        row = std::clamp(row, 0, PIXELS - 1);
+        const float h = t.heights[static_cast<std::size_t>(row) * PIXELS + col];
+        if (h <= NODATA) continue; // no data here in this tile
+        elevation = h;
+        bestRes = t.resolution;
+        found = true;
+    }
+    return found;
 }
 
 bool TerrainData::parseTracksBin(const std::string& path,
@@ -327,6 +352,63 @@ bool TerrainData::parseBuildingsBin(const std::string& path,
         }
         if (!ok) break;
         if (b.footprint.size() >= 3) out.push_back(std::move(b));
+    }
+    return !out.empty();
+}
+
+bool TerrainData::parsePlatformsBin(const std::string& path,
+                                    std::vector<PlatformSegment>& out) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return false;
+
+    std::vector<char> buf((std::istreambuf_iterator<char>(f)),
+                          std::istreambuf_iterator<char>());
+    const char* p = buf.data();
+    const char* end = p + buf.size();
+
+    auto readU32 = [&](std::uint32_t& v) -> bool {
+        if (p + 4 > end) return false;
+        std::memcpy(&v, p, 4);
+        p += 4;
+        return true;
+    };
+    auto readF32 = [&](float& v) -> bool {
+        if (p + 4 > end) return false;
+        std::memcpy(&v, p, 4);
+        p += 4;
+        return true;
+    };
+
+    std::uint32_t numPlatforms = 0;
+    if (!readU32(numPlatforms)) return false;
+
+    for (std::uint32_t s = 0; s < numPlatforms; ++s) {
+        if (p + 12 > end) break; // baseZ + height + count
+        float baseZ = 0.0f, height = 0.0f;
+        std::uint32_t numVertices = 0;
+        std::memcpy(&baseZ, p + 0, 4);
+        std::memcpy(&height, p + 4, 4);
+        std::memcpy(&numVertices, p + 8, 4);
+        p += 12;
+
+        // Sanity: each footprint vertex is 8 bytes (x,y). Reject an implausible
+        // count before reserving.
+        if (static_cast<std::size_t>(numVertices) * 8u >
+            static_cast<std::size_t>(end - p))
+            break;
+
+        PlatformSegment pl;
+        pl.baseZ = baseZ;
+        pl.height = height;
+        pl.footprint.reserve(numVertices);
+        bool ok = true;
+        for (std::uint32_t v = 0; v < numVertices; ++v) {
+            float x, y;
+            if (!readF32(x) || !readF32(y)) { ok = false; break; }
+            pl.footprint.emplace_back(x, y);
+        }
+        if (!ok) break;
+        if (pl.footprint.size() >= 3) out.push_back(std::move(pl));
     }
     return !out.empty();
 }

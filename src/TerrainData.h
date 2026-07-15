@@ -48,6 +48,15 @@ struct BuildingSegment {
     std::vector<glm::dvec2> footprint; // exterior ring, not closed
 };
 
+// One OSM station platform: an exterior-ring footprint (world coords,
+// EPSG:25833) with a ground base elevation and slab height. Platforms carry no
+// id, so a footprint straddling tile boundaries must be deduplicated by geometry.
+struct PlatformSegment {
+    float baseZ = 0.0f;  // ground elevation (m)
+    float height = 0.0f; // slab height (m)
+    std::vector<glm::dvec2> footprint; // exterior ring, not closed
+};
+
 // One loaded terrain tile: a 256x256 grid of float32 elevations plus the
 // geometry needed to place it in the world (EPSG:25833, metres).
 struct Tile {
@@ -63,6 +72,7 @@ struct Tile {
     std::vector<TrackSegment> tracks;    // railway segments intersecting this tile
     std::vector<RoadSegment> roads;      // road segments intersecting this tile
     std::vector<BuildingSegment> buildings; // buildings intersecting this tile
+    std::vector<PlatformSegment> platforms; // platforms intersecting this tile
 };
 
 // Loads terrainmapper export tiles around a start location and resolves the
@@ -77,6 +87,11 @@ public:
     void load(const std::string& datasetRoot, double halfWindowMetres = 20000.0);
 
     const std::vector<Tile>& tiles() const { return tiles_; }
+
+    // Samples ground elevation (m) at world (x,y), preferring the finest LOD
+    // tile that covers the point with valid data. Returns false if no loaded
+    // tile has valid (non-NODATA) coverage there.
+    bool sampleGround(double worldX, double worldY, float& elevation) const;
 
     // Scene origin (world coords) that all rendered geometry is relative to.
     glm::dvec3 sceneOrigin() const { return sceneOrigin_; }
@@ -116,6 +131,10 @@ private:
     // Parses a buildings.bin into `out` (world coords); false if unreadable/empty.
     static bool parseBuildingsBin(const std::string& path,
                                   std::vector<BuildingSegment>& out);
+
+    // Parses a platforms.bin into `out` (world coords); false if unreadable/empty.
+    static bool parsePlatformsBin(const std::string& path,
+                                  std::vector<PlatformSegment>& out);
 
     std::vector<Tile> tiles_;
     glm::dvec3 sceneOrigin_{0.0};

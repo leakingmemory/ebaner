@@ -13,6 +13,7 @@
 
 #include "BuildingMesh.h"
 
+#include "EarClip.h"
 #include "TerrainData.h"
 
 #include <algorithm>
@@ -53,66 +54,6 @@ std::uint64_t hashBuilding(const BuildingSegment& b) {
     mix(static_cast<std::uint64_t>(q(b.footprint.front().x)));
     mix(static_cast<std::uint64_t>(q(b.footprint.front().y)));
     return h;
-}
-
-bool pointInTri(const glm::vec2& p, const glm::vec2& a, const glm::vec2& b,
-                const glm::vec2& c) {
-    const float d1 = (p.x - b.x) * (a.y - b.y) - (a.x - b.x) * (p.y - b.y);
-    const float d2 = (p.x - c.x) * (b.y - c.y) - (b.x - c.x) * (p.y - c.y);
-    const float d3 = (p.x - a.x) * (c.y - a.y) - (c.x - a.x) * (p.y - a.y);
-    const bool neg = (d1 < 0) || (d2 < 0) || (d3 < 0);
-    const bool pos = (d1 > 0) || (d2 > 0) || (d3 > 0);
-    return !(neg && pos);
-}
-
-// Ear-clipping triangulation of a simple polygon; returns triangle index triples
-// into `poly`. Empty if it can't be triangulated (degenerate).
-std::vector<int> triangulate(const std::vector<glm::vec2>& poly) {
-    const int n = static_cast<int>(poly.size());
-    std::vector<int> tris;
-    if (n < 3) return tris;
-
-    double area = 0.0;
-    for (int i = 0, j = n - 1; i < n; j = i++)
-        area += static_cast<double>(poly[j].x) * poly[i].y -
-                static_cast<double>(poly[i].x) * poly[j].y;
-    const bool ccw = area > 0.0;
-
-    std::vector<int> v(n);
-    for (int i = 0; i < n; ++i) v[i] = ccw ? i : (n - 1 - i); // work CCW
-
-    int m = n, guard = 0;
-    while (m > 3 && guard++ < 4 * n * n) {
-        bool clipped = false;
-        for (int i = 0; i < m; ++i) {
-            const int i0 = v[(i + m - 1) % m], i1 = v[i], i2 = v[(i + 1) % m];
-            const glm::vec2 a = poly[i0], b = poly[i1], c = poly[i2];
-            const float cross =
-                (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
-            if (cross <= 0.0f) continue; // reflex vertex
-            bool ear = true;
-            for (int k = 0; k < m; ++k) {
-                const int vk = v[k];
-                if (vk == i0 || vk == i1 || vk == i2) continue;
-                if (pointInTri(poly[vk], a, b, c)) { ear = false; break; }
-            }
-            if (!ear) continue;
-            tris.push_back(i0);
-            tris.push_back(i1);
-            tris.push_back(i2);
-            v.erase(v.begin() + i);
-            --m;
-            clipped = true;
-            break;
-        }
-        if (!clipped) break; // degenerate polygon; give up on the remainder
-    }
-    if (m == 3) {
-        tris.push_back(v[0]);
-        tris.push_back(v[1]);
-        tris.push_back(v[2]);
-    }
-    return tris;
 }
 
 } // namespace
@@ -222,7 +163,7 @@ void BuildingMesh::build(const TerrainData& data) {
         const glm::vec3 rInside(centroid.x, centroid.y, zt + pitch * 0.5f);
 
         if (b.roofShape == 0) { // flat cap
-            const std::vector<int> tris = triangulate(fp);
+            const std::vector<int> tris = earClipTriangulate(fp);
             for (std::size_t k = 0; k + 3 <= tris.size(); k += 3)
                 emitRoofTri(glm::vec3(fp[tris[k]], zt), glm::vec3(fp[tris[k + 1]], zt),
                             glm::vec3(fp[tris[k + 2]], zt), rInside, st);
@@ -231,7 +172,7 @@ void BuildingMesh::build(const TerrainData& data) {
             std::vector<float> zTop(n);
             for (int i = 0; i < n; ++i)
                 zTop[i] = zt + pitch * ((tproj[i] - tmin) / span);
-            const std::vector<int> tris = triangulate(fp);
+            const std::vector<int> tris = earClipTriangulate(fp);
             for (std::size_t k = 0; k + 3 <= tris.size(); k += 3)
                 emitRoofTri(glm::vec3(fp[tris[k]], zTop[tris[k]]),
                             glm::vec3(fp[tris[k + 1]], zTop[tris[k + 1]]),

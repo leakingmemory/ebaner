@@ -70,6 +70,8 @@ add_executable(ebaner
     src/TrackMesh.cpp
     src/RoadMesh.cpp
     src/BuildingMesh.cpp
+    src/PlatformMesh.cpp
+    src/EarClip.cpp
     src/VehicleMesh.cpp
     src/Vehicle.cpp
     src/Font.cpp

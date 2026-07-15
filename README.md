@@ -26,6 +26,9 @@ Bodø main track ("track 1 end"), resolved from the `tracks.bin` geometry.
 - **Buildings** — OSM footprints extruded into lit prisms coloured by type, with
   **pitched roofs** (flat / gabled / hipped / pyramidal / skillion) from the OSM
   `roof_shape` tag (`src/BuildingMesh.cpp`).
+- **Station platforms** — OSM `railway=platform` footprints (area platforms and
+  buffered platform edges) extruded into low lit concrete slabs seated on the DTM
+  beside the tracks (`src/PlatformMesh.cpp`).
 - **Rail vehicle** — chosen on an in-window **start screen** (a text menu): a
   single-axle wheelset or a dual-axle bogie (two wheelsets + frame), both unpowered
   (`src/VehicleMesh.cpp`). A small 1-DOF physics model (`src/Vehicle.cpp`) gives it
@@ -93,6 +96,8 @@ Per tile the viewer also reads, when present:
 - `roads.bin` — road polylines (deduped by geometry), category + number.
 - `buildings.bin` — OSM building footprints with kind, roof shape, base
   elevation and height.
+- `platforms.bin` — OSM station-platform footprints with base elevation and slab
+  height.
 
 The track/road/building geometry appears only when the export was produced with
 the corresponding sources (national rail register + NVDB roads + OSM enrichment).

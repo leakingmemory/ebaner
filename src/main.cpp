@@ -14,6 +14,7 @@
 #include "BuildingMesh.h"
 #include "Camera.h"
 #include "Font.h"
+#include "PlatformMesh.h"
 #include "RoadMesh.h"
 #include "TerrainData.h"
 #include "TerrainMesh.h"
@@ -89,6 +90,7 @@ int main(int argc, char** argv) {
     TrackMesh tracks;
     RoadMesh roads;
     BuildingMesh buildings;
+    PlatformMesh platforms;
     std::vector<TrackPath> paths;
     try {
         data.load(datasetRoot);
@@ -97,6 +99,7 @@ int main(int argc, char** argv) {
         tracks.build(paths);
         roads.build(data);
         buildings.build(data);
+        platforms.build(data, paths);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "Failed to load terrain: %s\n", e.what());
         return EXIT_FAILURE;
@@ -165,6 +168,21 @@ int main(int argc, char** argv) {
     texData.layers = landtex::LAYERS;
     texData.byteSize = texPixels.size();
 
+    // Platforms are the same solid-lit static geometry as buildings and draw
+    // identically, so merge them into the building buffers (offsetting the
+    // platform indices) rather than adding new renderer plumbing.
+    std::vector<TrackVertex> structVerts = buildings.vertices();
+    std::vector<std::uint32_t> structIndices = buildings.indices();
+    {
+        const std::uint32_t vbase =
+            static_cast<std::uint32_t>(structVerts.size());
+        structVerts.insert(structVerts.end(), platforms.vertices().begin(),
+                           platforms.vertices().end());
+        structIndices.reserve(structIndices.size() + platforms.indices().size());
+        for (std::uint32_t idx : platforms.indices())
+            structIndices.push_back(idx + vbase);
+    }
+
     // --- Renderer ---
     VulkanRenderer renderer;
     g_renderer = &renderer;
@@ -173,7 +191,7 @@ int main(int argc, char** argv) {
                       tracks.vertices(), tracks.indices(),
                       tracks.alwaysIndexCount(), tracks.sleeperChunks(),
                       roads.vertices(), roads.indices(),
-                      buildings.vertices(), buildings.indices());
+                      structVerts, structIndices);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "Vulkan init failed: %s\n", e.what());
         glfwDestroyWindow(window);
