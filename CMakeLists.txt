@@ -1,3 +1,13 @@
+# ebaner - a Vulkan viewer for terrainmapper rail/terrain exports.
+# Copyright (C) 2026 Jan-Espen Oversand <sigsegv@radiotube.org>
+#
+# This file is part of ebaner. ebaner is free software: you can redistribute it
+# and/or modify it under the terms of version 3 of the GNU General Public License
+# as published by the Free Software Foundation. ebaner is distributed WITHOUT ANY
+# WARRANTY; see the GNU General Public License for details. You should have
+# received a copy of the license along with ebaner; if not, see
+# <https://www.gnu.org/licenses/>.
+
 cmake_minimum_required(VERSION 3.20)
 project(ebaner LANGUAGES CXX)
 
