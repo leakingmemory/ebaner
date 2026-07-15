@@ -11,8 +11,10 @@ class TerrainData;
 struct TrackPose {
     glm::vec3 pos;     // scene-relative metres (z up)
     glm::vec3 tangent; // unit, direction of travel
-    glm::vec3 right;   // unit horizontal perpendicular (width / wheels / banking)
+    glm::vec3 right;   // unit cross-track right (banked by cant)
+    glm::vec3 up;      // unit cross-track up (banked by cant)
     float curvature;   // signed horizontal 1/R (m^-1); sign = curving left/right
+    float cant;        // superelevation roll about the tangent (radians)
 };
 
 // A smooth, arc-length-parameterised centreline for one track, interpolating the
@@ -40,8 +42,9 @@ private:
     // Arc-length table entry mapping cumulative length s -> global parameter
     // g = span + local-u (in [0, numSpans]).
     struct Sample {
-        float s; // cumulative arc length
-        float g; // span + local u
+        float s;    // cumulative arc length
+        float g;    // span + local u
+        float cant; // smoothed superelevation roll (radians)
     };
     std::vector<Sample> table_;
     float length_ = 0.0f;
@@ -51,8 +54,9 @@ private:
     std::uint32_t trackId_ = 0;
     std::uint8_t trackType_ = 0;
 
-    // Map arc-length s -> interpolated span index and local u in [0,1].
-    void locate(float s, int& span, float& u) const;
+    // Map arc-length s -> interpolated span index, local u in [0,1], and the
+    // interpolated (smoothed) cant angle.
+    void locate(float s, int& span, float& u, float& cant) const;
     // Evaluate position / first / second derivative in knot space at span,u.
     void eval(int span, float u, glm::vec3* p, glm::vec3* d1, glm::vec3* d2) const;
 };

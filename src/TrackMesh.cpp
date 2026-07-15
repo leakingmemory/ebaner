@@ -91,9 +91,11 @@ void TrackMesh::build(const TerrainData& data) {
                          const glm::vec3& inside, const glm::vec3& color) {
         emitQuad(p0, p1, p2, p3, inside, color, -1.0f, z2, z2, z2, z2);
     };
-    // Point at centreline P, offset `across` along horizontal perp R and `z` up.
-    auto pt = [](const glm::vec3& P, const glm::vec3& R, float across, float z) {
-        return P + R * across + glm::vec3(0.0f, 0.0f, z);
+    // Point at centreline P, offset `across` along cross-track right R and `z`
+    // along cross-track up U (both banked by cant).
+    auto pt = [](const glm::vec3& P, const glm::vec3& R, const glm::vec3& U,
+                 float across, float z) {
+        return P + R * across + U * z;
     };
 
     // --- Pass 1: ballast bed + rails (always drawn) ------------------------
@@ -104,47 +106,48 @@ void TrackMesh::build(const TerrainData& data) {
             const TrackPose pb = path.poseAt(ss[i + 1]);
             const glm::vec3 A = pa.pos, B = pb.pos;
             const glm::vec3 Ra = pa.right, Rb = pb.right;
+            const glm::vec3 Ua = pa.up, Ub = pb.up;
             const glm::vec3 mid = (A + B) * 0.5f;
             const float vA = ss[i] / kSleeperSpacing;
             const float vB = ss[i + 1] / kSleeperSpacing;
 
             // Ballast top (textured with the ballast/sleeper layer).
-            emitQuad(pt(A, Ra, -kBallastTopHalf, kBallastTopZ),
-                     pt(A, Ra, kBallastTopHalf, kBallastTopZ),
-                     pt(B, Rb, kBallastTopHalf, kBallastTopZ),
-                     pt(B, Rb, -kBallastTopHalf, kBallastTopZ), mid, kBallastTint,
+            emitQuad(pt(A, Ra, Ua,-kBallastTopHalf, kBallastTopZ),
+                     pt(A, Ra, Ua,kBallastTopHalf, kBallastTopZ),
+                     pt(B, Rb, Ub,kBallastTopHalf, kBallastTopZ),
+                     pt(B, Rb, Ub,-kBallastTopHalf, kBallastTopZ), mid, kBallastTint,
                      0.0f, glm::vec2(0.0f, vA), glm::vec2(1.0f, vA),
                      glm::vec2(1.0f, vB), glm::vec2(0.0f, vB));
 
             // Ballast side slopes.
-            solidQuad(pt(A, Ra, -kBallastTopHalf, kBallastTopZ),
-                      pt(A, Ra, -kBallastBotHalf, kBallastBotZ),
-                      pt(B, Rb, -kBallastBotHalf, kBallastBotZ),
-                      pt(B, Rb, -kBallastTopHalf, kBallastTopZ), mid, kBallastSide);
-            solidQuad(pt(A, Ra, kBallastTopHalf, kBallastTopZ),
-                      pt(A, Ra, kBallastBotHalf, kBallastBotZ),
-                      pt(B, Rb, kBallastBotHalf, kBallastBotZ),
-                      pt(B, Rb, kBallastTopHalf, kBallastTopZ), mid, kBallastSide);
+            solidQuad(pt(A, Ra, Ua,-kBallastTopHalf, kBallastTopZ),
+                      pt(A, Ra, Ua,-kBallastBotHalf, kBallastBotZ),
+                      pt(B, Rb, Ub,-kBallastBotHalf, kBallastBotZ),
+                      pt(B, Rb, Ub,-kBallastTopHalf, kBallastTopZ), mid, kBallastSide);
+            solidQuad(pt(A, Ra, Ua,kBallastTopHalf, kBallastTopZ),
+                      pt(A, Ra, Ua,kBallastBotHalf, kBallastBotZ),
+                      pt(B, Rb, Ub,kBallastBotHalf, kBallastBotZ),
+                      pt(B, Rb, Ub,kBallastTopHalf, kBallastTopZ), mid, kBallastSide);
 
             // Two rails: top + two vertical sides each.
             for (float sign : {-1.0f, 1.0f}) {
                 const float rc = sign * kRailHalf;
                 const glm::vec3 rmid =
-                    (pt(A, Ra, rc, (kRailBotZ + kRailTopZ) * 0.5f) +
-                     pt(B, Rb, rc, (kRailBotZ + kRailTopZ) * 0.5f)) *
+                    (pt(A, Ra, Ua,rc, (kRailBotZ + kRailTopZ) * 0.5f) +
+                     pt(B, Rb, Ub,rc, (kRailBotZ + kRailTopZ) * 0.5f)) *
                     0.5f;
-                solidQuad(pt(A, Ra, rc - kRailHalfWidth, kRailTopZ),
-                          pt(A, Ra, rc + kRailHalfWidth, kRailTopZ),
-                          pt(B, Rb, rc + kRailHalfWidth, kRailTopZ),
-                          pt(B, Rb, rc - kRailHalfWidth, kRailTopZ), rmid, kRailCol);
-                solidQuad(pt(A, Ra, rc - kRailHalfWidth, kRailTopZ),
-                          pt(A, Ra, rc - kRailHalfWidth, kRailBotZ),
-                          pt(B, Rb, rc - kRailHalfWidth, kRailBotZ),
-                          pt(B, Rb, rc - kRailHalfWidth, kRailTopZ), rmid, kRailCol);
-                solidQuad(pt(A, Ra, rc + kRailHalfWidth, kRailTopZ),
-                          pt(A, Ra, rc + kRailHalfWidth, kRailBotZ),
-                          pt(B, Rb, rc + kRailHalfWidth, kRailBotZ),
-                          pt(B, Rb, rc + kRailHalfWidth, kRailTopZ), rmid, kRailCol);
+                solidQuad(pt(A, Ra, Ua,rc - kRailHalfWidth, kRailTopZ),
+                          pt(A, Ra, Ua,rc + kRailHalfWidth, kRailTopZ),
+                          pt(B, Rb, Ub,rc + kRailHalfWidth, kRailTopZ),
+                          pt(B, Rb, Ub,rc - kRailHalfWidth, kRailTopZ), rmid, kRailCol);
+                solidQuad(pt(A, Ra, Ua,rc - kRailHalfWidth, kRailTopZ),
+                          pt(A, Ra, Ua,rc - kRailHalfWidth, kRailBotZ),
+                          pt(B, Rb, Ub,rc - kRailHalfWidth, kRailBotZ),
+                          pt(B, Rb, Ub,rc - kRailHalfWidth, kRailTopZ), rmid, kRailCol);
+                solidQuad(pt(A, Ra, Ua,rc + kRailHalfWidth, kRailTopZ),
+                          pt(A, Ra, Ua,rc + kRailHalfWidth, kRailBotZ),
+                          pt(B, Rb, Ub,rc + kRailHalfWidth, kRailBotZ),
+                          pt(B, Rb, Ub,rc + kRailHalfWidth, kRailTopZ), rmid, kRailCol);
             }
         }
     }
@@ -152,12 +155,12 @@ void TrackMesh::build(const TerrainData& data) {
 
     // --- Pass 2: sleeper boxes, grouped into distance-culled chunks --------
     auto emitSleeper = [&](const glm::vec3& P, const glm::vec3& R,
-                           const glm::vec3& T) {
+                           const glm::vec3& U, const glm::vec3& T) {
         const float L = kSleeperHalfLen, W = kSleeperHalfWid;
         const float zb = kSleeperBotZ, zt = kSleeperTopZ;
-        const glm::vec3 inside = P + glm::vec3(0.0f, 0.0f, (zb + zt) * 0.5f);
+        const glm::vec3 inside = P + U * ((zb + zt) * 0.5f);
         auto s = [&](float a, float b, float z) {
-            return P + R * a + T * b + glm::vec3(0.0f, 0.0f, z);
+            return P + R * a + T * b + U * z;
         };
         solidQuad(s(-L, -W, zt), s(L, -W, zt), s(L, W, zt), s(-L, W, zt), inside,
                   kSleeperCol);
@@ -191,7 +194,7 @@ void TrackMesh::build(const TerrainData& data) {
 
         for (float dist = 0.0f; dist <= total + 1e-3f; dist += kSleeperSpacing) {
             const TrackPose p = path.poseAt(dist);
-            emitSleeper(p.pos, p.right, p.tangent);
+            emitSleeper(p.pos, p.right, p.up, p.tangent);
             accum += p.pos;
             ++accumN;
             if (accumN >= kSleepersPerChunk) flush();

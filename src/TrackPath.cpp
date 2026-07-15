@@ -10,6 +10,10 @@
 
 namespace {
 constexpr int kSubStepsPerSpan = 20; // arc-length table resolution per span
+constexpr float kCantFactor = 0.6f;  // design fraction (cant deficiency)
+constexpr float kMaxCant = 0.105f;   // ~6 deg (150 mm over 1.435 m gauge)
+constexpr float kGravity = 9.81f;
+constexpr float kCantSmoothM = 22.0f; // cant-transition smoothing window (m)
 } // namespace
 
 TrackPath::TrackPath(std::uint32_t trackId, std::uint8_t trackType,
@@ -34,7 +38,7 @@ TrackPath::TrackPath(std::uint32_t trackId, std::uint8_t trackType,
 
     // Arc-length table: g = span + local-u in [0, numSpans]; s = cumulative length.
     const int numSpans = static_cast<int>(ctrl_.size()) - 3;
-    table_.push_back({0.0f, 0.0f});
+    table_.push_back({0.0f, 0.0f, 0.0f});
     glm::vec3 prev;
     eval(0, 0.0f, &prev, nullptr, nullptr);
     float s = 0.0f;
@@ -45,10 +49,56 @@ TrackPath::TrackPath(std::uint32_t trackId, std::uint8_t trackType,
             eval(span, u, &p, nullptr, nullptr);
             s += glm::distance(p, prev);
             prev = p;
-            table_.push_back({s, static_cast<float>(span) + u});
+            table_.push_back({s, static_cast<float>(span) + u, 0.0f});
         }
     }
     length_ = table_.empty() ? 0.0f : table_.back().s;
+
+    // Precompute a smoothed superelevation (cant) per sample from the design
+    // speed and curvature: theta = sign(k) * min(factor*atan(v^2*|k|/g), maxCant).
+    std::vector<float> raw(table_.size(), 0.0f);
+    const int npts = static_cast<int>(speed_.size());
+    for (std::size_t i = 0; i < table_.size(); ++i) {
+        const float g = table_[i].g;
+        const int span = std::clamp(static_cast<int>(std::floor(g)), 0,
+                                    std::max(numSpans - 1, 0));
+        const float u = std::clamp(g - static_cast<float>(span), 0.0f, 1.0f);
+        glm::vec3 d1, d2;
+        eval(span, u, nullptr, &d1, &d2);
+        const float denom = std::pow(d1.x * d1.x + d1.y * d1.y, 1.5f);
+        const float kappa =
+            (denom > 1e-8f) ? (d1.x * d2.y - d1.y * d2.x) / denom : 0.0f;
+        float v = 0.0f; // m/s at the nearer surveyed point's speed
+        if (npts > 0) {
+            int idx = std::clamp((u < 0.5f) ? span : span + 1, 0, npts - 1);
+            std::uint16_t sp = speed_[idx];
+            if (sp == 0) {
+                const int j = std::clamp((idx == span) ? span + 1 : span, 0, npts - 1);
+                sp = speed_[j];
+            }
+            v = static_cast<float>(sp) / 3.6f;
+        }
+        if (v > 0.0f) {
+            const float mag =
+                std::atan(kCantFactor * v * v * std::abs(kappa) / kGravity);
+            raw[i] = std::copysign(std::min(mag, kMaxCant), kappa);
+        }
+    }
+    // Box-smooth over ~kCantSmoothM metres so cant ramps in/out (table sorted by s).
+    for (std::size_t i = 0; i < table_.size(); ++i) {
+        const float s0 = table_[i].s;
+        float sum = 0.0f;
+        int cnt = 0;
+        for (int j = static_cast<int>(i); j >= 0 && s0 - table_[j].s <= kCantSmoothM; --j) {
+            sum += raw[j];
+            ++cnt;
+        }
+        for (std::size_t j = i + 1; j < table_.size() && table_[j].s - s0 <= kCantSmoothM; ++j) {
+            sum += raw[j];
+            ++cnt;
+        }
+        table_[i].cant = (cnt > 0) ? sum / static_cast<float>(cnt) : raw[i];
+    }
 }
 
 void TrackPath::eval(int span, float u, glm::vec3* p, glm::vec3* d1,
@@ -84,8 +134,9 @@ void TrackPath::eval(int span, float u, glm::vec3* p, glm::vec3* d1,
     }
 }
 
-void TrackPath::locate(float s, int& span, float& u) const {
+void TrackPath::locate(float s, int& span, float& u, float& cant) const {
     const int numSpans = static_cast<int>(ctrl_.size()) - 3;
+    cant = 0.0f;
     if (numSpans < 1 || table_.size() < 2 || length_ <= 0.0f) {
         span = -1;
         u = 0.0f;
@@ -107,18 +158,21 @@ void TrackPath::locate(float s, int& span, float& u) const {
     const float g = a.g + frac * (b.g - a.g);
     span = std::clamp(static_cast<int>(std::floor(g)), 0, numSpans - 1);
     u = std::clamp(g - static_cast<float>(span), 0.0f, 1.0f);
+    cant = a.cant + frac * (b.cant - a.cant);
 }
 
 TrackPose TrackPath::poseAt(float s) const {
     TrackPose pose;
     int span;
-    float u;
-    locate(s, span, u);
+    float u, cant;
+    locate(s, span, u, cant);
     if (span < 0) {
         pose.pos = ctrl_.size() > 1 ? ctrl_[1] : glm::vec3(0.0f);
         pose.tangent = glm::vec3(1.0f, 0.0f, 0.0f);
         pose.right = glm::vec3(0.0f, 1.0f, 0.0f);
+        pose.up = glm::vec3(0.0f, 0.0f, 1.0f);
         pose.curvature = 0.0f;
+        pose.cant = 0.0f;
         return pose;
     }
 
@@ -133,7 +187,20 @@ TrackPose TrackPath::poseAt(float s) const {
     const float thl = glm::length(th);
     const glm::vec2 r =
         (thl > 1e-8f) ? glm::vec2(-th.y, th.x) / thl : glm::vec2(0.0f, 1.0f);
-    pose.right = glm::vec3(r.x, r.y, 0.0f);
+    const glm::vec3 r0(r.x, r.y, 0.0f); // horizontal cross-track right
+
+    // Track-normal up (perpendicular to tangent and right), oriented +z.
+    glm::vec3 u0 = glm::cross(r0, pose.tangent);
+    if (glm::length(u0) < 1e-8f) u0 = glm::vec3(0.0f, 0.0f, 1.0f);
+    u0 = glm::normalize(u0);
+    if (u0.z < 0.0f) u0 = -u0;
+
+    // Roll the cross-track frame about the tangent by the cant angle (banks into
+    // the curve: outer rail rises).
+    const float c = std::cos(cant), sn = std::sin(cant);
+    pose.right = c * r0 + sn * u0;
+    pose.up = -sn * r0 + c * u0;
+    pose.cant = cant;
 
     // Horizontal signed curvature (x'y'' - y'x'') / |xy'|^3.
     const float xp = D1.x, yp = D1.y, xpp = D2.x, ypp = D2.y;
@@ -145,8 +212,8 @@ TrackPose TrackPath::poseAt(float s) const {
 float TrackPath::speedLimitAt(float s) const {
     if (speed_.empty()) return 0.0f;
     int span;
-    float u;
-    locate(s, span, u);
+    float u, cant;
+    locate(s, span, u, cant);
     const int n = static_cast<int>(speed_.size());
     if (span < 0) return static_cast<float>(speed_.front());
     // speed_ is per surveyed point; a span runs point[span]..point[span+1].
