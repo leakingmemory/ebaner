@@ -46,7 +46,7 @@ set(SHADER_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
 file(MAKE_DIRECTORY ${SHADER_OUT_DIR})
 
 set(SHADER_SPV)
-foreach(shader terrain.vert terrain.frag track.vert track.frag)
+foreach(shader terrain.vert terrain.frag track.vert track.frag text.vert text.frag)
     set(src ${SHADER_DIR}/${shader})
     set(spv ${SHADER_OUT_DIR}/${shader}.spv)
     add_custom_command(
@@ -70,8 +70,9 @@ add_executable(ebaner
     src/TrackMesh.cpp
     src/RoadMesh.cpp
     src/BuildingMesh.cpp
-    src/WheelsetMesh.cpp
+    src/VehicleMesh.cpp
     src/Vehicle.cpp
+    src/Font.cpp
     src/VulkanRenderer.cpp)
 
 add_dependencies(ebaner shaders)

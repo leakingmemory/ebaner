@@ -11,17 +11,18 @@
 // should have received a copy of the license along with ebaner; if not, see
 // <https://www.gnu.org/licenses/>.
 
-#include "Camera.h"
-#include "TerrainData.h"
 #include "BuildingMesh.h"
+#include "Camera.h"
+#include "Font.h"
 #include "RoadMesh.h"
+#include "TerrainData.h"
 #include "TerrainMesh.h"
 #include "Textures.h"
 #include "TrackMesh.h"
 #include "TrackPath.h"
 #include "Vehicle.h"
+#include "VehicleMesh.h"
 #include "VulkanRenderer.h"
-#include "WheelsetMesh.h"
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -29,6 +30,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -116,69 +118,9 @@ int main(int argc, char** argv) {
         if (!vpath && !paths.empty()) vpath = &paths[0];
     }
 
-    // Give the vehicle mass + bounding-box dimensions. Qualified guesses for a
-    // bare railway wheelset (two wheels + axle, nothing attached): ~1.3 t; ~0.2 m
-    // along travel, ~2.2 m axle across, ~0.92 m wheel diameter tall.
-    constexpr float kWheelsetMass = 1300.0f;
-    constexpr float kWheelsetLength = 0.20f;
-    constexpr float kWheelsetWidth = 2.20f;
-    constexpr float kWheelsetHeight = 0.92f;
+    // The vehicle is chosen on the start screen; created (attached) on confirm.
     std::optional<Vehicle> vehicle;
-    if (vpath)
-        vehicle.emplace(vpath, vs, kWheelsetMass, kWheelsetLength, kWheelsetWidth,
-                        kWheelsetHeight);
-
-    WheelsetMesh wheelset;
-    if (vehicle) wheelset.build(vehicle->frame());
-
-    // Resolve gravity at the vehicle: along-track (drives acceleration) vs.
-    // weight-on-rails (reacted by the rails; basis for future friction).
-    if (vehicle) {
-        const GravityResolution g = vehicle->gravity();
-        float maxGradeDeg = 0.0f;
-        for (float s = 0.0f; s <= vpath->length(); s += 10.0f) {
-            const float gr = glm::degrees(std::asin(
-                glm::clamp(vpath->poseAt(s).tangent.z, -1.0f, 1.0f)));
-            if (std::abs(gr) > std::abs(maxGradeDeg)) maxGradeDeg = gr;
-        }
-        std::printf(
-            "[Vehicle] mass %.0f kg; at s=%.0f grade %+.2f deg -> along-track "
-            "accel %.3f m/s^2, weight on rails %.0f N; steepest grade on path "
-            "%+.2f deg (accel %.3f m/s^2)\n",
-            vehicle->mass(), vehicle->s(), glm::degrees(g.gradeRad),
-            glm::length(g.alongTrackAccel), glm::length(g.weightOnRails),
-            maxGradeDeg,
-            9.81f * std::sin(glm::radians(std::abs(maxGradeDeg))));
-
-        // Rotational inertia (box model) and the curve overturning limit.
-        const glm::vec3 I = vehicle->inertia();
-        std::printf("[Vehicle] dims LxWxH = %.2fx%.2fx%.2f m; inertia "
-                    "(roll,pitch,yaw) = (%.0f, %.0f, %.0f) kg*m^2; CoM %.2f m "
-                    "above rail\n",
-                    vehicle->length(), vehicle->width(), vehicle->height(), I.x,
-                    I.y, I.z, vehicle->comHeight());
-        std::printf("[Vehicle] Davis resistance: %.0f N @0, %.0f N @10 m/s, "
-                    "%.0f N @30 m/s\n",
-                    vehicle->rollingResistance(0.0f),
-                    vehicle->rollingResistance(10.0f),
-                    vehicle->rollingResistance(30.0f));
-        float kMax = 0.0f, cantAtMax = 0.0f;
-        for (float s = 0.0f; s <= vpath->length(); s += 5.0f) {
-            const TrackPose p = vpath->poseAt(s);
-            if (std::abs(p.curvature) > kMax) {
-                kMax = std::abs(p.curvature);
-                cantAtMax = p.cant;
-            }
-        }
-        if (kMax > 1e-6f) {
-            const TippingLimit tl = vehicle->tippingLimit(kMax, cantAtMax);
-            std::printf("[Vehicle] sharpest curve R=%.0f m (cant %+.1f deg): "
-                        "overturn at lateral accel %.2f m/s^2 -> critical speed "
-                        "%.0f km/h\n",
-                        1.0f / kMax, glm::degrees(cantAtMax), tl.latAccelLimit,
-                        tl.critSpeed * 3.6f);
-        }
-    }
+    VehicleMesh vmesh;
 
     // --- Window ---
     if (!glfwInit()) {
@@ -231,8 +173,7 @@ int main(int argc, char** argv) {
                       tracks.vertices(), tracks.indices(),
                       tracks.alwaysIndexCount(), tracks.sleeperChunks(),
                       roads.vertices(), roads.indices(),
-                      buildings.vertices(), buildings.indices(),
-                      wheelset.vertices(), wheelset.indices());
+                      buildings.vertices(), buildings.indices());
     } catch (const std::exception& e) {
         std::fprintf(stderr, "Vulkan init failed: %s\n", e.what());
         glfwDestroyWindow(window);
@@ -252,6 +193,51 @@ int main(int argc, char** argv) {
     const char* shotPath = std::getenv("EBANER_SCREENSHOT");
     int frame = 0;
 
+    // Spawns the chosen vehicle once (create + mesh + attach + log physics).
+    auto spawnVehicle = [&](int idx) {
+        if (!vpath) return;
+        idx = std::clamp(idx, 0, kNumVehicleSpecs - 1);
+        vehicle.emplace(vpath, kVehicleSpecs[idx], vs);
+        vmesh.build(*vehicle);
+        renderer.attachVehicle(vmesh.vertices(), vmesh.indices());
+
+        const GravityResolution g = vehicle->gravity();
+        float maxGradeDeg = 0.0f, kMax = 0.0f, cantAtMax = 0.0f;
+        for (float s = 0.0f; s <= vpath->length(); s += 5.0f) {
+            const TrackPose p = vpath->poseAt(s);
+            const float gr = glm::degrees(std::asin(glm::clamp(p.tangent.z, -1.0f, 1.0f)));
+            if (std::abs(gr) > std::abs(maxGradeDeg)) maxGradeDeg = gr;
+            if (std::abs(p.curvature) > kMax) { kMax = std::abs(p.curvature); cantAtMax = p.cant; }
+        }
+        const glm::vec3 I = vehicle->inertia();
+        std::printf("[Vehicle] %s: mass %.0f kg, dims LxWxH = %.2fx%.2fx%.2f m, "
+                    "wheelbase %.2f m; inertia (roll,pitch,yaw) = (%.0f,%.0f,%.0f) "
+                    "kg*m^2; CoM %.2f m; Davis %.0f/%.0f/%.0f N @0/10/30 m/s\n",
+                    vehicle->name(), vehicle->mass(), vehicle->length(),
+                    vehicle->width(), vehicle->height(), vehicle->wheelbase(), I.x,
+                    I.y, I.z, vehicle->comHeight(), vehicle->rollingResistance(0.0f),
+                    vehicle->rollingResistance(10.0f),
+                    vehicle->rollingResistance(30.0f));
+        if (kMax > 1e-6f) {
+            const TippingLimit tl = vehicle->tippingLimit(kMax, cantAtMax);
+            std::printf("[Vehicle] steepest grade %+.2f deg; sharpest curve R=%.0f m "
+                        "-> overturn at %.0f km/h\n",
+                        maxGradeDeg, 1.0f / kMax, tl.critSpeed * 3.6f);
+        }
+        (void)g;
+    };
+
+    enum class Mode { Menu, Sim };
+    Mode mode = Mode::Menu;
+    int menuIndex = 0;
+    if (const char* vsel = std::getenv("EBANER_VEHICLE")) {
+        menuIndex = std::clamp(std::atoi(vsel), 0, kNumVehicleSpecs - 1);
+        spawnVehicle(menuIndex);
+        mode = Mode::Sim;
+    }
+    bool prevUp = false, prevDown = false, prevK1 = false, prevK2 = false,
+         prevEnter = false;
+
     double lastTime = glfwGetTime();
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
@@ -259,13 +245,67 @@ int main(int argc, char** argv) {
         const float dt = static_cast<float>(now - lastTime);
         lastTime = now;
 
-        // Advance the vehicle simulation and refresh its (moving) mesh.
-        if (vehicle) {
-            // Hand push along the track (Up = forward, Down = back).
+        int fbw = 0, fbh = 0;
+        glfwGetFramebufferSize(window, &fbw, &fbh);
+        if (fbw == 0 || fbh == 0) { continue; } // minimised
+
+        if (mode == Mode::Menu) {
+            // --- Start screen: pick a vehicle ---
+            auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
+            const bool kUp = down(GLFW_KEY_UP), kDn = down(GLFW_KEY_DOWN);
+            const bool k1 = down(GLFW_KEY_1), k2 = down(GLFW_KEY_2);
+            const bool kEnt = down(GLFW_KEY_ENTER);
+            if (kUp && !prevUp)
+                menuIndex = (menuIndex + kNumVehicleSpecs - 1) % kNumVehicleSpecs;
+            if (kDn && !prevDown) menuIndex = (menuIndex + 1) % kNumVehicleSpecs;
+            if (k1 && !prevK1) menuIndex = 0;
+            if (k2 && !prevK2 && kNumVehicleSpecs > 1) menuIndex = 1;
+            const bool confirm = kEnt && !prevEnter;
+            prevUp = kUp; prevDown = kDn; prevK1 = k1; prevK2 = k2; prevEnter = kEnt;
+
+            if (confirm) {
+                spawnVehicle(menuIndex);
+                renderer.setOverlayText({});
+                mode = Mode::Sim;
+            } else {
+                std::vector<TextVertex> tv;
+                const float sc = std::max(2.0f, static_cast<float>(fbh) / 240.0f);
+                const float x = 40.0f, lh = 12.0f * sc;
+                // Dark backing panel for contrast over the terrain.
+                {
+                    auto ndc = [&](float px, float py) {
+                        return glm::vec2(px / fbw * 2.0f - 1.0f, py / fbh * 2.0f - 1.0f);
+                    };
+                    const float x1 =
+                        std::min(static_cast<float>(fbw) - 20.0f, 40.0f + 30.0f * 8.0f * sc);
+                    const float y1 = 40.0f + (kNumVehicleSpecs + 4) * lh;
+                    const glm::vec3 pc(0.04f, 0.05f, 0.09f);
+                    const glm::vec2 a = ndc(20.0f, 20.0f), b = ndc(x1, 20.0f),
+                                    c = ndc(x1, y1), d = ndc(20.0f, y1);
+                    tv.push_back({a, pc}); tv.push_back({b, pc}); tv.push_back({c, pc});
+                    tv.push_back({a, pc}); tv.push_back({c, pc}); tv.push_back({d, pc});
+                }
+                appendText(tv, "SELECT VEHICLE", x, 40.0f, sc,
+                           glm::vec3(1.0f, 0.95f, 0.5f), fbw, fbh);
+                for (int i = 0; i < kNumVehicleSpecs; ++i) {
+                    const bool hi = (i == menuIndex);
+                    std::string line = (hi ? "> " : "  ");
+                    line += std::to_string(i + 1) + ". " + kVehicleSpecs[i].name;
+                    appendText(tv, line, x, 40.0f + (i + 2) * lh, sc,
+                               hi ? glm::vec3(1.0f) : glm::vec3(0.6f, 0.6f, 0.65f),
+                               fbw, fbh);
+                }
+                appendText(tv, "UP/DOWN OR 1/2 TO CHOOSE, ENTER TO START", x,
+                           40.0f + (kNumVehicleSpecs + 3) * lh, sc * 0.75f,
+                           glm::vec3(0.7f, 0.8f, 0.9f), fbw, fbh);
+                renderer.setOverlayText(tv);
+            }
+        } else if (vehicle) {
+            // --- Sim: hand push + physics + camera ---
             float pushInput = 0.0f;
             if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) pushInput += 1.0f;
             if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) pushInput -= 1.0f;
-            const float simDt = std::min(dt, 0.05f); // clamp for stability
+            const float simDt = std::min(dt, 0.05f);
             const VehicleState prev = vehicle->state();
             vehicle->update(simDt, pushInput);
             if (vehicle->state() != prev) {
@@ -275,36 +315,28 @@ int main(int argc, char** argv) {
                             vehicle->speed());
                 std::fflush(stdout);
             }
-            wheelset.build(vehicle->frame());
-            renderer.updateVehicleVertices(wheelset.vertices());
-        }
+            vmesh.build(*vehicle);
+            renderer.updateVehicleVertices(vmesh.vertices());
 
-        // Movement input.
-        float fwd = 0.0f, right = 0.0f, up = 0.0f;
-        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) fwd += 1.0f;
-        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) fwd -= 1.0f;
-        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) right += 1.0f;
-        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) right -= 1.0f;
-        if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) up += 1.0f;
-        if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) up -= 1.0f;
-        const bool fast = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS;
-        if (g_chase && vehicle) {
-            // Ride behind + above the wheelset, looking at it. Recomputed from
-            // the vehicle frame each frame, so it follows through derailment.
-            const VehicleFrame vp = vehicle->frame();
-            const glm::vec3 axle = vp.pos + vp.up * wheelset::kAxleCentreAboveBed;
-            const glm::vec3 camPos =
-                axle - vp.tangent * 8.0f + vp.up * 3.0f;
-            const glm::vec3 dir = glm::normalize(axle - camPos);
-            g_camera.setPose(camPos, std::atan2(dir.y, dir.x),
-                             std::asin(glm::clamp(dir.z, -1.0f, 1.0f)));
-        } else {
-            g_camera.move(fwd, right, up, dt, fast);
+            float fwd = 0.0f, right = 0.0f, up = 0.0f;
+            if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) fwd += 1.0f;
+            if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) fwd -= 1.0f;
+            if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) right += 1.0f;
+            if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) right -= 1.0f;
+            if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) up += 1.0f;
+            if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) up -= 1.0f;
+            const bool fast = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS;
+            if (g_chase) {
+                const VehicleFrame vp = vehicle->frame();
+                const glm::vec3 axle = vp.pos + vp.up * wheelset::kAxleCentreAboveBed;
+                const glm::vec3 camPos = axle - vp.tangent * 8.0f + vp.up * 3.0f;
+                const glm::vec3 dir = glm::normalize(axle - camPos);
+                g_camera.setPose(camPos, std::atan2(dir.y, dir.x),
+                                 std::asin(glm::clamp(dir.z, -1.0f, 1.0f)));
+            } else {
+                g_camera.move(fwd, right, up, dt, fast);
+            }
         }
-
-        int fbw = 0, fbh = 0;
-        glfwGetFramebufferSize(window, &fbw, &fbh);
-        if (fbw == 0 || fbh == 0) { continue; } // minimised
 
         const float aspect = static_cast<float>(fbw) / static_cast<float>(fbh);
         PushConstants pc{};

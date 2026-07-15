@@ -1,0 +1,33 @@
+// ebaner - a Vulkan viewer for terrainmapper rail/terrain exports.
+// Copyright (C) 2026 Jan-Espen Oversand <sigsegv@radiotube.org>
+//
+// This file is part of ebaner. ebaner is free software: you can redistribute it
+// and/or modify it under the terms of version 3 of the GNU General Public License
+// as published by the Free Software Foundation.
+//
+// ebaner is distributed in the hope that it will be useful, but WITHOUT ANY
+// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+// PARTICULAR PURPOSE. See the GNU General Public License for more details. You
+// should have received a copy of the license along with ebaner; if not, see
+// <https://www.gnu.org/licenses/>.
+
+#pragma once
+
+#include <glm/glm.hpp>
+
+#include <string>
+#include <vector>
+
+// One vertex of the 2-D text overlay: position in normalised device coords
+// (-1..1, y down) and a solid colour.
+struct TextVertex {
+    glm::vec2 pos;
+    glm::vec3 color;
+};
+
+// Append the triangles for `text` (an 8x8 bitmap font, one solid quad per lit
+// glyph pixel) to `out`, starting at screen pixel (xPx, yPx) with `pxScale`
+// pixels per glyph pixel, in the given colour. `fbW`/`fbH` are the framebuffer
+// size (to convert to NDC). Monospace, 8*pxScale px per character cell.
+void appendText(std::vector<TextVertex>& out, const std::string& text, float xPx,
+                float yPx, float pxScale, const glm::vec3& color, int fbW, int fbH);

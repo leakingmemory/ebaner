@@ -16,6 +16,7 @@
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
 
+#include "Font.h"      // TextVertex
 #include "TrackMesh.h" // TrackVertex, TrackDrawChunk
 
 #include <array>
@@ -54,12 +55,16 @@ public:
               const std::vector<TrackVertex>& roadVertices,
               const std::vector<std::uint32_t>& roadIndices,
               const std::vector<TrackVertex>& buildingVertices,
-              const std::vector<std::uint32_t>& buildingIndices,
-              const std::vector<TrackVertex>& vehicleVertices,
-              const std::vector<std::uint32_t>& vehicleIndices);
+              const std::vector<std::uint32_t>& buildingIndices);
     void drawFrame(const PushConstants& pc);
     void waitIdle();
     void cleanup();
+
+    // Attach the chosen vehicle's mesh once, after the start-screen selection.
+    void attachVehicle(const std::vector<TrackVertex>& vertices,
+                       const std::vector<std::uint32_t>& indices);
+    // Set the 2-D text overlay (screen-space triangles) drawn on top each frame.
+    void setOverlayText(const std::vector<TextVertex>& vertices);
 
     void notifyResize() { framebufferResized_ = true; }
 
@@ -95,6 +100,8 @@ private:
                                const std::vector<std::uint32_t>& indices);
     void createVehicleBuffers(const std::vector<TrackVertex>& vertices,
                               const std::vector<std::uint32_t>& indices);
+    void createTextResources();
+    void createTextPipeline();
 
 public:
     // Replaces the wheelset vertices for the next frame (fixed topology).
@@ -208,6 +215,16 @@ private:
     VkDeviceMemory vehicleIndexMemory_ = VK_NULL_HANDLE;
     uint32_t vehicleIndexCount_ = 0;
     std::vector<TrackVertex> pendingVehicleVertices_;
+
+    // 2-D text overlay: a 2-D pipeline + one host-visible mapped vertex buffer per
+    // in-flight frame, sized to a fixed capacity; the count varies each frame.
+    VkPipeline textPipeline_ = VK_NULL_HANDLE;
+    std::array<VkBuffer, kMaxFramesInFlight> textVertexBuffers_{};
+    std::array<VkDeviceMemory, kMaxFramesInFlight> textVertexMemories_{};
+    std::array<void*, kMaxFramesInFlight> textVertexMapped_{};
+    VkDeviceSize textCapacityBytes_ = 0;
+    std::vector<TextVertex> pendingTextVertices_;
+    uint32_t textVertexCount_ = 0;
 
     std::vector<VkSemaphore> imageAvailable_;
     std::vector<VkSemaphore> renderFinished_;

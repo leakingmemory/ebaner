@@ -31,15 +31,23 @@ constexpr float kDragCd = 1.0f;      // aerodynamic drag coefficient (bluff box)
 constexpr float kAirDensity = 1.225f; // kg/m^3
 } // namespace
 
-Vehicle::Vehicle(const TrackPath* path, float s, float massKg, float length,
-                 float width, float height, float initialSpeed)
+Vehicle::Vehicle(const TrackPath* path, const VehicleSpec& spec, float s,
+                 float initialSpeed)
     : path_(path),
       s_(s),
-      mass_(massKg),
-      length_(length),
-      width_(width),
-      height_(height),
+      mass_(spec.mass),
+      length_(spec.length),
+      width_(spec.width),
+      height_(spec.height),
+      wheelbase_(spec.wheelbase),
+      name_(spec.name),
       v_(initialSpeed) {}
+
+namespace {
+VehicleFrame frameOf(const TrackPose& p) {
+    return {p.pos, p.right, p.tangent, p.up};
+}
+} // namespace
 
 TrackPose Vehicle::pose() const { return path_->poseAt(s_); }
 
@@ -56,20 +64,43 @@ float Vehicle::speed() const {
     return (state_ == VehicleState::OnRail) ? std::abs(v_) : glm::length(vel_);
 }
 
-VehicleFrame Vehicle::frame() const {
-    if (state_ == VehicleState::OnRail) {
-        const TrackPose p = path_->poseAt(s_);
-        return {p.pos, p.right, p.tangent, p.up};
-    }
-    return {pos_, fRight_, fTangent_, fUp_};
+VehicleFrame Vehicle::bodyFrame() const {
+    if (state_ != VehicleState::OnRail)
+        return {pos_, fRight_, fTangent_, fUp_};
+    const float half = 0.5f * wheelbase_;
+    if (half < 1e-3f) return frameOf(path_->poseAt(s_)); // single axle
+    // Bogie: rigid frame spanning the two axle contact points (chords the curve).
+    const TrackPose pr = path_->poseAt(s_ - half);
+    const TrackPose pf = path_->poseAt(s_ + half);
+    VehicleFrame f;
+    f.pos = (pr.pos + pf.pos) * 0.5f;
+    const glm::vec3 chord = pf.pos - pr.pos;
+    const float cl = glm::length(chord);
+    f.tangent = (cl > 1e-6f) ? chord / cl : path_->poseAt(s_).tangent;
+    glm::vec3 up = glm::normalize(pr.up + pf.up);
+    f.right = glm::normalize(glm::cross(up, f.tangent));
+    f.up = glm::normalize(glm::cross(f.tangent, f.right));
+    return f;
+}
+
+std::vector<VehicleFrame> Vehicle::axleFrames() const {
+    const float half = 0.5f * wheelbase_;
+    if (half < 1e-3f) return {frame()}; // single axle
+    if (state_ == VehicleState::OnRail)
+        return {frameOf(path_->poseAt(s_ - half)),
+                frameOf(path_->poseAt(s_ + half))};
+    // Derailed: axles offset from the frozen body along its tangent.
+    const VehicleFrame b{pos_, fRight_, fTangent_, fUp_};
+    return {{pos_ - fTangent_ * half, b.right, b.tangent, b.up},
+            {pos_ + fTangent_ * half, b.right, b.tangent, b.up}};
 }
 
 void Vehicle::update(float dt, float pushInput) {
     if (state_ == VehicleState::OnRail) {
-        const TrackPose p = path_->poseAt(s_);
+        const VehicleFrame bf = bodyFrame();
         // Driving acceleration: gravity along the track (downhill in +s is
         // positive) plus the hand push (a force, so a = F/m).
-        const float aGrav = -kG * p.tangent.z;
+        const float aGrav = -kG * bf.tangent.z;
         const float aPush = pushInput * kPushForce / mass_;
         v_ += (aGrav + aPush) * dt;
 
@@ -81,9 +112,11 @@ void Vehicle::update(float dt, float pushInput) {
 
         s_ += v_ * dt;
 
+        // Derail when the leading or trailing axle passes an end of the track.
         const float L = path_->length();
-        if (s_ < 0.0f || s_ > L) { // ran off an end -> derail
-            const TrackPose e = path_->poseAt(s_ < 0.0f ? 0.0f : L);
+        const float half = 0.5f * wheelbase_;
+        if (s_ - half < 0.0f || s_ + half > L) {
+            const VehicleFrame e = bodyFrame(); // frozen at exit
             pos_ = e.pos;
             fRight_ = e.right;
             fTangent_ = e.tangent;

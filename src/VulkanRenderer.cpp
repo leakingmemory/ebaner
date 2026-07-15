@@ -95,9 +95,7 @@ void VulkanRenderer::init(GLFWwindow* window,
                           const std::vector<TrackVertex>& roadVertices,
                           const std::vector<std::uint32_t>& roadIndices,
                           const std::vector<TrackVertex>& buildingVertices,
-                          const std::vector<std::uint32_t>& buildingIndices,
-                          const std::vector<TrackVertex>& vehicleVertices,
-                          const std::vector<std::uint32_t>& vehicleIndices) {
+                          const std::vector<std::uint32_t>& buildingIndices) {
     window_ = window;
     validationEnabled_ = validationLayersSupported();
     trackAlwaysIndexCount_ = trackAlwaysIndexCount;
@@ -123,7 +121,7 @@ void VulkanRenderer::init(GLFWwindow* window,
     createTrackBuffers(trackVertices, trackIndices);
     createRoadBuffers(roadVertices, roadIndices);
     createBuildingBuffers(buildingVertices, buildingIndices);
-    createVehicleBuffers(vehicleVertices, vehicleIndices);
+    createTextResources(); // vehicle is attached later, after the start screen
     createCommandBuffers();
     createSyncObjects();
 }
@@ -1048,6 +1046,128 @@ void VulkanRenderer::updateVehicleVertices(
     if (vehicleIndexCount_ > 0) pendingVehicleVertices_ = vertices;
 }
 
+void VulkanRenderer::attachVehicle(const std::vector<TrackVertex>& vertices,
+                                   const std::vector<std::uint32_t>& indices) {
+    createVehicleBuffers(vertices, indices);
+}
+
+void VulkanRenderer::createTextPipeline() {
+    // 2-D overlay: reuses pipelineLayout_/renderPass_; no depth so it draws on top.
+    auto vertCode = readFile(std::string(SHADER_DIR) + "/text.vert.spv");
+    auto fragCode = readFile(std::string(SHADER_DIR) + "/text.frag.spv");
+    VkShaderModule vert = createShaderModule(vertCode);
+    VkShaderModule frag = createShaderModule(fragCode);
+    VkPipelineShaderStageCreateInfo vs{
+        VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    vs.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    vs.module = vert;
+    vs.pName = "main";
+    VkPipelineShaderStageCreateInfo fs{
+        VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    fs.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    fs.module = frag;
+    fs.pName = "main";
+    VkPipelineShaderStageCreateInfo stages[] = {vs, fs};
+
+    VkVertexInputBindingDescription binding{};
+    binding.binding = 0;
+    binding.stride = sizeof(TextVertex);
+    binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    std::array<VkVertexInputAttributeDescription, 2> attrs{{
+        {0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(TextVertex, pos)},
+        {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(TextVertex, color)},
+    }};
+    VkPipelineVertexInputStateCreateInfo vertexInput{
+        VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    vertexInput.vertexBindingDescriptionCount = 1;
+    vertexInput.pVertexBindingDescriptions = &binding;
+    vertexInput.vertexAttributeDescriptionCount =
+        static_cast<uint32_t>(attrs.size());
+    vertexInput.pVertexAttributeDescriptions = attrs.data();
+
+    VkPipelineInputAssemblyStateCreateInfo ia{
+        VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo vp{
+        VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    vp.viewportCount = 1;
+    vp.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rs{
+        VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.cullMode = VK_CULL_MODE_NONE;
+    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo ms{
+        VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineDepthStencilStateCreateInfo dsds{
+        VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    dsds.depthTestEnable = VK_FALSE;
+    dsds.depthWriteEnable = VK_FALSE;
+
+    VkPipelineColorBlendAttachmentState cba{};
+    cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                         VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    cba.blendEnable = VK_FALSE;
+    VkPipelineColorBlendStateCreateInfo cb{
+        VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    cb.attachmentCount = 1;
+    cb.pAttachments = &cba;
+
+    std::array<VkDynamicState, 2> dynamics{VK_DYNAMIC_STATE_VIEWPORT,
+                                           VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dyn{
+        VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dyn.dynamicStateCount = static_cast<uint32_t>(dynamics.size());
+    dyn.pDynamicStates = dynamics.data();
+
+    VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    ci.stageCount = 2;
+    ci.pStages = stages;
+    ci.pVertexInputState = &vertexInput;
+    ci.pInputAssemblyState = &ia;
+    ci.pViewportState = &vp;
+    ci.pRasterizationState = &rs;
+    ci.pMultisampleState = &ms;
+    ci.pDepthStencilState = &dsds;
+    ci.pColorBlendState = &cb;
+    ci.pDynamicState = &dyn;
+    ci.layout = pipelineLayout_;
+    ci.renderPass = renderPass_;
+    ci.subpass = 0;
+    check(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &ci, nullptr,
+                                    &textPipeline_),
+          "vkCreateGraphicsPipelines(text)");
+    vkDestroyShaderModule(device_, vert, nullptr);
+    vkDestroyShaderModule(device_, frag, nullptr);
+}
+
+void VulkanRenderer::createTextResources() {
+    createTextPipeline();
+    // Fixed-capacity host-visible mapped vertex buffer per in-flight frame.
+    textCapacityBytes_ = sizeof(TextVertex) * 60000u;
+    for (int i = 0; i < kMaxFramesInFlight; ++i) {
+        createBuffer(textCapacityBytes_, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                     textVertexBuffers_[i], textVertexMemories_[i]);
+        vkMapMemory(device_, textVertexMemories_[i], 0, textCapacityBytes_, 0,
+                    &textVertexMapped_[i]);
+    }
+}
+
+void VulkanRenderer::setOverlayText(const std::vector<TextVertex>& vertices) {
+    pendingTextVertices_ = vertices;
+    const VkDeviceSize maxVerts = textCapacityBytes_ / sizeof(TextVertex);
+    if (pendingTextVertices_.size() > maxVerts)
+        pendingTextVertices_.resize(maxVerts);
+}
+
 void VulkanRenderer::createCommandBuffers() {
     commandBuffers_.resize(kMaxFramesInFlight);
     VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
@@ -1155,6 +1275,14 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageInde
             if (glm::distance(cam, c.centroid) < kSleeperLODRadius)
                 vkCmdDrawIndexed(cmd, c.indexCount, 1, c.firstIndex, 0, 0);
         }
+    }
+
+    // 2-D text overlay, drawn last (no depth) so it sits on top.
+    if (textVertexCount_ > 0) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, textPipeline_);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &textVertexBuffers_[currentFrame_],
+                               &offset);
+        vkCmdDraw(cmd, textVertexCount_, 1, 0, 0);
     }
 
     vkCmdEndRenderPass(cmd);
@@ -1275,6 +1403,11 @@ void VulkanRenderer::drawFrame(const PushConstants& pc) {
                         pendingVehicleVertices_.data(),
                         static_cast<std::size_t>(bytes));
     }
+    // Text overlay: refresh this slot's mapped buffer (count varies per frame).
+    textVertexCount_ = static_cast<uint32_t>(pendingTextVertices_.size());
+    if (textVertexCount_ > 0 && textVertexMapped_[currentFrame_])
+        std::memcpy(textVertexMapped_[currentFrame_], pendingTextVertices_.data(),
+                    sizeof(TextVertex) * textVertexCount_);
 
     vkResetCommandBuffer(commandBuffers_[currentFrame_], 0);
     recordCommandBuffer(commandBuffers_[currentFrame_], imageIndex);
@@ -1359,6 +1492,7 @@ void VulkanRenderer::cleanup() {
 
     cleanupSwapchain();
 
+    vkDestroyPipeline(device_, textPipeline_, nullptr);
     vkDestroyPipeline(device_, trackPipeline_, nullptr);
     vkDestroyPipeline(device_, pipeline_, nullptr);
     vkDestroyPipelineLayout(device_, pipelineLayout_, nullptr);
@@ -1382,6 +1516,9 @@ void VulkanRenderer::cleanup() {
         if (vehicleVertexMemories_[i]) vkUnmapMemory(device_, vehicleVertexMemories_[i]);
         vkDestroyBuffer(device_, vehicleVertexBuffers_[i], nullptr);
         vkFreeMemory(device_, vehicleVertexMemories_[i], nullptr);
+        if (textVertexMemories_[i]) vkUnmapMemory(device_, textVertexMemories_[i]);
+        vkDestroyBuffer(device_, textVertexBuffers_[i], nullptr);
+        vkFreeMemory(device_, textVertexMemories_[i], nullptr);
     }
     vkDestroyBuffer(device_, buildingIndexBuffer_, nullptr);
     vkFreeMemory(device_, buildingIndexMemory_, nullptr);

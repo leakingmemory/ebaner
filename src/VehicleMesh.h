@@ -18,7 +18,7 @@
 #include <cstdint>
 #include <vector>
 
-struct VehicleFrame;
+class Vehicle;
 
 // Shared wheelset dimensions (metres). kAxleCentreAboveBed is the height of the
 // axle centre above the rail-bed centreline (pose.pos) — rail top + wheel radius.
@@ -28,12 +28,12 @@ constexpr float kWheelRadius = 0.46f; // 0.92 m wheel
 constexpr float kAxleCentreAboveBed = kRailTopZ + kWheelRadius;
 } // namespace wheelset
 
-// Builds a single railway wheelset (one axle + two wheels, nothing attached),
-// seated on the rails at the given track pose. Emits TrackVertex + indices in
-// scene coords, drawn by the track pipeline.
-class WheelsetMesh {
+// Builds the geometry for a rail vehicle: one wheelset (axle + two wheels) per
+// axle, plus a bogie frame box when the vehicle has a wheelbase. Emits TrackVertex
+// + indices in scene coords, drawn by the track pipeline.
+class VehicleMesh {
 public:
-    void build(const VehicleFrame& frame);
+    void build(const Vehicle& vehicle);
 
     const std::vector<TrackVertex>& vertices() const { return vertices_; }
     const std::vector<std::uint32_t>& indices() const { return indices_; }

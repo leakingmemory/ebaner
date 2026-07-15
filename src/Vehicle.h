@@ -17,7 +17,26 @@
 
 #include <glm/glm.hpp>
 
+#include <vector>
+
 class TrackPath;
+
+// A selectable rail vehicle type: a rigid body on 1 or 2 axles.
+struct VehicleSpec {
+    const char* name;
+    float mass;      // kg
+    float length;    // m, bounding box along travel
+    float width;     // m, across the track
+    float height;    // m, vertical
+    float wheelbase; // m axle spacing (0 = single axle)
+};
+
+// The vehicles offered on the start screen.
+inline constexpr VehicleSpec kVehicleSpecs[] = {
+    {"Single-axle wheelset", 1300.0f, 0.20f, 2.20f, 0.92f, 0.00f},
+    {"Dual-axle bogie", 4000.0f, 2.60f, 2.50f, 1.05f, 1.80f},
+};
+inline constexpr int kNumVehicleSpecs = 2;
 
 // Gravity on the vehicle resolved at its current pose. The along-track part is
 // "free" (it drives acceleration up/down grades); the remainder is reacted by the
@@ -50,14 +69,12 @@ struct VehicleFrame {
 
 enum class VehicleState { OnRail, Derailed, Stopped };
 
-// A rail vehicle riding a TrackPath at arc-length s. For now a single wheelset
-// with a mass; velocity/integration comes later.
+// A rail vehicle (1 or 2 axles) riding a TrackPath at arc-length s (body centre),
+// with a 1-DOF along-track physics model.
 class Vehicle {
 public:
-    // Dimensions are the vehicle bounding box: length along travel, width across
-    // the track, height vertical (metres).
-    Vehicle(const TrackPath* path, float s, float massKg, float length,
-            float width, float height, float initialSpeed = 0.0f);
+    Vehicle(const TrackPath* path, const VehicleSpec& spec, float s,
+            float initialSpeed = 0.0f);
 
     // Advance the simulation. `pushInput` in [-1, +1] is a hand push along the
     // track (+1 = toward increasing s), applied only while on the rails. Gravity
@@ -65,8 +82,11 @@ public:
     // off either end derails it (then ground friction stops it).
     void update(float dt, float pushInput = 0.0f);
 
-    // Rigid frame for rendering/camera in the current state.
-    VehicleFrame frame() const;
+    // Rigid body frame for the camera / vehicle frame, in the current state.
+    VehicleFrame frame() const { return bodyFrame(); }
+    VehicleFrame bodyFrame() const;
+    // On-rail pose of each axle (1 for single axle, 2 for a bogie), for the mesh.
+    std::vector<VehicleFrame> axleFrames() const;
     VehicleState state() const { return state_; }
     float speed() const; // m/s
 
@@ -96,13 +116,16 @@ public:
     float length() const { return length_; }
     float width() const { return width_; }
     float height() const { return height_; }
+    float wheelbase() const { return wheelbase_; }
+    const char* name() const { return name_; }
     const TrackPath* path() const { return path_; }
 
 private:
     const TrackPath* path_;
     float s_;
     float mass_;
-    float length_, width_, height_;
+    float length_, width_, height_, wheelbase_;
+    const char* name_;
 
     VehicleState state_ = VehicleState::OnRail;
     float v_ = 0.0f;                    // on-rail scalar speed (+ = increasing s)

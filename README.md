@@ -26,12 +26,14 @@ Bodø main track ("track 1 end"), resolved from the `tracks.bin` geometry.
 - **Buildings** — OSM footprints extruded into lit prisms coloured by type, with
   **pitched roofs** (flat / gabled / hipped / pyramidal / skillion) from the OSM
   `roof_shape` tag (`src/BuildingMesh.cpp`).
-- **Rail vehicle** — a plain wheelset (one axle + two wheels) on the rails
-  (`src/WheelsetMesh.cpp`), driven by a small physics model (`src/Vehicle.cpp`):
-  mass, gravity resolved into along-track acceleration + weight-on-rails, box
-  inertia and a curve overturning limit. It rolls under gravity on grades, and if
-  it runs off the end of its track it derails and is slowed to a stop by
-  ground friction proportional to its weight.
+- **Rail vehicle** — chosen on an in-window **start screen** (a text menu): a
+  single-axle wheelset or a dual-axle bogie (two wheelsets + frame), both unpowered
+  (`src/VehicleMesh.cpp`). A small 1-DOF physics model (`src/Vehicle.cpp`) gives it
+  mass, gravity resolved into along-track acceleration + weight-on-rails, Davis
+  running resistance, box inertia and a curve overturning limit. It rolls under
+  gravity on grades, can be **hand-pushed** (Up/Down), coasts to a stop via rolling
+  resistance, and if it runs off the end of its track it derails and is slowed to a
+  stop by ground friction proportional to its weight.
 
 ## Requirements
 
@@ -102,6 +104,7 @@ the corresponding sources (national rail register + NVDB roads + OSM enrichment)
 | `EBANER_SCREENSHOT` | Render ~20 frames, write that frame to the given PPM, exit.   |
 | `EBANER_CAM`        | Scripted camera `"x,y,z,yawDeg,pitchDeg"` (scene-relative m). |
 | `EBANER_NOSTITCH`   | Skip the seam-stitching pass (to inspect raw tile seams).     |
+| `EBANER_VEHICLE`    | Skip the start screen and preselect a vehicle (`0` or `1`).   |
 
 ## Not yet implemented
 
