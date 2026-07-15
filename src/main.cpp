@@ -103,11 +103,17 @@ int main(int argc, char** argv) {
         if (!vpath && !paths.empty()) vpath = &paths[0];
     }
 
-    // Give the vehicle a mass. Qualified guess for a bare railway wheelset
-    // (two wheels + axle, nothing attached): ~1.0-1.5 t; use 1300 kg.
+    // Give the vehicle mass + bounding-box dimensions. Qualified guesses for a
+    // bare railway wheelset (two wheels + axle, nothing attached): ~1.3 t; ~0.2 m
+    // along travel, ~2.2 m axle across, ~0.92 m wheel diameter tall.
     constexpr float kWheelsetMass = 1300.0f;
+    constexpr float kWheelsetLength = 0.20f;
+    constexpr float kWheelsetWidth = 2.20f;
+    constexpr float kWheelsetHeight = 0.92f;
     std::optional<Vehicle> vehicle;
-    if (vpath) vehicle.emplace(vpath, vs, kWheelsetMass);
+    if (vpath)
+        vehicle.emplace(vpath, vs, kWheelsetMass, kWheelsetLength, kWheelsetWidth,
+                        kWheelsetHeight);
 
     WheelsetMesh wheelset;
     if (vehicle) wheelset.build(vehicle->pose());
@@ -130,6 +136,30 @@ int main(int argc, char** argv) {
             glm::length(g.alongTrackAccel), glm::length(g.weightOnRails),
             maxGradeDeg,
             9.81f * std::sin(glm::radians(std::abs(maxGradeDeg))));
+
+        // Rotational inertia (box model) and the curve overturning limit.
+        const glm::vec3 I = vehicle->inertia();
+        std::printf("[Vehicle] dims LxWxH = %.2fx%.2fx%.2f m; inertia "
+                    "(roll,pitch,yaw) = (%.0f, %.0f, %.0f) kg*m^2; CoM %.2f m "
+                    "above rail\n",
+                    vehicle->length(), vehicle->width(), vehicle->height(), I.x,
+                    I.y, I.z, vehicle->comHeight());
+        float kMax = 0.0f, cantAtMax = 0.0f;
+        for (float s = 0.0f; s <= vpath->length(); s += 5.0f) {
+            const TrackPose p = vpath->poseAt(s);
+            if (std::abs(p.curvature) > kMax) {
+                kMax = std::abs(p.curvature);
+                cantAtMax = p.cant;
+            }
+        }
+        if (kMax > 1e-6f) {
+            const TippingLimit tl = vehicle->tippingLimit(kMax, cantAtMax);
+            std::printf("[Vehicle] sharpest curve R=%.0f m (cant %+.1f deg): "
+                        "overturn at lateral accel %.2f m/s^2 -> critical speed "
+                        "%.0f km/h\n",
+                        1.0f / kMax, glm::degrees(cantAtMax), tl.latAccelLimit,
+                        tl.critSpeed * 3.6f);
+        }
     }
 
     // --- Window ---
