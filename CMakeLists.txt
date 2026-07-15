@@ -61,6 +61,7 @@ add_executable(ebaner
     src/RoadMesh.cpp
     src/BuildingMesh.cpp
     src/WheelsetMesh.cpp
+    src/Vehicle.cpp
     src/VulkanRenderer.cpp)
 
 add_dependencies(ebaner shaders)

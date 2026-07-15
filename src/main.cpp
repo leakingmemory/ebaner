@@ -6,6 +6,7 @@
 #include "Textures.h"
 #include "TrackMesh.h"
 #include "TrackPath.h"
+#include "Vehicle.h"
 #include "VulkanRenderer.h"
 #include "WheelsetMesh.h"
 
@@ -20,6 +21,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -100,8 +102,35 @@ int main(int argc, char** argv) {
         }
         if (!vpath && !paths.empty()) vpath = &paths[0];
     }
+
+    // Give the vehicle a mass. Qualified guess for a bare railway wheelset
+    // (two wheels + axle, nothing attached): ~1.0-1.5 t; use 1300 kg.
+    constexpr float kWheelsetMass = 1300.0f;
+    std::optional<Vehicle> vehicle;
+    if (vpath) vehicle.emplace(vpath, vs, kWheelsetMass);
+
     WheelsetMesh wheelset;
-    if (vpath) wheelset.build(vpath->poseAt(vs));
+    if (vehicle) wheelset.build(vehicle->pose());
+
+    // Resolve gravity at the vehicle: along-track (drives acceleration) vs.
+    // weight-on-rails (reacted by the rails; basis for future friction).
+    if (vehicle) {
+        const GravityResolution g = vehicle->gravity();
+        float maxGradeDeg = 0.0f;
+        for (float s = 0.0f; s <= vpath->length(); s += 10.0f) {
+            const float gr = glm::degrees(std::asin(
+                glm::clamp(vpath->poseAt(s).tangent.z, -1.0f, 1.0f)));
+            if (std::abs(gr) > std::abs(maxGradeDeg)) maxGradeDeg = gr;
+        }
+        std::printf(
+            "[Vehicle] mass %.0f kg; at s=%.0f grade %+.2f deg -> along-track "
+            "accel %.3f m/s^2, weight on rails %.0f N; steepest grade on path "
+            "%+.2f deg (accel %.3f m/s^2)\n",
+            vehicle->mass(), vehicle->s(), glm::degrees(g.gradeRad),
+            glm::length(g.alongTrackAccel), glm::length(g.weightOnRails),
+            maxGradeDeg,
+            9.81f * std::sin(glm::radians(std::abs(maxGradeDeg))));
+    }
 
     // --- Window ---
     if (!glfwInit()) {
@@ -191,10 +220,10 @@ int main(int argc, char** argv) {
         if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) up += 1.0f;
         if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) up -= 1.0f;
         const bool fast = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS;
-        if (g_chase && vpath) {
+        if (g_chase && vehicle) {
             // Ride behind + above the wheelset, looking at it. Recomputed from
-            // poseAt(vs) each frame, so it follows once the vehicle can move.
-            const TrackPose vp = vpath->poseAt(vs);
+            // the vehicle pose each frame, so it follows once the vehicle moves.
+            const TrackPose vp = vehicle->pose();
             const glm::vec3 axle = vp.pos + vp.up * wheelset::kAxleCentreAboveBed;
             const glm::vec3 camPos =
                 axle - vp.tangent * 8.0f + vp.up * 3.0f;
