@@ -28,9 +28,10 @@ struct RoadSegment {
 // ground base elevation and extrusion height. Buildings carry no id, so a
 // footprint straddling tile boundaries must be deduplicated by geometry.
 struct BuildingSegment {
-    std::uint8_t kind = 0; // 0=other,1=residential,2=commercial,3=industrial
-    float baseZ = 0.0f;    // ground elevation (m)
-    float height = 0.0f;   // extrusion height (m)
+    std::uint8_t kind = 0;      // 0=other,1=residential,2=commercial,3=industrial
+    std::uint8_t roofShape = 0; // 0=flat,1=gabled,2=hipped,3=pyramidal,4=skillion
+    float baseZ = 0.0f;         // ground elevation (m)
+    float height = 0.0f;        // wall/eaves height (m)
     std::vector<glm::dvec2> footprint; // exterior ring, not closed
 };
 

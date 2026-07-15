@@ -2,6 +2,7 @@
 
 #include "TerrainData.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <unordered_set>
@@ -136,6 +137,27 @@ void BuildingMesh::build(const TerrainData& data) {
         indices_.push_back(base + 2);
         indices_.push_back(base + 3);
     };
+    // Roof triangle: outward normal; near-vertical faces (gable ends) get the
+    // wall colour, sloped/flat faces the roof colour.
+    auto emitRoofTri = [&](const glm::vec3& p0, const glm::vec3& p1,
+                           const glm::vec3& p2, const glm::vec3& inside,
+                           const BuildingStyle& st) {
+        glm::vec3 nrm = glm::cross(p1 - p0, p2 - p0);
+        const float nl = glm::length(nrm);
+        if (nl < 1e-9f) return; // degenerate
+        nrm /= nl;
+        const glm::vec3 cen = (p0 + p1 + p2) * (1.0f / 3.0f);
+        if (glm::dot(nrm, cen - inside) < 0.0f) nrm = -nrm;
+        const glm::vec3 color = (std::abs(nrm.z) < 0.35f) ? st.wall : st.roof;
+        const glm::vec2 uv(0.0f);
+        const std::uint32_t base = static_cast<std::uint32_t>(vertices_.size());
+        vertices_.push_back({p0, nrm, color, uv, -1.0f});
+        vertices_.push_back({p1, nrm, color, uv, -1.0f});
+        vertices_.push_back({p2, nrm, color, uv, -1.0f});
+        indices_.push_back(base + 0);
+        indices_.push_back(base + 1);
+        indices_.push_back(base + 2);
+    };
 
     for (const BuildingSegment* bp : uniq) {
         const BuildingSegment& b = *bp;
@@ -164,19 +186,66 @@ void BuildingMesh::build(const TerrainData& data) {
                      st.wall);
         }
 
-        // Roof: triangulated footprint at the top, facing up.
-        const std::vector<int> tris = triangulate(fp);
-        const glm::vec3 up(0.0f, 0.0f, 1.0f);
-        const glm::vec2 uv(0.0f);
-        for (std::size_t k = 0; k + 3 <= tris.size(); k += 3) {
-            const std::uint32_t base = static_cast<std::uint32_t>(vertices_.size());
-            for (int j = 0; j < 3; ++j) {
-                const glm::vec2& q = fp[tris[k + j]];
-                vertices_.push_back({glm::vec3(q.x, q.y, zt), up, st.roof, uv, -1.0f});
+        // Roof, driven by OSM roof_shape.
+        // Pitch height scales with footprint size; ridge axis = longest edge.
+        glm::vec2 bmin = fp[0], bmax = fp[0];
+        for (const glm::vec2& q : fp) { bmin = glm::min(bmin, q); bmax = glm::max(bmax, q); }
+        const float ext = std::min(bmax.x - bmin.x, bmax.y - bmin.y);
+        const float pitch = std::clamp(0.35f * ext, 1.5f, 8.0f);
+        glm::vec2 axis(1.0f, 0.0f);
+        float bestLen = -1.0f;
+        for (int i = 0; i < n; ++i) {
+            const glm::vec2 e = fp[(i + 1) % n] - fp[i];
+            const float L = glm::length(e);
+            if (L > bestLen) { bestLen = L; if (L > 1e-4f) axis = e / L; }
+        }
+        std::vector<float> tproj(n);
+        float tmin = 1e30f, tmax = -1e30f;
+        for (int i = 0; i < n; ++i) {
+            tproj[i] = glm::dot(fp[i] - centroid, axis);
+            tmin = std::min(tmin, tproj[i]);
+            tmax = std::max(tmax, tproj[i]);
+        }
+        const glm::vec3 rInside(centroid.x, centroid.y, zt + pitch * 0.5f);
+
+        if (b.roofShape == 0) { // flat cap
+            const std::vector<int> tris = triangulate(fp);
+            for (std::size_t k = 0; k + 3 <= tris.size(); k += 3)
+                emitRoofTri(glm::vec3(fp[tris[k]], zt), glm::vec3(fp[tris[k + 1]], zt),
+                            glm::vec3(fp[tris[k + 2]], zt), rInside, st);
+        } else if (b.roofShape == 4) { // skillion (single slope)
+            const float span = std::max(tmax - tmin, 1e-3f);
+            std::vector<float> zTop(n);
+            for (int i = 0; i < n; ++i)
+                zTop[i] = zt + pitch * ((tproj[i] - tmin) / span);
+            const std::vector<int> tris = triangulate(fp);
+            for (std::size_t k = 0; k + 3 <= tris.size(); k += 3)
+                emitRoofTri(glm::vec3(fp[tris[k]], zTop[tris[k]]),
+                            glm::vec3(fp[tris[k + 1]], zTop[tris[k + 1]]),
+                            glm::vec3(fp[tris[k + 2]], zTop[tris[k + 2]]), rInside, st);
+        } else { // ridge roof: gabled=1, hipped=2, pyramidal=3
+            const float rmid = (tmin + tmax) * 0.5f, half = (tmax - tmin) * 0.5f;
+            const float inset = (b.roofShape == 2) ? 0.28f
+                                : (b.roofShape == 3) ? 1.0f
+                                                     : 0.0f;
+            const float ridgeHalf = half * (1.0f - inset);
+            const float ridgeMin = rmid - ridgeHalf, ridgeMax = rmid + ridgeHalf;
+            auto ridgePt = [&](float t) {
+                return centroid + axis * std::clamp(t, ridgeMin, ridgeMax);
+            };
+            const float ztop = zt + pitch;
+            for (int i = 0; i < n; ++i) {
+                const int j = (i + 1) % n;
+                const glm::vec3 a(fp[i].x, fp[i].y, zt), c(fp[j].x, fp[j].y, zt);
+                const glm::vec2 r0 = ridgePt(tproj[i]), r1 = ridgePt(tproj[j]);
+                const glm::vec3 R0(r0.x, r0.y, ztop), R1(r1.x, r1.y, ztop);
+                if (glm::distance(r0, r1) < 0.05f) {
+                    emitRoofTri(a, c, R0, rInside, st);
+                } else {
+                    emitRoofTri(a, c, R1, rInside, st);
+                    emitRoofTri(a, R1, R0, rInside, st);
+                }
             }
-            indices_.push_back(base + 0);
-            indices_.push_back(base + 1);
-            indices_.push_back(base + 2);
         }
     }
 

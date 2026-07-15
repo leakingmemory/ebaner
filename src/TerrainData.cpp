@@ -284,8 +284,9 @@ bool TerrainData::parseBuildingsBin(const std::string& path,
     if (!readU32(numBuildings)) return false;
 
     for (std::uint32_t s = 0; s < numBuildings; ++s) {
-        if (p + 16 > end) break; // kind + reserved + baseZ + height + numVertices
+        if (p + 16 > end) break; // kind + roof + reserved + baseZ + height + count
         const std::uint8_t kind = static_cast<std::uint8_t>(p[0]);
+        const std::uint8_t roofShape = static_cast<std::uint8_t>(p[1]);
         float baseZ = 0.0f, height = 0.0f;
         std::uint32_t numVertices = 0;
         std::memcpy(&baseZ, p + 4, 4);
@@ -301,6 +302,7 @@ bool TerrainData::parseBuildingsBin(const std::string& path,
 
         BuildingSegment b;
         b.kind = kind;
+        b.roofShape = roofShape;
         b.baseZ = baseZ;
         b.height = height;
         b.footprint.reserve(numVertices);
