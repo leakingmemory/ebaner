@@ -82,3 +82,17 @@ no cracks or T-junctions between differing resolutions (see `src/TerrainMesh.cpp
 ## Not yet implemented
 
 Track/road rendering and streamed/dynamic tile loading.
+
+## License
+
+ebaner is licensed under the **GNU General Public License, version 3 (GPLv3)** —
+see [`LICENSE`](LICENSE).
+
+Copyright © Jan-Espen Oversand &lt;sigsegv@radiotube.org&gt;.
+
+## Contributing
+
+Contributions are welcome under the terms in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+Note that, in addition to the GPLv3, contributors grant the maintainer
+(Jan-Espen Oversand) the right to relicense the project and to offer it under
+additional licenses.
