@@ -27,8 +27,13 @@ Bodø main track ("track 1 end"), resolved from the `tracks.bin` geometry.
   **pitched roofs** (flat / gabled / hipped / pyramidal / skillion) from the OSM
   `roof_shape` tag (`src/BuildingMesh.cpp`).
 - **Station platforms** — OSM `railway=platform` footprints (area platforms and
-  buffered platform edges) extruded into low lit concrete slabs seated on the DTM
-  beside the tracks (`src/PlatformMesh.cpp`).
+  buffered platform edges) extruded into low lit slabs beside the tracks
+  (`src/PlatformMesh.cpp`). The slab top is set a standard 0.76 m above the
+  nearest **rail head** (not the raw DTM), so long platforms sit flat at rail
+  level instead of sinking into rising ground. The surface is styled to the
+  Norwegian standard: an asphalt centre with light **concrete edge slabs** and a
+  painted **yellow safety line** where the slabs begin, on the track-facing
+  long edges.
 - **Rail vehicle** — chosen on an in-window **start screen** (a text menu): a
   single-axle wheelset or a dual-axle bogie (two wheelsets + frame), both unpowered
   (`src/VehicleMesh.cpp`). A small 1-DOF physics model (`src/Vehicle.cpp`) gives it

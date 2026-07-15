@@ -26,9 +26,15 @@
 
 namespace {
 
-// Concrete greys: walls a touch darker than the top surface.
-const glm::vec3 kWallColor(0.60f, 0.60f, 0.62f);
-const glm::vec3 kTopColor(0.72f, 0.72f, 0.74f);
+// Surface palette. Norwegian platforms are asphalt with a band of light
+// concrete edge slabs, and a painted yellow safety line where the slabs start.
+const glm::vec3 kWallColor(0.60f, 0.60f, 0.62f);     // concrete slab sides
+const glm::vec3 kAsphaltColor(0.30f, 0.30f, 0.32f);  // asphalt centre
+const glm::vec3 kConcreteColor(0.74f, 0.74f, 0.76f); // concrete edge slabs
+const glm::vec3 kYellowColor(0.88f, 0.74f, 0.10f);   // safety line
+
+constexpr float kEdgeBandWidth = 0.8f; // concrete edge-slab band width (m)
+constexpr float kYellowWidth = 0.12f;  // painted safety-line width (m)
 
 // The rail head sits this far above the track centreline z in the rendered
 // track cross-section (mirrors kRailTopZ in TrackMesh.cpp).
@@ -59,6 +65,20 @@ bool nearestRailHeadZ(const glm::vec2& pt, const std::vector<TrackPath>& paths,
         }
     }
     return found;
+}
+
+// True if any track centreline passes within `radius` (horizontal) of `pt`
+// (scene-relative x,y) — used to decide which long edges face a track.
+bool trackWithin(const glm::vec2& pt, const std::vector<TrackPath>& paths,
+                 float radius) {
+    const float r2 = radius * radius;
+    for (const TrackPath& path : paths)
+        for (float s = 0.0f; s <= path.length(); s += 2.0f) {
+            const glm::vec3 c = path.poseAt(s).pos;
+            const float dx = c.x - pt.x, dy = c.y - pt.y;
+            if (dx * dx + dy * dy < r2) return true;
+        }
+    return false;
 }
 
 std::uint64_t hashPlatform(const PlatformSegment& p) {
@@ -112,18 +132,28 @@ void PlatformMesh::build(const TerrainData& data,
         indices_.push_back(base + 2);
         indices_.push_back(base + 3);
     };
+    // Top surface faces straight up; colour varies by band (asphalt/concrete/
+    // yellow). Cull mode is NONE so winding does not matter.
     auto emitTopTri = [&](const glm::vec3& p0, const glm::vec3& p1,
-                          const glm::vec3& p2) {
-        // Top surface faces straight up.
+                          const glm::vec3& p2, const glm::vec3& color) {
         const glm::vec3 nrm(0.0f, 0.0f, 1.0f);
         const glm::vec2 uv(0.0f);
         const std::uint32_t base = static_cast<std::uint32_t>(vertices_.size());
-        vertices_.push_back({p0, nrm, kTopColor, uv, -1.0f});
-        vertices_.push_back({p1, nrm, kTopColor, uv, -1.0f});
-        vertices_.push_back({p2, nrm, kTopColor, uv, -1.0f});
+        vertices_.push_back({p0, nrm, color, uv, -1.0f});
+        vertices_.push_back({p1, nrm, color, uv, -1.0f});
+        vertices_.push_back({p2, nrm, color, uv, -1.0f});
         indices_.push_back(base + 0);
         indices_.push_back(base + 1);
         indices_.push_back(base + 2);
+    };
+    // A flat top quad (v0..v3 in order) at height zt.
+    auto emitTopQuad = [&](const glm::vec2& v0, const glm::vec2& v1,
+                           const glm::vec2& v2, const glm::vec2& v3, float zt,
+                           const glm::vec3& color) {
+        emitTopTri(glm::vec3(v0, zt), glm::vec3(v1, zt), glm::vec3(v2, zt),
+                   color);
+        emitTopTri(glm::vec3(v0, zt), glm::vec3(v2, zt), glm::vec3(v3, zt),
+                   color);
     };
 
     for (const PlatformSegment* pp : uniq) {
@@ -203,11 +233,89 @@ void PlatformMesh::build(const TerrainData& data,
                      kWallColor);
         }
 
-        // Flat top slab.
-        const std::vector<int> tris = earClipTriangulate(fp);
-        for (std::size_t k = 0; k + 3 <= tris.size(); k += 3)
-            emitTopTri(glm::vec3(fp[tris[k]], zt), glm::vec3(fp[tris[k + 1]], zt),
-                       glm::vec3(fp[tris[k + 2]], zt));
+        // Top surface. Model the slab as the strip between its two long edges
+        // and split each cross-section laterally into: concrete edge band ->
+        // yellow safety line -> asphalt centre -> yellow -> concrete, banding
+        // only the long edges that face a track. Bands are partitioned (never
+        // overlapping) so the yellow line stays flush with no z-fighting.
+        int li = 0;
+        float bestLen = -1.0f;
+        for (int i = 0; i < n; ++i) {
+            const float L = glm::length(fp[(i + 1) % n] - fp[i]);
+            if (L > bestLen) { bestLen = L; li = i; }
+        }
+        const glm::vec2 A0 = fp[li], A1 = fp[(li + 1) % n];
+        const glm::vec2 dirA = glm::normalize(A1 - A0);
+
+        // Opposite long edge: the longest edge running roughly anti-parallel.
+        int lj = -1;
+        float bestScore = 0.0f;
+        for (int i = 0; i < n; ++i) {
+            if (i == li) continue;
+            const glm::vec2 d = fp[(i + 1) % n] - fp[i];
+            const float L = glm::length(d);
+            if (L < 1e-3f) continue;
+            const float anti = -glm::dot(d / L, dirA);
+            if (anti < 0.5f) continue; // must be roughly opposite
+            if (anti * L > bestScore) { bestScore = anti * L; lj = i; }
+        }
+
+        if (lj < 0) { // odd shape: plain asphalt top
+            const std::vector<int> tris = earClipTriangulate(fp);
+            for (std::size_t k = 0; k + 3 <= tris.size(); k += 3)
+                emitTopTri(glm::vec3(fp[tris[k]], zt),
+                           glm::vec3(fp[tris[k + 1]], zt),
+                           glm::vec3(fp[tris[k + 2]], zt), kAsphaltColor);
+            continue;
+        }
+
+        // Q runs parallel to A (traverse the opposite edge backwards).
+        const glm::vec2 Qs = fp[(lj + 1) % n], Qe = fp[lj];
+        glm::vec2 m0 = Qs - A0, m1 = Qe - A1;
+        const float W0 = glm::length(m0), W1 = glm::length(m1);
+        if (W0 < 1e-3f || W1 < 1e-3f) { continue; }
+        m0 /= W0;
+        m1 /= W1;
+
+        // Which long edges face a track (get the concrete band + yellow line).
+        const bool aBand = trackWithin((A0 + A1) * 0.5f, paths, kTrackSearchRadius);
+        const bool bBand = trackWithin((Qs + Qe) * 0.5f, paths, kTrackSearchRadius);
+        const float bw = kEdgeBandWidth, yw = kYellowWidth;
+        const float aInner = aBand ? bw + yw : 0.0f; // asphalt start from A side
+        const float bInner = bBand ? bw + yw : 0.0f; // asphalt start from B side
+
+        // Emit a band between lateral distances [d0,d1] from the A side (per-end
+        // clamped to the local width) with a colour.
+        auto band = [&](float d0, float d1, const glm::vec3& col) {
+            emitTopQuad(A0 + m0 * std::clamp(d0, 0.0f, W0),
+                        A0 + m0 * std::clamp(d1, 0.0f, W0),
+                        A1 + m1 * std::clamp(d1, 0.0f, W1),
+                        A1 + m1 * std::clamp(d0, 0.0f, W1), zt, col);
+        };
+        // Same, measured inward from the B (Q) side.
+        auto bandQ = [&](float e0, float e1, const glm::vec3& col) {
+            emitTopQuad(Qs - m0 * std::clamp(e0, 0.0f, W0),
+                        Qs - m0 * std::clamp(e1, 0.0f, W0),
+                        Qe - m1 * std::clamp(e1, 0.0f, W1),
+                        Qe - m1 * std::clamp(e0, 0.0f, W1), zt, col);
+        };
+
+        // Too narrow for a proper asphalt centre: pave it all in asphalt.
+        if (std::min(W0, W1) < aInner + bInner + 0.2f) {
+            band(0.0f, std::max(W0, W1), kAsphaltColor);
+        } else {
+            // Asphalt centre between the two inner lines.
+            emitTopQuad(A0 + m0 * aInner, Qs - m0 * bInner, Qe - m1 * bInner,
+                        A1 + m1 * aInner, zt, kAsphaltColor);
+            if (aBand) {
+                band(0.0f, bw, kConcreteColor);
+                band(bw, bw + yw, kYellowColor);
+            }
+            if (bBand) {
+                bandQ(0.0f, bw, kConcreteColor);
+                bandQ(bw, bw + yw, kYellowColor);
+            }
+        }
     }
 
     std::printf("[PlatformMesh] %zu platforms, %zu vertices, %zu triangles\n",
