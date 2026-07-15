@@ -69,6 +69,7 @@ counts, and vehicle physics (mass, inertia, tipping limit).
 | Mouse        | Look                            |
 | Left Shift   | Move faster (×8)                |
 | C            | Toggle chase camera (the vehicle) |
+| Up / Down    | Hand-push the vehicle fwd / back |
 | Tab          | Release/grab cursor             |
 | Esc          | Quit                            |
 

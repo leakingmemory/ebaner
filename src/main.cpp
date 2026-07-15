@@ -237,7 +237,7 @@ int main(int argc, char** argv) {
 
     std::printf(
         "\nControls: WASD move, Q/E down/up, mouse look, Shift boost, "
-        "C chase vehicle, Tab release cursor, Esc quit\n\n");
+        "C chase vehicle, Up/Down push vehicle, Tab release cursor, Esc quit\n\n");
 
     // Directional sun (scene space): from the south-west, fairly high.
     const glm::vec3 sunDir = glm::normalize(glm::vec3(0.4f, -0.5f, 0.75f));
@@ -256,9 +256,13 @@ int main(int argc, char** argv) {
 
         // Advance the vehicle simulation and refresh its (moving) mesh.
         if (vehicle) {
+            // Hand push along the track (Up = forward, Down = back).
+            float pushInput = 0.0f;
+            if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) pushInput += 1.0f;
+            if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) pushInput -= 1.0f;
             const float simDt = std::min(dt, 0.05f); // clamp for stability
             const VehicleState prev = vehicle->state();
-            vehicle->update(simDt);
+            vehicle->update(simDt, pushInput);
             if (vehicle->state() != prev) {
                 static const char* kNames[] = {"OnRail", "Derailed", "Stopped"};
                 std::printf("[Vehicle] -> %s (speed %.1f m/s)\n",

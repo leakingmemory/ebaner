@@ -22,6 +22,8 @@ constexpr float kG = 9.81f;         // m/s^2
 constexpr float kGauge = 1.435f;    // standard track gauge (tipping pivot width)
 constexpr float kFrictionMu = 0.6f; // derailed ground friction ("digging in")
 constexpr float kStopSpeed = 0.1f;  // m/s below which a derailed vehicle stops
+constexpr float kPushForce = 500.0f; // N, a person's sustained hand shove
+constexpr float kRollResist = 0.004f; // steel-wheel-on-rail rolling resistance
 } // namespace
 
 Vehicle::Vehicle(const TrackPath* path, float s, float massKg, float length,
@@ -48,12 +50,20 @@ VehicleFrame Vehicle::frame() const {
     return {pos_, fRight_, fTangent_, fUp_};
 }
 
-void Vehicle::update(float dt) {
+void Vehicle::update(float dt, float pushInput) {
     if (state_ == VehicleState::OnRail) {
         const TrackPose p = path_->poseAt(s_);
-        // Along-track gravity acceleration (downhill in +s direction is positive).
-        const float a = -kG * p.tangent.z;
-        v_ += a * dt;
+        // Driving acceleration: gravity along the track (downhill in +s is
+        // positive) plus the hand push (a force, so a = F/m).
+        const float aGrav = -kG * p.tangent.z;
+        const float aPush = pushInput * kPushForce / mass_;
+        v_ += (aGrav + aPush) * dt;
+
+        // Light rolling resistance opposes motion, capped so it can't reverse v_
+        // (this also holds the axle on grades gentler than the resistance).
+        const float roll = std::min(kRollResist * kG * dt, std::abs(v_));
+        v_ -= std::copysign(roll, v_);
+
         s_ += v_ * dt;
 
         const float L = path_->length();

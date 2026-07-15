@@ -59,10 +59,11 @@ public:
     Vehicle(const TrackPath* path, float s, float massKg, float length,
             float width, float height, float initialSpeed = 0.0f);
 
-    // Advance the simulation: gravity accelerates it along the rails; running off
-    // either end derails it; a derailed vehicle is slowed by ground friction
-    // (proportional to its weight) until it stops.
-    void update(float dt);
+    // Advance the simulation. `pushInput` in [-1, +1] is a hand push along the
+    // track (+1 = toward increasing s), applied only while on the rails. Gravity
+    // also accelerates it; light rolling resistance coasts it to a stop; running
+    // off either end derails it (then ground friction stops it).
+    void update(float dt, float pushInput = 0.0f);
 
     // Rigid frame for rendering/camera in the current state.
     VehicleFrame frame() const;
