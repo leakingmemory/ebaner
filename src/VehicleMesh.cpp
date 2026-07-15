@@ -25,11 +25,14 @@ constexpr float kAxleHalf = kGauge * 0.5f + kWheelWidth; // axle ends outside wh
 const glm::vec3 kAxleCol(0.36f, 0.36f, 0.38f);  // steel
 const glm::vec3 kWheelCol(0.32f, 0.30f, 0.30f); // steel with a rusty tinge
 const glm::vec3 kFrameCol(0.30f, 0.31f, 0.34f); // bogie frame steel
+const glm::vec3 kUnderframeCol(0.24f, 0.25f, 0.27f); // carriage solebar/floor
 constexpr int kSeg = 20;                        // segments per circle
 constexpr float kPi = 3.14159265358979f;
 // Bogie frame box, above the wheels.
 constexpr float kFrameHalfWidth = 1.05f;  // across the track (m)
 constexpr float kFrameHalfHeight = 0.18f; // vertical (m)
+// Carriage underframe (floor plate) resting on the two bogies.
+constexpr float kUnderframeHalfHeight = 0.15f; // thickness/2 (m)
 } // namespace
 
 void VehicleMesh::build(const Vehicle& vehicle) {
@@ -128,13 +131,28 @@ void VehicleMesh::build(const Vehicle& vehicle) {
 
     for (const VehicleFrame& fr : vehicle.axleFrames()) emitWheelset(fr);
 
-    if (vehicle.wheelbase() > 1e-3f) {
-        // Bogie frame: a low steel box above the wheels, spanning the wheelbase.
+    // Height of a bogie frame box centre / its top above the pose bed.
+    const float frameCentreZ =
+        wheelset::kAxleCentreAboveBed + wheelset::kWheelRadius;
+    const float frameTopZ = frameCentreZ + kFrameHalfHeight;
+
+    // A bogie frame box (low steel box above the wheels, spanning the wheelbase).
+    auto emitBogieFrame = [&](const VehicleFrame& b) {
+        emitBox(b.right, b.tangent, b.up, b.pos + b.up * frameCentreZ,
+                kFrameHalfWidth, 0.5f * vehicle.wheelbase(), kFrameHalfHeight,
+                kFrameCol);
+    };
+
+    if (vehicle.bogieSpacing() > 1e-3f) {
+        // Carriage: a bogie frame at each end plus a long underframe/floor plate
+        // spanning them, sitting just above the bogie frame tops.
+        for (const VehicleFrame& bf : vehicle.bogieFrames()) emitBogieFrame(bf);
         const VehicleFrame b = vehicle.bodyFrame();
         const glm::vec3 centre =
-            b.pos +
-            b.up * (wheelset::kAxleCentreAboveBed + wheelset::kWheelRadius);
-        emitBox(b.right, b.tangent, b.up, centre, kFrameHalfWidth,
-                0.5f * vehicle.wheelbase(), kFrameHalfHeight, kFrameCol);
+            b.pos + b.up * (frameTopZ + kUnderframeHalfHeight);
+        emitBox(b.right, b.tangent, b.up, centre, 0.5f * vehicle.width(),
+                0.5f * vehicle.length(), kUnderframeHalfHeight, kUnderframeCol);
+    } else if (vehicle.wheelbase() > 1e-3f) {
+        emitBogieFrame(vehicle.bodyFrame()); // single bogie
     }
 }

@@ -215,7 +215,16 @@ int main(int argc, char** argv) {
     auto spawnVehicle = [&](int idx) {
         if (!vpath) return;
         idx = std::clamp(idx, 0, kNumVehicleSpecs - 1);
-        vehicle.emplace(vpath, kVehicleSpecs[idx], vs);
+        const VehicleSpec& sp = kVehicleSpecs[idx];
+        // Keep the whole vehicle on the track: the outermost axle sits
+        // (bogieSpacing + wheelbase)/2 from the body centre. Nudge the spawn in
+        // from the ends (long carriages otherwise straddle the buffer-stop end).
+        const float outerHalf =
+            0.5f * (sp.bogieSpacing + sp.wheelbase);
+        float startS = vs;
+        const float L = vpath->length(), margin = outerHalf + 1.0f;
+        if (L > 2.0f * margin) startS = std::clamp(vs, margin, L - margin);
+        vehicle.emplace(vpath, sp, startS);
         vmesh.build(*vehicle);
         renderer.attachVehicle(vmesh.vertices(), vmesh.indices());
 
@@ -254,7 +263,7 @@ int main(int argc, char** argv) {
         mode = Mode::Sim;
     }
     bool prevUp = false, prevDown = false, prevK1 = false, prevK2 = false,
-         prevEnter = false;
+         prevK3 = false, prevEnter = false;
 
     double lastTime = glfwGetTime();
     while (!glfwWindowShouldClose(window)) {
@@ -271,15 +280,18 @@ int main(int argc, char** argv) {
             // --- Start screen: pick a vehicle ---
             auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
             const bool kUp = down(GLFW_KEY_UP), kDn = down(GLFW_KEY_DOWN);
-            const bool k1 = down(GLFW_KEY_1), k2 = down(GLFW_KEY_2);
+            const bool k1 = down(GLFW_KEY_1), k2 = down(GLFW_KEY_2),
+                       k3 = down(GLFW_KEY_3);
             const bool kEnt = down(GLFW_KEY_ENTER);
             if (kUp && !prevUp)
                 menuIndex = (menuIndex + kNumVehicleSpecs - 1) % kNumVehicleSpecs;
             if (kDn && !prevDown) menuIndex = (menuIndex + 1) % kNumVehicleSpecs;
             if (k1 && !prevK1) menuIndex = 0;
             if (k2 && !prevK2 && kNumVehicleSpecs > 1) menuIndex = 1;
+            if (k3 && !prevK3 && kNumVehicleSpecs > 2) menuIndex = 2;
             const bool confirm = kEnt && !prevEnter;
-            prevUp = kUp; prevDown = kDn; prevK1 = k1; prevK2 = k2; prevEnter = kEnt;
+            prevUp = kUp; prevDown = kDn; prevK1 = k1; prevK2 = k2; prevK3 = k3;
+            prevEnter = kEnt;
 
             if (confirm) {
                 spawnVehicle(menuIndex);
@@ -313,7 +325,7 @@ int main(int argc, char** argv) {
                                hi ? glm::vec3(1.0f) : glm::vec3(0.6f, 0.6f, 0.65f),
                                fbw, fbh);
                 }
-                appendText(tv, "UP/DOWN OR 1/2 TO CHOOSE, ENTER TO START", x,
+                appendText(tv, "UP/DOWN OR 1/2/3 TO CHOOSE, ENTER TO START", x,
                            40.0f + (kNumVehicleSpecs + 3) * lh, sc * 0.75f,
                            glm::vec3(0.7f, 0.8f, 0.9f), fbw, fbh);
                 renderer.setOverlayText(tv);

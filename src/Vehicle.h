@@ -21,22 +21,25 @@
 
 class TrackPath;
 
-// A selectable rail vehicle type: a rigid body on 1 or 2 axles.
+// A selectable rail vehicle type: a rigid body on 1 or 2 axles, or a carriage
+// carried on two bogies (bogieSpacing > 0).
 struct VehicleSpec {
     const char* name;
-    float mass;      // kg
-    float length;    // m, bounding box along travel
-    float width;     // m, across the track
-    float height;    // m, vertical
-    float wheelbase; // m axle spacing (0 = single axle)
+    float mass;         // kg
+    float length;       // m, bounding box along travel
+    float width;        // m, across the track
+    float height;       // m, vertical
+    float wheelbase;    // m axle spacing within a bogie (0 = single axle)
+    float bogieSpacing; // m centre-to-centre of the two bogies (0 = not a carriage)
 };
 
 // The vehicles offered on the start screen.
 inline constexpr VehicleSpec kVehicleSpecs[] = {
-    {"Single-axle wheelset", 1300.0f, 0.20f, 2.20f, 0.92f, 0.00f},
-    {"Dual-axle bogie", 4000.0f, 2.60f, 2.50f, 1.05f, 1.80f},
+    {"Single-axle wheelset", 1300.0f, 0.20f, 2.20f, 0.92f, 0.00f, 0.00f},
+    {"Dual-axle bogie", 4000.0f, 2.60f, 2.50f, 1.05f, 1.80f, 0.00f},
+    {"Carriage (two bogies)", 34000.0f, 25.0f, 3.00f, 1.30f, 2.50f, 18.00f},
 };
-inline constexpr int kNumVehicleSpecs = 2;
+inline constexpr int kNumVehicleSpecs = 3;
 
 // Gravity on the vehicle resolved at its current pose. The along-track part is
 // "free" (it drives acceleration up/down grades); the remainder is reacted by the
@@ -85,8 +88,11 @@ public:
     // Rigid body frame for the camera / vehicle frame, in the current state.
     VehicleFrame frame() const { return bodyFrame(); }
     VehicleFrame bodyFrame() const;
-    // On-rail pose of each axle (1 for single axle, 2 for a bogie), for the mesh.
+    // On-rail pose of each axle (1 single axle, 2 bogie, 4 carriage), for the mesh.
     std::vector<VehicleFrame> axleFrames() const;
+    // Pivot frame of each bogie (2 for a carriage), each chording its own axles.
+    // Returns {bodyFrame()} when the vehicle is not a carriage.
+    std::vector<VehicleFrame> bogieFrames() const;
     VehicleState state() const { return state_; }
     float speed() const; // m/s
 
@@ -117,14 +123,21 @@ public:
     float width() const { return width_; }
     float height() const { return height_; }
     float wheelbase() const { return wheelbase_; }
+    float bogieSpacing() const { return bogieSpacing_; }
     const char* name() const { return name_; }
     const TrackPath* path() const { return path_; }
 
 private:
+    // Arc-length offsets of each axle from the body centre (s_).
+    std::vector<float> axleOffsets() const;
+    // Half the span between the body's two support points (bogie pivots for a
+    // carriage, the two axles for a bogie, 0 for a single axle).
+    float supportHalf() const;
+
     const TrackPath* path_;
     float s_;
     float mass_;
-    float length_, width_, height_, wheelbase_;
+    float length_, width_, height_, wheelbase_, bogieSpacing_;
     const char* name_;
 
     VehicleState state_ = VehicleState::OnRail;

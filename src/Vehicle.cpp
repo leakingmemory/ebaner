@@ -40,12 +40,27 @@ Vehicle::Vehicle(const TrackPath* path, const VehicleSpec& spec, float s,
       width_(spec.width),
       height_(spec.height),
       wheelbase_(spec.wheelbase),
+      bogieSpacing_(spec.bogieSpacing),
       name_(spec.name),
       v_(initialSpeed) {}
 
 namespace {
 VehicleFrame frameOf(const TrackPose& p) {
     return {p.pos, p.right, p.tangent, p.up};
+}
+
+// Rigid frame spanning two on-rail poses (chords the curve between them).
+VehicleFrame chordFrame(const TrackPose& pr, const TrackPose& pf,
+                        const glm::vec3& fallbackTangent) {
+    VehicleFrame f;
+    f.pos = (pr.pos + pf.pos) * 0.5f;
+    const glm::vec3 chord = pf.pos - pr.pos;
+    const float cl = glm::length(chord);
+    f.tangent = (cl > 1e-6f) ? chord / cl : fallbackTangent;
+    const glm::vec3 up = glm::normalize(pr.up + pf.up);
+    f.right = glm::normalize(glm::cross(up, f.tangent));
+    f.up = glm::normalize(glm::cross(f.tangent, f.right));
+    return f;
 }
 } // namespace
 
@@ -64,35 +79,59 @@ float Vehicle::speed() const {
     return (state_ == VehicleState::OnRail) ? std::abs(v_) : glm::length(vel_);
 }
 
+float Vehicle::supportHalf() const {
+    if (bogieSpacing_ > 1e-3f) return 0.5f * bogieSpacing_; // carriage: pivots
+    if (wheelbase_ > 1e-3f) return 0.5f * wheelbase_;       // bogie: two axles
+    return 0.0f;                                            // single axle
+}
+
+std::vector<float> Vehicle::axleOffsets() const {
+    if (bogieSpacing_ > 1e-3f) { // carriage: two axles per bogie
+        const float bc = 0.5f * bogieSpacing_, wb = 0.5f * wheelbase_;
+        return {-bc - wb, -bc + wb, bc - wb, bc + wb};
+    }
+    if (wheelbase_ > 1e-3f) { // bogie
+        const float wb = 0.5f * wheelbase_;
+        return {-wb, wb};
+    }
+    return {0.0f}; // single axle
+}
+
 VehicleFrame Vehicle::bodyFrame() const {
     if (state_ != VehicleState::OnRail)
         return {pos_, fRight_, fTangent_, fUp_};
-    const float half = 0.5f * wheelbase_;
+    const float half = supportHalf();
     if (half < 1e-3f) return frameOf(path_->poseAt(s_)); // single axle
-    // Bogie: rigid frame spanning the two axle contact points (chords the curve).
-    const TrackPose pr = path_->poseAt(s_ - half);
-    const TrackPose pf = path_->poseAt(s_ + half);
-    VehicleFrame f;
-    f.pos = (pr.pos + pf.pos) * 0.5f;
-    const glm::vec3 chord = pf.pos - pr.pos;
-    const float cl = glm::length(chord);
-    f.tangent = (cl > 1e-6f) ? chord / cl : path_->poseAt(s_).tangent;
-    glm::vec3 up = glm::normalize(pr.up + pf.up);
-    f.right = glm::normalize(glm::cross(up, f.tangent));
-    f.up = glm::normalize(glm::cross(f.tangent, f.right));
-    return f;
+    // Chord the two support points (bogie pivots for a carriage, axles for a bogie).
+    return chordFrame(path_->poseAt(s_ - half), path_->poseAt(s_ + half),
+                      path_->poseAt(s_).tangent);
+}
+
+std::vector<VehicleFrame> Vehicle::bogieFrames() const {
+    if (bogieSpacing_ <= 1e-3f) return {bodyFrame()}; // not a carriage
+    const float bc = 0.5f * bogieSpacing_, wb = 0.5f * wheelbase_;
+    std::vector<VehicleFrame> out;
+    for (float c : {-bc, bc}) {
+        if (state_ == VehicleState::OnRail) {
+            out.push_back(chordFrame(path_->poseAt(s_ + c - wb),
+                                     path_->poseAt(s_ + c + wb),
+                                     path_->poseAt(s_ + c).tangent));
+        } else { // derailed: bogie pivots offset along the frozen body tangent
+            out.push_back({pos_ + fTangent_ * c, fRight_, fTangent_, fUp_});
+        }
+    }
+    return out;
 }
 
 std::vector<VehicleFrame> Vehicle::axleFrames() const {
-    const float half = 0.5f * wheelbase_;
-    if (half < 1e-3f) return {frame()}; // single axle
-    if (state_ == VehicleState::OnRail)
-        return {frameOf(path_->poseAt(s_ - half)),
-                frameOf(path_->poseAt(s_ + half))};
-    // Derailed: axles offset from the frozen body along its tangent.
-    const VehicleFrame b{pos_, fRight_, fTangent_, fUp_};
-    return {{pos_ - fTangent_ * half, b.right, b.tangent, b.up},
-            {pos_ + fTangent_ * half, b.right, b.tangent, b.up}};
+    std::vector<VehicleFrame> out;
+    for (float off : axleOffsets()) {
+        if (state_ == VehicleState::OnRail)
+            out.push_back(frameOf(path_->poseAt(s_ + off)));
+        else // derailed: axles offset from the frozen body along its tangent
+            out.push_back({pos_ + fTangent_ * off, fRight_, fTangent_, fUp_});
+    }
+    return out;
 }
 
 void Vehicle::update(float dt, float pushInput) {
@@ -114,8 +153,9 @@ void Vehicle::update(float dt, float pushInput) {
 
         // Derail when the leading or trailing axle passes an end of the track.
         const float L = path_->length();
-        const float half = 0.5f * wheelbase_;
-        if (s_ - half < 0.0f || s_ + half > L) {
+        float outerHalf = 0.0f;
+        for (float o : axleOffsets()) outerHalf = std::max(outerHalf, std::abs(o));
+        if (s_ - outerHalf < 0.0f || s_ + outerHalf > L) {
             const VehicleFrame e = bodyFrame(); // frozen at exit
             pos_ = e.pos;
             fRight_ = e.right;
