@@ -1,15 +1,37 @@
 # ebaner
 
-A small Vulkan/C++ terrain viewer for the `terrainmapper` game-export data
+A small Vulkan/C++ viewer for the `terrainmapper` game-export data
 (`../norway-rails`). It stitches the elevation tiles around **Bodø station** into
-a continuous 3D surface and lets you fly around it. The camera starts at the
-buffer-stop end of the Bodø main track ("track 1 end"), resolved from the
-`tracks.bin` geometry.
+a continuous 3D surface and draws the railway, roads and buildings on top, with a
+first physics-driven rail vehicle. The camera starts at the buffer-stop end of the
+Bodø main track ("track 1 end"), resolved from the `tracks.bin` geometry.
 
-It renders **terrain only** (railway tracks and roads are not drawn yet), shaded
-with hillshade and coloured by **AR50 land cover** when the export provides it
-(forest, agriculture, open land, bog, glacier, water …), falling back to an
-elevation ramp otherwise.
+## What it renders
+
+- **Terrain** — heightmap tiles shaded with hillshade and coloured by **AR50 land
+  cover** when the export provides it (forest, agriculture, open land, bog,
+  glacier, water, built-up …), falling back to an elevation ramp otherwise. The
+  overlapping LOD quadtree is de-overlapped (finest tile per area) and
+  watertight-stitched so there are no cracks between resolutions
+  (`src/TerrainMesh.cpp`).
+- **Railway** — a realistic cross-section: a ballast bed, concrete sleepers and
+  two rusty rails (`src/TrackMesh.cpp`). Centrelines are smoothed through the
+  coarse surveyed points with a **centripetal Catmull-Rom** spline
+  (`src/TrackPath.cpp`), so curves are continuous. Sleepers are real 3-D boxes
+  near the camera and a repeating texture at distance (distance LOD). Track is
+  **superelevated (banked)** on curves from the OSM speed limit + curvature.
+- **Roads** — category-coloured asphalt ribbons (`src/RoadMesh.cpp`): the public
+  network (Europavei/Riksvei/Fylkesvei/Kommunal) prominent, private tracks thin
+  and faint.
+- **Buildings** — OSM footprints extruded into lit prisms coloured by type, with
+  **pitched roofs** (flat / gabled / hipped / pyramidal / skillion) from the OSM
+  `roof_shape` tag (`src/BuildingMesh.cpp`).
+- **Rail vehicle** — a plain wheelset (one axle + two wheels) on the rails
+  (`src/WheelsetMesh.cpp`), driven by a small physics model (`src/Vehicle.cpp`):
+  mass, gravity resolved into along-track acceleration + weight-on-rails, box
+  inertia and a curve overturning limit. It rolls under gravity on grades, and if
+  it runs off the end of its track it derails and is slowed to a stop by
+  ground friction proportional to its weight.
 
 ## Requirements
 
@@ -35,41 +57,42 @@ cmake --build build -j
 ```
 
 The dataset path defaults to `../norway-rails` if omitted. On startup the console
-prints the resolved start point (UTM 33N), the look direction, and how many tiles
-and triangles were loaded.
+prints the resolved start point (UTM 33N), the look direction, tile/triangle
+counts, and vehicle physics (mass, inertia, tipping limit).
 
 ## Controls
 
-| Input        | Action              |
-|--------------|---------------------|
-| W / A / S / D| Move horizontally   |
-| Q / E        | Move down / up      |
-| Mouse        | Look                |
-| Left Shift   | Move faster (×8)    |
-| Tab          | Release/grab cursor |
-| Esc          | Quit                |
+| Input        | Action                          |
+|--------------|---------------------------------|
+| W / A / S / D| Move horizontally               |
+| Q / E        | Move down / up                  |
+| Mouse        | Look                            |
+| Left Shift   | Move faster (×8)                |
+| C            | Toggle chase camera (the vehicle) |
+| Tab          | Release/grab cursor             |
+| Esc          | Quit                            |
 
 ## Data format
 
 See `../terrainmapper/doc/game-export-format.md`. In short: 256×256 little-endian
 `float32` heightmaps (`terrain.hm32`, row 0 = north), EPSG:25833 (UTM 33N) metres,
-tiled across four LOD levels. World coordinates are stored relative to the start
-point to preserve float precision.
+tiled across four fully-overlapping LOD levels. World coordinates are rendered
+relative to the start point to preserve float precision.
 
-Land cover: if a tile has a `landcover.u8` file (256×256 uint8 AR50 `artype`
-codes, same grid as `terrain.hm32`), the terrain is **textured by land type** —
-procedurally generated per-class surfaces (forest, agriculture, open land, bog,
-glacier, freshwater, ocean, built-up) uploaded as a Vulkan texture array and
-sampled in world space (`src/Textures.cpp`, `shaders/terrain.frag`). Pixels with
-no class (artype 0) fall back to the elevation ramp. This requires exporting
-terrainmapper **with an AR50 dataset loaded**; plain exports omit the file and the
-whole surface uses the elevation ramp.
+Per tile the viewer also reads, when present:
 
-Note: contrary to the format doc, the LOD levels in this export **fully overlap**
-(the same ground is present at every LOD as a power-of-two quadtree). The renderer
-therefore de-overlaps — it keeps only the finest tile per ground area — and then
-watertight-stitches the resulting seams (edge bridges + corner fills) so there are
-no cracks or T-junctions between differing resolutions (see `src/TerrainMesh.cpp`).
+- `landcover.u8` — 256×256 uint8 AR50 `artype` codes; the terrain is textured by
+  land type (procedural per-class surfaces in a Vulkan texture array, sampled in
+  world space — `src/Textures.cpp`, `shaders/terrain.frag`). Requires exporting
+  terrainmapper **with an AR50 dataset loaded**.
+- `tracks.bin` — railway polylines (deduped by `trackId`), including a per-vertex
+  OSM **speed limit** used for banking.
+- `roads.bin` — road polylines (deduped by geometry), category + number.
+- `buildings.bin` — OSM building footprints with kind, roof shape, base
+  elevation and height.
+
+The track/road/building geometry appears only when the export was produced with
+the corresponding sources (national rail register + NVDB roads + OSM enrichment).
 
 ## Debug environment variables
 
@@ -81,7 +104,9 @@ no cracks or T-junctions between differing resolutions (see `src/TerrainMesh.cpp
 
 ## Not yet implemented
 
-Track/road rendering and streamed/dynamic tile loading.
+Traction/braking and rolling resistance, per-wheel grip-vs-slip and overturn at
+speed, terrain-grounded derailment, multi-axle bodies, and streamed/dynamic tile
+loading.
 
 ## License
 
