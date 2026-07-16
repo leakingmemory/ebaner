@@ -395,7 +395,7 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                 quadN(TBL, TBC, FBC, FBL, c93::kSkirt, down); // undersides
                 quadN(TBC, TBR, FBR, FBC, c93::kSkirt, down);
             };
-            plow(z0 - 0.34f, z0 - 0.64f, hw * 0.62f, hw * 0.42f, -0.05f, 0.28f); // upper
+            plow(z0 - 0.34f, z0 - 0.64f, hw * 0.94f, hw * 0.60f, -0.05f, 0.28f); // upper
             plow(z0 - 0.72f, z0 - 0.98f, hw * 0.34f, hw * 0.22f, 0.12f, 0.34f);  // lower
         }
     };
