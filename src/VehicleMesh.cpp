@@ -16,7 +16,6 @@
 #include "Vehicle.h" // Vehicle, VehicleFrame
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <vector>
 
@@ -210,45 +209,63 @@ void VehicleMesh::build(const Vehicle& vehicle) {
         const float allLo = std::min(tip, gang), allHi = std::max(tip, gang);
         const glm::vec3 in = P(0.0f, 0.5f * (allLo + allHi), 0.5f * (z0 + z1));
 
-        // Shared cross-section: a rounded body profile as 10 points, from the
-        // bottom-right up the side, over a domed roof (narrower than the waist),
-        // and down the left side. `wS` scales the width and `drop` lowers the
-        // roof (used to taper and rake the nose into a windscreen). Facet k
-        // between consecutive points: 0/1/2 right side (lower/window/cantrail),
-        // 3/4/5 right-shoulder/roof/left-shoulder, 6/7/8 left side.
+        // Shared cross-section: a rounded body profile (open at the bottom; the
+        // floor pan closes it). Straight sides carry window-band boundary points,
+        // then rounded shoulder arcs sweep in to a domed roof narrower than the
+        // waist. `wS` scales the width and `drop` lowers the roof (used to taper
+        // and rake the nose into a windscreen). Facets are coloured by geometry,
+        // so the ring resolution can change freely.
+        const int arcN = 4;
         auto ring = [&](float y, float wS, float drop) {
             const float w = hw * wS, rw = rhw * wS;
             const float zr = z1 - drop;
             const float zC = std::min(zc, zr - 0.04f);
             const float zH = std::min(zwh, zC - 0.02f), zL = std::min(zwl, zH - 0.02f);
-            return std::array<glm::vec3, 10>{
-                P(w, y, z0),  P(w, y, zL),  P(w, y, zH),  P(w, y, zC),
-                P(rw, y, zr), P(-rw, y, zr),
-                P(-w, y, zC), P(-w, y, zH), P(-w, y, zL), P(-w, y, z0)};
+            std::vector<glm::vec3> p;
+            p.push_back(P(w, y, z0));
+            p.push_back(P(w, y, zL));
+            p.push_back(P(w, y, zH));
+            for (int i = 0; i <= arcN; ++i) { // right shoulder (w,zC) -> (rw,zr)
+                const float a = kPi * 0.5f * i / arcN;
+                p.push_back(P(rw + (w - rw) * std::cos(a), y, zC + (zr - zC) * std::sin(a)));
+            }
+            for (int i = arcN; i >= 0; --i) { // left shoulder (-rw,zr) -> (-w,zC)
+                const float a = kPi * 0.5f * i / arcN;
+                p.push_back(P(-(rw + (w - rw) * std::cos(a)), y, zC + (zr - zC) * std::sin(a)));
+            }
+            p.push_back(P(-w, y, zH));
+            p.push_back(P(-w, y, zL));
+            p.push_back(P(-w, y, z0));
+            return p;
         };
-        // Loft between two rings, colouring each facet. `bodyCol` picks the side
-        // livery by facet index; nose facets are coloured by orientation instead.
-        auto loft = [&](const std::array<glm::vec3, 10>& A,
-                        const std::array<glm::vec3, 10>& B, bool nose, bool doorL,
-                        bool doorR) {
-            for (int k = 0; k + 1 < 10; ++k) {
+        // Loft between two rings, colouring each facet by geometry: grey domed
+        // roof (up-facing), dark window band at cantrail height, red doors and
+        // nose sides, dark forward-facing windscreen on the nose, silver body.
+        auto loft = [&](const std::vector<glm::vec3>& A, const std::vector<glm::vec3>& B,
+                        bool nose, bool door) {
+            for (std::size_t k = 0; k + 1 < A.size(); ++k) {
                 const glm::vec3 a = A[k], b = A[k + 1], c = B[k + 1], d = B[k];
                 glm::vec3 nn = glm::cross(b - a, d - a);
                 const float l = glm::length(nn);
                 nn = (l > 1e-9f) ? nn / l : Z;
                 const glm::vec3 cen = 0.25f * (a + b + c + d);
                 if (glm::dot(nn, cen - in) < 0.0f) nn = -nn;
+                const float locZ = glm::dot(cen - f.pos, Z);
+                const float up = glm::dot(nn, Z);
                 glm::vec3 col;
-                const bool roof = (k >= 3 && k <= 5);
                 if (nose) {
-                    col = roof ? (glm::dot(nn, fdir) > 0.28f ? c93::kBand : c93::kRoof)
-                               : c93::kRed;
-                } else if (roof) {
-                    col = c93::kRoof;
+                    if (up > 0.45f || locZ > zc - 0.05f)
+                        col = (glm::dot(nn, fdir) > 0.28f) ? c93::kBand : c93::kRoof;
+                    else
+                        col = c93::kRed;
+                } else if (up > 0.45f) {
+                    col = c93::kRoof; // domed roof / shoulders
+                } else if (door && locZ < zc - 0.05f) {
+                    col = c93::kRed;  // full-height door
+                } else if (locZ > zwl - 0.03f && locZ < zwh + 0.03f) {
+                    col = c93::kBand; // window band
                 } else {
-                    const bool door = (k <= 2) ? doorR : doorL;
-                    col = door ? c93::kRed
-                               : (k == 1 || k == 7) ? c93::kBand : c93::kBody;
+                    col = c93::kBody; // silver body
                 }
                 quadN(a, b, c, d, col, in);
             }
@@ -266,32 +283,32 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                             {d1 + hdw, d2 - hdw, false}, {d2 - hdw, d2 + hdw, true},
                             {d2 + hdw, bodyHi, false}};
         for (const Seg& s : segs)
-            loft(ring(s.a, 1.0f, 0.0f), ring(s.b, 1.0f, 0.0f), false, s.door, s.door);
+            loft(ring(s.a, 1.0f, 0.0f), ring(s.b, 1.0f, 0.0f), false, s.door);
 
         // Nose: taper width to a rounded prow while the roof rakes down into a
-        // deep windscreen. Linear stations keep the profile smooth (no bump).
-        const int N = 8;
+        // deep windscreen. Ease-in width and eased roof drop keep it smooth.
+        const int N = 12;
         auto noseStation = [&](int i) {
             const float u = static_cast<float>(i) / N;
             const float y = base + (tip - base) * u;
-            const float wS = std::sqrt(std::max(0.14f, 1.0f - 0.86f * u * u));
-            const float drop = (z1 - (zwl + 0.10f)) * (u * u); // roof → window level
+            const float wS = std::sqrt(std::max(0.12f, 1.0f - 0.90f * u * u));
+            const float drop = (z1 - (zwl + 0.05f)) * (u * u); // roof → window level
             return ring(y, wS, drop);
         };
-        std::array<glm::vec3, 10> prev = noseStation(0);
+        std::vector<glm::vec3> prev = noseStation(0);
         for (int i = 1; i <= N; ++i) {
-            const std::array<glm::vec3, 10> cur = noseStation(i);
-            loft(prev, cur, true, false, false);
+            const std::vector<glm::vec3> cur = noseStation(i);
+            loft(prev, cur, true, false);
             prev = cur;
         }
         // Prow cap (fan the last narrow ring closed).
         { glm::vec3 c(0.0f);
           for (const glm::vec3& q : prev) c += q;
-          c *= 0.1f;
+          c /= static_cast<float>(prev.size());
           const float czc = glm::dot(c - f.pos, Z);
-          for (int k = 0; k < 10; ++k) {
+          for (std::size_t k = 0; k < prev.size(); ++k) {
               const glm::vec3& a = prev[k];
-              const glm::vec3& b = prev[(k + 1) % 10];
+              const glm::vec3& b = prev[(k + 1) % prev.size()];
               quadN(a, b, c, c, (czc > z0 + 0.55f * (z1 - z0)) ? c93::kBand : c93::kRed, in);
           } }
 
