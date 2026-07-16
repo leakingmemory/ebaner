@@ -198,7 +198,8 @@ void VehicleMesh::build(const Vehicle& vehicle) {
     // Y=tangent, Z=up); the body spans y in [-halfLen, halfLen] with the raked
     // cab at the outer end (cabNegY picks which) and the articulation gangway at
     // the other. Silver body, dark window band, red doors, red raked cab front.
-    auto emitClass93 = [&](const VehicleFrame& f, float halfLen, bool cabNegY) {
+    auto emitClass93 = [&](const VehicleFrame& f, float halfLen, bool cabNegY,
+                           bool hasWC) {
         const glm::vec3 X = f.right, Y = f.tangent, Z = f.up;
         const float hw = c93::kHalfWidth;
         const float rhw = hw * c93::kRoofHalf;         // domed-roof half width
@@ -270,7 +271,8 @@ void VehicleMesh::build(const Vehicle& vehicle) {
         // the rest of the side in `lowerCol`. Nose facets are coloured by
         // orientation (grey roof, dark forward windscreen, red sides).
         auto loft = [&](const std::vector<glm::vec3>& A, const std::vector<glm::vec3>& B,
-                        bool nose, const glm::vec3& lowerCol, const glm::vec3& bandCol) {
+                        bool nose, const glm::vec3& lowerCol,
+                        const glm::vec3& bandColR, const glm::vec3& bandColL) {
             for (std::size_t k = 0; k + 1 < A.size(); ++k) {
                 const glm::vec3 a = A[k], b = A[k + 1], c = B[k + 1], d = B[k];
                 glm::vec3 nn = glm::cross(b - a, d - a);
@@ -294,8 +296,10 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                         col = c93::kRed;
                 } else if (k >= 3 && k <= 11) {
                     col = c93::kRoof; // shoulders + domed roof (by ring index)
-                } else if (k == 1 || k == 13) {
-                    col = bandCol;    // window band (glazing or a pillar)
+                } else if (k == 1) {
+                    col = bandColR;   // +x window band (glazing or blank)
+                } else if (k == 13) {
+                    col = bandColL;   // -x window band
                 } else {
                     col = lowerCol;   // lower body / cantrail (silver or door)
                 }
@@ -330,25 +334,50 @@ void VehicleMesh::build(const Vehicle& vehicle) {
         auto cabSide = [&](float y) { return std::abs(y - base) < std::abs(yStep - base); };
         auto bandLo = [&](float y) { return z0 + (cabSide(y) ? 1.18f : 0.82f); };
         auto bandHi = [&](float y) { return z0 + (cabSide(y) ? 2.05f : 1.68f); };
-        struct Panel { float a, b; glm::vec3 lower, band; };
+        // Boxed interior areas have no windows, so the glazing is blanked over
+        // them: the tech cabinets behind the cab, the stairs, and (one car only)
+        // the WC/utility module on the gangway side.
+        const float dirSaloon = (gang > base) ? 1.0f : -1.0f;
+        // WC/utility module: one side only (+x), directly beside the door,
+        // extending toward the gangway (a long box).
+        const float wc0 = yDoor + dirSaloon * (dhw + 0.05f);
+        const float wc1 = wc0 + dirSaloon * std::abs(gang - base) * 0.40f;
+        // Tech cabinets and the stairs block both sides; the WC blocks its side.
+        const std::pair<float, float> solidsBoth[] = {
+            {base, base + dirSaloon * 2.0f}, {yStep - 0.4f, yStep + 0.4f}};
+        auto inRange = [&](const std::pair<float, float>& s, float y) {
+            return y > std::min(s.first, s.second) && y < std::max(s.first, s.second);
+        };
+        auto inBoth = [&](float y) {
+            for (const auto& s : solidsBoth)
+                if (inRange(s, y)) return true;
+            return false;
+        };
+        auto inWC = [&](float y) { return hasWC && inRange({wc0, wc1}, y); };
+        // Blank the glazing over boxed areas (per side): +x facet vs -x facet.
+        auto bandR = [&](float y) { return (inBoth(y) || inWC(y)) ? c93::kBody : c93::kBand; };
+        auto bandL = [&](float y) { return inBoth(y) ? c93::kBody : c93::kBand; };
+        struct Panel { float a, b; glm::vec3 lower, bandR, bandL; };
         std::vector<Panel> panels;
         auto tile = [&](float a, float b) { // fill [a,b] with windows + pillars
             const float m = 0.18f, winW = 1.35f, pilW = 0.32f;
             float x = a;
-            panels.push_back({x, x + m, c93::kBody, c93::kBody}); // start margin
+            panels.push_back({x, x + m, c93::kBody, c93::kBody, c93::kBody}); // margin
             x += m;
             while (b - m - x >= winW - 1e-3f) {
-                panels.push_back({x, x + winW, c93::kBody, c93::kBand}); // window
+                // A window each side unless blanked by a boxed interior area.
+                const float wcen = x + 0.5f * winW;
+                panels.push_back({x, x + winW, c93::kBody, bandR(wcen), bandL(wcen)});
                 x += winW;
                 if (b - m - x >= winW + pilW) {
-                    panels.push_back({x, x + pilW, c93::kBody, c93::kBody}); // pillar
+                    panels.push_back({x, x + pilW, c93::kBody, c93::kBody, c93::kBody}); // pillar
                     x += pilW;
                 }
             }
-            panels.push_back({x, b, c93::kBody, c93::kBody}); // end margin
+            panels.push_back({x, b, c93::kBody, c93::kBody, c93::kBody}); // end margin
         };
         tile(bodyLo, yDoor - dhw);
-        panels.push_back({yDoor - dhw, yDoor + dhw, c93::kRed, c93::kRed}); // door
+        panels.push_back({yDoor - dhw, yDoor + dhw, c93::kRed, c93::kRed, c93::kRed}); // door
         tile(yDoor + dhw, bodyHi);
         // Loft each panel, subdividing at the bogie-notch edges (doubled with a
         // tiny gap) so the sill steps up near-vertically over each bogie.
@@ -366,7 +395,7 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                 }
             std::sort(ys.begin(), ys.end());
             for (std::size_t i = 0; i + 1 < ys.size(); ++i)
-                loft(bodyRing(ys[i]), bodyRing(ys[i + 1]), false, p.lower, p.band);
+                loft(bodyRing(ys[i]), bodyRing(ys[i + 1]), false, p.lower, p.bandR, p.bandL);
         }
 
         // Nose: taper width to a rounded prow while the roof rakes down into a
@@ -383,7 +412,7 @@ void VehicleMesh::build(const Vehicle& vehicle) {
         std::vector<glm::vec3> prev = noseStation(0);
         for (int i = 1; i <= N; ++i) {
             const std::vector<glm::vec3> cur = noseStation(i);
-            loft(prev, cur, true, c93::kRed, c93::kRed); // colours unused for nose
+            loft(prev, cur, true, c93::kRed, c93::kRed, c93::kRed); // colours unused for nose
             prev = cur;
         }
         // Prow cap (fan the last narrow ring closed).
@@ -527,6 +556,13 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                 partition({glm::vec2(sx * ihw, cabEnd), glm::vec2(sx * ihw, doorEnd),
                            glm::vec2(sx * (ihw - techDepth), doorEnd + so * 0.35f),
                            glm::vec2(sx * (ihw - techDepth), cabEnd)}, zFh, c93::kStep);
+
+            // WC / utility module (one car only): a full-height box on the +x
+            // side of the low floor, directly beside the door; ends angled.
+            if (hasWC)
+                partition({glm::vec2(aisle, wc0 - so * 0.25f), glm::vec2(ihw, wc0),
+                           glm::vec2(ihw, wc1), glm::vec2(aisle, wc1 + so * 0.25f)},
+                          zFl, c93::kWall);
         }
     };
 
@@ -540,7 +576,7 @@ void VehicleMesh::build(const Vehicle& vehicle) {
             0.5f * vehicle.length() / static_cast<float>(sections.size());
         for (std::size_t i = 0; i < sections.size(); ++i) {
             if (vehicle.bodyStyle() == BodyClass93) {
-                emitClass93(sections[i], halfLen, i == 0); // front cab at -Y
+                emitClass93(sections[i], halfLen, i == 0, i == 1); // WC in the 2nd car
             } else {
                 const glm::vec3 centre =
                     sections[i].pos + sections[i].up * (frameTopZ + kUnderframeHalfHeight);
