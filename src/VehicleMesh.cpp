@@ -242,11 +242,11 @@ void VehicleMesh::build(const Vehicle& vehicle) {
         const float dipB = std::max(yBogieOuter, yBogieMid) - dipInset;
         auto sillAt = [&](float y) { return (y > dipA && y < dipB) ? zLow : zEnd; };
         const int arcN = 4;
-        auto ring = [&](float y, float wS, float drop, float zb) {
+        auto ring = [&](float y, float wS, float drop, float zb, float zbL, float zbH) {
             const float w = hw * wS, rw = rhw * wS;
             const float zr = z1 - drop;
             const float zC = std::min(zc, zr - 0.04f);
-            const float zH = std::min(zwh, zC - 0.02f), zL = std::min(zwl, zH - 0.02f);
+            const float zH = std::min(zbH, zC - 0.02f), zL = std::min(zbL, zH - 0.02f);
             const float wb = w * c93::kTumble; // narrower at the sill line
             std::vector<glm::vec3> p;
             p.push_back(P(wb, y, zb));          // tumblehome: side leans in to sill
@@ -292,9 +292,9 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                         col = c93::kBand;
                     else
                         col = c93::kRed;
-                } else if (up > 0.45f) {
-                    col = c93::kRoof; // domed roof / shoulders
-                } else if (locZ > zwl - 0.03f && locZ < zwh + 0.03f) {
+                } else if (k >= 3 && k <= 11) {
+                    col = c93::kRoof; // shoulders + domed roof (by ring index)
+                } else if (k == 1 || k == 13) {
                     col = bandCol;    // window band (glazing or a pillar)
                 } else {
                     col = lowerCol;   // lower body / cantrail (silver or door)
@@ -317,14 +317,21 @@ void VehicleMesh::build(const Vehicle& vehicle) {
             quadN(P(-aisle, gang, z0), P(aisle, gang, z0), P(aisle, gang, zFlr), P(-aisle, gang, zFlr), c93::kUnder, in);
         }
 
-        // Main body: a panel sequence along the car — end margins, glazed
-        // windows separated by body-colour pillars, and two glazed doors. Each
-        // panel lofts the constant profile with its lower/window-band colours.
+        // Main body: one passenger door per car, set inboard of the cab. The
+        // window band steps in level at the door — higher over the raised cab
+        // vestibule, lower over the low-floor saloon. Windows are glazed panels
+        // separated by body-colour pillars.
         const float Lb = bodyHi - bodyLo;
+        const float dhw = 0.5f * c93::kDoorWidth;
+        // The floor/window level steps at the stairs; the exterior door sits on
+        // the low floor, past the stairs (so it doesn't open onto them).
+        const float yStep = base + (gang - base) * 0.36f;
+        const float yDoor = base + (gang - base) * 0.46f;
+        auto cabSide = [&](float y) { return std::abs(y - base) < std::abs(yStep - base); };
+        auto bandLo = [&](float y) { return z0 + (cabSide(y) ? 1.18f : 0.82f); };
+        auto bandHi = [&](float y) { return z0 + (cabSide(y) ? 2.05f : 1.68f); };
         struct Panel { float a, b; glm::vec3 lower, band; };
         std::vector<Panel> panels;
-        const float dhw = 0.5f * c93::kDoorWidth;
-        const float dc1 = bodyLo + 0.27f * Lb, dc2 = bodyLo + 0.73f * Lb;
         auto tile = [&](float a, float b) { // fill [a,b] with windows + pillars
             const float m = 0.18f, winW = 1.35f, pilW = 0.32f;
             float x = a;
@@ -340,15 +347,16 @@ void VehicleMesh::build(const Vehicle& vehicle) {
             }
             panels.push_back({x, b, c93::kBody, c93::kBody}); // end margin
         };
-        tile(bodyLo, dc1 - dhw);
-        panels.push_back({dc1 - dhw, dc1 + dhw, c93::kRed, c93::kBand}); // glazed door
-        tile(dc1 + dhw, dc2 - dhw);
-        panels.push_back({dc2 - dhw, dc2 + dhw, c93::kRed, c93::kBand});
-        tile(dc2 + dhw, bodyHi);
+        tile(bodyLo, yDoor - dhw);
+        panels.push_back({yDoor - dhw, yDoor + dhw, c93::kRed, c93::kRed}); // door
+        tile(yDoor + dhw, bodyHi);
         // Loft each panel, subdividing at the bogie-notch edges (doubled with a
         // tiny gap) so the sill steps up near-vertically over each bogie.
         const float eps = 0.02f;
         const float edges[] = {dipA, dipB};
+        auto bodyRing = [&](float y) {
+            return ring(y, 1.0f, 0.0f, sillAt(y), bandLo(y), bandHi(y));
+        };
         for (const Panel& p : panels) {
             std::vector<float> ys = {p.a, p.b};
             for (const float e : edges)
@@ -358,8 +366,7 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                 }
             std::sort(ys.begin(), ys.end());
             for (std::size_t i = 0; i + 1 < ys.size(); ++i)
-                loft(ring(ys[i], 1.0f, 0.0f, sillAt(ys[i])),
-                     ring(ys[i + 1], 1.0f, 0.0f, sillAt(ys[i + 1])), false, p.lower, p.band);
+                loft(bodyRing(ys[i]), bodyRing(ys[i + 1]), false, p.lower, p.band);
         }
 
         // Nose: taper width to a rounded prow while the roof rakes down into a
@@ -370,7 +377,8 @@ void VehicleMesh::build(const Vehicle& vehicle) {
             const float y = base + (tip - base) * u;
             const float wS = std::sqrt(std::max(0.12f, 1.0f - 0.90f * u * u));
             const float drop = (z1 - (zwl + 0.05f)) * (u * u); // roof → window level
-            return ring(y, wS, drop, sillAt(y)); // nose skin follows the same sill
+            // Nose skin follows the same sill; band levels are unused (nose is red).
+            return ring(y, wS, drop, sillAt(y), zwl, zwh);
         };
         std::vector<glm::vec3> prev = noseStation(0);
         for (int i = 1; i <= N; ++i) {
@@ -459,31 +467,66 @@ void VehicleMesh::build(const Vehicle& vehicle) {
             const float zSt = zFl + 0.19f;            // mid step
             const float zFh = zFl + 0.38f;            // raised vestibule floor
             const float so = (base < gang) ? -1.0f : 1.0f; // toward the cab
-            auto lerp = [&](float t) { return base + (gang - base) * t; };
-            const float y1 = lerp(0.30f); // cab-end saloon boundary
+            const float aisle = 0.52f;                // half aisle width
             auto plate = [&](float ya, float yb, float z, const glm::vec3& col) {
                 emitBox(X, Y, Z, P(0.0f, 0.5f * (ya + yb), z - 0.025f), ihw,
                         0.5f * std::abs(yb - ya), 0.025f, col);
             };
-            // Only the cab end is raised (over the leading bogie); the low saloon
-            // floor runs straight through the gangway (low-floor articulation).
-            plate(base, y1 + so * 0.62f, zFh, c93::kFloor); // cab-end raised vestibule
-            plate(y1, gang, zFl, c93::kFloor);              // saloon + low-floor gangway
-            // Two-step riser up to the raised cab vestibule.
-            auto steps = [&](float ye, float dir) {
-                emitBox(X, Y, Z, P(0.0f, ye, 0.5f * (zFl + zSt)), ihw, 0.02f, 0.5f * (zSt - zFl), c93::kStep);
-                plate(ye, ye + dir * 0.30f, zSt, c93::kStep); // mid tread
-                emitBox(X, Y, Z, P(0.0f, ye + dir * 0.30f, 0.5f * (zSt + zFh)), ihw, 0.02f, 0.5f * (zFh - zSt), c93::kStep);
+            // The cab end is raised (over the leading bogie); the low saloon floor
+            // runs straight through the gangway (low-floor articulation). The step
+            // is at the door; two risers with a mid tread step up toward the cab.
+            const float yTop = yStep + so * 0.30f; // top of the steps (raised side)
+            plate(base, yTop, zFh, c93::kFloor);   // raised cab vestibule
+            plate(yStep, gang, zFl, c93::kFloor);  // saloon + low-floor gangway
+            emitBox(X, Y, Z, P(0.0f, yStep, 0.5f * (zFl + zSt)), ihw, 0.02f, 0.5f * (zSt - zFl), c93::kStep);
+            plate(yStep, yTop, zSt, c93::kStep);   // mid tread
+            emitBox(X, Y, Z, P(0.0f, yTop, 0.5f * (zSt + zFh)), ihw, 0.02f, 0.5f * (zFh - zSt), c93::kStep);
+            // Interior ceiling height at lateral x (follows the domed roof).
+            auto ceilingAt = [&](float x) {
+                const float ax = std::abs(x), zCrown = z1 - 0.12f;
+                if (ax <= rhw) return zCrown;
+                return zCrown + (zc - zCrown) * std::min(1.0f, (ax - rhw) / (hw - rhw));
             };
-            steps(y1, so);
-            // Cab partition wall at the cab end, left & right of the aisle, with a
-            // header over the doorway.
-            const float aisle = 0.52f, wallY = base + so * 0.15f, zc = z1 - 0.35f;
-            const float side = 0.5f * (ihw - aisle);
-            emitBox(X, Y, Z, P(-(aisle + side), wallY, 0.5f * (zFh + zc)), side, 0.05f, 0.5f * (zc - zFh), c93::kWall);
-            emitBox(X, Y, Z, P(aisle + side, wallY, 0.5f * (zFh + zc)), side, 0.05f, 0.5f * (zc - zFh), c93::kWall);
-            const float doorTop = zFh + 1.95f;
-            emitBox(X, Y, Z, P(0.0f, wallY, 0.5f * (doorTop + zc)), aisle, 0.05f, 0.5f * (zc - doorTop), c93::kWall);
+            // A floor-to-roof partition from a 4-point footprint; the top follows
+            // the domed ceiling, walls oriented outward from the footprint centre.
+            auto partition = [&](const std::array<glm::vec2, 4>& fp, float zFloor,
+                                 const glm::vec3& col) {
+                glm::vec2 c(0.0f);
+                for (const glm::vec2& q : fp) c += q;
+                const glm::vec3 ref = P(0.25f * c.x, 0.25f * c.y, zFloor + 1.0f);
+                for (int i = 0; i < 4; ++i) {
+                    const glm::vec2 a = fp[i], b = fp[(i + 1) % 4];
+                    quadN(P(a.x, a.y, zFloor), P(b.x, b.y, zFloor),
+                          P(b.x, b.y, ceilingAt(b.x)), P(a.x, a.y, ceilingAt(a.x)), col, ref);
+                }
+                quadN(P(fp[0].x, fp[0].y, ceilingAt(fp[0].x)), P(fp[1].x, fp[1].y, ceilingAt(fp[1].x)),
+                      P(fp[2].x, fp[2].y, ceilingAt(fp[2].x)), P(fp[3].x, fp[3].y, ceilingAt(fp[3].x)), col, ref);
+            };
+
+            // Box in the stairs: full-height walls each side, right out to the
+            // body sides (only the aisle steps through), saloon-facing end angled.
+            for (const float sx : {1.0f, -1.0f})
+                partition({glm::vec2(sx * aisle, yStep - so * 0.22f), glm::vec2(sx * ihw, yStep),
+                           glm::vec2(sx * ihw, yTop), glm::vec2(sx * aisle, yTop)}, zFl, c93::kWall);
+
+            // Cab partition: full-height side panels (domed top) either side of a
+            // central aisle doorway, with a header over the door.
+            const float wallY = base + so * 0.15f;
+            for (const float sx : {1.0f, -1.0f})
+                partition({glm::vec2(sx * aisle, wallY - 0.05f), glm::vec2(sx * ihw, wallY - 0.05f),
+                           glm::vec2(sx * ihw, wallY + 0.05f), glm::vec2(sx * aisle, wallY + 0.05f)},
+                          zFh, c93::kWall);
+            const float doorTop = zFh + 1.95f, zCrown = z1 - 0.12f;
+            emitBox(X, Y, Z, P(0.0f, wallY, 0.5f * (doorTop + zCrown)), aisle, 0.05f, 0.5f * (zCrown - doorTop), c93::kWall);
+
+            // Full-height technical cabinets each side, behind the cab partition,
+            // with the wall facing the door section angled a little.
+            const float cabEnd = wallY - so * 0.1f, techLen = 1.7f, techDepth = 0.55f;
+            const float doorEnd = cabEnd - so * techLen;
+            for (const float sx : {1.0f, -1.0f})
+                partition({glm::vec2(sx * ihw, cabEnd), glm::vec2(sx * ihw, doorEnd),
+                           glm::vec2(sx * (ihw - techDepth), doorEnd + so * 0.35f),
+                           glm::vec2(sx * (ihw - techDepth), cabEnd)}, zFh, c93::kStep);
         }
     };
 
