@@ -60,6 +60,7 @@ const glm::vec3 kEquip(0.27f, 0.28f, 0.30f); // underfloor equipment box
 const glm::vec3 kTank(0.32f, 0.32f, 0.34f);  // underfloor tank / lighter box
 const glm::vec3 kRoofKit(0.40f, 0.41f, 0.43f); // roof exhaust / cooling boxes
 const glm::vec3 kSkirt(0.09f, 0.09f, 0.10f);   // black coupler skirt / valance
+const glm::vec3 kCoupler(0.22f, 0.23f, 0.25f); // steel automatic coupler head
 } // namespace
 } // namespace
 
@@ -366,6 +367,13 @@ void VehicleMesh::build(const Vehicle& vehicle) {
         // Coupler skirt: a black valance under the cab front around the coupler.
         emitBox(X, Y, Z, P(0.0f, base + (tip - base) * 0.86f, z0 - 0.28f),
                 hw * 0.52f, (tip - base) * 0.15f, 0.30f, c93::kSkirt);
+
+        // Automatic (Scharfenberg) coupler poking out of the skirt: a draft-gear
+        // block, the coupler shaft, and a wider knuckle head at the very front.
+        const float cz = z0 - 0.30f;
+        emitBox(X, Y, Z, P(0.0f, tip + ts * 0.02f, cz), hw * 0.26f, 0.12f, 0.16f, c93::kSkirt);
+        emitBox(X, Y, Z, P(0.0f, tip + ts * 0.22f, cz), 0.07f, 0.12f, 0.09f, c93::kCoupler);
+        emitBox(X, Y, Z, P(0.0f, tip + ts * 0.38f, cz), hw * 0.20f, 0.06f, 0.15f, c93::kCoupler);
     };
 
     // Body per section. A Class 93 draws a liveried car body (cab at each outer
