@@ -226,11 +226,66 @@ void VehicleMesh::build(const Vehicle& vehicle) {
             }
         }
 
-        // Raked cab nose (red) with a dark windscreen sloping to the roof.
-        for (const float xs : {hw, -hw})
-            quadN(P(xs, base, z0), P(xs, tip, z0), P(xs, tip, zwh), P(xs, base, z1), c93::kRed, in);
-        quadN(P(-hw, tip, z0), P(hw, tip, z0), P(hw, tip, zwh), P(-hw, tip, zwh), c93::kRed, in);
-        quadN(P(-hw, tip, zwh), P(hw, tip, zwh), P(hw, base, z1), P(-hw, base, z1), c93::kBand, in);
+        // Rounded cab nose, lofted from the full body cross-section at the nose
+        // base to a blunt, lowered, narrower snout at the tip. Each ring is an
+        // open profile (bottom-right, around a rounded top, to bottom-left); the
+        // underside is closed by the floor quad above.
+        const float ts = (tip < base) ? -1.0f : 1.0f; // outward (forward) sign
+        const glm::vec3 fdir = Y * ts;
+        auto noseRing = [&](float u) {
+            const float y = base + (tip - base) * u;
+            const float hwu = hw * std::sqrt(std::max(0.18f, 1.0f - 0.72f * u * u));
+            const float zt = z1 - (z1 - zwh) * (u * u); // roof drops toward the tip
+            float r = 0.05f + 0.5f * u;                 // top corners round off
+            r = std::min(r, std::min(hwu * 0.9f, (zt - z0) * 0.45f));
+            std::vector<glm::vec3> p;
+            p.push_back(P(hwu, y, z0));
+            const int arcN = 3;
+            for (int i = 0; i <= arcN; ++i) { // right shoulder, 0..90 deg
+                const float a = kPi * 0.5f * i / arcN;
+                p.push_back(P((hwu - r) + r * std::cos(a), y, (zt - r) + r * std::sin(a)));
+            }
+            for (int i = 0; i <= arcN; ++i) { // left shoulder, 90..180 deg
+                const float a = kPi * 0.5f + kPi * 0.5f * i / arcN;
+                p.push_back(P((-hwu + r) + r * std::cos(a), y, (zt - r) + r * std::sin(a)));
+            }
+            p.push_back(P(-hwu, y, z0));
+            return p;
+        };
+        // Colour a nose facet: grey roof on top, dark windscreen on the forward-
+        // facing upper surface, red elsewhere.
+        auto noseCol = [&](const glm::vec3& n, const glm::vec3& cen) {
+            if (glm::dot(n, Z) > 0.55f) return c93::kRoof;
+            const float cz = glm::dot(cen - f.pos, Z);
+            if (glm::dot(n, fdir) > 0.35f && cz > zwh - 0.15f) return c93::kBand;
+            return c93::kRed;
+        };
+        const int N = 6;
+        std::vector<glm::vec3> prev = noseRing(0.0f);
+        for (int s = 1; s <= N; ++s) {
+            const std::vector<glm::vec3> cur = noseRing(static_cast<float>(s) / N);
+            for (std::size_t k = 0; k + 1 < prev.size(); ++k) {
+                const glm::vec3 a = prev[k], b = prev[k + 1], c = cur[k + 1], d = cur[k];
+                glm::vec3 nn = glm::cross(b - a, d - a);
+                const float l = glm::length(nn);
+                nn = (l > 1e-9f) ? nn / l : Z;
+                const glm::vec3 cen = 0.25f * (a + b + c + d);
+                if (glm::dot(nn, cen - in) < 0.0f) nn = -nn;
+                quadN(a, b, c, d, noseCol(nn, cen), in);
+            }
+            prev = cur;
+        }
+        // Blunt tip cap (fan the last ring closed, incl. the bottom chord).
+        { glm::vec3 c(0.0f);
+          for (const glm::vec3& q : prev) c += q;
+          c /= static_cast<float>(prev.size());
+          for (std::size_t k = 0; k < prev.size(); ++k) {
+              const glm::vec3& a = prev[k];
+              const glm::vec3& b = prev[(k + 1) % prev.size()];
+              const glm::vec3 cen = (a + b + c) / 3.0f;
+              const float cz = glm::dot(cen - f.pos, Z);
+              quadN(a, b, c, c, (cz > zwh - 0.15f) ? c93::kBand : c93::kRed, in);
+          } }
     };
 
     // Body per section. A Class 93 draws a liveried car body (cab at each outer
