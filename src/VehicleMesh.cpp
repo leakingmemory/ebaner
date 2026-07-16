@@ -239,10 +239,11 @@ void VehicleMesh::build(const Vehicle& vehicle) {
             return p;
         };
         // Loft between two rings, colouring each facet by geometry: grey domed
-        // roof (up-facing), dark window band at cantrail height, red doors and
-        // nose sides, dark forward-facing windscreen on the nose, silver body.
+        // roof (up-facing), the window band at cantrail height in `bandCol`, and
+        // the rest of the side in `lowerCol`. Nose facets are coloured by
+        // orientation (grey roof, dark forward windscreen, red sides).
         auto loft = [&](const std::vector<glm::vec3>& A, const std::vector<glm::vec3>& B,
-                        bool nose, bool door) {
+                        bool nose, const glm::vec3& lowerCol, const glm::vec3& bandCol) {
             for (std::size_t k = 0; k + 1 < A.size(); ++k) {
                 const glm::vec3 a = A[k], b = A[k + 1], c = B[k + 1], d = B[k];
                 glm::vec3 nn = glm::cross(b - a, d - a);
@@ -260,12 +261,10 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                         col = c93::kRed;
                 } else if (up > 0.45f) {
                     col = c93::kRoof; // domed roof / shoulders
-                } else if (door && locZ < zc - 0.05f) {
-                    col = c93::kRed;  // full-height door
                 } else if (locZ > zwl - 0.03f && locZ < zwh + 0.03f) {
-                    col = c93::kBand; // window band
+                    col = bandCol;    // window band (glazing or a pillar)
                 } else {
-                    col = c93::kBody; // silver body
+                    col = lowerCol;   // lower body / cantrail (silver or door)
                 }
                 quadN(a, b, c, d, col, in);
             }
@@ -275,15 +274,36 @@ void VehicleMesh::build(const Vehicle& vehicle) {
         quadN(P(-hw, allLo, z0), P(hw, allLo, z0), P(hw, allHi, z0), P(-hw, allHi, z0), c93::kUnder, in);
         quadN(P(-hw, gang, z0), P(hw, gang, z0), P(hw, gang, z1), P(-hw, gang, z1), c93::kUnder, in);
 
-        // Main body: loft the constant profile along the door/window panels.
-        const float Lb = bodyHi - bodyLo, hdw = 0.5f * c93::kDoorWidth;
-        const float d1 = bodyLo + 0.26f * Lb, d2 = bodyLo + 0.74f * Lb;
-        struct Seg { float a, b; bool door; };
-        const Seg segs[] = {{bodyLo, d1 - hdw, false}, {d1 - hdw, d1 + hdw, true},
-                            {d1 + hdw, d2 - hdw, false}, {d2 - hdw, d2 + hdw, true},
-                            {d2 + hdw, bodyHi, false}};
-        for (const Seg& s : segs)
-            loft(ring(s.a, 1.0f, 0.0f), ring(s.b, 1.0f, 0.0f), false, s.door);
+        // Main body: a panel sequence along the car — end margins, glazed
+        // windows separated by body-colour pillars, and two glazed doors. Each
+        // panel lofts the constant profile with its lower/window-band colours.
+        const float Lb = bodyHi - bodyLo;
+        struct Panel { float a, b; glm::vec3 lower, band; };
+        std::vector<Panel> panels;
+        const float dhw = 0.5f * c93::kDoorWidth;
+        const float dc1 = bodyLo + 0.27f * Lb, dc2 = bodyLo + 0.73f * Lb;
+        auto tile = [&](float a, float b) { // fill [a,b] with windows + pillars
+            const float m = 0.18f, winW = 1.35f, pilW = 0.32f;
+            float x = a;
+            panels.push_back({x, x + m, c93::kBody, c93::kBody}); // start margin
+            x += m;
+            while (b - m - x >= winW - 1e-3f) {
+                panels.push_back({x, x + winW, c93::kBody, c93::kBand}); // window
+                x += winW;
+                if (b - m - x >= winW + pilW) {
+                    panels.push_back({x, x + pilW, c93::kBody, c93::kBody}); // pillar
+                    x += pilW;
+                }
+            }
+            panels.push_back({x, b, c93::kBody, c93::kBody}); // end margin
+        };
+        tile(bodyLo, dc1 - dhw);
+        panels.push_back({dc1 - dhw, dc1 + dhw, c93::kRed, c93::kBand}); // glazed door
+        tile(dc1 + dhw, dc2 - dhw);
+        panels.push_back({dc2 - dhw, dc2 + dhw, c93::kRed, c93::kBand});
+        tile(dc2 + dhw, bodyHi);
+        for (const Panel& p : panels)
+            loft(ring(p.a, 1.0f, 0.0f), ring(p.b, 1.0f, 0.0f), false, p.lower, p.band);
 
         // Nose: taper width to a rounded prow while the roof rakes down into a
         // deep windscreen. Ease-in width and eased roof drop keep it smooth.
@@ -298,7 +318,7 @@ void VehicleMesh::build(const Vehicle& vehicle) {
         std::vector<glm::vec3> prev = noseStation(0);
         for (int i = 1; i <= N; ++i) {
             const std::vector<glm::vec3> cur = noseStation(i);
-            loft(prev, cur, true, false);
+            loft(prev, cur, true, c93::kRed, c93::kRed); // colours unused for nose
             prev = cur;
         }
         // Prow cap (fan the last narrow ring closed).
