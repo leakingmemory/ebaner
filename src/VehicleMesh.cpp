@@ -51,6 +51,7 @@ constexpr float kWinLow = 1.00f;     // window band bottom above floor (m)
 constexpr float kWinHigh = 2.05f;    // window band top above floor (m)
 constexpr float kCantAbove = 2.20f;  // cantrail (shoulder base) above floor (m)
 constexpr float kRoofHalf = 0.74f;   // domed-roof half width, fraction of body
+constexpr float kTumble = 0.90f;     // floor-line half width (tumblehome), fraction
 constexpr float kNoseLen = 3.60f;    // raked cab overhang (m)
 constexpr float kDoorWidth = 1.30f;  // passenger door width (m)
 const glm::vec3 kEquip(0.27f, 0.28f, 0.30f); // underfloor equipment box
@@ -223,8 +224,9 @@ void VehicleMesh::build(const Vehicle& vehicle) {
             const float zr = z1 - drop;
             const float zC = std::min(zc, zr - 0.04f);
             const float zH = std::min(zwh, zC - 0.02f), zL = std::min(zwl, zH - 0.02f);
+            const float wb = w * c93::kTumble; // narrower at the floor line
             std::vector<glm::vec3> p;
-            p.push_back(P(w, y, z0));
+            p.push_back(P(wb, y, z0));         // tumblehome: side leans in to floor
             p.push_back(P(w, y, zL));
             p.push_back(P(w, y, zH));
             for (int i = 0; i <= arcN; ++i) { // right shoulder (w,zC) -> (rw,zr)
@@ -237,7 +239,7 @@ void VehicleMesh::build(const Vehicle& vehicle) {
             }
             p.push_back(P(-w, y, zH));
             p.push_back(P(-w, y, zL));
-            p.push_back(P(-w, y, z0));
+            p.push_back(P(-wb, y, z0));
             return p;
         };
         // Loft between two rings, colouring each facet by geometry: grey domed
@@ -272,9 +274,10 @@ void VehicleMesh::build(const Vehicle& vehicle) {
             }
         };
 
-        // Floor pan and the flat gangway end.
-        quadN(P(-hw, allLo, z0), P(hw, allLo, z0), P(hw, allHi, z0), P(-hw, allHi, z0), c93::kUnder, in);
-        quadN(P(-hw, gang, z0), P(hw, gang, z0), P(hw, gang, z1), P(-hw, gang, z1), c93::kUnder, in);
+        // Floor pan and the flat gangway end (matched to the tumblehome width).
+        const float wf = hw * c93::kTumble;
+        quadN(P(-wf, allLo, z0), P(wf, allLo, z0), P(wf, allHi, z0), P(-wf, allHi, z0), c93::kUnder, in);
+        quadN(P(-wf, gang, z0), P(wf, gang, z0), P(wf, gang, z1), P(-wf, gang, z1), c93::kUnder, in);
 
         // Main body: a panel sequence along the car — end margins, glazed
         // windows separated by body-colour pillars, and two glazed doors. Each
@@ -342,7 +345,7 @@ void VehicleMesh::build(const Vehicle& vehicle) {
         // Underfloor systems: a shallow equipment raft under the whole body plus
         // a couple of deeper boxes (engine / tank) slung between the bogies.
         emitBox(X, Y, Z, P(0.0f, 0.5f * (bodyLo + bodyHi), z0 - 0.24f),
-                hw * 0.94f, 0.5f * Lb * 0.96f, 0.22f, c93::kEquip);
+                hw * 0.86f, 0.5f * Lb * 0.96f, 0.22f, c93::kEquip);
         emitBox(X, Y, Z, P(0.0f, bodyLo + 0.34f * Lb, z0 - 0.56f),
                 hw * 0.82f, 0.20f * Lb, 0.40f, c93::kEquip);
         emitBox(X, Y, Z, P(0.0f, bodyLo + 0.66f * Lb, z0 - 0.50f),
