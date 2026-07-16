@@ -64,6 +64,10 @@ const glm::vec3 kCoupler(0.22f, 0.23f, 0.25f); // steel automatic coupler head
 const glm::vec3 kFloor(0.42f, 0.42f, 0.45f);   // interior saloon floor
 const glm::vec3 kStep(0.32f, 0.32f, 0.34f);    // interior step / riser
 const glm::vec3 kWall(0.74f, 0.70f, 0.62f);    // interior cab partition wall
+const glm::vec3 kLining(0.82f, 0.80f, 0.75f);  // interior wall lining (neutral)
+const glm::vec3 kCeiling(0.87f, 0.87f, 0.88f); // interior ceiling lining (light)
+const glm::vec3 kGlass(0.17f, 0.19f, 0.23f);   // window glazing seen from inside
+const glm::vec3 kWood(0.52f, 0.37f, 0.23f);    // wood-tone module panels
 } // namespace
 } // namespace
 
@@ -501,6 +505,43 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                 emitBox(X, Y, Z, P(0.0f, 0.5f * (ya + yb), z - 0.025f), ihw,
                         0.5f * std::abs(yb - ya), 0.025f, col);
             };
+
+            // Interior lining: an inset shell (walls + domed ceiling) facing the
+            // aisle, so the inside carries its own colours — neutral walls, light
+            // ceiling, dark glazing at the windows — independent of the exterior.
+            auto liningRing = [&](float y) {
+                return ring(y, 0.955f, 0.06f, zFl, bandLo(y), bandHi(y));
+            };
+            auto liningLoft = [&](const std::vector<glm::vec3>& A, const std::vector<glm::vec3>& B) {
+                for (std::size_t k = 0; k + 1 < A.size(); ++k) {
+                    const glm::vec3 a = A[k], b = A[k + 1], c = B[k + 1], d = B[k];
+                    glm::vec3 n = glm::cross(b - a, d - a);
+                    const float l = glm::length(n);
+                    n = (l > 1e-9f) ? n / l : Z;
+                    const glm::vec3 cen = 0.25f * (a + b + c + d);
+                    const glm::vec3 target = P(0.0f, glm::dot(cen - f.pos, Y), 0.5f * (zFl + z1));
+                    if (glm::dot(n, target - cen) < 0.0f) n = -n; // face the aisle
+                    const glm::vec3 col = (k == 1 || k == 13) ? c93::kGlass
+                                          : (k >= 3 && k <= 11) ? c93::kCeiling
+                                                                : c93::kLining;
+                    const glm::vec2 uv(0.0f);
+                    const std::uint32_t vb = static_cast<std::uint32_t>(vertices_.size());
+                    push(a, n, col); push(b, n, col); push(c, n, col); push(d, n, col);
+                    indices_.push_back(vb + 0); indices_.push_back(vb + 1); indices_.push_back(vb + 2);
+                    indices_.push_back(vb + 0); indices_.push_back(vb + 2); indices_.push_back(vb + 3);
+                }
+            };
+            {
+                const int steps = 24;
+                std::vector<glm::vec3> prev = liningRing(bodyLo);
+                for (int i = 1; i <= steps; ++i) {
+                    std::vector<glm::vec3> cur =
+                        liningRing(bodyLo + (bodyHi - bodyLo) * i / steps);
+                    liningLoft(prev, cur);
+                    prev = cur;
+                }
+            }
+
             // The cab end is raised (over the leading bogie); the low saloon floor
             // runs straight through the gangway (low-floor articulation). The step
             // is at the door; two risers with a mid tread step up toward the cab.
@@ -555,14 +596,14 @@ void VehicleMesh::build(const Vehicle& vehicle) {
             for (const float sx : {1.0f, -1.0f})
                 partition({glm::vec2(sx * ihw, cabEnd), glm::vec2(sx * ihw, doorEnd),
                            glm::vec2(sx * (ihw - techDepth), doorEnd + so * 0.35f),
-                           glm::vec2(sx * (ihw - techDepth), cabEnd)}, zFh, c93::kStep);
+                           glm::vec2(sx * (ihw - techDepth), cabEnd)}, zFh, c93::kWood);
 
             // WC / utility module (one car only): a full-height box on the +x
             // side of the low floor, directly beside the door; ends angled.
             if (hasWC)
                 partition({glm::vec2(aisle, wc0 - so * 0.25f), glm::vec2(ihw, wc0),
                            glm::vec2(ihw, wc1), glm::vec2(aisle, wc1 + so * 0.25f)},
-                          zFl, c93::kWall);
+                          zFl, c93::kWood);
         }
     };
 
