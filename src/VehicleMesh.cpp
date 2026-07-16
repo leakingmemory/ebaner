@@ -61,6 +61,9 @@ const glm::vec3 kTank(0.32f, 0.32f, 0.34f);  // underfloor tank / lighter box
 const glm::vec3 kRoofKit(0.40f, 0.41f, 0.43f); // roof exhaust / cooling boxes
 const glm::vec3 kSkirt(0.09f, 0.09f, 0.10f);   // black coupler skirt / valance
 const glm::vec3 kCoupler(0.22f, 0.23f, 0.25f); // steel automatic coupler head
+const glm::vec3 kFloor(0.42f, 0.42f, 0.45f);   // interior saloon floor
+const glm::vec3 kStep(0.32f, 0.32f, 0.34f);    // interior step / riser
+const glm::vec3 kWall(0.74f, 0.70f, 0.62f);    // interior cab partition wall
 } // namespace
 } // namespace
 
@@ -300,10 +303,19 @@ void VehicleMesh::build(const Vehicle& vehicle) {
             }
         };
 
-        // Floor pan and the flat gangway end (matched to the tumblehome width).
+        // Floor pan and the gangway end. The end wall has a central aisle
+        // doorway (a low-floor walk-through to the next car via the bellows).
         const float wf = hw * c93::kTumble;
         quadN(P(-wf, allLo, z0), P(wf, allLo, z0), P(wf, allHi, z0), P(-wf, allHi, z0), c93::kUnder, in);
-        quadN(P(-wf, gang, z0), P(wf, gang, z0), P(wf, gang, z1), P(-wf, gang, z1), c93::kUnder, in);
+        {
+            const float aisle = 0.52f;          // half aisle-doorway width
+            const float zFlr = z0 + 0.03f;      // gangway floor
+            const float zDoor = zFlr + 2.0f;    // doorway top
+            quadN(P(-wf, gang, z0), P(-aisle, gang, z0), P(-aisle, gang, z1), P(-wf, gang, z1), c93::kUnder, in);
+            quadN(P(aisle, gang, z0), P(wf, gang, z0), P(wf, gang, z1), P(aisle, gang, z1), c93::kUnder, in);
+            quadN(P(-aisle, gang, zDoor), P(aisle, gang, zDoor), P(aisle, gang, z1), P(-aisle, gang, z1), c93::kUnder, in);
+            quadN(P(-aisle, gang, z0), P(aisle, gang, z0), P(aisle, gang, zFlr), P(-aisle, gang, zFlr), c93::kUnder, in);
+        }
 
         // Main body: a panel sequence along the car — end margins, glazed
         // windows separated by body-colour pillars, and two glazed doors. Each
@@ -436,6 +448,43 @@ void VehicleMesh::build(const Vehicle& vehicle) {
             deflector(tip + ts * -0.9f, 0.45f, z0 - 0.34f, z0 - 0.86f, hw * 0.98f, hw * 0.66f);
             deflector(yBogieOuter + ts * 1.5f, 0.35f, z0 - 0.62f, z0 - 1.06f, hw * 0.52f, hw * 0.34f);
         }
+
+        // ---- Interior (seen by flying the camera inside the shell). The low
+        // saloon floor sits between two raised end vestibules (over the bogies,
+        // in front of the doors), joined by two-step risers; a partition wall
+        // with a central aisle doorway closes off the driver's cab. ----
+        {
+            const float ihw = hw * 0.90f;             // interior half width
+            const float zFl = z0 + 0.03f;             // saloon floor
+            const float zSt = zFl + 0.19f;            // mid step
+            const float zFh = zFl + 0.38f;            // raised vestibule floor
+            const float so = (base < gang) ? -1.0f : 1.0f; // toward the cab
+            auto lerp = [&](float t) { return base + (gang - base) * t; };
+            const float y1 = lerp(0.30f); // cab-end saloon boundary
+            auto plate = [&](float ya, float yb, float z, const glm::vec3& col) {
+                emitBox(X, Y, Z, P(0.0f, 0.5f * (ya + yb), z - 0.025f), ihw,
+                        0.5f * std::abs(yb - ya), 0.025f, col);
+            };
+            // Only the cab end is raised (over the leading bogie); the low saloon
+            // floor runs straight through the gangway (low-floor articulation).
+            plate(base, y1 + so * 0.62f, zFh, c93::kFloor); // cab-end raised vestibule
+            plate(y1, gang, zFl, c93::kFloor);              // saloon + low-floor gangway
+            // Two-step riser up to the raised cab vestibule.
+            auto steps = [&](float ye, float dir) {
+                emitBox(X, Y, Z, P(0.0f, ye, 0.5f * (zFl + zSt)), ihw, 0.02f, 0.5f * (zSt - zFl), c93::kStep);
+                plate(ye, ye + dir * 0.30f, zSt, c93::kStep); // mid tread
+                emitBox(X, Y, Z, P(0.0f, ye + dir * 0.30f, 0.5f * (zSt + zFh)), ihw, 0.02f, 0.5f * (zFh - zSt), c93::kStep);
+            };
+            steps(y1, so);
+            // Cab partition wall at the cab end, left & right of the aisle, with a
+            // header over the doorway.
+            const float aisle = 0.52f, wallY = base + so * 0.15f, zc = z1 - 0.35f;
+            const float side = 0.5f * (ihw - aisle);
+            emitBox(X, Y, Z, P(-(aisle + side), wallY, 0.5f * (zFh + zc)), side, 0.05f, 0.5f * (zc - zFh), c93::kWall);
+            emitBox(X, Y, Z, P(aisle + side, wallY, 0.5f * (zFh + zc)), side, 0.05f, 0.5f * (zc - zFh), c93::kWall);
+            const float doorTop = zFh + 1.95f;
+            emitBox(X, Y, Z, P(0.0f, wallY, 0.5f * (doorTop + zc)), aisle, 0.05f, 0.5f * (zc - doorTop), c93::kWall);
+        }
     };
 
     // Body per section. A Class 93 draws a liveried car body (cab at each outer
@@ -493,6 +542,9 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                               c93::kSkirt, mid);
                     prev = cur;
                 }
+                // Low-floor bridge across the gap so the aisle walks through.
+                quadN(A[3], A[0], B[0], B[3], c93::kFloor,
+                      mid - glm::vec3(0.0f, 0.0f, 2.0f));
             }
         }
     }
