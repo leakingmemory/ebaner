@@ -374,6 +374,30 @@ void VehicleMesh::build(const Vehicle& vehicle) {
         emitBox(X, Y, Z, P(0.0f, tip + ts * 0.02f, cz), hw * 0.26f, 0.12f, 0.16f, c93::kSkirt);
         emitBox(X, Y, Z, P(0.0f, tip + ts * 0.22f, cz), 0.07f, 0.12f, 0.09f, c93::kCoupler);
         emitBox(X, Y, Z, P(0.0f, tip + ts * 0.38f, cz), hw * 0.20f, 0.06f, 0.15f, c93::kCoupler);
+
+        // Two obstacle deflectors ahead of the leading bogie: a larger upper
+        // snowplow below the coupler and a smaller lower lifeguard just above the
+        // rail. Each is a dark V-blade wedge with its point raked forward.
+        {
+            auto FY = [&](float d) { return tip + ts * d; };
+            auto plow = [&](float zTop, float zBot, float wT, float wB,
+                            float dBack, float dFront) {
+                const glm::vec3 TBL = P(-wT, FY(dBack), zTop);
+                const glm::vec3 TBR = P(wT, FY(dBack), zTop);
+                const glm::vec3 TBC = P(0.0f, FY(dBack), zTop);
+                const glm::vec3 FBL = P(-wB, FY(dFront), zBot);
+                const glm::vec3 FBR = P(wB, FY(dFront), zBot);
+                const glm::vec3 FBC = P(0.0f, FY(dFront + 0.16f), zBot - 0.08f); // point
+                const glm::vec3 back = P(0.0f, FY(dBack - 0.3f), zTop + 0.3f);
+                const glm::vec3 down = P(0.0f, FY(dFront), zTop - 2.0f);
+                quadN(TBL, FBL, FBC, TBC, c93::kSkirt, back); // blade faces
+                quadN(TBC, FBC, FBR, TBR, c93::kSkirt, back);
+                quadN(TBL, TBC, FBC, FBL, c93::kSkirt, down); // undersides
+                quadN(TBC, TBR, FBR, FBC, c93::kSkirt, down);
+            };
+            plow(z0 - 0.34f, z0 - 0.64f, hw * 0.62f, hw * 0.42f, -0.05f, 0.28f); // upper
+            plow(z0 - 0.72f, z0 - 0.98f, hw * 0.34f, hw * 0.22f, 0.12f, 0.34f);  // lower
+        }
     };
 
     // Body per section. A Class 93 draws a liveried car body (cab at each outer
