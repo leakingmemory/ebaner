@@ -55,6 +55,8 @@ constexpr float kNoseLen = 3.60f;    // raked cab overhang (m)
 constexpr float kDoorWidth = 1.30f;  // passenger door width (m)
 const glm::vec3 kEquip(0.27f, 0.28f, 0.30f); // underfloor equipment box
 const glm::vec3 kTank(0.32f, 0.32f, 0.34f);  // underfloor tank / lighter box
+const glm::vec3 kRoofKit(0.40f, 0.41f, 0.43f); // roof exhaust / cooling boxes
+const glm::vec3 kSkirt(0.09f, 0.09f, 0.10f);   // black coupler skirt / valance
 } // namespace
 } // namespace
 
@@ -345,6 +347,19 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                 hw * 0.82f, 0.20f * Lb, 0.40f, c93::kEquip);
         emitBox(X, Y, Z, P(0.0f, bodyLo + 0.66f * Lb, z0 - 0.50f),
                 hw * 0.74f, 0.15f * Lb, 0.34f, c93::kTank);
+
+        // Roof equipment: exhaust / cooling boxes along the car roof, sitting on
+        // the domed roof crown.
+        emitBox(X, Y, Z, P(0.0f, bodyLo + 0.32f * Lb, z1 + 0.13f),
+                rhw * 0.74f, 0.11f * Lb, 0.13f, c93::kRoofKit);
+        emitBox(X, Y, Z, P(0.0f, bodyLo + 0.58f * Lb, z1 + 0.16f),
+                rhw * 0.60f, 0.08f * Lb, 0.16f, c93::kRoofKit); // taller (exhaust)
+        emitBox(X, Y, Z, P(0.0f, bodyLo + 0.80f * Lb, z1 + 0.11f),
+                rhw * 0.72f, 0.09f * Lb, 0.11f, c93::kRoofKit);
+
+        // Coupler skirt: a black valance under the cab front around the coupler.
+        emitBox(X, Y, Z, P(0.0f, base + (tip - base) * 0.86f, z0 - 0.28f),
+                hw * 0.52f, (tip - base) * 0.15f, 0.30f, c93::kSkirt);
     };
 
     // Body per section. A Class 93 draws a liveried car body (cab at each outer
