@@ -21,10 +21,16 @@
 
 class TrackPath;
 
+// How the body is drawn on top of the running gear.
+enum VehicleBodyStyle {
+    BodyUnderframe = 0, // bare floor plate per section (a base to build on)
+    BodyClass93 = 1,    // NSB Class 93 (Bombardier Talent) exterior
+};
+
 // A selectable rail vehicle type. The running gear is described by a bogie count
 // (0 = single bare axle, 1 = one bogie, 2 = end bogies, 3 = end + middle),
 // bogieSpacing (end-bogie-to-end-bogie distance) and wheelbase (axle spacing
-// within a bogie). Two or more bogies carry an underframe body of `length`.
+// within a bogie). Two or more bogies carry a body of `length` drawn per `body`.
 struct VehicleSpec {
     const char* name;
     float mass;         // kg
@@ -34,16 +40,18 @@ struct VehicleSpec {
     float wheelbase;    // m axle spacing within a bogie (0 = single axle)
     float bogieSpacing; // m end-bogie-to-end-bogie distance (0 = <2 bogies)
     int   bogieCount;   // 0 bare axle, 1 bogie, 2 end bogies, 3 end + middle
+    int   body;         // VehicleBodyStyle
 };
 
 // The vehicles offered on the start screen.
 inline constexpr VehicleSpec kVehicleSpecs[] = {
-    {"Single-axle wheelset", 1300.0f, 0.20f, 2.20f, 0.92f, 0.00f, 0.00f, 0},
-    {"Dual-axle bogie", 4000.0f, 2.60f, 2.50f, 1.05f, 1.80f, 0.00f, 1},
-    {"Carriage (two bogies)", 34000.0f, 25.0f, 3.00f, 1.30f, 2.50f, 18.00f, 2},
-    {"Articulated (3 bogies)", 45000.0f, 30.0f, 2.70f, 1.30f, 2.50f, 22.00f, 3},
+    {"Single-axle wheelset", 1300.0f, 0.20f, 2.20f, 0.92f, 0.00f, 0.00f, 0, BodyUnderframe},
+    {"Dual-axle bogie", 4000.0f, 2.60f, 2.50f, 1.05f, 1.80f, 0.00f, 1, BodyUnderframe},
+    {"Carriage (two bogies)", 34000.0f, 25.0f, 3.00f, 1.30f, 2.50f, 18.00f, 2, BodyUnderframe},
+    {"Articulated (3 bogies)", 45000.0f, 30.0f, 2.70f, 1.30f, 2.50f, 22.00f, 3, BodyUnderframe},
+    {"NSB Class 93 (Talent)", 70000.0f, 41.5f, 2.75f, 3.80f, 2.50f, 30.00f, 3, BodyClass93},
 };
-inline constexpr int kNumVehicleSpecs = 4;
+inline constexpr int kNumVehicleSpecs = 5;
 
 // Gravity on the vehicle resolved at its current pose. The along-track part is
 // "free" (it drives acceleration up/down grades); the remainder is reacted by the
@@ -133,6 +141,7 @@ public:
     float wheelbase() const { return wheelbase_; }
     float bogieSpacing() const { return bogieSpacing_; }
     int bogieCount() const { return bogieCount_; }
+    int bodyStyle() const { return bodyStyle_; }
     const char* name() const { return name_; }
     const TrackPath* path() const { return path_; }
 
@@ -150,6 +159,7 @@ private:
     float mass_;
     float length_, width_, height_, wheelbase_, bogieSpacing_;
     int bogieCount_;
+    int bodyStyle_;
     const char* name_;
 
     VehicleState state_ = VehicleState::OnRail;

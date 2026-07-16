@@ -42,6 +42,7 @@ Vehicle::Vehicle(const TrackPath* path, const VehicleSpec& spec, float s,
       wheelbase_(spec.wheelbase),
       bogieSpacing_(spec.bogieSpacing),
       bogieCount_(spec.bogieCount),
+      bodyStyle_(spec.body),
       name_(spec.name),
       v_(initialSpeed) {}
 
