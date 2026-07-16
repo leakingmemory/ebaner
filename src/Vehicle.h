@@ -21,8 +21,10 @@
 
 class TrackPath;
 
-// A selectable rail vehicle type: a rigid body on 1 or 2 axles, or a carriage
-// carried on two bogies (bogieSpacing > 0).
+// A selectable rail vehicle type. The running gear is described by a bogie count
+// (0 = single bare axle, 1 = one bogie, 2 = end bogies, 3 = end + middle),
+// bogieSpacing (end-bogie-to-end-bogie distance) and wheelbase (axle spacing
+// within a bogie). Two or more bogies carry an underframe body of `length`.
 struct VehicleSpec {
     const char* name;
     float mass;         // kg
@@ -30,16 +32,18 @@ struct VehicleSpec {
     float width;        // m, across the track
     float height;       // m, vertical
     float wheelbase;    // m axle spacing within a bogie (0 = single axle)
-    float bogieSpacing; // m centre-to-centre of the two bogies (0 = not a carriage)
+    float bogieSpacing; // m end-bogie-to-end-bogie distance (0 = <2 bogies)
+    int   bogieCount;   // 0 bare axle, 1 bogie, 2 end bogies, 3 end + middle
 };
 
 // The vehicles offered on the start screen.
 inline constexpr VehicleSpec kVehicleSpecs[] = {
-    {"Single-axle wheelset", 1300.0f, 0.20f, 2.20f, 0.92f, 0.00f, 0.00f},
-    {"Dual-axle bogie", 4000.0f, 2.60f, 2.50f, 1.05f, 1.80f, 0.00f},
-    {"Carriage (two bogies)", 34000.0f, 25.0f, 3.00f, 1.30f, 2.50f, 18.00f},
+    {"Single-axle wheelset", 1300.0f, 0.20f, 2.20f, 0.92f, 0.00f, 0.00f, 0},
+    {"Dual-axle bogie", 4000.0f, 2.60f, 2.50f, 1.05f, 1.80f, 0.00f, 1},
+    {"Carriage (two bogies)", 34000.0f, 25.0f, 3.00f, 1.30f, 2.50f, 18.00f, 2},
+    {"Articulated (3 bogies)", 45000.0f, 30.0f, 2.70f, 1.30f, 2.50f, 22.00f, 3},
 };
-inline constexpr int kNumVehicleSpecs = 3;
+inline constexpr int kNumVehicleSpecs = 4;
 
 // Gravity on the vehicle resolved at its current pose. The along-track part is
 // "free" (it drives acceleration up/down grades); the remainder is reacted by the
@@ -90,9 +94,13 @@ public:
     VehicleFrame bodyFrame() const;
     // On-rail pose of each axle (1 single axle, 2 bogie, 4 carriage), for the mesh.
     std::vector<VehicleFrame> axleFrames() const;
-    // Pivot frame of each bogie (2 for a carriage), each chording its own axles.
-    // Returns {bodyFrame()} when the vehicle is not a carriage.
+    // Pivot frame of each bogie (0 for a bare axle, up to 3), each chording its
+    // own axles.
     std::vector<VehicleFrame> bogieFrames() const;
+    // Frame of each underframe body section (0 when <2 bogies, 1 for a carriage,
+    // 2 for a 3-bogie module), each oriented by its bogie pair so an articulated
+    // module flexes at the middle bogie.
+    std::vector<VehicleFrame> bodySectionFrames() const;
     VehicleState state() const { return state_; }
     float speed() const; // m/s
 
@@ -124,20 +132,24 @@ public:
     float height() const { return height_; }
     float wheelbase() const { return wheelbase_; }
     float bogieSpacing() const { return bogieSpacing_; }
+    int bogieCount() const { return bogieCount_; }
     const char* name() const { return name_; }
     const TrackPath* path() const { return path_; }
 
 private:
+    // Arc-length offsets of each bogie centre from the body centre (s_).
+    std::vector<float> bogieCentres() const;
     // Arc-length offsets of each axle from the body centre (s_).
     std::vector<float> axleOffsets() const;
-    // Half the span between the body's two support points (bogie pivots for a
-    // carriage, the two axles for a bogie, 0 for a single axle).
+    // Half the span between the body's two support points (the two end bogies for
+    // a carriage/module, the two axles for a lone bogie, 0 for a single axle).
     float supportHalf() const;
 
     const TrackPath* path_;
     float s_;
     float mass_;
     float length_, width_, height_, wheelbase_, bogieSpacing_;
+    int bogieCount_;
     const char* name_;
 
     VehicleState state_ = VehicleState::OnRail;

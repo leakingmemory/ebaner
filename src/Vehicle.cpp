@@ -41,6 +41,7 @@ Vehicle::Vehicle(const TrackPath* path, const VehicleSpec& spec, float s,
       height_(spec.height),
       wheelbase_(spec.wheelbase),
       bogieSpacing_(spec.bogieSpacing),
+      bogieCount_(spec.bogieCount),
       name_(spec.name),
       v_(initialSpeed) {}
 
@@ -80,21 +81,27 @@ float Vehicle::speed() const {
 }
 
 float Vehicle::supportHalf() const {
-    if (bogieSpacing_ > 1e-3f) return 0.5f * bogieSpacing_; // carriage: pivots
-    if (wheelbase_ > 1e-3f) return 0.5f * wheelbase_;       // bogie: two axles
-    return 0.0f;                                            // single axle
+    if (bogieCount_ >= 2) return 0.5f * bogieSpacing_; // chord the two end bogies
+    if (bogieCount_ == 1) return 0.5f * wheelbase_;    // chord the bogie's axles
+    return 0.0f;                                       // single axle
+}
+
+std::vector<float> Vehicle::bogieCentres() const {
+    const float bc = 0.5f * bogieSpacing_;
+    switch (bogieCount_) {
+        case 1: return {0.0f};
+        case 2: return {-bc, bc};
+        case 3: return {-bc, 0.0f, bc};
+        default: return {}; // 0: no bogie (single bare axle)
+    }
 }
 
 std::vector<float> Vehicle::axleOffsets() const {
-    if (bogieSpacing_ > 1e-3f) { // carriage: two axles per bogie
-        const float bc = 0.5f * bogieSpacing_, wb = 0.5f * wheelbase_;
-        return {-bc - wb, -bc + wb, bc - wb, bc + wb};
-    }
-    if (wheelbase_ > 1e-3f) { // bogie
-        const float wb = 0.5f * wheelbase_;
-        return {-wb, wb};
-    }
-    return {0.0f}; // single axle
+    if (bogieCount_ == 0) return {0.0f}; // single bare axle
+    const float wb = 0.5f * wheelbase_;
+    std::vector<float> out;
+    for (float c : bogieCentres()) { out.push_back(c - wb); out.push_back(c + wb); }
+    return out;
 }
 
 VehicleFrame Vehicle::bodyFrame() const {
@@ -102,22 +109,44 @@ VehicleFrame Vehicle::bodyFrame() const {
         return {pos_, fRight_, fTangent_, fUp_};
     const float half = supportHalf();
     if (half < 1e-3f) return frameOf(path_->poseAt(s_)); // single axle
-    // Chord the two support points (bogie pivots for a carriage, axles for a bogie).
+    // Chord the two support points (end bogies for a carriage/module, the two
+    // axles for a lone bogie).
     return chordFrame(path_->poseAt(s_ - half), path_->poseAt(s_ + half),
                       path_->poseAt(s_).tangent);
 }
 
 std::vector<VehicleFrame> Vehicle::bogieFrames() const {
-    if (bogieSpacing_ <= 1e-3f) return {bodyFrame()}; // not a carriage
-    const float bc = 0.5f * bogieSpacing_, wb = 0.5f * wheelbase_;
+    const float wb = 0.5f * wheelbase_;
     std::vector<VehicleFrame> out;
-    for (float c : {-bc, bc}) {
-        if (state_ == VehicleState::OnRail) {
+    for (float c : bogieCentres()) {
+        if (state_ == VehicleState::OnRail)
             out.push_back(chordFrame(path_->poseAt(s_ + c - wb),
                                      path_->poseAt(s_ + c + wb),
                                      path_->poseAt(s_ + c).tangent));
-        } else { // derailed: bogie pivots offset along the frozen body tangent
+        else // derailed: bogie pivots offset along the frozen body tangent
             out.push_back({pos_ + fTangent_ * c, fRight_, fTangent_, fUp_});
+    }
+    return out;
+}
+
+std::vector<VehicleFrame> Vehicle::bodySectionFrames() const {
+    const std::vector<float> centres = bogieCentres();
+    std::vector<VehicleFrame> out;
+    if (centres.size() < 2) return out; // <2 bogies carry no underframe body
+    const int n = static_cast<int>(centres.size()) - 1; // sections between bogies
+    for (int i = 0; i < n; ++i) {
+        // Body-section centre, tiled evenly along the body length.
+        const float mid = -0.5f * length_ + (i + 0.5f) * length_ / n;
+        if (state_ == VehicleState::OnRail) {
+            // Orientation from the section's bogie pair (so the body flexes at the
+            // shared middle bogie); position on the track at the section centre.
+            VehicleFrame f = chordFrame(path_->poseAt(s_ + centres[i]),
+                                        path_->poseAt(s_ + centres[i + 1]),
+                                        path_->poseAt(s_ + mid).tangent);
+            f.pos = path_->poseAt(s_ + mid).pos;
+            out.push_back(f);
+        } else { // derailed: frozen body axes, section offset along the tangent
+            out.push_back({pos_ + fTangent_ * mid, fRight_, fTangent_, fUp_});
         }
     }
     return out;

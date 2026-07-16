@@ -35,10 +35,11 @@ Bodø main track ("track 1 end"), resolved from the `tracks.bin` geometry.
   painted **yellow safety line** where the slabs begin, on the track-facing
   long edges.
 - **Rail vehicle** — chosen on an in-window **start screen** (a text menu): a
-  single-axle wheelset, a dual-axle bogie (two wheelsets + frame), or a full-length
-  **carriage underframe** carried on two dual-axle bogies (one at each end), all
-  unpowered (`src/VehicleMesh.cpp`). A small 1-DOF physics model (`src/Vehicle.cpp`)
-  gives it
+  single-axle wheelset, a dual-axle bogie (two wheelsets + frame), a full-length
+  **carriage underframe** on two dual-axle bogies (one at each end), or a longer
+  **articulated module** on three bogies whose two underframe sections hinge over
+  the shared middle (Jacobs) bogie so it flexes on curves, all unpowered
+  (`src/VehicleMesh.cpp`). A small 1-DOF physics model (`src/Vehicle.cpp`) gives it
   mass, gravity resolved into along-track acceleration + weight-on-rails, Davis
   running resistance, box inertia and a curve overturning limit. It rolls under
   gravity on grades, can be **hand-pushed** (Up/Down), coasts to a stop via rolling

@@ -263,7 +263,7 @@ int main(int argc, char** argv) {
         mode = Mode::Sim;
     }
     bool prevUp = false, prevDown = false, prevK1 = false, prevK2 = false,
-         prevK3 = false, prevEnter = false;
+         prevK3 = false, prevK4 = false, prevEnter = false;
 
     double lastTime = glfwGetTime();
     while (!glfwWindowShouldClose(window)) {
@@ -281,7 +281,7 @@ int main(int argc, char** argv) {
             auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
             const bool kUp = down(GLFW_KEY_UP), kDn = down(GLFW_KEY_DOWN);
             const bool k1 = down(GLFW_KEY_1), k2 = down(GLFW_KEY_2),
-                       k3 = down(GLFW_KEY_3);
+                       k3 = down(GLFW_KEY_3), k4 = down(GLFW_KEY_4);
             const bool kEnt = down(GLFW_KEY_ENTER);
             if (kUp && !prevUp)
                 menuIndex = (menuIndex + kNumVehicleSpecs - 1) % kNumVehicleSpecs;
@@ -289,9 +289,10 @@ int main(int argc, char** argv) {
             if (k1 && !prevK1) menuIndex = 0;
             if (k2 && !prevK2 && kNumVehicleSpecs > 1) menuIndex = 1;
             if (k3 && !prevK3 && kNumVehicleSpecs > 2) menuIndex = 2;
+            if (k4 && !prevK4 && kNumVehicleSpecs > 3) menuIndex = 3;
             const bool confirm = kEnt && !prevEnter;
             prevUp = kUp; prevDown = kDn; prevK1 = k1; prevK2 = k2; prevK3 = k3;
-            prevEnter = kEnt;
+            prevK4 = k4; prevEnter = kEnt;
 
             if (confirm) {
                 spawnVehicle(menuIndex);
@@ -325,7 +326,7 @@ int main(int argc, char** argv) {
                                hi ? glm::vec3(1.0f) : glm::vec3(0.6f, 0.6f, 0.65f),
                                fbw, fbh);
                 }
-                appendText(tv, "UP/DOWN OR 1/2/3 TO CHOOSE, ENTER TO START", x,
+                appendText(tv, "UP/DOWN OR 1/2/3/4 TO CHOOSE, ENTER TO START", x,
                            40.0f + (kNumVehicleSpecs + 3) * lh, sc * 0.75f,
                            glm::vec3(0.7f, 0.8f, 0.9f), fbw, fbh);
                 renderer.setOverlayText(tv);

@@ -143,16 +143,22 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                 kFrameCol);
     };
 
-    if (vehicle.bogieSpacing() > 1e-3f) {
-        // Carriage: a bogie frame at each end plus a long underframe/floor plate
-        // spanning them, sitting just above the bogie frame tops.
-        for (const VehicleFrame& bf : vehicle.bogieFrames()) emitBogieFrame(bf);
-        const VehicleFrame b = vehicle.bodyFrame();
-        const glm::vec3 centre =
-            b.pos + b.up * (frameTopZ + kUnderframeHalfHeight);
-        emitBox(b.right, b.tangent, b.up, centre, 0.5f * vehicle.width(),
-                0.5f * vehicle.length(), kUnderframeHalfHeight, kUnderframeCol);
-    } else if (vehicle.wheelbase() > 1e-3f) {
-        emitBogieFrame(vehicle.bodyFrame()); // single bogie
+    // A bogie frame per bogie (none for a bare wheelset).
+    for (const VehicleFrame& bf : vehicle.bogieFrames()) emitBogieFrame(bf);
+
+    // An underframe/floor plate per body section, sitting just above the bogie
+    // frame tops. A carriage has one full-length plate; a 3-bogie module has two
+    // half plates that hinge over the shared middle bogie (each section's frame
+    // is oriented by its own bogie pair).
+    const std::vector<VehicleFrame> sections = vehicle.bodySectionFrames();
+    if (!sections.empty()) {
+        const float halfLen =
+            0.5f * vehicle.length() / static_cast<float>(sections.size());
+        for (const VehicleFrame& s : sections) {
+            const glm::vec3 centre =
+                s.pos + s.up * (frameTopZ + kUnderframeHalfHeight);
+            emitBox(s.right, s.tangent, s.up, centre, 0.5f * vehicle.width(),
+                    halfLen, kUnderframeHalfHeight, kUnderframeCol);
+        }
     }
 }
