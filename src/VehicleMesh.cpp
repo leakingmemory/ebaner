@@ -16,6 +16,7 @@
 #include "Vehicle.h" // Vehicle, VehicleFrame
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <vector>
 
@@ -54,6 +55,7 @@ constexpr float kRoofHalf = 0.74f;   // domed-roof half width, fraction of body
 constexpr float kTumble = 0.90f;     // floor-line half width (tumblehome), fraction
 constexpr float kNoseLen = 3.60f;    // raked cab overhang (m)
 constexpr float kDoorWidth = 1.30f;  // passenger door width (m)
+constexpr float kGangGap = 0.45f;    // half the inter-car gap for the bellows (m)
 const glm::vec3 kEquip(0.27f, 0.28f, 0.30f); // underfloor equipment box
 const glm::vec3 kTank(0.32f, 0.32f, 0.34f);  // underfloor tank / lighter box
 const glm::vec3 kRoofKit(0.40f, 0.41f, 0.43f); // roof exhaust / cooling boxes
@@ -205,7 +207,8 @@ void VehicleMesh::build(const Vehicle& vehicle) {
         const float tip = cabNegY ? -halfLen : halfLen;                // cab tip
         const float base = cabNegY ? -halfLen + c93::kNoseLen          // nose base
                                    : halfLen - c93::kNoseLen;
-        const float gang = cabNegY ? halfLen : -halfLen;               // gangway end
+        // Gangway end, inset from the section boundary to leave a bellows gap.
+        const float gang = (cabNegY ? 1.0f : -1.0f) * (halfLen - c93::kGangGap);
         const float ts = (tip < base) ? -1.0f : 1.0f;                  // forward sign
         const glm::vec3 fdir = Y * ts;
         const float bodyLo = std::min(base, gang), bodyHi = std::max(base, gang);
@@ -382,6 +385,44 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                 emitBox(sections[i].right, sections[i].tangent, sections[i].up,
                         centre, 0.5f * vehicle.width(), halfLen,
                         kUnderframeHalfHeight, kUnderframeCol);
+            }
+        }
+
+        // Gangway bellows: a dark concertina tube bridging each pair of adjacent
+        // Class 93 car bodies over the shared middle bogie. Its ends follow the
+        // two sections' inner faces, so it flexes with the articulation.
+        if (vehicle.bodyStyle() == BodyClass93 && sections.size() >= 2) {
+            const float z0b = frameTopZ + c93::kFloorAbove;
+            const float zCb = z0b + c93::kCantAbove;
+            const float bw = c93::kHalfWidth * 0.70f;
+            auto gwEnd = [&](const VehicleFrame& f, float sign) {
+                const glm::vec3 e = f.pos + f.tangent * (sign * (halfLen - c93::kGangGap));
+                return std::array<glm::vec3, 4>{
+                    e + f.right * bw + f.up * z0b, e + f.right * bw + f.up * zCb,
+                    e - f.right * bw + f.up * zCb, e - f.right * bw + f.up * z0b};
+            };
+            for (std::size_t i = 0; i + 1 < sections.size(); ++i) {
+                const std::array<glm::vec3, 4> A = gwEnd(sections[i], +1.0f);
+                const std::array<glm::vec3, 4> B = gwEnd(sections[i + 1], -1.0f);
+                glm::vec3 mid(0.0f);
+                for (int k = 0; k < 4; ++k) mid += A[k] + B[k];
+                mid *= 0.125f;
+                const int M = 6; // concertina segments (alternate in/out)
+                std::array<glm::vec3, 4> prev = A;
+                for (int j = 1; j <= M; ++j) {
+                    const float t = static_cast<float>(j) / M;
+                    std::array<glm::vec3, 4> cur;
+                    glm::vec3 cen(0.0f);
+                    for (int k = 0; k < 4; ++k) cen += glm::mix(A[k], B[k], t);
+                    cen *= 0.25f;
+                    const float s = (j % 2 == 0 || j == M) ? 1.0f : 0.82f; // ribs
+                    for (int k = 0; k < 4; ++k)
+                        cur[k] = cen + (glm::mix(A[k], B[k], t) - cen) * s;
+                    for (int k = 0; k < 4; ++k)
+                        quadN(prev[k], prev[(k + 1) % 4], cur[(k + 1) % 4], cur[k],
+                              c93::kSkirt, mid);
+                    prev = cur;
+                }
             }
         }
     }
