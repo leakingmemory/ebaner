@@ -222,15 +222,31 @@ void VehicleMesh::build(const Vehicle& vehicle) {
         // waist. `wS` scales the width and `drop` lowers the roof (used to taper
         // and rake the nose into a windscreen). Facets are coloured by geometry,
         // so the ring resolution can change freely.
+        // Outer skin sill: the side sheeting hangs low almost everywhere (nose
+        // included), with a tight rectangular cut-up over each bogie to clear the
+        // wheels. The two bogies in this car (section frame) are the leading/outer
+        // one and the shared middle bogie at the gangway end.
+        const float bc = 0.5f * vehicle.bogieSpacing();
+        const float yBogieOuter = ts * (bc - halfLen);
+        const float yBogieMid = -ts * halfLen;
+        // The nose and the skin over both bogies share one fairly low end level
+        // (nose flush with the over-bogie skin); only the mid-car, between the
+        // bogies, dips lower as a valance. A rectangular step joins them.
+        const float zEnd = frameCentreZ - 0.10f;   // nose + over-bogie skin level
+        const float zLow = frameCentreZ - 0.36f;   // mid-car valance (lower)
+        const float dipInset = 0.5f * vehicle.wheelbase() + 0.42f;
+        const float dipA = std::min(yBogieOuter, yBogieMid) + dipInset;
+        const float dipB = std::max(yBogieOuter, yBogieMid) - dipInset;
+        auto sillAt = [&](float y) { return (y > dipA && y < dipB) ? zLow : zEnd; };
         const int arcN = 4;
-        auto ring = [&](float y, float wS, float drop) {
+        auto ring = [&](float y, float wS, float drop, float zb) {
             const float w = hw * wS, rw = rhw * wS;
             const float zr = z1 - drop;
             const float zC = std::min(zc, zr - 0.04f);
             const float zH = std::min(zwh, zC - 0.02f), zL = std::min(zwl, zH - 0.02f);
-            const float wb = w * c93::kTumble; // narrower at the floor line
+            const float wb = w * c93::kTumble; // narrower at the sill line
             std::vector<glm::vec3> p;
-            p.push_back(P(wb, y, z0));         // tumblehome: side leans in to floor
+            p.push_back(P(wb, y, zb));          // tumblehome: side leans in to sill
             p.push_back(P(w, y, zL));
             p.push_back(P(w, y, zH));
             for (int i = 0; i <= arcN; ++i) { // right shoulder (w,zC) -> (rw,zr)
@@ -243,7 +259,7 @@ void VehicleMesh::build(const Vehicle& vehicle) {
             }
             p.push_back(P(-w, y, zH));
             p.push_back(P(-w, y, zL));
-            p.push_back(P(-wb, y, z0));
+            p.push_back(P(-wb, y, zb));
             return p;
         };
         // Loft between two rings, colouring each facet by geometry: grey domed
@@ -263,8 +279,14 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                 const float up = glm::dot(nn, Z);
                 glm::vec3 col;
                 if (nose) {
-                    if (up > 0.45f || locZ > zc - 0.05f)
-                        col = (glm::dot(nn, fdir) > 0.28f) ? c93::kBand : c93::kRoof;
+                    // A large wrap-around windscreen: glazed from the crown down
+                    // to well below the cantrail (larger than the glazed area seen
+                    // from inside), wrapping onto the sides; red fascia below it;
+                    // grey roof on the near-horizontal crown.
+                    if (up > 0.55f)
+                        col = c93::kRoof;
+                    else if (locZ > z0 + 0.65f)
+                        col = c93::kBand;
                     else
                         col = c93::kRed;
                 } else if (up > 0.45f) {
@@ -311,8 +333,22 @@ void VehicleMesh::build(const Vehicle& vehicle) {
         tile(dc1 + dhw, dc2 - dhw);
         panels.push_back({dc2 - dhw, dc2 + dhw, c93::kRed, c93::kBand});
         tile(dc2 + dhw, bodyHi);
-        for (const Panel& p : panels)
-            loft(ring(p.a, 1.0f, 0.0f), ring(p.b, 1.0f, 0.0f), false, p.lower, p.band);
+        // Loft each panel, subdividing at the bogie-notch edges (doubled with a
+        // tiny gap) so the sill steps up near-vertically over each bogie.
+        const float eps = 0.02f;
+        const float edges[] = {dipA, dipB};
+        for (const Panel& p : panels) {
+            std::vector<float> ys = {p.a, p.b};
+            for (const float e : edges)
+                if (e > p.a + eps && e < p.b - eps) {
+                    ys.push_back(e - eps);
+                    ys.push_back(e + eps);
+                }
+            std::sort(ys.begin(), ys.end());
+            for (std::size_t i = 0; i + 1 < ys.size(); ++i)
+                loft(ring(ys[i], 1.0f, 0.0f, sillAt(ys[i])),
+                     ring(ys[i + 1], 1.0f, 0.0f, sillAt(ys[i + 1])), false, p.lower, p.band);
+        }
 
         // Nose: taper width to a rounded prow while the roof rakes down into a
         // deep windscreen. Ease-in width and eased roof drop keep it smooth.
@@ -322,7 +358,7 @@ void VehicleMesh::build(const Vehicle& vehicle) {
             const float y = base + (tip - base) * u;
             const float wS = std::sqrt(std::max(0.12f, 1.0f - 0.90f * u * u));
             const float drop = (z1 - (zwl + 0.05f)) * (u * u); // roof → window level
-            return ring(y, wS, drop);
+            return ring(y, wS, drop, sillAt(y)); // nose skin follows the same sill
         };
         std::vector<glm::vec3> prev = noseStation(0);
         for (int i = 1; i <= N; ++i) {
@@ -341,10 +377,11 @@ void VehicleMesh::build(const Vehicle& vehicle) {
               quadN(a, b, c, c, (czc > z0 + 0.55f * (z1 - z0)) ? c93::kBand : c93::kRed, in);
           } }
 
-        // Headlights: a lens block at each lower front corner.
-        const float yh = base + (tip - base) * 0.92f;
-        for (const float xh : {hw * 0.46f, -hw * 0.46f})
-            emitBox(X, Y, Z, P(xh, yh, z0 + 0.42f), 0.14f, 0.16f, 0.12f, c93::kLight);
+        // Headlights / marker lights set into the lower corners of the
+        // windscreen glazing: compact lamp blocks just above the red fascia.
+        const float yh = base + (tip - base) * 0.90f;
+        for (const float xh : {hw * 0.42f, -hw * 0.42f})
+            emitBox(X, Y, Z, P(xh, yh, z0 + 0.82f), 0.14f, 0.09f, 0.07f, c93::kLight);
 
         // Underfloor systems: a shallow equipment raft under the whole body plus
         // a couple of deeper boxes (engine / tank) slung between the bogies.
@@ -375,28 +412,29 @@ void VehicleMesh::build(const Vehicle& vehicle) {
         emitBox(X, Y, Z, P(0.0f, tip + ts * 0.22f, cz), 0.07f, 0.12f, 0.09f, c93::kCoupler);
         emitBox(X, Y, Z, P(0.0f, tip + ts * 0.38f, cz), hw * 0.20f, 0.06f, 0.15f, c93::kCoupler);
 
-        // Two obstacle deflectors ahead of the leading bogie: a larger upper
-        // snowplow below the coupler and a smaller lower lifeguard just above the
-        // rail. Each is a dark V-blade wedge with its point raked forward.
+        // Two obstacle deflectors hanging below the floor: a large upper snowplow
+        // under the cab front, and a lower lifeguard set back just ahead of the
+        // leading bogie's wheelset, dropping to near rail level. Each is a dark
+        // V-blade wedge (top edge back, sweeping down-forward to a low V point).
         {
-            auto FY = [&](float d) { return tip + ts * d; };
-            auto plow = [&](float zTop, float zBot, float wT, float wB,
-                            float dBack, float dFront) {
-                const glm::vec3 TBL = P(-wT, FY(dBack), zTop);
-                const glm::vec3 TBR = P(wT, FY(dBack), zTop);
-                const glm::vec3 TBC = P(0.0f, FY(dBack), zTop);
-                const glm::vec3 FBL = P(-wB, FY(dFront), zBot);
-                const glm::vec3 FBR = P(wB, FY(dFront), zBot);
-                const glm::vec3 FBC = P(0.0f, FY(dFront + 0.16f), zBot - 0.08f); // point
-                const glm::vec3 back = P(0.0f, FY(dBack - 0.3f), zTop + 0.3f);
-                const glm::vec3 down = P(0.0f, FY(dFront), zTop - 2.0f);
-                quadN(TBL, FBL, FBC, TBC, c93::kSkirt, back); // blade faces
-                quadN(TBC, FBC, FBR, TBR, c93::kSkirt, back);
-                quadN(TBL, TBC, FBC, FBL, c93::kSkirt, down); // undersides
-                quadN(TBC, TBR, FBR, FBC, c93::kSkirt, down);
+            auto deflector = [&](float yBack, float fwd, float zTop, float zBot,
+                                 float wT, float wB) {
+                const float yF = yBack + ts * fwd;
+                const glm::vec3 TL = P(-wT, yBack, zTop), TR = P(wT, yBack, zTop);
+                const glm::vec3 TC = P(0.0f, yBack, zTop);
+                const glm::vec3 BL = P(-wB, yF, zBot), BR = P(wB, yF, zBot);
+                const glm::vec3 BC = P(0.0f, yF + ts * 0.14f, zBot - 0.06f); // V point
+                const glm::vec3 nref = P(0.0f, yBack - ts * 0.4f, zTop + 0.4f);
+                const glm::vec3 dref = P(0.0f, yF, zBot - 2.0f);
+                quadN(TL, BL, BC, TC, c93::kSkirt, nref); // blade faces
+                quadN(TC, BC, BR, TR, c93::kSkirt, nref);
+                quadN(TL, TC, BC, BL, c93::kSkirt, dref); // undersides
+                quadN(TC, TR, BR, BC, c93::kSkirt, dref);
             };
-            plow(z0 - 0.34f, z0 - 0.64f, hw * 0.94f, hw * 0.60f, -0.05f, 0.28f); // upper
-            plow(z0 - 0.72f, z0 - 0.98f, hw * 0.34f, hw * 0.22f, 0.12f, 0.34f);  // lower
+            // Upper snowplow under the cab front (wide), lower lifeguard back at
+            // the leading bogie (narrower, near rail).
+            deflector(tip + ts * -0.9f, 0.45f, z0 - 0.34f, z0 - 0.86f, hw * 0.98f, hw * 0.66f);
+            deflector(yBogieOuter + ts * 1.5f, 0.35f, z0 - 0.62f, z0 - 1.06f, hw * 0.52f, hw * 0.34f);
         }
     };
 
