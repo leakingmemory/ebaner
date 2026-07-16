@@ -16,6 +16,7 @@
 #include "Vehicle.h" // Vehicle, VehicleFrame
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <vector>
 
@@ -43,13 +44,18 @@ const glm::vec3 kBand(0.11f, 0.12f, 0.14f);  // dark window band / glazing
 const glm::vec3 kRed(0.74f, 0.10f, 0.12f);   // NSB red: doors + cab front
 const glm::vec3 kRoof(0.55f, 0.56f, 0.58f);  // grey roof
 const glm::vec3 kUnder(0.18f, 0.19f, 0.21f); // dark underframe/floor
+const glm::vec3 kLight(0.93f, 0.92f, 0.84f); // headlight lens
 constexpr float kHalfWidth = 1.36f;  // body half width (m)
 constexpr float kHeight = 2.75f;     // floor-to-roof (m)
 constexpr float kFloorAbove = 0.05f; // body floor above the bogie frame top (m)
 constexpr float kWinLow = 1.00f;     // window band bottom above floor (m)
-constexpr float kWinHigh = 2.00f;    // window band top above floor (m)
-constexpr float kNoseLen = 3.20f;    // raked cab overhang (m)
+constexpr float kWinHigh = 2.05f;    // window band top above floor (m)
+constexpr float kCantAbove = 2.20f;  // cantrail (shoulder base) above floor (m)
+constexpr float kRoofHalf = 0.74f;   // domed-roof half width, fraction of body
+constexpr float kNoseLen = 3.60f;    // raked cab overhang (m)
 constexpr float kDoorWidth = 1.30f;  // passenger door width (m)
+const glm::vec3 kEquip(0.27f, 0.28f, 0.30f); // underfloor equipment box
+const glm::vec3 kTank(0.32f, 0.32f, 0.34f);  // underfloor tank / lighter box
 } // namespace
 } // namespace
 
@@ -187,105 +193,121 @@ void VehicleMesh::build(const Vehicle& vehicle) {
     auto emitClass93 = [&](const VehicleFrame& f, float halfLen, bool cabNegY) {
         const glm::vec3 X = f.right, Y = f.tangent, Z = f.up;
         const float hw = c93::kHalfWidth;
-        const float z0 = frameTopZ + c93::kFloorAbove;                 // floor
-        const float z1 = z0 + c93::kHeight;                            // roof
-        const float zwl = z0 + c93::kWinLow, zwh = z0 + c93::kWinHigh;  // window band
+        const float rhw = hw * c93::kRoofHalf;         // domed-roof half width
+        const float z0 = frameTopZ + c93::kFloorAbove; // floor
+        const float z1 = z0 + c93::kHeight;            // roof top
+        const float zwl = z0 + c93::kWinLow, zwh = z0 + c93::kWinHigh; // window band
+        const float zc = z0 + c93::kCantAbove;         // cantrail (shoulder base)
         auto P = [&](float x, float y, float z) { return f.pos + X * x + Y * y + Z * z; };
 
         const float tip = cabNegY ? -halfLen : halfLen;                // cab tip
         const float base = cabNegY ? -halfLen + c93::kNoseLen          // nose base
                                    : halfLen - c93::kNoseLen;
         const float gang = cabNegY ? halfLen : -halfLen;               // gangway end
+        const float ts = (tip < base) ? -1.0f : 1.0f;                  // forward sign
+        const glm::vec3 fdir = Y * ts;
         const float bodyLo = std::min(base, gang), bodyHi = std::max(base, gang);
         const float allLo = std::min(tip, gang), allHi = std::max(tip, gang);
         const glm::vec3 in = P(0.0f, 0.5f * (allLo + allHi), 0.5f * (z0 + z1));
 
-        // Roof, floor (full length incl. nose), and the flat gangway end.
-        quadN(P(-hw, bodyLo, z1), P(hw, bodyLo, z1), P(hw, bodyHi, z1), P(-hw, bodyHi, z1), c93::kRoof, in);
+        // Shared cross-section: a rounded body profile as 10 points, from the
+        // bottom-right up the side, over a domed roof (narrower than the waist),
+        // and down the left side. `wS` scales the width and `drop` lowers the
+        // roof (used to taper and rake the nose into a windscreen). Facet k
+        // between consecutive points: 0/1/2 right side (lower/window/cantrail),
+        // 3/4/5 right-shoulder/roof/left-shoulder, 6/7/8 left side.
+        auto ring = [&](float y, float wS, float drop) {
+            const float w = hw * wS, rw = rhw * wS;
+            const float zr = z1 - drop;
+            const float zC = std::min(zc, zr - 0.04f);
+            const float zH = std::min(zwh, zC - 0.02f), zL = std::min(zwl, zH - 0.02f);
+            return std::array<glm::vec3, 10>{
+                P(w, y, z0),  P(w, y, zL),  P(w, y, zH),  P(w, y, zC),
+                P(rw, y, zr), P(-rw, y, zr),
+                P(-w, y, zC), P(-w, y, zH), P(-w, y, zL), P(-w, y, z0)};
+        };
+        // Loft between two rings, colouring each facet. `bodyCol` picks the side
+        // livery by facet index; nose facets are coloured by orientation instead.
+        auto loft = [&](const std::array<glm::vec3, 10>& A,
+                        const std::array<glm::vec3, 10>& B, bool nose, bool doorL,
+                        bool doorR) {
+            for (int k = 0; k + 1 < 10; ++k) {
+                const glm::vec3 a = A[k], b = A[k + 1], c = B[k + 1], d = B[k];
+                glm::vec3 nn = glm::cross(b - a, d - a);
+                const float l = glm::length(nn);
+                nn = (l > 1e-9f) ? nn / l : Z;
+                const glm::vec3 cen = 0.25f * (a + b + c + d);
+                if (glm::dot(nn, cen - in) < 0.0f) nn = -nn;
+                glm::vec3 col;
+                const bool roof = (k >= 3 && k <= 5);
+                if (nose) {
+                    col = roof ? (glm::dot(nn, fdir) > 0.28f ? c93::kBand : c93::kRoof)
+                               : c93::kRed;
+                } else if (roof) {
+                    col = c93::kRoof;
+                } else {
+                    const bool door = (k <= 2) ? doorR : doorL;
+                    col = door ? c93::kRed
+                               : (k == 1 || k == 7) ? c93::kBand : c93::kBody;
+                }
+                quadN(a, b, c, d, col, in);
+            }
+        };
+
+        // Floor pan and the flat gangway end.
         quadN(P(-hw, allLo, z0), P(hw, allLo, z0), P(hw, allHi, z0), P(-hw, allHi, z0), c93::kUnder, in);
         quadN(P(-hw, gang, z0), P(hw, gang, z0), P(hw, gang, z1), P(-hw, gang, z1), c93::kUnder, in);
 
-        // Sides split into window / door panels (two doors per side).
+        // Main body: loft the constant profile along the door/window panels.
         const float Lb = bodyHi - bodyLo, hdw = 0.5f * c93::kDoorWidth;
         const float d1 = bodyLo + 0.26f * Lb, d2 = bodyLo + 0.74f * Lb;
         struct Seg { float a, b; bool door; };
         const Seg segs[] = {{bodyLo, d1 - hdw, false}, {d1 - hdw, d1 + hdw, true},
                             {d1 + hdw, d2 - hdw, false}, {d2 - hdw, d2 + hdw, true},
                             {d2 + hdw, bodyHi, false}};
-        for (const float xs : {hw, -hw}) {
-            auto sq = [&](float ya, float yb, float za, float zb, const glm::vec3& c) {
-                quadN(P(xs, ya, za), P(xs, yb, za), P(xs, yb, zb), P(xs, ya, zb), c, in);
-            };
-            for (const Seg& s : segs) {
-                if (s.door) { sq(s.a, s.b, z0, z1, c93::kRed); }
-                else {
-                    sq(s.a, s.b, z0, zwl, c93::kBody);  // lower body
-                    sq(s.a, s.b, zwl, zwh, c93::kBand); // window band
-                    sq(s.a, s.b, zwh, z1, c93::kBody);  // cantrail
-                }
-            }
-        }
+        for (const Seg& s : segs)
+            loft(ring(s.a, 1.0f, 0.0f), ring(s.b, 1.0f, 0.0f), false, s.door, s.door);
 
-        // Rounded cab nose, lofted from the full body cross-section at the nose
-        // base to a blunt, lowered, narrower snout at the tip. Each ring is an
-        // open profile (bottom-right, around a rounded top, to bottom-left); the
-        // underside is closed by the floor quad above.
-        const float ts = (tip < base) ? -1.0f : 1.0f; // outward (forward) sign
-        const glm::vec3 fdir = Y * ts;
-        auto noseRing = [&](float u) {
+        // Nose: taper width to a rounded prow while the roof rakes down into a
+        // deep windscreen. Linear stations keep the profile smooth (no bump).
+        const int N = 8;
+        auto noseStation = [&](int i) {
+            const float u = static_cast<float>(i) / N;
             const float y = base + (tip - base) * u;
-            const float hwu = hw * std::sqrt(std::max(0.18f, 1.0f - 0.72f * u * u));
-            const float zt = z1 - (z1 - zwh) * (u * u); // roof drops toward the tip
-            float r = 0.05f + 0.5f * u;                 // top corners round off
-            r = std::min(r, std::min(hwu * 0.9f, (zt - z0) * 0.45f));
-            std::vector<glm::vec3> p;
-            p.push_back(P(hwu, y, z0));
-            const int arcN = 3;
-            for (int i = 0; i <= arcN; ++i) { // right shoulder, 0..90 deg
-                const float a = kPi * 0.5f * i / arcN;
-                p.push_back(P((hwu - r) + r * std::cos(a), y, (zt - r) + r * std::sin(a)));
-            }
-            for (int i = 0; i <= arcN; ++i) { // left shoulder, 90..180 deg
-                const float a = kPi * 0.5f + kPi * 0.5f * i / arcN;
-                p.push_back(P((-hwu + r) + r * std::cos(a), y, (zt - r) + r * std::sin(a)));
-            }
-            p.push_back(P(-hwu, y, z0));
-            return p;
+            const float wS = std::sqrt(std::max(0.14f, 1.0f - 0.86f * u * u));
+            const float drop = (z1 - (zwl + 0.10f)) * (u * u); // roof → window level
+            return ring(y, wS, drop);
         };
-        // Colour a nose facet: grey roof on top, dark windscreen on the forward-
-        // facing upper surface, red elsewhere.
-        auto noseCol = [&](const glm::vec3& n, const glm::vec3& cen) {
-            if (glm::dot(n, Z) > 0.55f) return c93::kRoof;
-            const float cz = glm::dot(cen - f.pos, Z);
-            if (glm::dot(n, fdir) > 0.35f && cz > zwh - 0.15f) return c93::kBand;
-            return c93::kRed;
-        };
-        const int N = 6;
-        std::vector<glm::vec3> prev = noseRing(0.0f);
-        for (int s = 1; s <= N; ++s) {
-            const std::vector<glm::vec3> cur = noseRing(static_cast<float>(s) / N);
-            for (std::size_t k = 0; k + 1 < prev.size(); ++k) {
-                const glm::vec3 a = prev[k], b = prev[k + 1], c = cur[k + 1], d = cur[k];
-                glm::vec3 nn = glm::cross(b - a, d - a);
-                const float l = glm::length(nn);
-                nn = (l > 1e-9f) ? nn / l : Z;
-                const glm::vec3 cen = 0.25f * (a + b + c + d);
-                if (glm::dot(nn, cen - in) < 0.0f) nn = -nn;
-                quadN(a, b, c, d, noseCol(nn, cen), in);
-            }
+        std::array<glm::vec3, 10> prev = noseStation(0);
+        for (int i = 1; i <= N; ++i) {
+            const std::array<glm::vec3, 10> cur = noseStation(i);
+            loft(prev, cur, true, false, false);
             prev = cur;
         }
-        // Blunt tip cap (fan the last ring closed, incl. the bottom chord).
+        // Prow cap (fan the last narrow ring closed).
         { glm::vec3 c(0.0f);
           for (const glm::vec3& q : prev) c += q;
-          c /= static_cast<float>(prev.size());
-          for (std::size_t k = 0; k < prev.size(); ++k) {
+          c *= 0.1f;
+          const float czc = glm::dot(c - f.pos, Z);
+          for (int k = 0; k < 10; ++k) {
               const glm::vec3& a = prev[k];
-              const glm::vec3& b = prev[(k + 1) % prev.size()];
-              const glm::vec3 cen = (a + b + c) / 3.0f;
-              const float cz = glm::dot(cen - f.pos, Z);
-              quadN(a, b, c, c, (cz > zwh - 0.15f) ? c93::kBand : c93::kRed, in);
+              const glm::vec3& b = prev[(k + 1) % 10];
+              quadN(a, b, c, c, (czc > z0 + 0.55f * (z1 - z0)) ? c93::kBand : c93::kRed, in);
           } }
+
+        // Headlights: a lens block at each lower front corner.
+        const float yh = base + (tip - base) * 0.92f;
+        for (const float xh : {hw * 0.46f, -hw * 0.46f})
+            emitBox(X, Y, Z, P(xh, yh, z0 + 0.42f), 0.14f, 0.16f, 0.12f, c93::kLight);
+
+        // Underfloor systems: a shallow equipment raft under the whole body plus
+        // a couple of deeper boxes (engine / tank) slung between the bogies.
+        emitBox(X, Y, Z, P(0.0f, 0.5f * (bodyLo + bodyHi), z0 - 0.24f),
+                hw * 0.94f, 0.5f * Lb * 0.96f, 0.22f, c93::kEquip);
+        emitBox(X, Y, Z, P(0.0f, bodyLo + 0.34f * Lb, z0 - 0.56f),
+                hw * 0.82f, 0.20f * Lb, 0.40f, c93::kEquip);
+        emitBox(X, Y, Z, P(0.0f, bodyLo + 0.66f * Lb, z0 - 0.50f),
+                hw * 0.74f, 0.15f * Lb, 0.34f, c93::kTank);
     };
 
     // Body per section. A Class 93 draws a liveried car body (cab at each outer
