@@ -29,6 +29,33 @@ constexpr float kDavisA = 0.002f;    // rolling + bearing, per unit weight
 constexpr float kDavisB = 0.0001f;   // flange/track, per unit weight, s/m
 constexpr float kDragCd = 1.0f;      // aerodynamic drag coefficient (bluff box)
 constexpr float kAirDensity = 1.225f; // kg/m^3
+
+// Air brake (all pressures in bar). A notched direct brake: each handle notch
+// commands a brake-cylinder target the local system laps onto from the main
+// reservoir; a governed compressor keeps the reservoir charged.
+constexpr float kMRCapacity = 8.0f;      // main reservoir full / compressor cut-out
+constexpr float kMRCutIn = 6.5f;         // compressor cut-in
+constexpr float kBCFullService = 3.4f;   // brake cylinder at full service (B4)
+constexpr float kBCEmergency = 3.8f;     // brake cylinder in emergency
+constexpr float kBCApplyRate = 1.5f;     // service apply rate (bar/s)
+constexpr float kBCEmergRate = 6.0f;     // emergency apply rate (bar/s)
+constexpr float kBCReleaseRate = 1.2f;   // release rate (bar/s)
+constexpr float kCompRate = 0.20f;       // compressor recharge (bar/s)
+constexpr float kMRPerBC = 0.04f;        // MR bar spent per bar of BC charged
+constexpr float kMRLeak = 0.001f;        // reservoir leak (bar/s)
+// The compressor is driven by the engine, which isn't modelled yet, so it stays
+// off: the reservoir only depletes (slowly, over many applications) for now.
+constexpr bool kCompressorEnabled = false;
+constexpr float kFullServiceDecel = 1.3f; // deceleration at full service (m/s^2)
+constexpr float kAdhesionMu = 0.20f;     // wheel/rail grip cap on brake force
+
+// Brake-cylinder target (bar) for a handle notch: 0 release, 1..4 graduated
+// service up to full service, emergency a touch higher.
+float targetBC(int notch) {
+    if (notch <= 0) return 0.0f;
+    if (notch >= Vehicle::kEmergencyNotch) return kBCEmergency;
+    return kBCFullService * static_cast<float>(notch) / 4.0f;
+}
 } // namespace
 
 Vehicle::Vehicle(const TrackPath* path, const VehicleSpec& spec, float s,
@@ -44,7 +71,18 @@ Vehicle::Vehicle(const TrackPath* path, const VehicleSpec& spec, float s,
       bogieCount_(spec.bogieCount),
       bodyStyle_(spec.body),
       name_(spec.name),
-      v_(initialSpeed) {}
+      v_(initialSpeed),
+      mrPres_(kMRCapacity),   // reservoir starts at capacity
+      bcPres_(kBCEmergency) {} // brakes start in emergency (held)
+
+void Vehicle::setBrakeNotch(int notch) {
+    brakeNotch_ = std::clamp(notch, 0, kEmergencyNotch);
+}
+
+const char* Vehicle::brakeNotchName() const {
+    static const char* kNames[] = {"REL", "B1", "B2", "B3", "B4", "EMERG"};
+    return kNames[std::clamp(brakeNotch_, 0, kEmergencyNotch)];
+}
 
 namespace {
 VehicleFrame frameOf(const TrackPose& p) {
@@ -173,11 +211,41 @@ void Vehicle::update(float dt, float pushInput) {
         const float aPush = pushInput * kPushForce / mass_;
         v_ += (aGrav + aPush) * dt;
 
-        // Davis running resistance opposes motion, capped so it can't reverse v_
-        // (this also holds the axle on grades gentler than the resistance).
-        const float rollDecel = rollingResistance(v_) / mass_;
-        const float roll = std::min(rollDecel * dt, std::abs(v_));
-        v_ -= std::copysign(roll, v_);
+        // Air brake: lap the brake-cylinder pressure toward the notch target,
+        // charging from (and spending) the main reservoir on apply, venting on
+        // release; a governed compressor recharges the reservoir.
+        const float tgt = targetBC(brakeNotch_);
+        if (tgt > bcPres_) {
+            const float rate = (brakeNotch_ >= kEmergencyNotch) ? kBCEmergRate : kBCApplyRate;
+            const float reach = std::min(tgt, mrPres_); // capped by reservoir pressure
+            const float before = bcPres_;
+            bcPres_ = std::min(reach, bcPres_ + rate * dt);
+            mrPres_ -= kMRPerBC * std::max(0.0f, bcPres_ - before);
+        } else if (tgt < bcPres_) {
+            bcPres_ = std::max(tgt, bcPres_ - kBCReleaseRate * dt);
+        }
+        mrPres_ -= kMRLeak * dt;
+        // Governed compressor (cut-in below kMRCutIn, runs until full). Charging
+        // the cylinders costs kMRPerBC per bar of BC, so without the compressor the
+        // reservoir only draws down — enough air for many applications, then the
+        // cylinders can no longer fully charge and the brakes fade. The compressor
+        // is engine-driven; until engines exist it stays off (kCompressorEnabled).
+        if (kCompressorEnabled) {
+            if (mrPres_ >= kMRCapacity) compOn_ = false;
+            else if (mrPres_ < kMRCutIn) compOn_ = true;
+            if (compOn_) mrPres_ += kCompRate * dt;
+        }
+        mrPres_ = std::clamp(mrPres_, 0.0f, kMRCapacity);
+        bcPres_ = std::max(0.0f, bcPres_);
+
+        // Brake force (capped by wheel/rail adhesion) and Davis running resistance
+        // both oppose motion, capped so they can't reverse v_ (this also holds the
+        // vehicle at rest, up to the grade the brakes can hold).
+        const float brake = std::min((bcPres_ / kBCFullService) * mass_ * kFullServiceDecel,
+                                     kAdhesionMu * mass_ * kG);
+        const float resistDecel = brake / mass_ + rollingResistance(v_) / mass_;
+        const float resist = std::min(resistDecel * dt, std::abs(v_));
+        v_ -= std::copysign(resist, v_);
 
         s_ += v_ * dt;
 

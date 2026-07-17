@@ -699,12 +699,25 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                 emitBox(X, Y, Z, P(0.0f, 0.5f * (dyN + dyD), 0.5f * (zFh + zTab)),
                         dw, 0.5f * std::abs(dyD - dyN), 0.5f * (zTab - zFh), c93::kDash);
 
-                // Combined power/brake lever on the right of the table.
+                // Live brake state drives the dials and the lever position.
+                const float spd = vehicle.speed();
+                const float mrP = vehicle.mrPressure();
+                const float bcP = vehicle.bcPressure();
+                const int notch = vehicle.brakeNotch();
+
+                // Combined power/brake lever on the right of the table; the stick
+                // swings toward the driver as the brake notch rises.
                 {
                     const float lx = 0.54f, ly = dyN + so * 0.30f;
-                    emitBox(X, Y, Z, P(lx, ly, zTab + 0.03f), 0.10f, 0.12f, 0.03f, c93::kButton);
-                    emitBox(X, Y, Z, P(lx, ly - so * 0.04f, zTab + 0.17f), 0.025f, 0.025f, 0.14f, c93::kDash);
-                    emitBox(X, Y, Z, P(lx, ly - so * 0.09f, zTab + 0.27f), 0.05f, 0.10f, 0.035f, c93::kButton);
+                    emitBox(X, Y, Z, P(lx, ly, zTab + 0.03f), 0.10f, 0.12f, 0.03f, c93::kButton); // base
+                    const float tilt = 0.5f * static_cast<float>(notch) /
+                                       static_cast<float>(Vehicle::kEmergencyNotch); // rad, toward driver
+                    const glm::vec3 pv = P(lx, ly, zTab + 0.06f);
+                    const glm::vec3 dir = Z * std::cos(tilt) - Y * (so * std::sin(tilt));
+                    const glm::vec3 Yb = glm::normalize(glm::cross(dir, X));
+                    const float L = 0.16f;
+                    emitBox(X, Yb, dir, pv + dir * (0.5f * L), 0.025f, 0.025f, 0.5f * L, c93::kDash);   // stick
+                    emitBox(X, Yb, dir, pv + dir * (L + 0.03f), 0.05f, 0.09f, 0.035f, c93::kButton);    // handle
                 }
 
                 // Instrument dome: three distinct facets. The centre faces the
@@ -735,6 +748,17 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                         quadN(o, prev, cur, cur, col, o - n);
                         prev = cur;
                     }
+                };
+                // A gauge needle: value fraction in [0,1] sweeps a 240-degree arc.
+                auto needle = [&](const glm::vec3& C, const glm::vec3& u, const glm::vec3& v,
+                                  const glm::vec3& n, float cx, float cy, float r, float frac,
+                                  const glm::vec3& col) {
+                    const glm::vec3 o = C + u * cx + v * cy + n * 0.016f;
+                    const float a = kPi * (210.0f - 240.0f * std::clamp(frac, 0.0f, 1.0f)) / 180.0f;
+                    const glm::vec3 dir = u * std::cos(a) + v * std::sin(a);
+                    const glm::vec3 perp = -u * std::sin(a) + v * std::cos(a);
+                    const glm::vec3 tip = o + dir * r;
+                    quadN(o - perp * 0.006f, o + perp * 0.006f, tip, tip, col, o - n);
                 };
                 glm::vec3 C, u, v, n;
                 auto facet = [&](float xa, float xb) {
@@ -768,12 +792,17 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                     rectFace(C, u, v, n, 0.22f, yy, 0.02f, 0.025f, 0.012f, c93::kButton);
                 }
 
-                // Centre facet: two round analog dials over a row of buttons.
+                // Centre facet: two round analog dials over a row of buttons. Left
+                // dial = speedometer; right dial = duplex air gauge (main reservoir
+                // red needle + brake cylinder dark needle). Needles track the sim.
                 facet(-xc, xc);
-                for (const float gx : {-0.12f, 0.12f}) {
-                    discFace(C, u, v, n, gx, 0.06f, 0.09f, 0.01f, c93::kGauge);
-                    discFace(C, u, v, n, gx, 0.06f, 0.015f, 0.02f, c93::kDash); // hub
-                }
+                discFace(C, u, v, n, -0.12f, 0.06f, 0.09f, 0.01f, c93::kGauge);
+                discFace(C, u, v, n, 0.12f, 0.06f, 0.09f, 0.01f, c93::kGauge);
+                needle(C, u, v, n, -0.12f, 0.06f, 0.076f, spd / 40.0f, c93::kDash);  // speed (0..40 m/s)
+                needle(C, u, v, n, 0.12f, 0.06f, 0.072f, mrP / 10.0f, c93::kRed);    // reservoir
+                needle(C, u, v, n, 0.12f, 0.06f, 0.078f, bcP / 10.0f, c93::kDash);   // brake cylinder
+                for (const float gx : {-0.12f, 0.12f})
+                    discFace(C, u, v, n, gx, 0.06f, 0.015f, 0.02f, c93::kDash); // hubs (over needle roots)
                 for (int i = 0; i < 5; ++i)
                     rectFace(C, u, v, n, -0.18f + 0.09f * i, -0.14f, 0.028f, 0.022f, 0.012f, c93::kButton);
 

@@ -48,7 +48,16 @@ Bodø main track ("track 1 end"), resolved from the `tracks.bin` geometry.
   running resistance, box inertia and a curve overturning limit. It rolls under
   gravity on grades, can be **hand-pushed** (Up/Down), coasts to a stop via rolling
   resistance, and if it runs off the end of its track it derails and is slowed to a
-  stop by ground friction proportional to its weight.
+  stop by ground friction proportional to its weight. A simple **air-brake**
+  simulation adds a main reservoir and a notched direct brake handle (0 / B1–B4 /
+  Emergency, `,` / `.` / Space): each notch laps the brake-cylinder pressure to a
+  target from the reservoir, producing a braking force capped by wheel–rail
+  adhesion that also holds the vehicle at rest. The reservoir holds enough air for
+  many applications; cycling the brakes slowly draws it down (the engine-driven
+  compressor isn't modelled yet, so it doesn't recharge), and once depleted the
+  cylinders can no longer fully charge and the brakes fade. It starts held in
+  **emergency with the reservoir full**; the cab's speed and duplex air gauges and
+  the brake lever animate with the sim, mirrored on a HUD.
 
 ## Requirements
 
@@ -87,6 +96,8 @@ counts, and vehicle physics (mass, inertia, tipping limit).
 | Left Shift   | Move faster (×8)                |
 | C            | Toggle chase camera (the vehicle) |
 | Up / Down    | Hand-push the vehicle fwd / back |
+| , / .        | Brake handle: release / apply one notch |
+| Space        | Emergency brake                 |
 | Tab          | Release/grab cursor             |
 | Esc          | Quit                            |
 
@@ -125,9 +136,10 @@ the corresponding sources (national rail register + NVDB roads + OSM enrichment)
 
 ## Not yet implemented
 
-Traction/braking, per-wheel grip-vs-slip and overturn at speed, terrain-grounded
-derailment, carriage bodies and multi-car consists (couplers), and
-streamed/dynamic tile loading.
+Traction/power (the handle's power side), brake-pipe/triple-valve propagation and
+multi-unit consist braking, per-wheel grip-vs-slip and overturn at speed,
+terrain-grounded derailment, carriage bodies and multi-car consists (couplers),
+and streamed/dynamic tile loading.
 
 ## License
 

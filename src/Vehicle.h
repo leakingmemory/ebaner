@@ -133,6 +133,17 @@ public:
     // the frontal area). Used as the on-rail rolling resistance.
     float rollingResistance(float speed) const;
 
+    // Air brake (notched direct brake). The handle sits at notch 0 (release),
+    // 1..4 (graduated service) or kEmergencyNotch (emergency); each commands a
+    // brake-cylinder pressure the local air system laps onto from the main
+    // reservoir. Pressures are in bar.
+    static constexpr int kEmergencyNotch = 5;
+    void setBrakeNotch(int notch);
+    int brakeNotch() const { return brakeNotch_; }
+    const char* brakeNotchName() const;
+    float mrPressure() const { return mrPres_; } // main reservoir (bar)
+    float bcPressure() const { return bcPres_; } // brake cylinder (bar)
+
     float s() const { return s_; }
     float mass() const { return mass_; }
     float length() const { return length_; }
@@ -164,6 +175,11 @@ private:
 
     VehicleState state_ = VehicleState::OnRail;
     float v_ = 0.0f;                    // on-rail scalar speed (+ = increasing s)
+    // Air-brake state (bar). Starts held: reservoir full, emergency applied.
+    float mrPres_;                      // main reservoir pressure
+    float bcPres_;                      // brake cylinder pressure
+    int brakeNotch_ = kEmergencyNotch;  // 0 release .. kEmergencyNotch emergency
+    bool compOn_ = false;               // compressor state (cut-in/cut-out governor)
     glm::vec3 pos_{0.0f};               // derailed free-body position
     glm::vec3 vel_{0.0f};               // derailed velocity
     glm::vec3 fRight_{0.0f}, fTangent_{1.0f, 0.0f, 0.0f}, fUp_{0.0f, 0.0f, 1.0f};

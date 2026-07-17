@@ -265,6 +265,7 @@ int main(int argc, char** argv) {
     }
     bool prevUp = false, prevDown = false, prevK1 = false, prevK2 = false,
          prevK3 = false, prevK4 = false, prevK5 = false, prevEnter = false;
+    bool prevBrkDown = false, prevBrkUp = false, prevBrkEmerg = false;
 
     double lastTime = glfwGetTime();
     while (!glfwWindowShouldClose(window)) {
@@ -339,6 +340,25 @@ int main(int argc, char** argv) {
             float pushInput = 0.0f;
             if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) pushInput += 1.0f;
             if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) pushInput -= 1.0f;
+
+            // Brake handle: ',' steps toward release, '.' toward emergency, Space
+            // slams to emergency (edge-triggered so each press is one notch). These
+            // keys are the same physical position on any layout (unlike [ ] \,
+            // which are AltGr combinations on e.g. Norwegian keyboards).
+            auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
+            const bool bD = down(GLFW_KEY_COMMA), bU = down(GLFW_KEY_PERIOD),
+                       bE = down(GLFW_KEY_SPACE);
+            const int prevNotch = vehicle->brakeNotch();
+            if (bD && !prevBrkDown) vehicle->setBrakeNotch(prevNotch - 1);
+            if (bU && !prevBrkUp) vehicle->setBrakeNotch(vehicle->brakeNotch() + 1);
+            if (bE && !prevBrkEmerg) vehicle->setBrakeNotch(Vehicle::kEmergencyNotch);
+            prevBrkDown = bD; prevBrkUp = bU; prevBrkEmerg = bE;
+            if (vehicle->brakeNotch() != prevNotch) {
+                std::printf("[Brake] %s  MR %.1f  BC %.1f bar\n", vehicle->brakeNotchName(),
+                            vehicle->mrPressure(), vehicle->bcPressure());
+                std::fflush(stdout);
+            }
+
             const float simDt = std::min(dt, 0.05f);
             const VehicleState prev = vehicle->state();
             vehicle->update(simDt, pushInput);
@@ -351,6 +371,26 @@ int main(int argc, char** argv) {
             }
             vmesh.build(*vehicle);
             renderer.updateVehicleVertices(vmesh.vertices());
+
+            // HUD: speed, reservoir/brake pressures and the brake notch.
+            {
+                std::vector<TextVertex> tv;
+                const float sc = std::max(2.0f, static_cast<float>(fbh) / 240.0f);
+                const float lh = 12.0f * sc, x = 40.0f;
+                char buf[96];
+                std::snprintf(buf, sizeof(buf), "SPEED %.0f km/h  (%.1f m/s)",
+                              vehicle->speed() * 3.6f, vehicle->speed());
+                appendText(tv, buf, x, 40.0f, sc, glm::vec3(1.0f, 0.95f, 0.6f), fbw, fbh);
+                std::snprintf(buf, sizeof(buf), "MR %.1f bar   BC %.1f bar",
+                              vehicle->mrPressure(), vehicle->bcPressure());
+                appendText(tv, buf, x, 40.0f + lh, sc, glm::vec3(0.8f, 0.9f, 1.0f), fbw, fbh);
+                std::snprintf(buf, sizeof(buf), "BRAKE %s   , / . / Space", vehicle->brakeNotchName());
+                const bool emerg = vehicle->brakeNotch() >= Vehicle::kEmergencyNotch;
+                appendText(tv, buf, x, 40.0f + 2 * lh, sc,
+                           emerg ? glm::vec3(1.0f, 0.4f, 0.35f) : glm::vec3(0.7f, 0.85f, 0.7f),
+                           fbw, fbh);
+                renderer.setOverlayText(tv);
+            }
 
             float fwd = 0.0f, right = 0.0f, up = 0.0f;
             if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) fwd += 1.0f;
