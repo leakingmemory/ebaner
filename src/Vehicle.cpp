@@ -48,6 +48,8 @@ constexpr float kMRLeak = 0.001f;        // reservoir leak (bar/s)
 constexpr bool kCompressorEnabled = false;
 constexpr float kFullServiceDecel = 1.3f; // deceleration at full service (m/s^2)
 constexpr float kAdhesionMu = 0.20f;     // wheel/rail grip cap on brake force
+constexpr float kMRSafetyTrip = 6.0f;    // low reservoir -> automatic emergency
+constexpr float kMRSafetyReset = 6.5f;   // safety clears once recharged above this
 
 // Brake-cylinder target (bar) for a handle notch: 0 release, 1..4 graduated
 // service up to full service, emergency a touch higher.
@@ -211,12 +213,19 @@ void Vehicle::update(float dt, float pushInput) {
         const float aPush = pushInput * kPushForce / mass_;
         v_ += (aGrav + aPush) * dt;
 
+        // Low main-reservoir safety: if the reservoir falls below the trip
+        // pressure the brakes go to full emergency regardless of the handle,
+        // latched until the reservoir recovers above the reset pressure.
+        if (mrPres_ < kMRSafetyTrip) safetyBrake_ = true;
+        else if (mrPres_ >= kMRSafetyReset) safetyBrake_ = false;
+        const int effNotch = safetyBrake_ ? kEmergencyNotch : brakeNotch_;
+
         // Air brake: lap the brake-cylinder pressure toward the notch target,
         // charging from (and spending) the main reservoir on apply, venting on
         // release; a governed compressor recharges the reservoir.
-        const float tgt = targetBC(brakeNotch_);
+        const float tgt = targetBC(effNotch);
         if (tgt > bcPres_) {
-            const float rate = (brakeNotch_ >= kEmergencyNotch) ? kBCEmergRate : kBCApplyRate;
+            const float rate = (effNotch >= kEmergencyNotch) ? kBCEmergRate : kBCApplyRate;
             const float reach = std::min(tgt, mrPres_); // capped by reservoir pressure
             const float before = bcPres_;
             bcPres_ = std::min(reach, bcPres_ + rate * dt);

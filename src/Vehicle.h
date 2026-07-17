@@ -143,6 +143,9 @@ public:
     const char* brakeNotchName() const;
     float mrPressure() const { return mrPres_; } // main reservoir (bar)
     float bcPressure() const { return bcPres_; } // brake cylinder (bar)
+    // True when the low-reservoir safety has forced an automatic emergency
+    // application (overriding the handle) because the reservoir fell too low.
+    bool safetyBrakeActive() const { return safetyBrake_; }
 
     float s() const { return s_; }
     float mass() const { return mass_; }
@@ -180,6 +183,7 @@ private:
     float bcPres_;                      // brake cylinder pressure
     int brakeNotch_ = kEmergencyNotch;  // 0 release .. kEmergencyNotch emergency
     bool compOn_ = false;               // compressor state (cut-in/cut-out governor)
+    bool safetyBrake_ = false;          // low-reservoir automatic emergency (latched)
     glm::vec3 pos_{0.0f};               // derailed free-body position
     glm::vec3 vel_{0.0f};               // derailed velocity
     glm::vec3 fRight_{0.0f}, fTangent_{1.0f, 0.0f, 0.0f}, fUp_{0.0f, 0.0f, 1.0f};

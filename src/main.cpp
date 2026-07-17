@@ -266,6 +266,7 @@ int main(int argc, char** argv) {
     bool prevUp = false, prevDown = false, prevK1 = false, prevK2 = false,
          prevK3 = false, prevK4 = false, prevK5 = false, prevEnter = false;
     bool prevBrkDown = false, prevBrkUp = false, prevBrkEmerg = false;
+    bool prevSafety = false;
 
     double lastTime = glfwGetTime();
     while (!glfwWindowShouldClose(window)) {
@@ -369,6 +370,10 @@ int main(int argc, char** argv) {
                             vehicle->speed());
                 std::fflush(stdout);
             }
+            if (vehicle->safetyBrakeActive() && !prevSafety)
+                std::printf("[Brake] LOW RESERVOIR (%.1f bar) -> automatic emergency\n",
+                            vehicle->mrPressure());
+            prevSafety = vehicle->safetyBrakeActive();
             vmesh.build(*vehicle);
             renderer.updateVehicleVertices(vmesh.vertices());
 
@@ -389,6 +394,9 @@ int main(int argc, char** argv) {
                 appendText(tv, buf, x, 40.0f + 2 * lh, sc,
                            emerg ? glm::vec3(1.0f, 0.4f, 0.35f) : glm::vec3(0.7f, 0.85f, 0.7f),
                            fbw, fbh);
+                if (vehicle->safetyBrakeActive())
+                    appendText(tv, "!! LOW RESERVOIR - AUTO EMERGENCY !!", x, 40.0f + 3 * lh,
+                               sc, glm::vec3(1.0f, 0.35f, 0.3f), fbw, fbh);
                 renderer.setOverlayText(tv);
             }
 
