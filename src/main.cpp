@@ -102,9 +102,13 @@ void resizeCallback(GLFWwindow*, int, int) {
 int main(int argc, char** argv) {
     const std::string datasetRoot = (argc > 1) ? argv[1] : "../norway-rails";
 
-    // Offline audio check: render a scripted brake sequence to a WAV and exit.
+    // Offline audio checks: render a scripted sequence to a WAV and exit.
     if (const char* dump = std::getenv("EBANER_AUDIO_DUMP")) {
         Audio::dumpTest(dump);
+        return EXIT_SUCCESS;
+    }
+    if (const char* dump = std::getenv("EBANER_AUDIO_DUMP_ENGINE")) {
+        Audio::dumpEngineTest(dump);
         return EXIT_SUCCESS;
     }
 
@@ -417,15 +421,21 @@ int main(int argc, char** argv) {
                 std::printf("[Brake] LOW RESERVOIR (%.1f bar) -> automatic emergency\n",
                             vehicle->mrPressure());
             prevSafety = vehicle->safetyBrakeActive();
-            // Fade the brake sound by camera distance to the nearest bogie (the
-            // brake-cylinder source): full within ~5 m, silent past ~60 m.
-            float distGain = 0.0f;
+            // Fade the sounds by camera distance to their sources: the brake by the
+            // nearest bogie, each engine by its own car section (the underfloor
+            // engine). Full when close, silent far away.
             const glm::vec3 camPos = g_camera.position();
+            float distGain = 0.0f;
             for (const VehicleFrame& b : vehicle->bogieFrames())
                 distGain = std::max(distGain,
                                     glm::clamp((60.0f - glm::distance(camPos, b.pos)) / 55.0f,
                                                0.0f, 1.0f));
-            audio.update(*vehicle, simDt, distGain); // brake-air hiss + valve clicks
+            float engGain[2] = {0.0f, 0.0f};
+            const std::vector<VehicleFrame> secs = vehicle->bodySectionFrames();
+            for (int k = 0; k < 2 && k < static_cast<int>(secs.size()); ++k)
+                engGain[k] = glm::clamp((50.0f - glm::distance(camPos, secs[k].pos)) / 38.0f,
+                                        0.0f, 1.0f);
+            audio.update(*vehicle, simDt, distGain, engGain[0], engGain[1]);
             vmesh.build(*vehicle);
             renderer.updateVehicleVertices(vmesh.vertices());
 

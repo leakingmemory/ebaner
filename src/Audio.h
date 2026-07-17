@@ -33,9 +33,10 @@ public:
     Audio& operator=(const Audio&) = delete;
 
     void init();                              // open the device (silent on failure / headless)
-    // Main thread, per sim frame. `distGain` in [0,1] attenuates by camera distance
-    // to the bogies (the brake-cylinder sources).
-    void update(const Vehicle& v, float dt, float distGain);
+    // Main thread, per sim frame. `brakeGain` attenuates the brake sound by camera
+    // distance to the bogies; `engGain0/1` do the same per engine end. All in [0,1].
+    void update(const Vehicle& v, float dt, float brakeGain, float engGain0,
+                float engGain1);
     void toggleMuted() { muted_.store(!muted_.load()); }
     bool muted() const { return muted_.load(); }
     void shutdown();
@@ -44,15 +45,18 @@ public:
     // the offline dump) can drive it. Only touched by the audio thread at runtime.
     void render(float* out, int n);
 
-    // Render a scripted brake sequence to a mono 16-bit WAV (offline verification;
-    // needs no audio device).
+    // Render a scripted brake / engine sequence to a mono 16-bit WAV (offline
+    // verification; needs no audio device).
     static void dumpTest(const std::string& wavPath);
+    static void dumpEngineTest(const std::string& wavPath);
 
 private:
     // Shared main -> audio thread (lock-free).
     std::atomic<float> amp_{0.0f};        // target hiss amplitude [0,1]
     std::atomic<float> brightness_{0.0f}; // 0 = apply (warm), 1 = release (bright vent)
-    std::atomic<float> envGain_{1.0f};    // distance attenuation [0,1]
+    std::atomic<float> envGain_{1.0f};    // brake distance attenuation [0,1]
+    std::atomic<float> engRpm_[2]{};      // per-engine speed (rev/min)
+    std::atomic<float> engGain_[2]{};     // per-engine distance attenuation [0,1]
     std::atomic<unsigned> valveEvents_{0};
     std::atomic<bool> muted_{false};
 
@@ -71,6 +75,13 @@ private:
     float svfLow_ = 0.0f, svfBand_ = 0.0f;   // hiss band-pass
     float clkLow_ = 0.0f, clkBand_ = 0.0f;   // click band-pass
     float clickEnv_ = 0.0f, clickPhase_ = 0.0f;
+    // Per-engine diesel voice state.
+    float engPhase_[2] = {0.0f, 0.0f};       // firing phase
+    float engRpmEnv_[2] = {0.0f, 0.0f};      // smoothed rpm
+    float engGainEnv_[2] = {0.0f, 0.0f};     // smoothed distance gain
+    float engLp_[2] = {0.0f, 0.0f};          // insulation low-pass
+    float engKnock_[2] = {0.0f, 0.0f};       // per-firing knock envelope
+    float engKnLp_[2] = {0.0f, 0.0f};        // knock noise low-pass
     unsigned lastEvents_ = 0;
     std::uint32_t rng_ = 0x1234567u;
     float sampleRate_ = 44100.0f;

@@ -66,7 +66,10 @@ Bodø main track ("track 1 end"), resolved from the `tracks.bin` geometry.
   whose loudness tracks the airflow — a subdued charge on apply and a prominent,
   brighter vent on release — fading as the pressure equalizes and with camera
   distance to the bogies, plus a valve click at each change of the handle or the
-  safety (`src/Audio.cpp`).
+  safety. The two diesels get a **muffled idle drone** (a firing thrum at the ~35 Hz
+  idle firing rate with a soft combustion knock, heavily low-passed for the
+  insulated character, the two ends slightly detuned so they beat), following each
+  engine's rpm and faded by distance to its end (`src/Audio.cpp`).
 
 ## Requirements
 
@@ -148,6 +151,7 @@ the corresponding sources (national rail register + NVDB roads + OSM enrichment)
 | `EBANER_NOSTITCH`   | Skip the seam-stitching pass (to inspect raw tile seams).     |
 | `EBANER_VEHICLE`    | Skip the start screen and preselect a vehicle (`0` or `1`).   |
 | `EBANER_AUDIO_DUMP` | Render a scripted brake sequence to the given WAV and exit.   |
+| `EBANER_AUDIO_DUMP_ENGINE` | Render an engine start/idle/stop to the given WAV, exit. |
 
 ## Not yet implemented
 

@@ -111,6 +111,10 @@ void Audio::render(float* out, int n) {
     const float targetAmp = amp_.load(std::memory_order_relaxed);
     const float targetBright = brightness_.load(std::memory_order_relaxed);
     const float targetEnv = envGain_.load(std::memory_order_relaxed);
+    const float engRpmT[2] = {engRpm_[0].load(std::memory_order_relaxed),
+                              engRpm_[1].load(std::memory_order_relaxed)};
+    const float engGainT[2] = {engGain_[0].load(std::memory_order_relaxed),
+                               engGain_[1].load(std::memory_order_relaxed)};
     const unsigned ev = valveEvents_.load(std::memory_order_relaxed);
     if (ev != lastEvents_) { // a valve just operated -> click
         lastEvents_ = ev;
@@ -152,14 +156,44 @@ void Audio::render(float* out, int n) {
             clickEnv_ *= 0.9990f; // ~23 ms decay
         }
 
-        float s = muted ? 0.0f : (hiss * 1.2f + click * 0.9f) * envEnv_;
+        // Diesel engines: a muffled idle drone per end. Firing thrum (harmonics of
+        // the ~35 Hz firing rate) + a soft per-firing knock + a noise hum, heavily
+        // low-passed for the insulated/modern character; the two ends are detuned so
+        // they beat. Continuous while running; scaled by per-engine distance.
+        float engine = 0.0f;
+        for (int k = 0; k < 2; ++k) {
+            engRpmEnv_[k] += (engRpmT[k] - engRpmEnv_[k]) * 0.002f;
+            engGainEnv_[k] += (engGainT[k] - engGainEnv_[k]) * 0.001f;
+            const float rpm = engRpmEnv_[k];
+            if (rpm <= 20.0f) continue;
+            const float firingHz = rpm / 20.0f * (k == 0 ? 1.0f : 1.007f); // 3/rev, detuned
+            engPhase_[k] += firingHz / fs;
+            if (engPhase_[k] >= 1.0f) { engPhase_[k] -= 1.0f; engKnock_[k] = 1.0f; }
+            const float ph = engPhase_[k];
+            const float thrum = std::sin(2.0f * kPi * ph) + 0.5f * std::sin(4.0f * kPi * ph) +
+                                0.3f * std::sin(6.0f * kPi * ph);
+            rng_ = rng_ * 1664525u + 1013904223u;
+            engKnLp_[k] += ((static_cast<float>(rng_ >> 8) / 8388608.0f - 1.0f) - engKnLp_[k]) * 0.5f;
+            const float knock = engKnLp_[k] * engKnock_[k];
+            engKnock_[k] *= 0.9985f; // ~15 ms decay (about half a firing period)
+            rng_ = rng_ * 1664525u + 1013904223u;
+            const float hum = static_cast<float>(rng_ >> 8) / 8388608.0f - 1.0f;
+            float voice = (thrum * 0.5f + knock * 0.55f + hum * 0.08f) *
+                          std::clamp((rpm - 100.0f) / 200.0f, 0.0f, 1.0f); // crank-in
+            engLp_[k] += (voice - engLp_[k]) * 0.11f; // insulation LP (~800 Hz)
+            engine += engLp_[k] * engGainEnv_[k];
+        }
+
+        float s = muted ? 0.0f
+                        : (hiss * 1.2f + click * 0.9f) * envEnv_ + engine * 0.30f;
         s = std::clamp(s, -1.0f, 1.0f);
         out[i] = s;
     }
     cbFrames_.fetch_add(static_cast<unsigned long>(n), std::memory_order_relaxed);
 }
 
-void Audio::update(const Vehicle& v, float /*dt*/, float distGain) {
+void Audio::update(const Vehicle& v, float /*dt*/, float brakeGain, float engGain0,
+                   float engGain1) {
     const float rate = v.bcRate();
     // The release (venting to atmosphere) is the prominent sound; the filling
     // (charging the cylinders) is quieter, as in reality.
@@ -168,7 +202,11 @@ void Audio::update(const Vehicle& v, float /*dt*/, float distGain) {
                           : std::min(std::fabs(rate) / 5.0f, 1.0f) * 0.5f;  // apply
     amp_.store(amp, std::memory_order_relaxed);
     brightness_.store(rate < 0.0f ? 1.0f : 0.0f, std::memory_order_relaxed);
-    envGain_.store(std::clamp(distGain, 0.0f, 1.0f), std::memory_order_relaxed);
+    envGain_.store(std::clamp(brakeGain, 0.0f, 1.0f), std::memory_order_relaxed);
+    engRpm_[0].store(v.engineRpm(0), std::memory_order_relaxed);
+    engRpm_[1].store(v.engineRpm(1), std::memory_order_relaxed);
+    engGain_[0].store(std::clamp(engGain0, 0.0f, 1.0f), std::memory_order_relaxed);
+    engGain_[1].store(std::clamp(engGain1, 0.0f, 1.0f), std::memory_order_relaxed);
     // Valve operates whenever the effective brake command changes (handle or the
     // low-reservoir safety).
     const int cmd = v.safetyBrakeActive() ? Vehicle::kEmergencyNotch : v.brakeNotch();
@@ -367,6 +405,33 @@ void Audio::dumpTest(const std::string& wavPath) {
         a.amp_.store(s.rate < 0.0f ? std::min(std::fabs(s.rate) / 1.5f, 1.0f)
                                    : std::min(std::fabs(s.rate) / 5.0f, 1.0f) * 0.5f);
         a.brightness_.store(s.rate < 0.0f ? 1.0f : 0.0f);
+        const int total = static_cast<int>(s.dur * fs);
+        float buf[256];
+        for (int done = 0; done < total; done += 256) {
+            const int n = std::min(256, total - done);
+            a.render(buf, n);
+            for (int i = 0; i < n; ++i)
+                pcm.push_back(static_cast<std::int16_t>(
+                    std::clamp(buf[i], -1.0f, 1.0f) * 32767.0f));
+        }
+    }
+    writeWav(wavPath, pcm, static_cast<int>(fs));
+    std::fprintf(stderr, "audio: wrote %s (%zu samples)\n", wavPath.c_str(), pcm.size());
+}
+
+void Audio::dumpEngineTest(const std::string& wavPath) {
+    const float fs = 44100.0f;
+    Audio a;
+    a.sampleRate_ = fs;
+    struct Seg { float dur, rpm; };
+    // off -> crank to idle -> hold at idle -> spin down -> off
+    const Seg segs[] = {{0.6f, 0.0f}, {4.0f, 700.0f}, {3.0f, 700.0f}, {3.0f, 0.0f}, {0.6f, 0.0f}};
+    std::vector<std::int16_t> pcm;
+    for (const Seg& s : segs) {
+        a.engRpm_[0].store(s.rpm);
+        a.engRpm_[1].store(s.rpm);
+        a.engGain_[0].store(1.0f);
+        a.engGain_[1].store(1.0f);
         const int total = static_cast<int>(s.dur * fs);
         float buf[256];
         for (int done = 0; done < total; done += 256) {
