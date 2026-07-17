@@ -57,7 +57,12 @@ Bodø main track ("track 1 end"), resolved from the `tracks.bin` geometry.
   compressor isn't modelled yet, so it doesn't recharge), and once depleted the
   cylinders can no longer fully charge and the brakes fade. It starts held in
   **emergency with the reservoir full**; the cab's speed and duplex air gauges and
-  the brake lever animate with the sim, mirrored on a HUD.
+  the brake lever animate with the sim, mirrored on a HUD. With an audio backend
+  (PulseAudio or PortAudio), the brake air is **synthesized** in real time: a hiss
+  whose loudness tracks the airflow — a subdued charge on apply and a prominent,
+  brighter vent on release — fading as the pressure equalizes and with camera
+  distance to the bogies, plus a valve click at each change of the handle or the
+  safety (`src/Audio.cpp`).
 
 ## Requirements
 
@@ -67,6 +72,8 @@ System packages (all found via CMake / pkg-config):
 - GLFW 3
 - GLM
 - `glslc` (shader compiler, from shaderc)
+- PulseAudio (`libpulse-simple`) or PortAudio (**optional** — either enables the
+  synthesized brake sound, PulseAudio preferred; the build is silent without both)
 - CMake ≥ 3.20, a C++20 compiler
 
 ## Build
@@ -99,6 +106,7 @@ counts, and vehicle physics (mass, inertia, tipping limit).
 | Up / Down    | Hand-push the vehicle fwd / back |
 | , / .        | Brake handle: release / apply one notch |
 | Space        | Emergency brake                 |
+| M            | Mute / unmute sound             |
 | Tab          | Release/grab cursor             |
 | Esc          | Quit                            |
 
@@ -134,6 +142,7 @@ the corresponding sources (national rail register + NVDB roads + OSM enrichment)
 | `EBANER_CAM`        | Scripted camera `"x,y,z,yawDeg,pitchDeg"` (scene-relative m). |
 | `EBANER_NOSTITCH`   | Skip the seam-stitching pass (to inspect raw tile seams).     |
 | `EBANER_VEHICLE`    | Skip the start screen and preselect a vehicle (`0` or `1`).   |
+| `EBANER_AUDIO_DUMP` | Render a scripted brake sequence to the given WAV and exit.   |
 
 ## Not yet implemented
 

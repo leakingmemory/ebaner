@@ -21,6 +21,7 @@
 #include "Textures.h"
 #include "TrackMesh.h"
 #include "TrackPath.h"
+#include "Audio.h"
 #include "Vehicle.h"
 #include "VehicleMesh.h"
 #include "VulkanRenderer.h"
@@ -51,6 +52,7 @@ bool g_chase = false; // chase-cam mode (ride the rail vehicle)
 int g_driverPos = -1; // driver camera: -1 off, else cab index (0 front, 1 rear)
 float g_driverYaw = 0.0f, g_driverPitch = 0.0f; // look offsets relative to the train
 constexpr float kLookSens = 0.0022f; // radians per pixel (matches Camera)
+Audio* g_audio = nullptr; // for the M mute toggle in the key callback
 
 void cursorCallback(GLFWwindow*, double x, double y) {
     if (!g_mouseCaptured) { g_firstMouse = true; return; }
@@ -86,6 +88,8 @@ void keyCallback(GLFWwindow* win, int key, int, int action, int) {
         g_driverYaw = g_driverPitch = 0.0f;      // face forward on entering / switching
         if (g_driverPos >= 0) g_chase = false;
     }
+    // M mutes / unmutes the synthesized sound.
+    if (key == GLFW_KEY_M && action == GLFW_PRESS && g_audio) g_audio->toggleMuted();
 }
 
 VulkanRenderer* g_renderer = nullptr;
@@ -97,6 +101,12 @@ void resizeCallback(GLFWwindow*, int, int) {
 
 int main(int argc, char** argv) {
     const std::string datasetRoot = (argc > 1) ? argv[1] : "../norway-rails";
+
+    // Offline audio check: render a scripted brake sequence to a WAV and exit.
+    if (const char* dump = std::getenv("EBANER_AUDIO_DUMP")) {
+        Audio::dumpTest(dump);
+        return EXIT_SUCCESS;
+    }
 
     // --- Load terrain data ---
     TerrainData data;
@@ -138,6 +148,8 @@ int main(int argc, char** argv) {
     // The vehicle is chosen on the start screen; created (attached) on confirm.
     std::optional<Vehicle> vehicle;
     VehicleMesh vmesh;
+    Audio audio;
+    g_audio = &audio; // init() is deferred until just before the render loop
 
     // --- Window ---
     if (!glfwInit()) {
@@ -216,7 +228,7 @@ int main(int argc, char** argv) {
     std::printf(
         "\nControls: WASD move, Q/E down/up, mouse look, Shift boost, "
         "C chase vehicle, V driver view (switch cab), Up/Down push vehicle, "
-        ", / . / Space brakes, Tab release cursor, Esc quit\n\n");
+        ", / . / Space brakes, M mute, Tab release cursor, Esc quit\n\n");
 
     // Directional sun (scene space): from the south-west, fairly high.
     const glm::vec3 sunDir = glm::normalize(glm::vec3(0.4f, -0.5f, 0.75f));
@@ -282,6 +294,10 @@ int main(int argc, char** argv) {
          prevK3 = false, prevK4 = false, prevK5 = false, prevEnter = false;
     bool prevBrkDown = false, prevBrkUp = false, prevBrkEmerg = false;
     bool prevSafety = false;
+
+    // Open the audio device now that the heavy startup work is done, so the audio
+    // thread isn't starved (which causes ALSA under-runs) during loading.
+    audio.init();
 
     double lastTime = glfwGetTime();
     while (!glfwWindowShouldClose(window)) {
@@ -389,6 +405,15 @@ int main(int argc, char** argv) {
                 std::printf("[Brake] LOW RESERVOIR (%.1f bar) -> automatic emergency\n",
                             vehicle->mrPressure());
             prevSafety = vehicle->safetyBrakeActive();
+            // Fade the brake sound by camera distance to the nearest bogie (the
+            // brake-cylinder source): full within ~5 m, silent past ~60 m.
+            float distGain = 0.0f;
+            const glm::vec3 camPos = g_camera.position();
+            for (const VehicleFrame& b : vehicle->bogieFrames())
+                distGain = std::max(distGain,
+                                    glm::clamp((60.0f - glm::distance(camPos, b.pos)) / 55.0f,
+                                               0.0f, 1.0f));
+            audio.update(*vehicle, simDt, distGain); // brake-air hiss + valve clicks
             vmesh.build(*vehicle);
             renderer.updateVehicleVertices(vmesh.vertices());
 
@@ -463,6 +488,8 @@ int main(int argc, char** argv) {
     renderer.waitIdle();
     renderer.cleanup();
     g_renderer = nullptr;
+    g_audio = nullptr;
+    audio.shutdown();
     glfwDestroyWindow(window);
     glfwTerminate();
     return EXIT_SUCCESS;

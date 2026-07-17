@@ -223,6 +223,7 @@ void Vehicle::update(float dt, float pushInput) {
         // Air brake: lap the brake-cylinder pressure toward the notch target,
         // charging from (and spending) the main reservoir on apply, venting on
         // release; a governed compressor recharges the reservoir.
+        const float bcBefore = bcPres_;
         const float tgt = targetBC(effNotch);
         if (tgt > bcPres_) {
             const float rate = (effNotch >= kEmergencyNotch) ? kBCEmergRate : kBCApplyRate;
@@ -246,6 +247,7 @@ void Vehicle::update(float dt, float pushInput) {
         }
         mrPres_ = std::clamp(mrPres_, 0.0f, kMRCapacity);
         bcPres_ = std::max(0.0f, bcPres_);
+        bcRate_ = (dt > 1e-6f) ? (bcPres_ - bcBefore) / dt : 0.0f; // airflow, for sound
 
         // Brake force (capped by wheel/rail adhesion) and Davis running resistance
         // both oppose motion, capped so they can't reverse v_ (this also holds the

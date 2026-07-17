@@ -143,6 +143,9 @@ public:
     const char* brakeNotchName() const;
     float mrPressure() const { return mrPres_; } // main reservoir (bar)
     float bcPressure() const { return bcPres_; } // brake cylinder (bar)
+    // Rate of brake-cylinder pressure change (bar/s): + charging (apply), −
+    // venting (release), 0 when equalized/released. Drives the air-brake sound.
+    float bcRate() const { return bcRate_; }
     // True when the low-reservoir safety has forced an automatic emergency
     // application (overriding the handle) because the reservoir fell too low.
     bool safetyBrakeActive() const { return safetyBrake_; }
@@ -181,6 +184,7 @@ private:
     // Air-brake state (bar). Starts held: reservoir full, emergency applied.
     float mrPres_;                      // main reservoir pressure
     float bcPres_;                      // brake cylinder pressure
+    float bcRate_ = 0.0f;               // d(bcPres_)/dt (bar/s), for the sound
     int brakeNotch_ = kEmergencyNotch;  // 0 release .. kEmergencyNotch emergency
     bool compOn_ = false;               // compressor state (cut-in/cut-out governor)
     bool safetyBrake_ = false;          // low-reservoir automatic emergency (latched)

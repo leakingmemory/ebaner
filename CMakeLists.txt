@@ -35,6 +35,15 @@ endif()
 # GLM: header-only. Package if present, otherwise rely on system include dir.
 find_package(glm QUIET)
 
+# Audio (optional): procedural brake sounds. Prefer PulseAudio (talks to the sound
+# server directly, like other desktop apps); fall back to PortAudio. The build stays
+# silent if neither is present.
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(PULSE QUIET IMPORTED_TARGET libpulse-simple)
+    pkg_check_modules(PORTAUDIO QUIET IMPORTED_TARGET portaudio-2.0)
+endif()
+
 # ---- Shader compilation ---------------------------------------------------
 find_program(GLSLC glslc HINTS ${Vulkan_GLSLC_EXECUTABLE})
 if(NOT GLSLC)
@@ -74,6 +83,7 @@ add_executable(ebaner
     src/EarClip.cpp
     src/VehicleMesh.cpp
     src/Vehicle.cpp
+    src/Audio.cpp
     src/Font.cpp
     src/VulkanRenderer.cpp)
 
@@ -82,6 +92,19 @@ add_dependencies(ebaner shaders)
 target_link_libraries(ebaner PRIVATE Vulkan::Vulkan ${GLFW_TARGET})
 if(glm_FOUND)
     target_link_libraries(ebaner PRIVATE glm::glm)
+endif()
+if(PULSE_FOUND)
+    target_link_libraries(ebaner PRIVATE PkgConfig::PULSE)
+    target_compile_definitions(ebaner PRIVATE HAVE_PULSE=1)
+    message(STATUS "PulseAudio found: brake sounds via PulseAudio (preferred)")
+endif()
+if(PORTAUDIO_FOUND)
+    target_link_libraries(ebaner PRIVATE PkgConfig::PORTAUDIO)
+    target_compile_definitions(ebaner PRIVATE HAVE_PORTAUDIO=1)
+    message(STATUS "PortAudio found: brake sounds via PortAudio (fallback)")
+endif()
+if(NOT PULSE_FOUND AND NOT PORTAUDIO_FOUND)
+    message(STATUS "No audio backend found: building without sound")
 endif()
 
 # Directory holding the compiled .spv files, exposed to the app at runtime.
