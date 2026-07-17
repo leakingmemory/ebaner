@@ -70,6 +70,9 @@ const glm::vec3 kGlass(0.17f, 0.19f, 0.23f);   // window glazing seen from insid
 const glm::vec3 kWood(0.52f, 0.37f, 0.23f);    // wood-tone module panels
 const glm::vec3 kSeat(0.30f, 0.32f, 0.38f);    // passenger seat
 const glm::vec3 kDash(0.14f, 0.15f, 0.17f);    // driver's desk / console
+const glm::vec3 kScreen(0.13f, 0.22f, 0.30f);  // MFD / LCD panel
+const glm::vec3 kGauge(0.82f, 0.81f, 0.77f);   // analog dial face
+const glm::vec3 kButton(0.34f, 0.35f, 0.38f);  // desk control buttons
 } // namespace
 } // namespace
 
@@ -677,13 +680,91 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                 for (const float sx : {1.0f, -1.0f})             // armrests
                     emitBox(X, Y, Z, P(sx * 0.30f, sy, zFh + 0.56f), 0.03f, 0.20f, 0.08f,
                             c93::kSeat * 0.7f);
-                // Desk: a console box with a top raked up toward the windscreen.
-                const float dw = ihw * 0.8f;                     // desk half-width
-                const float dy = base + so * 1.5f;               // desk centre
-                emitBox(X, Y, Z, P(0.0f, dy, zFh + 0.39f), dw, 0.28f, 0.39f, c93::kDash);
-                const float yb = dy - so * 0.28f, yf = dy + so * 0.28f; // driver / nose edges
-                quadN(P(-dw, yb, zFh + 0.78f), P(dw, yb, zFh + 0.78f),
-                      P(dw, yf, zFh + 0.96f), P(-dw, yf, zFh + 0.96f), c93::kDash, in);
+                // Talent-style desk: a flat table with the power/brake lever on
+                // the right, and a three-facet dome rising toward the windscreen.
+                const float dw = ihw * 0.78f;            // desk half-width
+                const float zTab = zFh + 0.74f;          // table-top height
+                const float dyN = base + so * 1.02f;     // table edge near the driver
+                const float dyD = base + so * 1.72f;     // table / dome junction
+                const float dyF = base + so * 2.02f;     // dome front (toward glass)
+                const float zDome = zFh + 1.04f;         // dome top
+                const glm::vec3 eye = P(0.0f, sy, zFh + 1.15f); // driver's eye (ref)
+
+                // Table and dome body (solid dark console).
+                emitBox(X, Y, Z, P(0.0f, 0.5f * (dyN + dyD), 0.5f * (zFh + zTab)),
+                        dw, 0.5f * std::abs(dyD - dyN), 0.5f * (zTab - zFh), c93::kDash);
+                emitBox(X, Y, Z, P(0.0f, 0.5f * (dyD + dyF), 0.5f * (zFh + zDome)),
+                        dw, 0.5f * std::abs(dyF - dyD), 0.5f * (zDome - zFh), c93::kDash);
+
+                // Combined power/brake lever on the right of the table.
+                {
+                    const float lx = 0.54f, ly = dyN + so * 0.30f;
+                    emitBox(X, Y, Z, P(lx, ly, zTab + 0.03f), 0.10f, 0.12f, 0.03f, c93::kButton);
+                    emitBox(X, Y, Z, P(lx, ly - so * 0.04f, zTab + 0.17f), 0.025f, 0.025f, 0.14f, c93::kDash);
+                    emitBox(X, Y, Z, P(lx, ly - so * 0.09f, zTab + 0.27f), 0.05f, 0.10f, 0.035f, c93::kButton);
+                }
+
+                // Three angled instrument facets rising at the front of the table,
+                // wrapped toward the driver. Equipment is drawn as flat panels and
+                // discs held proud of each facet.
+                auto bulge = [&](float x) { return 0.10f * (1.0f - 0.8f * (x / dw) * (x / dw)); };
+                auto ptBot = [&](float x) { return P(x, dyD + so * bulge(x), zTab); };
+                auto ptTop = [&](float x) { return P(x, dyD + so * (bulge(x) + 0.14f), zDome); };
+                auto rectFace = [&](const glm::vec3& C, const glm::vec3& u, const glm::vec3& v,
+                                    const glm::vec3& n, float cx, float cy, float hu, float hv,
+                                    float pr, const glm::vec3& col) {
+                    const glm::vec3 o = C + u * cx + v * cy + n * pr;
+                    quadN(o - u * hu - v * hv, o + u * hu - v * hv, o + u * hu + v * hv,
+                          o - u * hu + v * hv, col, o - n);
+                };
+                auto discFace = [&](const glm::vec3& C, const glm::vec3& u, const glm::vec3& v,
+                                    const glm::vec3& n, float cx, float cy, float r, float pr,
+                                    const glm::vec3& col) {
+                    const glm::vec3 o = C + u * cx + v * cy + n * pr;
+                    const int M = 14;
+                    glm::vec3 prev = o + u * r;
+                    for (int i = 1; i <= M; ++i) {
+                        const float a = 2.0f * kPi * i / M;
+                        const glm::vec3 cur = o + u * (r * std::cos(a)) + v * (r * std::sin(a));
+                        quadN(o, prev, cur, cur, col, o - n);
+                        prev = cur;
+                    }
+                };
+                glm::vec3 C, u, v, n;
+                auto facet = [&](float xa, float xb) {
+                    const glm::vec3 BL = ptBot(xa), BR = ptBot(xb), TR = ptTop(xb), TL = ptTop(xa);
+                    C = 0.25f * (BL + BR + TR + TL);
+                    u = glm::normalize(BR - BL);
+                    v = glm::normalize(TL - BL);
+                    n = glm::normalize(glm::cross(u, v));
+                    if (glm::dot(n, eye - C) < 0.0f) n = -n;
+                    quadN(BL, BR, TR, TL, c93::kDash, C - n); // facet backing
+                };
+
+                // Left facet: an MFD LCD screen framed by rectangular buttons.
+                facet(-dw, -0.26f);
+                rectFace(C, u, v, n, 0.0f, 0.01f, 0.15f, 0.10f, 0.01f, c93::kScreen);
+                for (int i = 0; i < 3; ++i) {
+                    const float yy = 0.07f - 0.07f * i;
+                    rectFace(C, u, v, n, -0.20f, yy, 0.02f, 0.022f, 0.012f, c93::kButton);
+                    rectFace(C, u, v, n, 0.20f, yy, 0.02f, 0.022f, 0.012f, c93::kButton);
+                }
+
+                // Centre facet: two round analog dials (speed, brake/air pressure)
+                // over a row of buttons.
+                facet(-0.26f, 0.26f);
+                for (const float gx : {-0.11f, 0.11f}) {
+                    discFace(C, u, v, n, gx, 0.04f, 0.075f, 0.01f, c93::kGauge);
+                    discFace(C, u, v, n, gx, 0.04f, 0.013f, 0.02f, c93::kDash); // hub
+                }
+                for (int i = 0; i < 5; ++i)
+                    rectFace(C, u, v, n, -0.16f + 0.08f * i, -0.09f, 0.025f, 0.02f, 0.012f, c93::kButton);
+
+                // Right facet: signalling / ATC panel — a small screen and buttons.
+                facet(0.26f, dw);
+                rectFace(C, u, v, n, 0.0f, 0.05f, 0.13f, 0.06f, 0.01f, c93::kScreen);
+                for (int i = 0; i < 4; ++i)
+                    rectFace(C, u, v, n, -0.15f + 0.10f * i, -0.06f, 0.03f, 0.025f, 0.012f, c93::kButton);
             }
         }
     };
