@@ -68,6 +68,7 @@ const glm::vec3 kLining(0.82f, 0.80f, 0.75f);  // interior wall lining (neutral)
 const glm::vec3 kCeiling(0.87f, 0.87f, 0.88f); // interior ceiling lining (light)
 const glm::vec3 kGlass(0.17f, 0.19f, 0.23f);   // window glazing seen from inside
 const glm::vec3 kWood(0.52f, 0.37f, 0.23f);    // wood-tone module panels
+const glm::vec3 kSeat(0.30f, 0.32f, 0.38f);    // passenger seat
 } // namespace
 } // namespace
 
@@ -604,6 +605,59 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                 partition({glm::vec2(aisle, wc0 - so * 0.25f), glm::vec2(ihw, wc0),
                            glm::vec2(ihw, wc1), glm::vec2(aisle, wc1 + so * 0.25f)},
                           zFl, c93::kWood);
+
+            // Seats: 2+2 rows through each saloon, oriented from the NSB seat
+            // plans (the backrest is the darker end on the plan). Car A (no WC):
+            // both aisle sides match, and only the end-most column of each section
+            // is reversed to face inward (a facing bay against the cab / the
+            // gangway). WC car: the two aisle sides face opposite ways — the +x
+            // side toward the door, the -x side toward the car end except its
+            // end-most column, which faces the door too.
+            auto seat = [&](float x, float y, float zf, float face) {
+                emitBox(X, Y, Z, P(x, y, zf + 0.42f), 0.22f, 0.24f, 0.05f, c93::kSeat);
+                emitBox(X, Y, Z, P(x, y - face * 0.22f, zf + 0.72f), 0.22f, 0.05f, 0.28f,
+                        c93::kSeat * 0.8f); // backrest a shade darker (shows facing)
+            };
+            {
+                auto lerp = [&](float t) { return base + (gang - base) * t; };
+                const float pitchT = 0.92f / std::abs(gang - base);
+                std::vector<float> cabRows, gwRows; // seat rows, cab vs gangway section
+                for (float t = 0.06f; t < 0.94f; t += pitchT) {
+                    if (t < 0.15f) continue;              // tech behind cab
+                    if (t > 0.32f && t < 0.40f) continue; // stairs
+                    if (t > 0.42f && t < 0.51f) continue; // door
+                    (t < 0.46f ? cabRows : gwRows).push_back(t);
+                }
+                // Facing for column `i` (0 = the section's end-most row) on aisle
+                // side `sx`. toEnd faces the car end (cab / gangway); toDoor faces
+                // the vestibule.
+                auto faceFor = [&](int i, float sx, float toEnd, float toDoor) {
+                    if (!hasWC)                          // car A: both sides match
+                        return (i == 0) ? toDoor : toEnd;
+                    return (sx > 0.0f) ? toDoor          // WC car +x: all to door
+                                       : ((i == 0) ? toDoor : toEnd); // -x side
+                };
+                auto placeRow = [&](float t, int i, float toEnd, float toDoor) {
+                    const float zf = (t < 0.34f) ? zFh : zFl;
+                    const bool wcRegion = hasWC && t > 0.50f && t < 0.90f;
+                    for (const float sx : {1.0f, -1.0f}) {
+                        if (wcRegion && sx > 0.0f) continue; // WC on the +x side
+                        if (wcRegion) {
+                            // Opposite the WC: flip-up cushion on the window wall.
+                            emitBox(X, Y, Z, P(-(ihw - 0.18f), lerp(t), zf + 0.42f),
+                                    0.16f, 0.22f, 0.04f, c93::kSeat);
+                            continue;
+                        }
+                        const float face = faceFor(i, sx, toEnd, toDoor);
+                        seat(sx * 0.50f, lerp(t), zf, face); // aisle seat
+                        seat(sx * 0.98f, lerp(t), zf, face); // window seat
+                    }
+                };
+                for (std::size_t i = 0; i < cabRows.size(); ++i)
+                    placeRow(cabRows[i], static_cast<int>(i), so, -so);
+                for (std::size_t i = 0; i < gwRows.size(); ++i)
+                    placeRow(gwRows[gwRows.size() - 1 - i], static_cast<int>(i), -so, so);
+            }
         }
     };
 
