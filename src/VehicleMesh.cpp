@@ -69,6 +69,7 @@ const glm::vec3 kCeiling(0.87f, 0.87f, 0.88f); // interior ceiling lining (light
 const glm::vec3 kGlass(0.17f, 0.19f, 0.23f);   // window glazing seen from inside
 const glm::vec3 kWood(0.52f, 0.37f, 0.23f);    // wood-tone module panels
 const glm::vec3 kSeat(0.30f, 0.32f, 0.38f);    // passenger seat
+const glm::vec3 kDash(0.14f, 0.15f, 0.17f);    // driver's desk / console
 } // namespace
 } // namespace
 
@@ -657,6 +658,27 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                     placeRow(cabRows[i], static_cast<int>(i), so, -so);
                 for (std::size_t i = 0; i < gwRows.size(); ++i)
                     placeRow(gwRows[gwRows.size() - 1 - i], static_cast<int>(i), -so, so);
+            }
+
+            // Driver's cab (both ends, symmetric): a raised floor into the nose, a
+            // central seat facing the windscreen and a raked desk in front of it.
+            // No controls/gauges/screens yet. `so` points into the cab; the driver
+            // faces `so`, toward the raked nose.
+            {
+                plate(base, base + so * 2.2f, zFh, c93::kFloor); // cab floor
+                const float sy = base + so * 0.7f;               // seat centre
+                seat(0.0f, sy, zFh, so);                         // driver's seat
+                emitBox(X, Y, Z, P(0.0f, sy, zFh + 0.20f), 0.12f, 0.12f, 0.20f, c93::kDash); // pedestal
+                for (const float sx : {1.0f, -1.0f})             // armrests
+                    emitBox(X, Y, Z, P(sx * 0.30f, sy, zFh + 0.56f), 0.03f, 0.20f, 0.08f,
+                            c93::kSeat * 0.7f);
+                // Desk: a console box with a top raked up toward the windscreen.
+                const float dw = ihw * 0.8f;                     // desk half-width
+                const float dy = base + so * 1.5f;               // desk centre
+                emitBox(X, Y, Z, P(0.0f, dy, zFh + 0.39f), dw, 0.28f, 0.39f, c93::kDash);
+                const float yb = dy - so * 0.28f, yf = dy + so * 0.28f; // driver / nose edges
+                quadN(P(-dw, yb, zFh + 0.78f), P(dw, yb, zFh + 0.78f),
+                      P(dw, yf, zFh + 0.96f), P(-dw, yf, zFh + 0.96f), c93::kDash, in);
             }
         }
     };

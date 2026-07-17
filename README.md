@@ -38,7 +38,11 @@ Bodø main track ("track 1 end"), resolved from the `tracks.bin` geometry.
   single-axle wheelset, a dual-axle bogie (two wheelsets + frame), a full-length
   **carriage underframe** on two dual-axle bogies (one at each end), or a longer
   **articulated module** on three bogies whose two underframe sections hinge over
-  the shared middle (Jacobs) bogie so it flexes on curves, all unpowered
+  the shared middle (Jacobs) bogie so it flexes on curves, or a liveried **NSB
+  Class 93** (Bombardier Talent) DMU — a two-section body with raked cab noses, a
+  modelled saloon (low-floor gangway, raised vestibules, doors, boxed tech/WC
+  areas, wall/ceiling lining and oriented seats) and a basic **driver's cab**
+  (seat + desk) at each end — all unpowered
   (`src/VehicleMesh.cpp`). A small 1-DOF physics model (`src/Vehicle.cpp`) gives it
   mass, gravity resolved into along-track acceleration + weight-on-rails, Davis
   running resistance, box inertia and a curve overturning limit. It rolls under
