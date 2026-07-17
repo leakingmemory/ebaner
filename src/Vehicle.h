@@ -84,6 +84,9 @@ struct VehicleFrame {
 
 enum class VehicleState { OnRail, Derailed, Stopped };
 
+// Per-engine state, derived from its rpm (cranking up / at idle / spinning down).
+enum class EngineState { Off, Starting, Running, Stopping };
+
 // A rail vehicle (1 or 2 axles) riding a TrackPath at arc-length s (body centre),
 // with a 1-DOF along-track physics model.
 class Vehicle {
@@ -150,6 +153,16 @@ public:
     // application (overriding the handle) because the reservoir fell too low.
     bool safetyBrakeActive() const { return safetyBrake_; }
 
+    // Diesel engines (one per cab end; synchronous start/stop). Once running at
+    // idle they drive the air compressor. No traction is modelled yet, so they idle.
+    // Two Cummins N14E-R (14 L), full power at 1500 rev/min (the tachometer top).
+    static constexpr float kMaxRpm = 1500.0f;
+    void toggleEngines();                   // start if off, else stop (both together)
+    int engineCount() const { return engineCount_; }
+    float engineRpm(int i) const;           // current speed (rev/min)
+    EngineState engineState(int i) const;
+    bool enginesRunning() const;            // all engines at idle
+
     float s() const { return s_; }
     float mass() const { return mass_; }
     float length() const { return length_; }
@@ -188,6 +201,9 @@ private:
     int brakeNotch_ = kEmergencyNotch;  // 0 release .. kEmergencyNotch emergency
     bool compOn_ = false;               // compressor state (cut-in/cut-out governor)
     bool safetyBrake_ = false;          // low-reservoir automatic emergency (latched)
+    int engineCount_ = 0;               // diesel engines (2 for a Class 93, else 0)
+    bool engineOn_ = false;             // commanded on/off (both engines together)
+    float engineRpm_[2] = {0.0f, 0.0f}; // per-engine speed
     glm::vec3 pos_{0.0f};               // derailed free-body position
     glm::vec3 vel_{0.0f};               // derailed velocity
     glm::vec3 fRight_{0.0f}, fTangent_{1.0f, 0.0f, 0.0f}, fUp_{0.0f, 0.0f, 1.0f};

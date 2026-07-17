@@ -53,11 +53,15 @@ Bodø main track ("track 1 end"), resolved from the `tracks.bin` geometry.
   Emergency, `,` / `.` / Space): each notch laps the brake-cylinder pressure to a
   target from the reservoir, producing a braking force capped by wheel–rail
   adhesion that also holds the vehicle at rest. The reservoir holds enough air for
-  many applications; cycling the brakes slowly draws it down (the engine-driven
-  compressor isn't modelled yet, so it doesn't recharge), and once depleted the
-  cylinders can no longer fully charge and the brakes fade. It starts held in
-  **emergency with the reservoir full**; the cab's speed and duplex air gauges and
-  the brake lever animate with the sim, mirrored on a HUD. With an audio backend
+  many applications; cycling the brakes slowly draws it down and, once depleted, the
+  cylinders can no longer fully charge and the brakes fade. Recharging comes from the
+  **diesel engines** (one per cab end, 2 × 306 kW): start them with `I` (both crank
+  to idle ~700 rpm together, shown as a rev-counter bar per engine on the left cab
+  LCD; they are two Cummins N14E-R, 14 L, full power at 1500 rpm) and their
+  compressors refill the reservoir — which also lifts it back above the low-air
+  safety trip. It starts held in **emergency with the reservoir full and the engines
+  off**; the cab's speed and duplex air gauges and the brake lever animate with the
+  sim, mirrored on a HUD. (Traction/transmission is not modelled yet.) With an audio backend
   (PulseAudio or PortAudio), the brake air is **synthesized** in real time: a hiss
   whose loudness tracks the airflow — a subdued charge on apply and a prominent,
   brighter vent on release — fading as the pressure equalizes and with camera
@@ -103,6 +107,7 @@ counts, and vehicle physics (mass, inertia, tipping limit).
 | Left Shift   | Move faster (×8)                |
 | C            | Toggle chase camera (the vehicle) |
 | V            | Driver's-seat view; press again to switch cab, again to exit |
+| I            | Start / stop the diesel engines (both together) |
 | Up / Down    | Hand-push the vehicle fwd / back |
 | , / .        | Brake handle: release / apply one notch |
 | Space        | Emergency brake                 |

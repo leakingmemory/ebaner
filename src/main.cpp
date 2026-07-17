@@ -227,8 +227,9 @@ int main(int argc, char** argv) {
 
     std::printf(
         "\nControls: WASD move, Q/E down/up, mouse look, Shift boost, "
-        "C chase vehicle, V driver view (switch cab), Up/Down push vehicle, "
-        ", / . / Space brakes, M mute, Tab release cursor, Esc quit\n\n");
+        "C chase vehicle, V driver view (switch cab), I engines start/stop, "
+        "Up/Down push vehicle, , / . / Space brakes, M mute, Tab release cursor, "
+        "Esc quit\n\n");
 
     // Directional sun (scene space): from the south-west, fairly high.
     const glm::vec3 sunDir = glm::normalize(glm::vec3(0.4f, -0.5f, 0.75f));
@@ -293,7 +294,7 @@ int main(int argc, char** argv) {
     bool prevUp = false, prevDown = false, prevK1 = false, prevK2 = false,
          prevK3 = false, prevK4 = false, prevK5 = false, prevEnter = false;
     bool prevBrkDown = false, prevBrkUp = false, prevBrkEmerg = false;
-    bool prevSafety = false;
+    bool prevSafety = false, prevEngine = false;
 
     // Open the audio device now that the heavy startup work is done, so the audio
     // thread isn't starved (which causes ALSA under-runs) during loading.
@@ -391,6 +392,17 @@ int main(int argc, char** argv) {
                 std::fflush(stdout);
             }
 
+            // I: start / stop the diesel engines (both together, edge-triggered).
+            const bool iKey = down(GLFW_KEY_I);
+            if (iKey && !prevEngine && vehicle->engineCount() > 0) {
+                const EngineState es = vehicle->engineState(0);
+                const bool wasOff = es == EngineState::Off || es == EngineState::Stopping;
+                vehicle->toggleEngines();
+                std::printf("[Engine] %s\n", wasOff ? "starting" : "stopping");
+                std::fflush(stdout);
+            }
+            prevEngine = iKey;
+
             const float simDt = std::min(dt, 0.05f);
             const VehicleState prev = vehicle->state();
             vehicle->update(simDt, pushInput);
@@ -437,6 +449,20 @@ int main(int argc, char** argv) {
                 if (vehicle->safetyBrakeActive())
                     appendText(tv, "!! LOW RESERVOIR - AUTO EMERGENCY !!", x, 40.0f + 3 * lh,
                                sc, glm::vec3(1.0f, 0.35f, 0.3f), fbw, fbh);
+                if (vehicle->engineCount() > 0) {
+                    const EngineState es = vehicle->engineState(0);
+                    if (es == EngineState::Off)
+                        std::snprintf(buf, sizeof(buf), "ENG OFF   I to start");
+                    else {
+                        const char* sn = es == EngineState::Running    ? "RUNNING"
+                                         : es == EngineState::Starting ? "STARTING"
+                                                                       : "STOPPING";
+                        std::snprintf(buf, sizeof(buf), "ENG %s  %.0f rpm", sn,
+                                      vehicle->engineRpm(0));
+                    }
+                    appendText(tv, buf, x, 40.0f + 4 * lh, sc, glm::vec3(0.7f, 0.85f, 0.7f),
+                               fbw, fbh);
+                }
                 renderer.setOverlayText(tv);
             }
 

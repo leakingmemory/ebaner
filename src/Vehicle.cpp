@@ -43,13 +43,15 @@ constexpr float kBCReleaseRate = 1.2f;   // release rate (bar/s)
 constexpr float kCompRate = 0.20f;       // compressor recharge (bar/s)
 constexpr float kMRPerBC = 0.04f;        // MR bar spent per bar of BC charged
 constexpr float kMRLeak = 0.001f;        // reservoir leak (bar/s)
-// The compressor is driven by the engine, which isn't modelled yet, so it stays
-// off: the reservoir only depletes (slowly, over many applications) for now.
-constexpr bool kCompressorEnabled = false;
 constexpr float kFullServiceDecel = 1.3f; // deceleration at full service (m/s^2)
 constexpr float kAdhesionMu = 0.20f;     // wheel/rail grip cap on brake force
 constexpr float kMRSafetyTrip = 6.0f;    // low reservoir -> automatic emergency
 constexpr float kMRSafetyReset = 6.5f;   // safety clears once recharged above this
+
+// Diesel engines (Cummins N14E-R): crank up to a fixed idle (no traction yet).
+constexpr float kIdleRpm = 700.0f;       // low idle
+constexpr float kStartRate = kIdleRpm / 4.0f; // rpm/s while cranking (~4 s to idle)
+constexpr float kStopRate = kIdleRpm / 3.0f;  // rpm/s while spinning down (~3 s)
 
 // Brake-cylinder target (bar) for a handle notch: 0 release, 1..4 graduated
 // service up to full service, emergency a touch higher.
@@ -75,10 +77,32 @@ Vehicle::Vehicle(const TrackPath* path, const VehicleSpec& spec, float s,
       name_(spec.name),
       v_(initialSpeed),
       mrPres_(kMRCapacity),   // reservoir starts at capacity
-      bcPres_(kBCEmergency) {} // brakes start in emergency (held)
+      bcPres_(kBCEmergency),  // brakes start in emergency (held)
+      engineCount_(spec.body == BodyClass93 ? 2 : 0) {} // one diesel per cab end
 
 void Vehicle::setBrakeNotch(int notch) {
     brakeNotch_ = std::clamp(notch, 0, kEmergencyNotch);
+}
+
+void Vehicle::toggleEngines() {
+    if (engineCount_ > 0) engineOn_ = !engineOn_; // both start / stop together
+}
+
+float Vehicle::engineRpm(int i) const {
+    return (i >= 0 && i < engineCount_) ? engineRpm_[i] : 0.0f;
+}
+
+EngineState Vehicle::engineState(int i) const {
+    if (i < 0 || i >= engineCount_ || engineRpm_[i] <= 0.0f) return EngineState::Off;
+    if (engineRpm_[i] >= kIdleRpm * 0.99f) return EngineState::Running;
+    return engineOn_ ? EngineState::Starting : EngineState::Stopping;
+}
+
+bool Vehicle::enginesRunning() const {
+    if (engineCount_ == 0) return false;
+    for (int i = 0; i < engineCount_; ++i)
+        if (engineRpm_[i] < kIdleRpm * 0.99f) return false;
+    return true;
 }
 
 const char* Vehicle::brakeNotchName() const {
@@ -205,6 +229,15 @@ std::vector<VehicleFrame> Vehicle::axleFrames() const {
 }
 
 void Vehicle::update(float dt, float pushInput) {
+    // Engines crank up to / spin down from idle, independent of motion.
+    const float rpmTarget = engineOn_ ? kIdleRpm : 0.0f;
+    for (int i = 0; i < engineCount_; ++i) {
+        if (engineRpm_[i] < rpmTarget)
+            engineRpm_[i] = std::min(rpmTarget, engineRpm_[i] + kStartRate * dt);
+        else if (engineRpm_[i] > rpmTarget)
+            engineRpm_[i] = std::max(rpmTarget, engineRpm_[i] - kStopRate * dt);
+    }
+
     if (state_ == VehicleState::OnRail) {
         const VehicleFrame bf = bodyFrame();
         // Driving acceleration: gravity along the track (downhill in +s is
@@ -235,15 +268,17 @@ void Vehicle::update(float dt, float pushInput) {
             bcPres_ = std::max(tgt, bcPres_ - kBCReleaseRate * dt);
         }
         mrPres_ -= kMRLeak * dt;
-        // Governed compressor (cut-in below kMRCutIn, runs until full). Charging
-        // the cylinders costs kMRPerBC per bar of BC, so without the compressor the
-        // reservoir only draws down — enough air for many applications, then the
-        // cylinders can no longer fully charge and the brakes fade. The compressor
-        // is engine-driven; until engines exist it stays off (kCompressorEnabled).
-        if (kCompressorEnabled) {
+        // Engine-driven compressors (governor cut-in below kMRCutIn, off at full):
+        // they recharge only while the engines idle, scaled by how many are running.
+        // With the engines off the reservoir just draws down and the brakes fade.
+        int running = 0;
+        for (int i = 0; i < engineCount_; ++i)
+            if (engineRpm_[i] >= kIdleRpm * 0.99f) ++running;
+        if (running > 0) {
             if (mrPres_ >= kMRCapacity) compOn_ = false;
             else if (mrPres_ < kMRCutIn) compOn_ = true;
-            if (compOn_) mrPres_ += kCompRate * dt;
+            if (compOn_)
+                mrPres_ += kCompRate * (static_cast<float>(running) / engineCount_) * dt;
         }
         mrPres_ = std::clamp(mrPres_, 0.0f, kMRCapacity);
         bcPres_ = std::max(0.0f, bcPres_);

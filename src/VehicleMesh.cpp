@@ -73,6 +73,7 @@ const glm::vec3 kDash(0.14f, 0.15f, 0.17f);    // driver's desk / console
 const glm::vec3 kScreen(0.13f, 0.22f, 0.30f);  // MFD / LCD panel
 const glm::vec3 kGauge(0.82f, 0.81f, 0.77f);   // analog dial face
 const glm::vec3 kButton(0.34f, 0.35f, 0.38f);  // desk control buttons
+const glm::vec3 kEngBar(0.30f, 0.78f, 0.36f);  // engine progress-bar fill (green)
 } // namespace
 } // namespace
 
@@ -704,6 +705,8 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                 const float mrP = vehicle.mrPressure();
                 const float bcP = vehicle.bcPressure();
                 const int notch = vehicle.brakeNotch();
+                const float eng0 = vehicle.engineRpm(0) / Vehicle::kMaxRpm; // rev counter
+                const float eng1 = vehicle.engineRpm(1) / Vehicle::kMaxRpm;
 
                 // Combined power/brake lever on the right of the table; the stick
                 // swings toward the driver as the brake notch rises.
@@ -783,9 +786,23 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                 quadN(ptBot(-dw), ptTop(-dw), P(-dw, dyF, zDome), P(-dw, dyF, zTab), c93::kDash, domeC);
                 quadN(ptBot(dw), ptTop(dw), P(dw, dyF, zDome), P(dw, dyF, zTab), c93::kDash, domeC);
 
-                // Left facet: an MFD LCD screen framed by rectangular buttons.
+                // Left facet: an MFD LCD screen framed by rectangular buttons; on the
+                // screen, a vertical engine tachometer bar per engine (rpm as a
+                // fraction of full power, filled from the bottom).
                 facet(-dw, -xc);
                 rectFace(C, u, v, n, 0.0f, 0.02f, 0.15f, 0.13f, 0.01f, c93::kScreen);
+                {
+                    const float y0 = -0.08f, y1 = 0.11f, bw = 0.035f; // bar extent / half-width
+                    const std::pair<float, float> bars[] = {{-0.055f, eng0}, {0.055f, eng1}};
+                    for (const auto& b : bars) {
+                        rectFace(C, u, v, n, b.first, 0.5f * (y0 + y1), bw, 0.5f * (y1 - y0),
+                                 0.013f, c93::kDash); // dark track
+                        const float fill = glm::clamp(b.second, 0.0f, 1.0f) * (y1 - y0);
+                        if (fill > 1e-4f)
+                            rectFace(C, u, v, n, b.first, y0 + 0.5f * fill, bw * 0.8f,
+                                     0.5f * fill, 0.015f, c93::kEngBar); // fill from bottom
+                    }
+                }
                 for (int i = 0; i < 3; ++i) {
                     const float yy = 0.13f - 0.13f * i;
                     rectFace(C, u, v, n, -0.22f, yy, 0.02f, 0.025f, 0.012f, c93::kButton);
