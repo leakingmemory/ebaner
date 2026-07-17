@@ -15,6 +15,8 @@
 
 #include "TrackMesh.h" // TrackVertex (shared solid-lit vertex)
 
+#include <glm/glm.hpp>
+
 #include <cstdint>
 #include <vector>
 
@@ -46,3 +48,12 @@ private:
     std::vector<std::uint32_t> indices_;
     std::uint32_t glassFirstIndex_ = 0;
 };
+
+// Driver's-eye camera for a cab vehicle. `count` is the number of driver
+// positions (2 for a Class 93, one per cab; 0 for vehicles with no cab).
+// `eyePose` gives the eye point and forward direction (world space) for cab
+// `position` at the vehicle's current pose; false when unavailable.
+namespace drivercam {
+int count(const Vehicle& v);
+bool eyePose(const Vehicle& v, int position, glm::vec3& eye, glm::vec3& forward);
+} // namespace drivercam

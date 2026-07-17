@@ -48,6 +48,9 @@ double g_lastX = 0.0, g_lastY = 0.0;
 bool g_firstMouse = true;
 bool g_mouseCaptured = true;
 bool g_chase = false; // chase-cam mode (ride the rail vehicle)
+int g_driverPos = -1; // driver camera: -1 off, else cab index (0 front, 1 rear)
+float g_driverYaw = 0.0f, g_driverPitch = 0.0f; // look offsets relative to the train
+constexpr float kLookSens = 0.0022f; // radians per pixel (matches Camera)
 
 void cursorCallback(GLFWwindow*, double x, double y) {
     if (!g_mouseCaptured) { g_firstMouse = true; return; }
@@ -56,7 +59,12 @@ void cursorCallback(GLFWwindow*, double x, double y) {
     const float dy = static_cast<float>(y - g_lastY);
     g_lastX = x;
     g_lastY = y;
-    g_camera.look(dx, dy);
+    if (g_driverPos >= 0) { // free-look around the cab, relative to the train
+        g_driverYaw -= dx * kLookSens;
+        g_driverPitch = glm::clamp(g_driverPitch - dy * kLookSens, -1.4f, 1.4f);
+    } else {
+        g_camera.look(dx, dy);
+    }
 }
 
 void keyCallback(GLFWwindow* win, int key, int, int action, int) {
@@ -70,8 +78,14 @@ void keyCallback(GLFWwindow* win, int key, int, int action, int) {
                          g_mouseCaptured ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
         g_firstMouse = true;
     }
-    // C toggles the chase camera (ride the rail vehicle).
-    if (key == GLFW_KEY_C && action == GLFW_PRESS) g_chase = !g_chase;
+    // C toggles the chase camera (ride the rail vehicle); leaves the driver view.
+    if (key == GLFW_KEY_C && action == GLFW_PRESS) { g_chase = !g_chase; g_driverPos = -1; }
+    // V cycles the driver camera through the cab positions, then back to free-fly.
+    if (key == GLFW_KEY_V && action == GLFW_PRESS) {
+        g_driverPos = (g_driverPos + 2) % 3 - 1; // -1 -> 0 -> 1 -> -1
+        g_driverYaw = g_driverPitch = 0.0f;      // face forward on entering / switching
+        if (g_driverPos >= 0) g_chase = false;
+    }
 }
 
 VulkanRenderer* g_renderer = nullptr;
@@ -201,7 +215,8 @@ int main(int argc, char** argv) {
 
     std::printf(
         "\nControls: WASD move, Q/E down/up, mouse look, Shift boost, "
-        "C chase vehicle, Up/Down push vehicle, Tab release cursor, Esc quit\n\n");
+        "C chase vehicle, V driver view (switch cab), Up/Down push vehicle, "
+        ", / . / Space brakes, Tab release cursor, Esc quit\n\n");
 
     // Directional sun (scene space): from the south-west, fairly high.
     const glm::vec3 sunDir = glm::normalize(glm::vec3(0.4f, -0.5f, 0.75f));
@@ -408,7 +423,16 @@ int main(int argc, char** argv) {
             if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) up += 1.0f;
             if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) up -= 1.0f;
             const bool fast = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS;
-            if (g_chase) {
+            glm::vec3 dEye, dFwd;
+            if (g_driverPos >= 0 && drivercam::eyePose(*vehicle, g_driverPos, dEye, dFwd)) {
+                // Seated at the driver's position; the mouse free-looks relative to
+                // the train's heading, so it doesn't drift on curves.
+                const float fYaw = std::atan2(dFwd.y, dFwd.x);
+                const float fPitch = std::asin(glm::clamp(dFwd.z, -1.0f, 1.0f));
+                g_camera.setPose(dEye, fYaw + g_driverYaw,
+                                 glm::clamp(fPitch + g_driverPitch, -1.4f, 1.4f));
+            } else if (g_chase) {
+                if (g_driverPos >= 0) g_driverPos = -1; // no cab here; fall back
                 const VehicleFrame vp = vehicle->frame();
                 const glm::vec3 axle = vp.pos + vp.up * wheelset::kAxleCentreAboveBed;
                 const glm::vec3 camPos = axle - vp.tangent * 8.0f + vp.up * 3.0f;
@@ -416,6 +440,7 @@ int main(int argc, char** argv) {
                 g_camera.setPose(camPos, std::atan2(dir.y, dir.x),
                                  std::asin(glm::clamp(dir.z, -1.0f, 1.0f)));
             } else {
+                if (g_driverPos >= 0) g_driverPos = -1; // no cab here; fall back
                 g_camera.move(fwd, right, up, dt, fast);
             }
         }

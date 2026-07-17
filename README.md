@@ -95,6 +95,7 @@ counts, and vehicle physics (mass, inertia, tipping limit).
 | Mouse        | Look                            |
 | Left Shift   | Move faster (×8)                |
 | C            | Toggle chase camera (the vehicle) |
+| V            | Driver's-seat view; press again to switch cab, again to exit |
 | Up / Down    | Hand-push the vehicle fwd / back |
 | , / .        | Brake handle: release / apply one notch |
 | Space        | Emergency brake                 |

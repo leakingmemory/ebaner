@@ -908,3 +908,31 @@ void VehicleMesh::build(const Vehicle& vehicle) {
         indices_ = std::move(opaque);
     }
 }
+
+namespace drivercam {
+
+int count(const Vehicle& v) {
+    return (v.bodyStyle() == BodyClass93 && v.bodySectionFrames().size() >= 2) ? 2 : 0;
+}
+
+// Mirrors the cab geometry in emitClass93: the seat sits at base + so*0.7 on the
+// raised vestibule floor, facing the nose (so). Uses the same frame-height stack.
+bool eyePose(const Vehicle& v, int position, glm::vec3& eye, glm::vec3& forward) {
+    const std::vector<VehicleFrame> sections = v.bodySectionFrames();
+    if (v.bodyStyle() != BodyClass93 || position < 0 ||
+        position >= static_cast<int>(sections.size()))
+        return false;
+    const VehicleFrame& f = sections[position];
+    const float halfLen = 0.5f * v.length() / static_cast<float>(sections.size());
+    const bool cabNegY = (position == 0);
+    const float so = cabNegY ? -1.0f : 1.0f;                       // toward this cab
+    const float base = cabNegY ? -halfLen + c93::kNoseLen : halfLen - c93::kNoseLen;
+    const float sy = base + so * 0.7f;                             // seat centre
+    const float frameCentreZ = wheelset::kAxleCentreAboveBed + wheelset::kWheelRadius;
+    const float zFh = frameCentreZ + kFrameHalfHeight + c93::kFloorAbove + 0.41f; // cab floor
+    eye = f.pos + f.tangent * sy + f.up * (zFh + 1.4f);            // seated eye height
+    forward = f.tangent * so;                                     // out the windscreen
+    return true;
+}
+
+} // namespace drivercam
