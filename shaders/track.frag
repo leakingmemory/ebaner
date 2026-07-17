@@ -57,5 +57,8 @@ void main() {
     float haze = clamp(dist / 40000.0, 0.0, 0.65);
     color = mix(color, vec3(0.70, 0.78, 0.86), haze);
 
-    outColor = vec4(color, 1.0);
+    // Glazing (vehicle windows/windscreen) is tagged with a texLayer sentinel and
+    // drawn translucent; everything else is opaque.
+    float alpha = (vTexLayer < -1.5) ? 0.30 : 1.0;
+    outColor = vec4(color, alpha);
 }

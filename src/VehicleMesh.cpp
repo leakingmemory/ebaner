@@ -287,19 +287,24 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                 const glm::vec3 cen = 0.25f * (a + b + c + d);
                 if (glm::dot(nn, cen - in) < 0.0f) nn = -nn;
                 const float locZ = glm::dot(cen - f.pos, Z);
-                const float up = glm::dot(nn, Z);
                 glm::vec3 col;
                 if (nose) {
-                    // A large wrap-around windscreen: glazed from the crown down
-                    // to well below the cantrail (larger than the glazed area seen
-                    // from inside), wrapping onto the sides; red fascia below it;
-                    // grey roof on the near-horizontal crown.
-                    if (up > 0.55f)
-                        col = c93::kRoof;
-                    else if (locZ > z0 + 0.65f)
-                        col = c93::kBand;
+                    // Classify nose facets by orientation: the forward-raked front
+                    // is the windscreen (glazed); the near-horizontal crown is
+                    // opaque roof; the sideways-facing panels are the solid cab
+                    // sides, glazed only over the window band (a small side
+                    // window); red fascia below the glazing line.
+                    const float fwd = glm::dot(nn, fdir);
+                    const float side = std::abs(glm::dot(nn, X));
+                    if (locZ < z0 + 0.65f)
+                        col = c93::kRed;                       // fascia
+                    else if (fwd > 0.28f)
+                        col = c93::kBand;                      // windscreen (glass)
+                    else if (side > 0.5f)
+                        col = (k == 1 || k == 13) ? c93::kBand // small side window
+                                                  : c93::kBody; // solid cab side
                     else
-                        col = c93::kRed;
+                        col = c93::kRoof;                      // crown (opaque roof)
                 } else if (k >= 3 && k <= 11) {
                     col = c93::kRoof; // shoulders + domed roof (by ring index)
                 } else if (k == 1) {
@@ -743,5 +748,36 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                       mid - glm::vec3(0.0f, 0.0f, 2.0f));
             }
         }
+    }
+
+    // Split the glazing out into a trailing, transparent run so it can be drawn
+    // after the opaque geometry with alpha blending. Glass is the exterior window
+    // band / windscreen (kBand) and the interior glazing (kGlass); its vertices are
+    // tagged with a texLayer sentinel the track shader reads as "translucent".
+    {
+        constexpr float kGlassLayer = -2.0f;
+        auto isGlass = [](const glm::vec3& c) {
+            auto eq = [&](const glm::vec3& g) {
+                return std::abs(c.x - g.x) < 0.005f && std::abs(c.y - g.y) < 0.005f &&
+                       std::abs(c.z - g.z) < 0.005f;
+            };
+            return eq(c93::kBand) || eq(c93::kGlass);
+        };
+        std::vector<std::uint32_t> opaque, glass;
+        opaque.reserve(indices_.size());
+        for (std::size_t i = 0; i + 2 < indices_.size(); i += 3) {
+            const std::uint32_t a = indices_[i], b = indices_[i + 1], c = indices_[i + 2];
+            if (isGlass(vertices_[a].color) && isGlass(vertices_[b].color) &&
+                isGlass(vertices_[c].color)) {
+                vertices_[a].texLayer = vertices_[b].texLayer = vertices_[c].texLayer =
+                    kGlassLayer;
+                glass.push_back(a); glass.push_back(b); glass.push_back(c);
+            } else {
+                opaque.push_back(a); opaque.push_back(b); opaque.push_back(c);
+            }
+        }
+        glassFirstIndex_ = static_cast<std::uint32_t>(opaque.size());
+        opaque.insert(opaque.end(), glass.begin(), glass.end());
+        indices_ = std::move(opaque);
     }
 }

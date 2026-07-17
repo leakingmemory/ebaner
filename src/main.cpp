@@ -226,7 +226,8 @@ int main(int argc, char** argv) {
         if (L > 2.0f * margin) startS = std::clamp(vs, margin, L - margin);
         vehicle.emplace(vpath, sp, startS);
         vmesh.build(*vehicle);
-        renderer.attachVehicle(vmesh.vertices(), vmesh.indices());
+        renderer.attachVehicle(vmesh.vertices(), vmesh.indices(),
+                               vmesh.glassFirstIndex());
 
         const GravityResolution g = vehicle->gravity();
         float maxGradeDeg = 0.0f, kMax = 0.0f, cantAtMax = 0.0f;

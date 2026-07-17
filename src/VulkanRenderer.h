@@ -61,8 +61,10 @@ public:
     void cleanup();
 
     // Attach the chosen vehicle's mesh once, after the start-screen selection.
+    // `glassFirstIndex` marks where the transparent (glazing) indices begin.
     void attachVehicle(const std::vector<TrackVertex>& vertices,
-                       const std::vector<std::uint32_t>& indices);
+                       const std::vector<std::uint32_t>& indices,
+                       std::uint32_t glassFirstIndex = 0);
     // Set the 2-D text overlay (screen-space triangles) drawn on top each frame.
     void setOverlayText(const std::vector<TextVertex>& vertices);
 
@@ -99,7 +101,8 @@ private:
     void createBuildingBuffers(const std::vector<TrackVertex>& vertices,
                                const std::vector<std::uint32_t>& indices);
     void createVehicleBuffers(const std::vector<TrackVertex>& vertices,
-                              const std::vector<std::uint32_t>& indices);
+                              const std::vector<std::uint32_t>& indices,
+                              std::uint32_t glassFirstIndex);
     void createTextResources();
     void createTextPipeline();
 
@@ -174,6 +177,7 @@ private:
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
     VkPipeline trackPipeline_ = VK_NULL_HANDLE; // railway ribbons (reuses layout)
+    VkPipeline vehicleGlassPipeline_ = VK_NULL_HANDLE; // translucent vehicle glazing
 
     VkCommandPool commandPool_ = VK_NULL_HANDLE;
     std::vector<VkCommandBuffer> commandBuffers_;
@@ -214,6 +218,7 @@ private:
     VkBuffer vehicleIndexBuffer_ = VK_NULL_HANDLE;
     VkDeviceMemory vehicleIndexMemory_ = VK_NULL_HANDLE;
     uint32_t vehicleIndexCount_ = 0;
+    uint32_t vehicleGlassFirstIndex_ = 0; // opaque indices [0, this); glass [this, count)
     std::vector<TrackVertex> pendingVehicleVertices_;
 
     // 2-D text overlay: a 2-D pipeline + one host-visible mapped vertex buffer per

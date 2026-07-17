@@ -638,6 +638,21 @@ void VulkanRenderer::createTrackPipeline() {
                                     &trackPipeline_),
           "vkCreateGraphicsPipelines(track)");
 
+    // Translucent variant (same shaders/layout) for vehicle glazing: alpha blend
+    // over what is already there, and no depth write so glass panes on both sides
+    // of a car don't occlude each other.
+    cba.blendEnable = VK_TRUE;
+    cba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    cba.colorBlendOp = VK_BLEND_OP_ADD;
+    cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    cba.alphaBlendOp = VK_BLEND_OP_ADD;
+    ds.depthWriteEnable = VK_FALSE;
+    check(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &ci, nullptr,
+                                    &vehicleGlassPipeline_),
+          "vkCreateGraphicsPipelines(glass)");
+
     vkDestroyShaderModule(device_, vert, nullptr);
     vkDestroyShaderModule(device_, frag, nullptr);
 }
@@ -996,8 +1011,9 @@ void VulkanRenderer::createBuildingBuffers(
 
 void VulkanRenderer::createVehicleBuffers(
     const std::vector<TrackVertex>& vertices,
-    const std::vector<std::uint32_t>& indices) {
+    const std::vector<std::uint32_t>& indices, std::uint32_t glassFirstIndex) {
     vehicleIndexCount_ = static_cast<uint32_t>(indices.size());
+    vehicleGlassFirstIndex_ = glassFirstIndex;
     if (indices.empty() || vertices.empty()) return; // no vehicle
 
     // Static index buffer (fixed topology) — staged upload.
@@ -1047,8 +1063,9 @@ void VulkanRenderer::updateVehicleVertices(
 }
 
 void VulkanRenderer::attachVehicle(const std::vector<TrackVertex>& vertices,
-                                   const std::vector<std::uint32_t>& indices) {
-    createVehicleBuffers(vertices, indices);
+                                   const std::vector<std::uint32_t>& indices,
+                                   std::uint32_t glassFirstIndex) {
+    createVehicleBuffers(vertices, indices, glassFirstIndex);
 }
 
 void VulkanRenderer::createTextPipeline() {
@@ -1251,12 +1268,13 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageInde
     }
 
     // Rail vehicle (wheelset) — same track pipeline; per-frame dynamic buffer.
+    // Only the opaque indices here; the trailing glazing is drawn last (below).
     if (vehicleIndexCount_ > 0) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, trackPipeline_);
         vkCmdBindVertexBuffers(cmd, 0, 1, &vehicleVertexBuffers_[currentFrame_],
                                &offset);
         vkCmdBindIndexBuffer(cmd, vehicleIndexBuffer_, 0, VK_INDEX_TYPE_UINT32);
-        vkCmdDrawIndexed(cmd, vehicleIndexCount_, 1, 0, 0, 0);
+        vkCmdDrawIndexed(cmd, vehicleGlassFirstIndex_, 1, 0, 0, 0);
     }
 
     // Railway geometry — same layout/push constants; the descriptor set stays
@@ -1275,6 +1293,17 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageInde
             if (glm::distance(cam, c.centroid) < kSleeperLODRadius)
                 vkCmdDrawIndexed(cmd, c.indexCount, 1, c.firstIndex, 0, 0);
         }
+    }
+
+    // Vehicle glazing — translucent, drawn after all opaque geometry so it blends
+    // over the interior and the scene behind it.
+    if (vehicleIndexCount_ > vehicleGlassFirstIndex_) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vehicleGlassPipeline_);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &vehicleVertexBuffers_[currentFrame_],
+                               &offset);
+        vkCmdBindIndexBuffer(cmd, vehicleIndexBuffer_, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, vehicleIndexCount_ - vehicleGlassFirstIndex_, 1,
+                         vehicleGlassFirstIndex_, 0, 0);
     }
 
     // 2-D text overlay, drawn last (no depth) so it sits on top.
@@ -1493,6 +1522,7 @@ void VulkanRenderer::cleanup() {
     cleanupSwapchain();
 
     vkDestroyPipeline(device_, textPipeline_, nullptr);
+    vkDestroyPipeline(device_, vehicleGlassPipeline_, nullptr);
     vkDestroyPipeline(device_, trackPipeline_, nullptr);
     vkDestroyPipeline(device_, pipeline_, nullptr);
     vkDestroyPipelineLayout(device_, pipelineLayout_, nullptr);

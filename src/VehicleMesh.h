@@ -37,8 +37,12 @@ public:
 
     const std::vector<TrackVertex>& vertices() const { return vertices_; }
     const std::vector<std::uint32_t>& indices() const { return indices_; }
+    // Index at which the transparent (glass) triangles begin; indices are ordered
+    // opaque-first, then glass, so the two can be drawn in separate passes.
+    std::uint32_t glassFirstIndex() const { return glassFirstIndex_; }
 
 private:
     std::vector<TrackVertex> vertices_;
     std::vector<std::uint32_t> indices_;
+    std::uint32_t glassFirstIndex_ = 0;
 };
