@@ -271,22 +271,25 @@ void Vehicle::update(float dt, float pushInput) {
             bcPres_ = std::max(tgt, bcPres_ - kBCReleaseRate * dt);
         }
         mrPres_ -= kMRLeak * dt;
-        // Engine-driven compressors (governor cut-in below kMRCutIn, off at full):
-        // they recharge only while the engines idle, scaled by how many are running.
-        // With the engines off the reservoir just draws down and the brakes fade.
-        // "Running" here uses a threshold below the compressor droop so the load
-        // droop can't drop rpm under it and make the compressor cut out and hunt.
+        // Engine-driven compressors recharge only while the engines idle, scaled by
+        // how many are running. With the engines off the reservoir just draws down.
+        // "Running" uses a threshold below the compressor load droop so the droop
+        // can't make it cut out and hunt.
         int running = 0;
         for (int i = 0; i < engineCount_; ++i)
             if (engineRpm_[i] >= kIdleRpm * 0.9f) ++running;
+        if (running > 0 && compOn_)
+            mrPres_ += kCompRate * (static_cast<float>(running) / engineCount_) * dt;
+        mrPres_ = std::clamp(mrPres_, 0.0f, kMRCapacity);
+        // Governor decision for the next step, from the resulting pressure: cut out
+        // at capacity, cut in below kMRCutIn. (Deciding after the recharge+clamp is
+        // what latches it off at 8 bar; deciding before let the tiny leak keep the
+        // pressure hovering just under 8 so it never cut out.)
         if (running > 0) {
             if (mrPres_ >= kMRCapacity) compOn_ = false;
             else if (mrPres_ < kMRCutIn) compOn_ = true;
-            if (compOn_)
-                mrPres_ += kCompRate * (static_cast<float>(running) / engineCount_) * dt;
         }
-        compActive_ = (running > 0 && compOn_); // for the sound + engine load
-        mrPres_ = std::clamp(mrPres_, 0.0f, kMRCapacity);
+        compActive_ = (running > 0 && compOn_); // drives the sound + engine load
         bcPres_ = std::max(0.0f, bcPres_);
         bcRate_ = (dt > 1e-6f) ? (bcPres_ - bcBefore) / dt : 0.0f; // airflow, for sound
 

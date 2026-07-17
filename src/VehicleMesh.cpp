@@ -708,10 +708,11 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                 const float eng0 = vehicle.engineRpm(0) / Vehicle::kMaxRpm; // rev counter
                 const float eng1 = vehicle.engineRpm(1) / Vehicle::kMaxRpm;
 
-                // Combined power/brake lever on the right of the table; the stick
-                // swings toward the driver as the brake notch rises.
+                // Combined power/brake lever on the driver's right of the table (the
+                // two cabs face opposite ways, so -so keeps it right in both); the
+                // stick swings toward the driver as the brake notch rises.
                 {
-                    const float lx = 0.54f, ly = dyN + so * 0.30f;
+                    const float lx = -so * 0.54f, ly = dyN + so * 0.30f;
                     emitBox(X, Y, Z, P(lx, ly, zTab + 0.03f), 0.10f, 0.12f, 0.03f, c93::kButton); // base
                     const float tilt = 0.5f * static_cast<float>(notch) /
                                        static_cast<float>(Vehicle::kEmergencyNotch); // rad, toward driver
