@@ -115,6 +115,7 @@ void Audio::render(float* out, int n) {
                               engRpm_[1].load(std::memory_order_relaxed)};
     const float engGainT[2] = {engGain_[0].load(std::memory_order_relaxed),
                                engGain_[1].load(std::memory_order_relaxed)};
+    const float compTarget = compActive_.load(std::memory_order_relaxed) ? 1.0f : 0.0f;
     const unsigned ev = valveEvents_.load(std::memory_order_relaxed);
     if (ev != lastEvents_) { // a valve just operated -> click
         lastEvents_ = ev;
@@ -201,8 +202,26 @@ void Audio::render(float* out, int n) {
             engine = engine * 0.7f + exhaustLp_ * 0.7f;
         }
 
+        // Compressor: a higher, muffled piston-pump hum while charging the reservoir,
+        // faded in/out and heard near either engine end.
+        compEnv_ += (compTarget - compEnv_) * 0.00008f; // ~0.3 s fade in/out
+        float comp = 0.0f;
+        if (compEnv_ > 1e-4f) {
+            compPhase_ += 90.0f / fs; // ~90 Hz pump (above the ~35 Hz engine hum)
+            if (compPhase_ >= 1.0f) compPhase_ -= 1.0f;
+            const float cph = compPhase_;
+            const float tone = std::sin(2.0f * kPi * cph) + 0.5f * std::sin(4.0f * kPi * cph) +
+                               0.3f * std::sin(6.0f * kPi * cph);
+            rng_ = rng_ * 1664525u + 1013904223u;
+            const float cn = static_cast<float>(rng_ >> 8) / 8388608.0f - 1.0f;
+            const float air = cn * (0.5f + 0.5f * std::sin(2.0f * kPi * cph)); // pump-modulated
+            compLp_ += (tone * 0.5f + air * 0.15f - compLp_) * 0.14f; // ~1 kHz LP (muffled)
+            comp = compLp_ * compEnv_ * std::max(engGainEnv_[0], engGainEnv_[1]);
+        }
+
         float s = muted ? 0.0f
-                        : (hiss * 1.2f + click * 0.9f) * envEnv_ + engine * 0.30f;
+                        : (hiss * 1.2f + click * 0.9f) * envEnv_ + engine * 0.30f +
+                              comp * 0.22f;
         s = std::clamp(s, -1.0f, 1.0f);
         out[i] = s;
     }
@@ -224,6 +243,7 @@ void Audio::update(const Vehicle& v, float /*dt*/, float brakeGain, float engGai
     engRpm_[1].store(v.engineRpm(1), std::memory_order_relaxed);
     engGain_[0].store(std::clamp(engGain0, 0.0f, 1.0f), std::memory_order_relaxed);
     engGain_[1].store(std::clamp(engGain1, 0.0f, 1.0f), std::memory_order_relaxed);
+    compActive_.store(v.compressorRunning(), std::memory_order_relaxed);
     // Valve operates whenever the effective brake command changes (handle or the
     // low-reservoir safety).
     const int cmd = v.safetyBrakeActive() ? Vehicle::kEmergencyNotch : v.brakeNotch();
@@ -440,15 +460,18 @@ void Audio::dumpEngineTest(const std::string& wavPath) {
     const float fs = 44100.0f;
     Audio a;
     a.sampleRate_ = fs;
-    struct Seg { float dur, rpm; };
-    // off -> crank to idle -> hold at idle -> spin down -> off
-    const Seg segs[] = {{0.6f, 0.0f}, {4.0f, 700.0f}, {3.0f, 700.0f}, {3.0f, 0.0f}, {0.6f, 0.0f}};
+    struct Seg { float dur, rpm; bool comp; };
+    // off -> crank -> idle -> idle+compressor -> idle -> stop -> off
+    const Seg segs[] = {{0.6f, 0.0f, false},   {4.0f, 700.0f, false}, {2.0f, 700.0f, false},
+                        {3.0f, 700.0f, true},  {2.0f, 700.0f, false}, {3.0f, 0.0f, false},
+                        {0.6f, 0.0f, false}};
     std::vector<std::int16_t> pcm;
     for (const Seg& s : segs) {
         a.engRpm_[0].store(s.rpm);
         a.engRpm_[1].store(s.rpm);
         a.engGain_[0].store(1.0f);
         a.engGain_[1].store(1.0f);
+        a.compActive_.store(s.comp);
         const int total = static_cast<int>(s.dur * fs);
         float buf[256];
         for (int done = 0; done < total; done += 256) {

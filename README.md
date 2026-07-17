@@ -69,7 +69,9 @@ Bodø main track ("track 1 end"), resolved from the `tracks.bin` geometry.
   safety. The two diesels get a **muffled idle drone** (a firing thrum at the ~35 Hz
   idle firing rate with a soft combustion knock, heavily low-passed for the
   insulated character, the two ends slightly detuned so they beat), following each
-  engine's rpm and faded by distance to its end (`src/Audio.cpp`).
+  engine's rpm and faded by distance to its end. While a compressor charges the
+  reservoir it adds a higher, muffled **pump hum** and loads its engine down a touch
+  (a small, audible idle droop) (`src/Audio.cpp`).
 
 ## Requirements
 

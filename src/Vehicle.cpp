@@ -52,6 +52,7 @@ constexpr float kMRSafetyReset = 6.5f;   // safety clears once recharged above t
 constexpr float kIdleRpm = 700.0f;       // low idle
 constexpr float kStartRate = kIdleRpm / 4.0f; // rpm/s while cranking (~4 s to idle)
 constexpr float kStopRate = kIdleRpm / 3.0f;  // rpm/s while spinning down (~3 s)
+constexpr float kCompLoadDrop = 30.0f;   // idle rpm droop while the compressor pumps
 
 // Brake-cylinder target (bar) for a handle notch: 0 release, 1..4 graduated
 // service up to full service, emergency a touch higher.
@@ -229,8 +230,10 @@ std::vector<VehicleFrame> Vehicle::axleFrames() const {
 }
 
 void Vehicle::update(float dt, float pushInput) {
-    // Engines crank up to / spin down from idle, independent of motion.
-    const float rpmTarget = engineOn_ ? kIdleRpm : 0.0f;
+    // Engines crank up to / spin down from idle, independent of motion; a running
+    // compressor loads its engine down a little (compActive_ is last frame's value).
+    const float rpmTarget =
+        engineOn_ ? kIdleRpm - (compActive_ ? kCompLoadDrop : 0.0f) : 0.0f;
     for (int i = 0; i < engineCount_; ++i) {
         if (engineRpm_[i] < rpmTarget)
             engineRpm_[i] = std::min(rpmTarget, engineRpm_[i] + kStartRate * dt);
@@ -271,15 +274,18 @@ void Vehicle::update(float dt, float pushInput) {
         // Engine-driven compressors (governor cut-in below kMRCutIn, off at full):
         // they recharge only while the engines idle, scaled by how many are running.
         // With the engines off the reservoir just draws down and the brakes fade.
+        // "Running" here uses a threshold below the compressor droop so the load
+        // droop can't drop rpm under it and make the compressor cut out and hunt.
         int running = 0;
         for (int i = 0; i < engineCount_; ++i)
-            if (engineRpm_[i] >= kIdleRpm * 0.99f) ++running;
+            if (engineRpm_[i] >= kIdleRpm * 0.9f) ++running;
         if (running > 0) {
             if (mrPres_ >= kMRCapacity) compOn_ = false;
             else if (mrPres_ < kMRCutIn) compOn_ = true;
             if (compOn_)
                 mrPres_ += kCompRate * (static_cast<float>(running) / engineCount_) * dt;
         }
+        compActive_ = (running > 0 && compOn_); // for the sound + engine load
         mrPres_ = std::clamp(mrPres_, 0.0f, kMRCapacity);
         bcPres_ = std::max(0.0f, bcPres_);
         bcRate_ = (dt > 1e-6f) ? (bcPres_ - bcBefore) / dt : 0.0f; // airflow, for sound

@@ -57,6 +57,7 @@ private:
     std::atomic<float> envGain_{1.0f};    // brake distance attenuation [0,1]
     std::atomic<float> engRpm_[2]{};      // per-engine speed (rev/min)
     std::atomic<float> engGain_[2]{};     // per-engine distance attenuation [0,1]
+    std::atomic<bool> compActive_{false}; // a compressor is pumping
     std::atomic<unsigned> valveEvents_{0};
     std::atomic<bool> muted_{false};
 
@@ -86,6 +87,7 @@ private:
     float exhaustBuf_[1024] = {};            // exhaust comb (smears knocks into a hum)
     int exhaustIdx_ = 0;
     float exhaustLp_ = 0.0f;
+    float compPhase_ = 0.0f, compLp_ = 0.0f, compEnv_ = 0.0f; // compressor pump voice
     unsigned lastEvents_ = 0;
     std::uint32_t rng_ = 0x1234567u;
     float sampleRate_ = 44100.0f;

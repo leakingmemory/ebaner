@@ -162,6 +162,7 @@ public:
     float engineRpm(int i) const;           // current speed (rev/min)
     EngineState engineState(int i) const;
     bool enginesRunning() const;            // all engines at idle
+    bool compressorRunning() const { return compActive_; } // charging the reservoir
 
     float s() const { return s_; }
     float mass() const { return mass_; }
@@ -204,6 +205,7 @@ private:
     int engineCount_ = 0;               // diesel engines (2 for a Class 93, else 0)
     bool engineOn_ = false;             // commanded on/off (both engines together)
     float engineRpm_[2] = {0.0f, 0.0f}; // per-engine speed
+    bool compActive_ = false;           // a compressor is pumping (loads the engine)
     glm::vec3 pos_{0.0f};               // derailed free-body position
     glm::vec3 vel_{0.0f};               // derailed velocity
     glm::vec3 fRight_{0.0f}, fTangent_{1.0f, 0.0f, 0.0f}, fUp_{0.0f, 0.0f, 1.0f};
