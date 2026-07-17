@@ -166,7 +166,13 @@ void Audio::render(float* out, int n) {
             engGainEnv_[k] += (engGainT[k] - engGainEnv_[k]) * 0.001f;
             const float rpm = engRpmEnv_[k];
             if (rpm <= 20.0f) continue;
-            const float firingHz = rpm / 20.0f * (k == 0 ? 1.0f : 1.007f); // 3/rev, detuned
+            // Slow random load/rpm hunting (mean-reverting walk), most audible at
+            // idle: wanders the firing pitch and level a little.
+            rng_ = rng_ * 1664525u + 1013904223u;
+            const float wn = static_cast<float>(rng_ >> 8) / 8388608.0f - 1.0f;
+            engHunt_[k] += -engHunt_[k] * 0.00005f + wn * 0.0016f;
+            const float firingHz = rpm / 20.0f * (k == 0 ? 1.0f : 1.007f) *
+                                   (1.0f + engHunt_[k] * 0.05f); // 3/rev, detuned + hunt
             engPhase_[k] += firingHz / fs;
             if (engPhase_[k] >= 1.0f) { engPhase_[k] -= 1.0f; engKnock_[k] = 1.0f; }
             const float ph = engPhase_[k];
@@ -178,10 +184,21 @@ void Audio::render(float* out, int n) {
             engKnock_[k] *= 0.9985f; // ~15 ms decay (about half a firing period)
             rng_ = rng_ * 1664525u + 1013904223u;
             const float hum = static_cast<float>(rng_ >> 8) / 8388608.0f - 1.0f;
-            float voice = (thrum * 0.5f + knock * 0.55f + hum * 0.08f) *
-                          std::clamp((rpm - 100.0f) / 200.0f, 0.0f, 1.0f); // crank-in
+            float voice = (thrum * 0.55f + knock * 0.28f + hum * 0.10f) *
+                          std::clamp((rpm - 100.0f) / 200.0f, 0.0f, 1.0f) * // crank-in
+                          (1.0f + engHunt_[k] * 0.18f);                     // load fluctuation
             engLp_[k] += (voice - engLp_[k]) * 0.11f; // insulation LP (~800 Hz)
             engine += engLp_[k] * engGainEnv_[k];
+        }
+        // Exhaust muffler: a short low-passed feedback comb that smears the firing
+        // pulses into a resonant hum and adds body.
+        {
+            const int D = 441; // ~10 ms delay
+            const float delayed = exhaustBuf_[exhaustIdx_];
+            exhaustLp_ += (delayed - exhaustLp_) * 0.25f; // dark feedback
+            exhaustBuf_[exhaustIdx_] = engine + exhaustLp_ * 0.5f;
+            exhaustIdx_ = (exhaustIdx_ + 1) % D;
+            engine = engine * 0.7f + exhaustLp_ * 0.7f;
         }
 
         float s = muted ? 0.0f

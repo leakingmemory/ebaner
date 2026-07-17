@@ -82,6 +82,10 @@ private:
     float engLp_[2] = {0.0f, 0.0f};          // insulation low-pass
     float engKnock_[2] = {0.0f, 0.0f};       // per-firing knock envelope
     float engKnLp_[2] = {0.0f, 0.0f};        // knock noise low-pass
+    float engHunt_[2] = {0.0f, 0.0f};        // slow random load/rpm hunting
+    float exhaustBuf_[1024] = {};            // exhaust comb (smears knocks into a hum)
+    int exhaustIdx_ = 0;
+    float exhaustLp_ = 0.0f;
     unsigned lastEvents_ = 0;
     std::uint32_t rng_ = 0x1234567u;
     float sampleRate_ = 44100.0f;
