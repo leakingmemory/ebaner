@@ -232,8 +232,8 @@ int main(int argc, char** argv) {
     std::printf(
         "\nControls: WASD move, Q/E down/up, mouse look, Shift boost, "
         "C chase vehicle, V driver view (switch cab), I engines start/stop, "
-        "Up/Down push vehicle, , / . / Space brakes, F/N/R reverser, M mute, "
-        "Tab release cursor, Esc quit\n\n");
+        "Up/Down push vehicle, , / . power/brake lever, Space emergency, "
+        "F/N/R reverser, M mute, Tab release cursor, Esc quit\n\n");
 
     // Directional sun (scene space): from the south-west, fairly high.
     const glm::vec3 sunDir = glm::normalize(glm::vec3(0.4f, -0.5f, 0.75f));
@@ -379,24 +379,28 @@ int main(int argc, char** argv) {
             if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) pushInput += 1.0f;
             if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) pushInput -= 1.0f;
 
-            // Brake handle: ',' steps toward release, '.' toward emergency, Space
-            // slams to emergency (edge-triggered so each press is one notch). These
-            // keys are the same physical position on any layout (unlike [ ] \,
-            // which are AltGr combinations on e.g. Norwegian keyboards).
+            // Combined power/brake lever: ',' steps toward power (N -> P1..P5), '.'
+            // toward brake (N -> B1..B4 -> Emergency), Space slams to emergency
+            // (edge-triggered so each press is one notch). These keys are the same
+            // physical position on any layout (unlike [ ] \, which are AltGr
+            // combinations on e.g. Norwegian keyboards).
             auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
             // The keyboard drives the cab you are sitting in (driver view V), or
             // the front cab (0) in any other view.
             const int cab = (g_driverPos >= 0) ? g_driverPos : 0;
             const bool bD = down(GLFW_KEY_COMMA), bU = down(GLFW_KEY_PERIOD),
                        bE = down(GLFW_KEY_SPACE);
-            const int prevNotch = vehicle->brakeNotch(cab);
-            if (bD && !prevBrkDown) vehicle->setBrakeNotch(cab, prevNotch - 1);
-            if (bU && !prevBrkUp) vehicle->setBrakeNotch(cab, vehicle->brakeNotch(cab) + 1);
-            if (bE && !prevBrkEmerg) vehicle->setBrakeNotch(cab, Vehicle::kEmergencyNotch);
+            const int prevPos = vehicle->handlePosition(cab);
+            if (bD && !prevBrkDown) vehicle->moveHandle(cab, -1); // toward power
+            if (bU && !prevBrkUp) vehicle->moveHandle(cab, +1);   // toward brake
+            if (bE && !prevBrkEmerg) {
+                vehicle->setPowerNotch(cab, 0);
+                vehicle->setBrakeNotch(cab, Vehicle::kEmergencyNotch);
+            }
             prevBrkDown = bD; prevBrkUp = bU; prevBrkEmerg = bE;
-            if (vehicle->brakeNotch(cab) != prevNotch) {
-                std::printf("[Brake] cab %d %s  MR %.1f  BC %.1f bar\n", cab,
-                            vehicle->brakeNotchName(cab), vehicle->mrPressure(),
+            if (vehicle->handlePosition(cab) != prevPos) {
+                std::printf("[Handle] cab %d %s  MR %.1f  BC %.1f bar\n", cab,
+                            vehicle->handleName(cab), vehicle->mrPressure(),
                             vehicle->bcPressure());
                 std::fflush(stdout);
             }
@@ -481,8 +485,8 @@ int main(int argc, char** argv) {
                               vehicle->reverserName(cab), cab);
                 appendText(tv, buf, x, y, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
                 y += lh;
-                std::snprintf(buf, sizeof(buf), "BRAKE %s   , / . / Space",
-                              vehicle->brakeNotchName(cab));
+                std::snprintf(buf, sizeof(buf), "HANDLE %s   , power / brake . / Space",
+                              vehicle->handleName(cab));
                 const bool emerg = vehicle->brakeNotch(cab) >= Vehicle::kEmergencyNotch;
                 appendText(tv, buf, x, y, sc,
                            emerg ? glm::vec3(1.0f, 0.4f, 0.35f) : glm::vec3(0.7f, 0.85f, 0.7f),

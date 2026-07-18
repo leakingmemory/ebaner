@@ -141,11 +141,24 @@ public:
     // brake-cylinder pressure the local air system laps onto from the main
     // reservoir. Pressures are in bar.
     static constexpr int kEmergencyNotch = 5;
-    // Per-cab power/brake handle (0 release .. kEmergencyNotch emergency) and
-    // reverser (-1 R, 0 N, +1 F); cab 0 and cab 1 are the two ends.
+    static constexpr int kMaxPowerNotch = 5; // combined lever: N .. P1..P5 power side
+    // Per-cab brake handle (0 release .. kEmergencyNotch emergency), power notch
+    // (0 N .. kMaxPowerNotch) and reverser (-1 R, 0 N, +1 F); cab 0 and cab 1 are
+    // the two ends. Brake and power are the two sides of one combined lever and are
+    // mutually exclusive (see moveHandle) — at most one is non-zero per cab.
     void setBrakeNotch(int cab, int notch);
     int brakeNotch(int cab) const;
     const char* brakeNotchName(int cab) const;
+    void setPowerNotch(int cab, int notch);
+    int powerNotch(int cab) const;
+    // Move the combined lever one step: dir < 0 toward power (brake bleeds to 0
+    // first, then power rises), dir > 0 toward brake (power bleeds to 0 first, then
+    // brake rises to emergency).
+    void moveHandle(int cab, int dir);
+    // Combined-lever position for the mesh/HUD: +brake (1..5), 0 neutral, -power
+    // (-1..-kMaxPowerNotch); handleName gives "P3" / "N" / "B2" / "EMERG".
+    int handlePosition(int cab) const;
+    const char* handleName(int cab) const;
     void setReverser(int cab, int dir);
     int reverser(int cab) const;
     const char* reverserName(int cab) const;
@@ -158,6 +171,12 @@ public:
     // The single cab currently in gear (reverser out of Neutral), or -1 if none
     // or both are — the cab whose power/brake lever is live (see effectiveNotch).
     int activeCab() const;
+    // Power actually demanded, after the reverser interlock and low-air safety: 0
+    // unless exactly one cab is in gear (its power notch then rules).
+    int effectivePowerNotch() const;
+    // Signed traction demand in [-1,1]: direction * effectivePowerNotch/max.
+    float tractionDemand() const;
+    float tractiveEffort() const { return tractiveEffort_; } // N, + in +s (for HUD)
     float mrPressure() const { return mrPres_; } // main reservoir (bar)
     float bcPressure() const { return bcPres_; } // brake cylinder (bar)
     // Rate of brake-cylinder pressure change (bar/s): + charging (apply), −
@@ -167,8 +186,8 @@ public:
     // application (overriding the handle) because the reservoir fell too low.
     bool safetyBrakeActive() const { return safetyBrake_; }
 
-    // Diesel engines (one per cab end; synchronous start/stop). Once running at
-    // idle they drive the air compressor. No traction is modelled yet, so they idle.
+    // Diesel engines (one per cab end; synchronous start/stop). Once running they
+    // drive the air compressor at idle and the hydraulic transmission under power.
     // Two Cummins N14E-R (14 L), full power at 1500 rev/min (the tachometer top).
     static constexpr float kMaxRpm = 1500.0f;
     void toggleEngines();                   // start if off, else stop (both together)
@@ -191,6 +210,12 @@ public:
     const TrackPath* path() const { return path_; }
 
 private:
+    // Advance the transmission (auto gearbox + torque converter) and apply the
+    // resulting tractive effort to v_. `demandSigned` is the demand in [-1,1] signed
+    // by track direction (cab orientation folded in), `demand` its magnitude,
+    // `powering` whether traction is live, `reverse` whether the reverser is in R.
+    void updateTraction(float demandSigned, float demand, bool powering, bool reverse,
+                        float dt);
     // Arc-length offsets of each bogie centre from the body centre (s_).
     std::vector<float> bogieCentres() const;
     // Arc-length offsets of each axle from the body centre (s_).
@@ -213,8 +238,12 @@ private:
     float mrPres_;                      // main reservoir pressure
     float bcPres_;                      // brake cylinder pressure
     float bcRate_ = 0.0f;               // d(bcPres_)/dt (bar/s), for the sound
-    int brakeNotch_[2] = {kEmergencyNotch, kEmergencyNotch}; // per-cab handle
+    int brakeNotch_[2] = {kEmergencyNotch, kEmergencyNotch}; // per-cab handle (brake side)
+    int powerNotch_[2] = {0, 0};        // per-cab handle (power side, 0 = neutral)
     int reverser_[2] = {0, 0};          // per-cab R/N/F (-1/0/+1)
+    int gear_ = 1;                      // current automatic gear (1..5)
+    float shiftTimer_ = 0.0f;           // s remaining in an upshift dwell (TE cut)
+    float tractiveEffort_ = 0.0f;       // N applied this step (+ in +s), for the HUD
     bool compOn_ = false;               // compressor state (cut-in/cut-out governor)
     bool safetyBrake_ = false;          // low-reservoir automatic emergency (latched)
     int engineCount_ = 0;               // diesel engines (2 for a Class 93, else 0)

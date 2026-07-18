@@ -43,32 +43,41 @@ Bodø main track ("track 1 end"), resolved from the `tracks.bin` geometry.
   modelled saloon (low-floor gangway, raised vestibules, doors, boxed tech/WC
   areas, wall/ceiling lining and oriented seats) and a basic **driver's cab**
   (seat + desk, a combined power/brake lever on the driver's right and a smaller
-  **R/N/F reverser** on the left) at each end — all unpowered
+  **R/N/F reverser** on the left) at each end
   (`src/VehicleMesh.cpp`). A small 1-DOF physics model (`src/Vehicle.cpp`) gives it
   mass, gravity resolved into along-track acceleration + weight-on-rails, Davis
   running resistance, box inertia and a curve overturning limit. It rolls under
   gravity on grades, can be **hand-pushed** (Up/Down), coasts to a stop via rolling
   resistance, and if it runs off the end of its track it derails and is slowed to a
-  stop by ground friction proportional to its weight. A simple **air-brake**
-  simulation adds a main reservoir and a notched direct brake handle (0 / B1–B4 /
-  Emergency, `,` / `.` / Space): each notch laps the brake-cylinder pressure to a
-  target from the reservoir, producing a braking force capped by wheel–rail
-  adhesion that also holds the vehicle at rest. The reservoir holds enough air for
-  many applications; cycling the brakes slowly draws it down and, once depleted, the
-  cylinders can no longer fully charge and the brakes fade. Each cab has its **own**
-  power/brake lever and reverser, operating independently; the keyboard drives the cab
-  you are seated in (driver view `V`, else the front cab). The **reverser** (`F` / `N` /
-  `R`) gates the brakes across both cabs: with both handles in Neutral, or both out of
-  Neutral, the brakes are forced to emergency; only when **exactly one** cab is out of
-  Neutral does that cab's power/brake lever take control (traction is not modelled yet,
-  so the reverser's only current effect is this interlock). Recharging comes from the
-  **diesel engines** (one per cab end, 2 × 306 kW): start them with `I` (both crank
-  to idle ~700 rpm together, shown as a rev-counter bar per engine on the left cab
-  LCD; they are two Cummins N14E-R, 14 L, full power at 1500 rpm) and their
-  compressors refill the reservoir — which also lifts it back above the low-air
-  safety trip. It starts held in **emergency with the reservoir full and the engines
-  off**; the cab's speed and duplex air gauges and the brake lever animate with the
-  sim, mirrored on a HUD. (Traction/transmission is not modelled yet.) With an audio backend
+  stop by ground friction proportional to its weight. A single **combined
+  power/brake lever** per cab (`,` toward power N → P1–P5, `.` toward brake N → B1–B4
+  → Emergency, Space slams emergency) drives both a simple **air-brake** and the
+  traction. On the brake side a main reservoir feeds a notched direct brake: each
+  notch laps the brake-cylinder pressure to a target from the reservoir, producing a
+  braking force capped by wheel–rail adhesion that also holds the vehicle at rest.
+  The reservoir holds enough air for many applications; cycling the brakes slowly
+  draws it down and, once depleted, the cylinders can no longer fully charge and the
+  brakes fade. On the power side the vehicle **drives** through a modelled
+  **diesel-hydraulic transmission** (per the real Di 93): a **torque converter** for
+  launch (torque multiplication while it slips, so the revs flare then couple) feeding
+  a **5-speed automatic gearbox** that shifts on road speed (the engine steps down at
+  each upshift); tractive effort is the least of the geared/converter limit, the
+  constant-power hyperbola and the adhesion cap, so it launches hard then tapers toward
+  a level top speed. The gearbox is modelled but not shown — only speed and rpm are on
+  the HUD. Each cab has its **own** power/brake lever and reverser, operating
+  independently; the keyboard drives the cab you are seated in (driver view `V`, else
+  the front cab). The **reverser** (`F` / `N` / `R`) gates both across both cabs: with
+  both handles in Neutral, or both out of Neutral, the brakes go to emergency and no
+  power is available; only when **exactly one** cab is out of Neutral does that cab's
+  lever take control, with power applied in its direction (reverse is capped to a
+  shunting speed). Power and the recharge come from the **diesel engines** (one per cab
+  end, 2 × 306 kW): start them with `I` (both crank to idle ~700 rpm together, shown as
+  a rev-counter bar per engine on the left cab LCD; they are two Cummins N14E-R, 14 L,
+  full power at 1500 rpm), they rev up under power, and their compressors refill the
+  reservoir at idle — which also lifts it back above the low-air safety trip. It starts
+  held in **emergency with the reservoir full and the engines off**; the cab's speed and
+  duplex air gauges and the combined lever animate with the sim, mirrored on a HUD.
+  With an audio backend
   (PulseAudio or PortAudio), the brake air is **synthesized** in real time: a hiss
   whose loudness tracks the airflow — a subdued charge on apply and a prominent,
   brighter vent on release — fading as the pressure equalizes and with camera
@@ -121,7 +130,7 @@ counts, and vehicle physics (mass, inertia, tipping limit).
 | V            | Driver's-seat view; press again to switch cab, again to exit |
 | I            | Start / stop the diesel engines (both together) |
 | Up / Down    | Hand-push the vehicle fwd / back |
-| , / .        | Brake handle: release / apply one notch (the viewed cab) |
+| , / .        | Combined lever: step toward power / toward brake (the viewed cab) |
 | Space        | Emergency brake                 |
 | F / N / R    | Reverser: Forward / Neutral / Reverse (the viewed cab) |
 | M            | Mute / unmute sound             |
@@ -165,9 +174,9 @@ the corresponding sources (national rail register + NVDB roads + OSM enrichment)
 
 ## Not yet implemented
 
-Traction/power (the handle's power side actually driving the wheels via the
-reverser direction), a detented reverser gate / key interlock (no reversing above
-zero speed), brake-pipe/triple-valve propagation and
+A per-engine/per-bogie driveline split, hydrodynamic (retarder) braking through the
+converter, wheelslip/slip-control, a detented reverser gate / key interlock (no
+reversing above zero speed), brake-pipe/triple-valve propagation and
 multi-unit consist braking, per-wheel grip-vs-slip and overturn at speed,
 terrain-grounded derailment, carriage bodies and multi-car consists (couplers),
 and streamed/dynamic tile loading.

@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 
 namespace {
@@ -48,11 +49,32 @@ constexpr float kAdhesionMu = 0.20f;     // wheel/rail grip cap on brake force
 constexpr float kMRSafetyTrip = 6.0f;    // low reservoir -> automatic emergency
 constexpr float kMRSafetyReset = 6.5f;   // safety clears once recharged above this
 
-// Diesel engines (Cummins N14E-R): crank up to a fixed idle (no traction yet).
+// Diesel engines (Cummins N14E-R): crank up to a fixed idle, rev up under power.
 constexpr float kIdleRpm = 700.0f;       // low idle
 constexpr float kStartRate = kIdleRpm / 4.0f; // rpm/s while cranking (~4 s to idle)
 constexpr float kStopRate = kIdleRpm / 3.0f;  // rpm/s while spinning down (~3 s)
 constexpr float kCompLoadDrop = 30.0f;   // idle rpm droop while the compressor pumps
+
+// Transmission: diesel-hydraulic — a torque converter for launch feeding a 5-speed
+// automatic gearbox (per the real Di 93). Ratios are overall (gearbox * final drive)
+// engine-rev to wheel-rev, tuned so the engine sits ~950-1500 rpm under load and top
+// gear pulls to ~1500 rpm near 140 km/h on the level.
+constexpr float kRatedPowerW = 612000.0f;   // 2 x 306 kW combined
+constexpr float kWheelRadius = 0.42f;       // m (0.84 m driving wheels)
+constexpr float kGovernedRpm = Vehicle::kMaxRpm; // full-power / governed speed
+constexpr float kGearRatio[5] = {4.57f, 3.57f, 2.79f, 2.18f, 1.70f};
+constexpr float kTCStall = 2.0f;         // torque-converter stall torque ratio
+constexpr float kTCCouple = 0.85f;       // speed ratio at which it couples (TR -> 1)
+constexpr float kUpshiftRpm = 1450.0f;   // auto upshift threshold (on geared speed)
+constexpr float kDownshiftRpm = 950.0f;  // auto downshift threshold (on geared speed)
+constexpr float kConvFloorRpm = 1150.0f; // converter stall speed at full throttle
+constexpr float kShiftDwell = 0.4f;      // s of cut traction across an upshift
+constexpr float kTractionMu = 0.33f;     // wheel/rail adhesion under power
+constexpr float kDrivenFrac = 0.67f;     // fraction of weight on driven axles (~4/6)
+constexpr float kEta = 0.9f;             // driveline efficiency
+constexpr float kRevSpeedCap = 11.0f;    // m/s (~40 km/h) reverse power cut
+constexpr float kRpmSlew = 900.0f;       // rpm/s engine speed rate limit under power
+constexpr float kRpmToRad = 2.0f * 3.14159265358979f / 60.0f; // rev/min -> rad/s
 
 // Brake-cylinder target (bar) for a handle notch: 0 release, 1..4 graduated
 // service up to full service, emergency a touch higher.
@@ -89,6 +111,40 @@ int Vehicle::brakeNotch(int cab) const {
     return (cab == 0 || cab == 1) ? brakeNotch_[cab] : 0;
 }
 
+void Vehicle::setPowerNotch(int cab, int notch) {
+    if (cab == 0 || cab == 1) powerNotch_[cab] = std::clamp(notch, 0, kMaxPowerNotch);
+}
+
+int Vehicle::powerNotch(int cab) const {
+    return (cab == 0 || cab == 1) ? powerNotch_[cab] : 0;
+}
+
+void Vehicle::moveHandle(int cab, int dir) {
+    if (cab != 0 && cab != 1) return;
+    if (dir < 0) { // toward power: bleed the brake off first, then raise power
+        if (brakeNotch_[cab] > 0) --brakeNotch_[cab];
+        else powerNotch_[cab] = std::min(kMaxPowerNotch, powerNotch_[cab] + 1);
+    } else if (dir > 0) { // toward brake: bleed power off first, then raise brake
+        if (powerNotch_[cab] > 0) --powerNotch_[cab];
+        else brakeNotch_[cab] = std::min(kEmergencyNotch, brakeNotch_[cab] + 1);
+    }
+}
+
+int Vehicle::handlePosition(int cab) const {
+    if (powerNotch(cab) > 0) return -powerNotch(cab); // power side is negative
+    return brakeNotch(cab);                           // brake side positive, 0 = N
+}
+
+const char* Vehicle::handleName(int cab) const {
+    static char buf[8];
+    const int p = handlePosition(cab);
+    if (p == 0) return "N";
+    if (p < 0) { std::snprintf(buf, sizeof(buf), "P%d", -p); return buf; }
+    if (p >= kEmergencyNotch) return "EMERG";
+    std::snprintf(buf, sizeof(buf), "B%d", p);
+    return buf;
+}
+
 void Vehicle::setReverser(int cab, int dir) {
     if (cab == 0 || cab == 1) reverser_[cab] = std::clamp(dir, -1, 1);
 }
@@ -121,6 +177,23 @@ int Vehicle::effectiveNotch() const {
 
 bool Vehicle::interlockEmergency() const {
     return bodyStyle_ == BodyClass93 && !safetyBrake_ && activeCab() < 0;
+}
+
+int Vehicle::effectivePowerNotch() const {
+    if (safetyBrake_ || bodyStyle_ != BodyClass93) return 0;
+    const int a = activeCab();
+    return a >= 0 ? powerNotch_[a] : 0; // no power unless exactly one cab is in gear
+}
+
+float Vehicle::tractionDemand() const {
+    const int a = activeCab();
+    if (a < 0) return 0.0f;
+    // The two cabs face opposite ways (cab 0 toward -s, cab 1 toward +s, matching
+    // `so` in the cab mesh / drivercam), so a given reverser direction drives the
+    // train opposite ways from each end. Fold that into the sign here.
+    const float cabSign = (a == 0) ? -1.0f : 1.0f;
+    return cabSign * static_cast<float>(reverser_[a] * effectivePowerNotch()) /
+           static_cast<float>(kMaxPowerNotch);
 }
 
 void Vehicle::toggleEngines() {
@@ -272,16 +345,79 @@ std::vector<VehicleFrame> Vehicle::axleFrames() const {
     return out;
 }
 
+void Vehicle::updateTraction(float demandSigned, float demand, bool powering,
+                             bool reverse, float dt) {
+    tractiveEffort_ = 0.0f;
+    if (shiftTimer_ > 0.0f) shiftTimer_ = std::max(0.0f, shiftTimer_ - dt);
+
+    const float sp = std::abs(v_);
+    // Engine rev/min if the converter were locked in the current gear (the geared,
+    // turbine-side speed). The automatic shifts on this, not the engine speed.
+    const float rpmLock = sp / kWheelRadius * kGearRatio[gear_ - 1] / kRpmToRad;
+
+    // Automatic gear selection (runs whether or not we are powering, so the gear
+    // always matches road speed). An upshift briefly cuts traction so the revs dip.
+    if (shiftTimer_ <= 0.0f) {
+        if (gear_ < 5 && rpmLock >= kUpshiftRpm) { ++gear_; shiftTimer_ = kShiftDwell; }
+        else if (gear_ > 1 && rpmLock <= kDownshiftRpm) { --gear_; }
+    }
+
+    if (!powering) return; // coasting: engines idle (handled in update), no traction
+
+    // Engine speed: the converter keeps the revs up off a throttle-set floor while it
+    // slips at low road speed (the launch flare), then tracks the geared speed as it
+    // couples; each upshift drops the geared speed, so the revs step down.
+    const float floorRpm = kIdleRpm + demand * (kConvFloorRpm - kIdleRpm);
+    const float rpmWant = std::clamp(std::max(rpmLock, floorRpm), kIdleRpm, kGovernedRpm);
+    float rpm = engineRpm_[0];
+    rpm += std::clamp(rpmWant - rpm, -kRpmSlew * dt, kRpmSlew * dt);
+    rpm = std::clamp(rpm, kIdleRpm, kGovernedRpm);
+    for (int i = 0; i < engineCount_; ++i) engineRpm_[i] = rpm;
+
+    // Torque converter: speed ratio -> torque ratio (stall multiplication at low
+    // speed easing to 1:1 lock-up once coupled).
+    const float sr = std::clamp(rpmLock / std::max(rpm, 1.0f), 0.0f, 1.0f);
+    const float tr =
+        sr >= kTCCouple ? 1.0f : kTCStall + (1.0f - kTCStall) * (sr / kTCCouple);
+
+    // Tractive effort: the lesser of the geared/converter torque limit, the
+    // constant-power hyperbola, and the wheel/rail adhesion cap. Cut across a shift.
+    const float we = rpm * kRpmToRad;                  // engine rad/s
+    const float pAvail = demand * kRatedPowerW * kEta; // available power (W)
+    const float te = pAvail / std::max(we, 1.0f);      // engine torque (N*m)
+    const float teGeared = te * tr * kGearRatio[gear_ - 1] / kWheelRadius;
+    const float tePower = pAvail / std::max(sp, 1.0f); // hyperbola (limits at speed)
+    const float teAdh = kTractionMu * kDrivenFrac * mass_ * kG;
+    float TE = std::min(std::min(teGeared, tePower), teAdh);
+    if (shiftTimer_ > 0.0f) TE = 0.0f;                 // unloaded across an upshift
+    const float dir = demandSigned >= 0.0f ? 1.0f : -1.0f; // track direction of travel
+    if (reverse && sp > kRevSpeedCap) TE = 0.0f;       // reverse stays a shunting speed
+
+    tractiveEffort_ = dir * TE;
+    v_ += tractiveEffort_ / mass_ * dt;
+}
+
 void Vehicle::update(float dt, float pushInput) {
+    // Traction demand (signed by the reverser). Under power the engine speed is set
+    // by the transmission (below); otherwise the engines crank to / hold idle.
+    const float demandSigned = tractionDemand();
+    const float demand = std::abs(demandSigned);
+    const int activeC = activeCab();
+    const bool reverse = activeC >= 0 && reverser_[activeC] < 0; // reverser in R
+    const bool powering =
+        engineOn_ && demand > 0.0f && enginesRunning() && state_ == VehicleState::OnRail;
+
     // Engines crank up to / spin down from idle, independent of motion; a running
     // compressor loads its engine down a little (compActive_ is last frame's value).
-    const float rpmTarget =
-        engineOn_ ? kIdleRpm - (compActive_ ? kCompLoadDrop : 0.0f) : 0.0f;
-    for (int i = 0; i < engineCount_; ++i) {
-        if (engineRpm_[i] < rpmTarget)
-            engineRpm_[i] = std::min(rpmTarget, engineRpm_[i] + kStartRate * dt);
-        else if (engineRpm_[i] > rpmTarget)
-            engineRpm_[i] = std::max(rpmTarget, engineRpm_[i] - kStopRate * dt);
+    if (!powering) {
+        const float rpmTarget =
+            engineOn_ ? kIdleRpm - (compActive_ ? kCompLoadDrop : 0.0f) : 0.0f;
+        for (int i = 0; i < engineCount_; ++i) {
+            if (engineRpm_[i] < rpmTarget)
+                engineRpm_[i] = std::min(rpmTarget, engineRpm_[i] + kStartRate * dt);
+            else if (engineRpm_[i] > rpmTarget)
+                engineRpm_[i] = std::max(rpmTarget, engineRpm_[i] - kStopRate * dt);
+        }
     }
 
     if (state_ == VehicleState::OnRail) {
@@ -291,6 +427,10 @@ void Vehicle::update(float dt, float pushInput) {
         const float aGrav = -kG * bf.tangent.z;
         const float aPush = pushInput * kPushForce / mass_;
         v_ += (aGrav + aPush) * dt;
+
+        // Traction: a torque converter feeding a 5-speed automatic gearbox. Only the
+        // in-gear cab powers, in its reverser direction, engines running (`powering`).
+        updateTraction(demandSigned, demand, powering, reverse, dt);
 
         // Low main-reservoir safety: if the reservoir falls below the trip
         // pressure the brakes go to full emergency regardless of the handle,

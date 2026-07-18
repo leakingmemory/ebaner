@@ -705,18 +705,23 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                 const float mrP = vehicle.mrPressure();
                 const float bcP = vehicle.bcPressure();
                 const int cab = cabNegY ? 0 : 1;
-                const int notch = vehicle.brakeNotch(cab);
+                const int handle = vehicle.handlePosition(cab); // +brake / 0 / -power
                 const float eng0 = vehicle.engineRpm(0) / Vehicle::kMaxRpm; // rev counter
                 const float eng1 = vehicle.engineRpm(1) / Vehicle::kMaxRpm;
 
                 // Combined power/brake lever on the driver's right of the table (the
                 // two cabs face opposite ways, so -so keeps it right in both); the
-                // stick swings toward the driver as the brake notch rises.
+                // stick swings toward the driver as the brake rises and away from the
+                // driver (forward) as power rises.
                 {
                     const float lx = -so * 0.54f, ly = dyN + so * 0.30f;
                     emitBox(X, Y, Z, P(lx, ly, zTab + 0.03f), 0.10f, 0.12f, 0.03f, c93::kButton); // base
-                    const float tilt = 0.5f * static_cast<float>(notch) /
-                                       static_cast<float>(Vehicle::kEmergencyNotch); // rad, toward driver
+                    const float tilt =
+                        handle >= 0
+                            ? 0.5f * static_cast<float>(handle) /
+                                  static_cast<float>(Vehicle::kEmergencyNotch) // brake: toward driver
+                            : -0.4f * static_cast<float>(-handle) /
+                                  static_cast<float>(Vehicle::kMaxPowerNotch); // power: away (forward)
                     const glm::vec3 pv = P(lx, ly, zTab + 0.06f);
                     const glm::vec3 dir = Z * std::cos(tilt) - Y * (so * std::sin(tilt));
                     const glm::vec3 Yb = glm::normalize(glm::cross(dir, X));
@@ -817,9 +822,12 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                         rectFace(C, u, v, n, b.first, 0.5f * (y0 + y1), bw, 0.5f * (y1 - y0),
                                  0.013f, c93::kDash); // dark track
                         const float fill = glm::clamp(b.second, 0.0f, 1.0f) * (y1 - y0);
-                        if (fill > 1e-4f)
-                            rectFace(C, u, v, n, b.first, y0 + 0.5f * fill, bw * 0.8f,
-                                     0.5f * fill, 0.015f, c93::kEngBar); // fill from bottom
+                        // Always emit (a zero-height, invisible quad when empty) so the
+                        // vehicle mesh keeps a CONSTANT vertex/index count: the
+                        // renderer's vehicle buffer is fixed-size and drops any update
+                        // whose size changed, which would freeze the moving train.
+                        rectFace(C, u, v, n, b.first, y0 + 0.5f * fill, bw * 0.8f,
+                                 0.5f * fill, 0.015f, c93::kEngBar); // fill from bottom
                     }
                 }
                 for (int i = 0; i < 3; ++i) {
