@@ -42,7 +42,8 @@ Bodø main track ("track 1 end"), resolved from the `tracks.bin` geometry.
   Class 93** (Bombardier Talent) DMU — a two-section body with raked cab noses, a
   modelled saloon (low-floor gangway, raised vestibules, doors, boxed tech/WC
   areas, wall/ceiling lining and oriented seats) and a basic **driver's cab**
-  (seat + desk) at each end — all unpowered
+  (seat + desk, a combined power/brake lever on the driver's right and a smaller
+  **R/N/F reverser** on the left) at each end — all unpowered
   (`src/VehicleMesh.cpp`). A small 1-DOF physics model (`src/Vehicle.cpp`) gives it
   mass, gravity resolved into along-track acceleration + weight-on-rails, Davis
   running resistance, box inertia and a curve overturning limit. It rolls under
@@ -54,7 +55,13 @@ Bodø main track ("track 1 end"), resolved from the `tracks.bin` geometry.
   target from the reservoir, producing a braking force capped by wheel–rail
   adhesion that also holds the vehicle at rest. The reservoir holds enough air for
   many applications; cycling the brakes slowly draws it down and, once depleted, the
-  cylinders can no longer fully charge and the brakes fade. Recharging comes from the
+  cylinders can no longer fully charge and the brakes fade. Each cab has its **own**
+  power/brake lever and reverser, operating independently; the keyboard drives the cab
+  you are seated in (driver view `V`, else the front cab). The **reverser** (`F` / `N` /
+  `R`) gates the brakes across both cabs: with both handles in Neutral, or both out of
+  Neutral, the brakes are forced to emergency; only when **exactly one** cab is out of
+  Neutral does that cab's power/brake lever take control (traction is not modelled yet,
+  so the reverser's only current effect is this interlock). Recharging comes from the
   **diesel engines** (one per cab end, 2 × 306 kW): start them with `I` (both crank
   to idle ~700 rpm together, shown as a rev-counter bar per engine on the left cab
   LCD; they are two Cummins N14E-R, 14 L, full power at 1500 rpm) and their
@@ -114,8 +121,9 @@ counts, and vehicle physics (mass, inertia, tipping limit).
 | V            | Driver's-seat view; press again to switch cab, again to exit |
 | I            | Start / stop the diesel engines (both together) |
 | Up / Down    | Hand-push the vehicle fwd / back |
-| , / .        | Brake handle: release / apply one notch |
+| , / .        | Brake handle: release / apply one notch (the viewed cab) |
 | Space        | Emergency brake                 |
+| F / N / R    | Reverser: Forward / Neutral / Reverse (the viewed cab) |
 | M            | Mute / unmute sound             |
 | Tab          | Release/grab cursor             |
 | Esc          | Quit                            |
@@ -157,7 +165,9 @@ the corresponding sources (national rail register + NVDB roads + OSM enrichment)
 
 ## Not yet implemented
 
-Traction/power (the handle's power side), brake-pipe/triple-valve propagation and
+Traction/power (the handle's power side actually driving the wheels via the
+reverser direction), a detented reverser gate / key interlock (no reversing above
+zero speed), brake-pipe/triple-valve propagation and
 multi-unit consist braking, per-wheel grip-vs-slip and overturn at speed,
 terrain-grounded derailment, carriage bodies and multi-car consists (couplers),
 and streamed/dynamic tile loading.

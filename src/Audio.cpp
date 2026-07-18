@@ -246,7 +246,7 @@ void Audio::update(const Vehicle& v, float /*dt*/, float brakeGain, float engGai
     compActive_.store(v.compressorRunning(), std::memory_order_relaxed);
     // Valve operates whenever the effective brake command changes (handle or the
     // low-reservoir safety).
-    const int cmd = v.safetyBrakeActive() ? Vehicle::kEmergencyNotch : v.brakeNotch();
+    const int cmd = v.effectiveNotch();
     if (!firstUpdate_ && cmd != lastCmd_)
         valveEvents_.fetch_add(1, std::memory_order_relaxed);
     lastCmd_ = cmd;

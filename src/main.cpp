@@ -232,8 +232,8 @@ int main(int argc, char** argv) {
     std::printf(
         "\nControls: WASD move, Q/E down/up, mouse look, Shift boost, "
         "C chase vehicle, V driver view (switch cab), I engines start/stop, "
-        "Up/Down push vehicle, , / . / Space brakes, M mute, Tab release cursor, "
-        "Esc quit\n\n");
+        "Up/Down push vehicle, , / . / Space brakes, F/N/R reverser, M mute, "
+        "Tab release cursor, Esc quit\n\n");
 
     // Directional sun (scene space): from the south-west, fairly high.
     const glm::vec3 sunDir = glm::normalize(glm::vec3(0.4f, -0.5f, 0.75f));
@@ -299,6 +299,7 @@ int main(int argc, char** argv) {
          prevK3 = false, prevK4 = false, prevK5 = false, prevEnter = false;
     bool prevBrkDown = false, prevBrkUp = false, prevBrkEmerg = false;
     bool prevSafety = false, prevEngine = false;
+    bool prevRevF = false, prevRevN = false, prevRevR = false;
 
     // Open the audio device now that the heavy startup work is done, so the audio
     // thread isn't starved (which causes ALSA under-runs) during loading.
@@ -383,16 +384,37 @@ int main(int argc, char** argv) {
             // keys are the same physical position on any layout (unlike [ ] \,
             // which are AltGr combinations on e.g. Norwegian keyboards).
             auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
+            // The keyboard drives the cab you are sitting in (driver view V), or
+            // the front cab (0) in any other view.
+            const int cab = (g_driverPos >= 0) ? g_driverPos : 0;
             const bool bD = down(GLFW_KEY_COMMA), bU = down(GLFW_KEY_PERIOD),
                        bE = down(GLFW_KEY_SPACE);
-            const int prevNotch = vehicle->brakeNotch();
-            if (bD && !prevBrkDown) vehicle->setBrakeNotch(prevNotch - 1);
-            if (bU && !prevBrkUp) vehicle->setBrakeNotch(vehicle->brakeNotch() + 1);
-            if (bE && !prevBrkEmerg) vehicle->setBrakeNotch(Vehicle::kEmergencyNotch);
+            const int prevNotch = vehicle->brakeNotch(cab);
+            if (bD && !prevBrkDown) vehicle->setBrakeNotch(cab, prevNotch - 1);
+            if (bU && !prevBrkUp) vehicle->setBrakeNotch(cab, vehicle->brakeNotch(cab) + 1);
+            if (bE && !prevBrkEmerg) vehicle->setBrakeNotch(cab, Vehicle::kEmergencyNotch);
             prevBrkDown = bD; prevBrkUp = bU; prevBrkEmerg = bE;
-            if (vehicle->brakeNotch() != prevNotch) {
-                std::printf("[Brake] %s  MR %.1f  BC %.1f bar\n", vehicle->brakeNotchName(),
-                            vehicle->mrPressure(), vehicle->bcPressure());
+            if (vehicle->brakeNotch(cab) != prevNotch) {
+                std::printf("[Brake] cab %d %s  MR %.1f  BC %.1f bar\n", cab,
+                            vehicle->brakeNotchName(cab), vehicle->mrPressure(),
+                            vehicle->bcPressure());
+                std::fflush(stdout);
+            }
+
+            // Reverser handle for the same cab: F = Forward, N = Neutral, R =
+            // Reverse (edge-triggered). No traction yet, but the R/N/F interlock
+            // gates the brakes across both cabs (see Vehicle::effectiveNotch).
+            const bool rF = down(GLFW_KEY_F), rN = down(GLFW_KEY_N),
+                       rR = down(GLFW_KEY_R);
+            const int prevRev = vehicle->reverser(cab);
+            if (rF && !prevRevF) vehicle->setReverser(cab, 1);
+            if (rN && !prevRevN) vehicle->setReverser(cab, 0);
+            if (rR && !prevRevR) vehicle->setReverser(cab, -1);
+            prevRevF = rF; prevRevN = rN; prevRevR = rR;
+            if (vehicle->reverser(cab) != prevRev) {
+                std::printf("[Reverser] cab %d %s%s\n", cab,
+                            vehicle->reverserName(cab),
+                            vehicle->interlockEmergency() ? "  (interlock: EMERG)" : "");
                 std::fflush(stdout);
             }
 
@@ -445,20 +467,37 @@ int main(int argc, char** argv) {
                 const float sc = std::max(2.0f, static_cast<float>(fbh) / 240.0f);
                 const float lh = 12.0f * sc, x = 40.0f;
                 char buf[96];
+                const int cab = (g_driverPos >= 0) ? g_driverPos : 0;
+                float y = 40.0f; // running line cursor
                 std::snprintf(buf, sizeof(buf), "SPEED %.0f km/h  (%.1f m/s)",
                               vehicle->speed() * 3.6f, vehicle->speed());
-                appendText(tv, buf, x, 40.0f, sc, glm::vec3(1.0f, 0.95f, 0.6f), fbw, fbh);
+                appendText(tv, buf, x, y, sc, glm::vec3(1.0f, 0.95f, 0.6f), fbw, fbh);
+                y += lh;
                 std::snprintf(buf, sizeof(buf), "MR %.1f bar   BC %.1f bar",
                               vehicle->mrPressure(), vehicle->bcPressure());
-                appendText(tv, buf, x, 40.0f + lh, sc, glm::vec3(0.8f, 0.9f, 1.0f), fbw, fbh);
-                std::snprintf(buf, sizeof(buf), "BRAKE %s   , / . / Space", vehicle->brakeNotchName());
-                const bool emerg = vehicle->brakeNotch() >= Vehicle::kEmergencyNotch;
-                appendText(tv, buf, x, 40.0f + 2 * lh, sc,
+                appendText(tv, buf, x, y, sc, glm::vec3(0.8f, 0.9f, 1.0f), fbw, fbh);
+                y += lh;
+                std::snprintf(buf, sizeof(buf), "REV %s (cab %d)   F / N / R",
+                              vehicle->reverserName(cab), cab);
+                appendText(tv, buf, x, y, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
+                y += lh;
+                std::snprintf(buf, sizeof(buf), "BRAKE %s   , / . / Space",
+                              vehicle->brakeNotchName(cab));
+                const bool emerg = vehicle->brakeNotch(cab) >= Vehicle::kEmergencyNotch;
+                appendText(tv, buf, x, y, sc,
                            emerg ? glm::vec3(1.0f, 0.4f, 0.35f) : glm::vec3(0.7f, 0.85f, 0.7f),
                            fbw, fbh);
-                if (vehicle->safetyBrakeActive())
-                    appendText(tv, "!! LOW RESERVOIR - AUTO EMERGENCY !!", x, 40.0f + 3 * lh,
+                y += lh;
+                if (vehicle->interlockEmergency()) {
+                    appendText(tv, "!! REVERSER INTERLOCK - AUTO EMERGENCY !!", x, y,
                                sc, glm::vec3(1.0f, 0.35f, 0.3f), fbw, fbh);
+                    y += lh;
+                }
+                if (vehicle->safetyBrakeActive()) {
+                    appendText(tv, "!! LOW RESERVOIR - AUTO EMERGENCY !!", x, y,
+                               sc, glm::vec3(1.0f, 0.35f, 0.3f), fbw, fbh);
+                    y += lh;
+                }
                 if (vehicle->engineCount() > 0) {
                     const EngineState es = vehicle->engineState(0);
                     if (es == EngineState::Off)
@@ -470,8 +509,8 @@ int main(int argc, char** argv) {
                         std::snprintf(buf, sizeof(buf), "ENG %s  %.0f rpm", sn,
                                       vehicle->engineRpm(0));
                     }
-                    appendText(tv, buf, x, 40.0f + 4 * lh, sc, glm::vec3(0.7f, 0.85f, 0.7f),
-                               fbw, fbh);
+                    appendText(tv, buf, x, y, sc, glm::vec3(0.7f, 0.85f, 0.7f), fbw, fbh);
+                    y += lh;
                 }
                 renderer.setOverlayText(tv);
             }

@@ -141,9 +141,23 @@ public:
     // brake-cylinder pressure the local air system laps onto from the main
     // reservoir. Pressures are in bar.
     static constexpr int kEmergencyNotch = 5;
-    void setBrakeNotch(int notch);
-    int brakeNotch() const { return brakeNotch_; }
-    const char* brakeNotchName() const;
+    // Per-cab power/brake handle (0 release .. kEmergencyNotch emergency) and
+    // reverser (-1 R, 0 N, +1 F); cab 0 and cab 1 are the two ends.
+    void setBrakeNotch(int cab, int notch);
+    int brakeNotch(int cab) const;
+    const char* brakeNotchName(int cab) const;
+    void setReverser(int cab, int dir);
+    int reverser(int cab) const;
+    const char* reverserName(int cab) const;
+    // Brake actually applied, after the reverser interlock and low-air safety:
+    // emergency unless exactly one cab is out of Neutral (its handle then rules).
+    // Non-cab vehicles just use handle 0.
+    int effectiveNotch() const;
+    const char* effectiveBrakeName() const;
+    bool interlockEmergency() const; // the reverser interlock is forcing emergency
+    // The single cab currently in gear (reverser out of Neutral), or -1 if none
+    // or both are — the cab whose power/brake lever is live (see effectiveNotch).
+    int activeCab() const;
     float mrPressure() const { return mrPres_; } // main reservoir (bar)
     float bcPressure() const { return bcPres_; } // brake cylinder (bar)
     // Rate of brake-cylinder pressure change (bar/s): + charging (apply), −
@@ -199,7 +213,8 @@ private:
     float mrPres_;                      // main reservoir pressure
     float bcPres_;                      // brake cylinder pressure
     float bcRate_ = 0.0f;               // d(bcPres_)/dt (bar/s), for the sound
-    int brakeNotch_ = kEmergencyNotch;  // 0 release .. kEmergencyNotch emergency
+    int brakeNotch_[2] = {kEmergencyNotch, kEmergencyNotch}; // per-cab handle
+    int reverser_[2] = {0, 0};          // per-cab R/N/F (-1/0/+1)
     bool compOn_ = false;               // compressor state (cut-in/cut-out governor)
     bool safetyBrake_ = false;          // low-reservoir automatic emergency (latched)
     int engineCount_ = 0;               // diesel engines (2 for a Class 93, else 0)

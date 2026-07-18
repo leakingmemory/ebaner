@@ -81,8 +81,46 @@ Vehicle::Vehicle(const TrackPath* path, const VehicleSpec& spec, float s,
       bcPres_(kBCEmergency),  // brakes start in emergency (held)
       engineCount_(spec.body == BodyClass93 ? 2 : 0) {} // one diesel per cab end
 
-void Vehicle::setBrakeNotch(int notch) {
-    brakeNotch_ = std::clamp(notch, 0, kEmergencyNotch);
+void Vehicle::setBrakeNotch(int cab, int notch) {
+    if (cab == 0 || cab == 1) brakeNotch_[cab] = std::clamp(notch, 0, kEmergencyNotch);
+}
+
+int Vehicle::brakeNotch(int cab) const {
+    return (cab == 0 || cab == 1) ? brakeNotch_[cab] : 0;
+}
+
+void Vehicle::setReverser(int cab, int dir) {
+    if (cab == 0 || cab == 1) reverser_[cab] = std::clamp(dir, -1, 1);
+}
+
+int Vehicle::reverser(int cab) const {
+    return (cab == 0 || cab == 1) ? reverser_[cab] : 0;
+}
+
+const char* Vehicle::reverserName(int cab) const {
+    const int r = reverser(cab);
+    return r > 0 ? "F" : (r < 0 ? "R" : "N");
+}
+
+int Vehicle::activeCab() const {
+    if (bodyStyle_ != BodyClass93) return -1;
+    int active = -1, count = 0;
+    for (int c = 0; c < 2; ++c)
+        if (reverser_[c] != 0) { active = c; ++count; }
+    return count == 1 ? active : -1; // -1 when both Neutral or both in gear
+}
+
+int Vehicle::effectiveNotch() const {
+    if (safetyBrake_) return kEmergencyNotch; // low reservoir overrides everything
+    if (bodyStyle_ == BodyClass93) {
+        const int a = activeCab();
+        return a >= 0 ? brakeNotch_[a] : kEmergencyNotch; // interlock: else emergency
+    }
+    return brakeNotch_[0]; // non-cab vehicles: a single handle, no interlock
+}
+
+bool Vehicle::interlockEmergency() const {
+    return bodyStyle_ == BodyClass93 && !safetyBrake_ && activeCab() < 0;
 }
 
 void Vehicle::toggleEngines() {
@@ -106,9 +144,14 @@ bool Vehicle::enginesRunning() const {
     return true;
 }
 
-const char* Vehicle::brakeNotchName() const {
+const char* Vehicle::brakeNotchName(int cab) const {
     static const char* kNames[] = {"REL", "B1", "B2", "B3", "B4", "EMERG"};
-    return kNames[std::clamp(brakeNotch_, 0, kEmergencyNotch)];
+    return kNames[std::clamp(brakeNotch(cab), 0, kEmergencyNotch)];
+}
+
+const char* Vehicle::effectiveBrakeName() const {
+    static const char* kNames[] = {"REL", "B1", "B2", "B3", "B4", "EMERG"};
+    return kNames[std::clamp(effectiveNotch(), 0, kEmergencyNotch)];
 }
 
 namespace {
@@ -254,7 +297,7 @@ void Vehicle::update(float dt, float pushInput) {
         // latched until the reservoir recovers above the reset pressure.
         if (mrPres_ < kMRSafetyTrip) safetyBrake_ = true;
         else if (mrPres_ >= kMRSafetyReset) safetyBrake_ = false;
-        const int effNotch = safetyBrake_ ? kEmergencyNotch : brakeNotch_;
+        const int effNotch = effectiveNotch();
 
         // Air brake: lap the brake-cylinder pressure toward the notch target,
         // charging from (and spending) the main reservoir on apply, venting on

@@ -704,7 +704,8 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                 const float spd = vehicle.speed();
                 const float mrP = vehicle.mrPressure();
                 const float bcP = vehicle.bcPressure();
-                const int notch = vehicle.brakeNotch();
+                const int cab = cabNegY ? 0 : 1;
+                const int notch = vehicle.brakeNotch(cab);
                 const float eng0 = vehicle.engineRpm(0) / Vehicle::kMaxRpm; // rev counter
                 const float eng1 = vehicle.engineRpm(1) / Vehicle::kMaxRpm;
 
@@ -722,6 +723,23 @@ void VehicleMesh::build(const Vehicle& vehicle) {
                     const float L = 0.16f;
                     emitBox(X, Yb, dir, pv + dir * (0.5f * L), 0.025f, 0.025f, 0.5f * L, c93::kDash);   // stick
                     emitBox(X, Yb, dir, pv + dir * (L + 0.03f), 0.05f, 0.09f, 0.035f, c93::kButton);    // handle
+                }
+
+                // Reverser (R/N/F) handle on the driver's left (lx = so*0.54,
+                // mirroring the brake). Smaller than the power lever; Neutral is
+                // upright, Forward pushes away from the driver, Reverse pulls back
+                // toward the driver (dir tilts fore/aft along ±Y).
+                {
+                    const int rev = vehicle.reverser(cab);
+                    const float lx = so * 0.54f, ly = dyN + so * 0.24f;
+                    emitBox(X, Y, Z, P(lx, ly, zTab + 0.03f), 0.07f, 0.09f, 0.03f, c93::kButton); // base
+                    const float tilt = static_cast<float>(rev) * 0.35f; // +F away, -R toward driver
+                    const glm::vec3 pv = P(lx, ly, zTab + 0.06f);
+                    const glm::vec3 dir = Z * std::cos(tilt) + Y * (so * std::sin(tilt));
+                    const glm::vec3 Yb = glm::normalize(glm::cross(dir, X));
+                    const float L = 0.11f;
+                    emitBox(X, Yb, dir, pv + dir * (0.5f * L), 0.02f, 0.02f, 0.5f * L, c93::kDash);   // stick
+                    emitBox(X, Yb, dir, pv + dir * (L + 0.02f), 0.035f, 0.05f, 0.028f, c93::kButton); // knob
                 }
 
                 // Instrument dome: three distinct facets. The centre faces the
