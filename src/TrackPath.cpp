@@ -17,9 +17,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <deque>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace {
 constexpr int kSubStepsPerSpan = 20; // arc-length table resolution per span
@@ -238,34 +241,61 @@ float TrackPath::speedLimitAt(float s) const {
     return static_cast<float>(speed_[j]);
 }
 
+namespace {
+// One exported track segment (scene-relative), before chaining.
+struct Seg {
+    std::vector<glm::vec3> pts;
+    std::vector<std::uint16_t> speed;
+    std::uint8_t trackType = 0;
+    std::uint32_t trackId = 0;
+};
+
+// The exporter splits each line into separate segments at medium transitions
+// (surface / tunnel / bridge), each with its own trackId. Join segments that meet
+// end-to-end at a shared node (within kJoinTol) into continuous routes, so the
+// vehicle can run through tunnels instead of derailing off the end of a segment.
+constexpr float kJoinTol = 1.0f; // m; conservative so only coincident ends join
+
+// Union-find over segment endpoints.
+struct DSU {
+    std::vector<int> p;
+    void init(int n) { p.resize(n); for (int i = 0; i < n; ++i) p[i] = i; }
+    int find(int x) { while (p[x] != x) x = p[x] = p[p[x]]; return x; }
+    void unite(int a, int b) { p[find(a)] = find(b); }
+};
+} // namespace
+
 std::vector<TrackPath> buildTrackPaths(const TerrainData& data) {
     const glm::dvec3 origin = data.sceneOrigin();
     std::unordered_set<std::uint32_t> seen;
-    std::vector<TrackPath> paths;
     std::size_t mainVerts = 0, knownVerts = 0; // speed-plumbing summary
     int minSpeed = 0, maxSpeed = 0;
     std::unordered_map<int, int> speedHist;
+
+    // --- Collect unique segments (finest-LOD copy per trackId), scene-relative. ---
+    std::vector<Seg> segs;
     for (const Tile& t : data.tiles()) {
         for (const TrackSegment& seg : t.tracks) {
             if (!seen.insert(seg.trackId).second) continue; // one per through-track
             if (seg.pts.size() < 2) continue;
-            std::vector<glm::vec3> pts;
-            std::vector<std::uint16_t> speed;
-            pts.reserve(seg.pts.size());
-            speed.reserve(seg.pts.size());
+            Seg s;
+            s.trackType = seg.trackType;
+            s.trackId = seg.trackId;
+            s.pts.reserve(seg.pts.size());
+            s.speed.reserve(seg.pts.size());
             for (std::size_t k = 0; k < seg.pts.size(); ++k) {
                 const glm::dvec3& w = seg.pts[k];
                 const glm::vec3 p(static_cast<float>(w.x - origin.x),
                                   static_cast<float>(w.y - origin.y),
                                   static_cast<float>(w.z - origin.z));
-                if (pts.empty() || glm::distance(pts.back(), p) > 1e-3f) {
-                    pts.push_back(p); // drop coincident points (and their speed)
-                    speed.push_back(k < seg.speed.size() ? seg.speed[k] : 0);
+                if (s.pts.empty() || glm::distance(s.pts.back(), p) > 1e-3f) {
+                    s.pts.push_back(p); // drop coincident points (and their speed)
+                    s.speed.push_back(k < seg.speed.size() ? seg.speed[k] : 0);
                 }
             }
-            if (pts.size() < 2) continue;
-            if (seg.trackType == 0) { // main line: tally speed coverage
-                for (std::uint16_t sp : speed) {
+            if (s.pts.size() < 2) continue;
+            if (s.trackType == 0) { // main line: tally speed coverage
+                for (std::uint16_t sp : s.speed) {
                     ++mainVerts;
                     if (sp > 0) {
                         ++knownVerts;
@@ -275,8 +305,101 @@ std::vector<TrackPath> buildTrackPaths(const TerrainData& data) {
                     }
                 }
             }
-            paths.emplace_back(seg.trackId, seg.trackType, pts, speed);
+            segs.push_back(std::move(s));
         }
+    }
+
+    // --- Group endpoints into shared nodes (union endpoints within kJoinTol). ---
+    // Endpoint index e = 2*seg + which (which: 0 = front, 1 = back).
+    const int nEnds = 2 * static_cast<int>(segs.size());
+    auto endPt = [&](int e) -> const glm::vec3& {
+        return (e & 1) ? segs[e >> 1].pts.back() : segs[e >> 1].pts.front();
+    };
+    DSU dsu;
+    dsu.init(nEnds);
+    {
+        std::unordered_map<std::int64_t, std::vector<int>> cell;
+        auto key = [](int cx, int cy) {
+            return (std::int64_t(cx) << 32) ^ std::int64_t(std::uint32_t(cy));
+        };
+        for (int e = 0; e < nEnds; ++e) {
+            const glm::vec3& q = endPt(e);
+            const int cx = static_cast<int>(std::floor(q.x / kJoinTol));
+            const int cy = static_cast<int>(std::floor(q.y / kJoinTol));
+            for (int dx = -1; dx <= 1; ++dx)
+                for (int dy = -1; dy <= 1; ++dy) {
+                    auto it = cell.find(key(cx + dx, cy + dy));
+                    if (it == cell.end()) continue;
+                    for (int f : it->second)
+                        if (std::hypot(q.x - endPt(f).x, q.y - endPt(f).y) <= kJoinTol)
+                            dsu.unite(e, f);
+                }
+            cell[key(cx, cy)].push_back(e);
+        }
+    }
+    // node root -> endpoint indices meeting there.
+    std::unordered_map<int, std::vector<int>> node;
+    for (int e = 0; e < nEnds; ++e) node[dsu.find(e)].push_back(e);
+
+    // --- Partner links: at a degree-2 node joining two different segments of the
+    // same track type, each endpoint's partner is the other. ---
+    std::vector<int> partner(nEnds, -1);
+    for (auto& [root, ends] : node) {
+        if (ends.size() != 2) continue;               // dead end / junction
+        const int a = ends[0], b = ends[1];
+        if ((a >> 1) == (b >> 1)) continue;            // same segment (tiny loop)
+        if (segs[a >> 1].trackType != segs[b >> 1].trackType) continue;
+        partner[a] = b;
+        partner[b] = a;
+    }
+
+    // --- Chain segments head-to-tail through partner links into routes. ---
+    std::vector<TrackPath> paths;
+    std::vector<char> used(segs.size(), 0);
+    for (int i = 0; i < static_cast<int>(segs.size()); ++i) {
+        if (used[i]) continue;
+        std::deque<std::pair<int, bool>> chain; // (segment, reversed)
+        chain.push_back({i, false});
+        used[i] = 1;
+        // Extend forward from the tail.
+        for (;;) {
+            auto [sg, flip] = chain.back();
+            const int tail = flip ? (2 * sg) : (2 * sg + 1);
+            const int p = partner[tail];
+            if (p < 0 || used[p >> 1]) break;
+            const int j = p >> 1;
+            chain.push_back({j, (p & 1) == 1}); // reverse j if its back connects
+            used[j] = 1;
+        }
+        // Extend backward from the head.
+        for (;;) {
+            auto [sg, flip] = chain.front();
+            const int head = flip ? (2 * sg + 1) : (2 * sg);
+            const int p = partner[head];
+            if (p < 0 || used[p >> 1]) break;
+            const int j = p >> 1;
+            chain.push_front({j, (p & 1) == 0}); // reverse j if its front connects
+            used[j] = 1;
+        }
+
+        // Concatenate (dropping the duplicated join vertex, then any coincident).
+        std::vector<glm::vec3> pts;
+        std::vector<std::uint16_t> speed;
+        for (std::size_t c = 0; c < chain.size(); ++c) {
+            const auto [sg, flip] = chain[c];
+            const Seg& s = segs[sg];
+            const int n = static_cast<int>(s.pts.size());
+            for (int k = 0; k < n; ++k) {
+                if (c > 0 && k == 0) continue; // shared node with previous segment
+                const int kk = flip ? (n - 1 - k) : k;
+                const glm::vec3& P = s.pts[kk];
+                if (!pts.empty() && glm::distance(pts.back(), P) <= 1e-3f) continue;
+                pts.push_back(P);
+                speed.push_back(kk < static_cast<int>(s.speed.size()) ? s.speed[kk] : 0);
+            }
+        }
+        if (pts.size() < 2) continue;
+        paths.emplace_back(segs[i].trackId, segs[i].trackType, pts, speed);
     }
 
     int modal = 0, modalCount = 0;

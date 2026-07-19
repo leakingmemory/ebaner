@@ -22,11 +22,15 @@ Bodø main track ("track 1 end"), resolved from the `tracks.bin` geometry.
   edits the height grid as a world-space function (so LOD seams stay watertight) at
   load time (`src/TerrainCarve.cpp`; set `EBANER_NOCARVE=1` to disable).
 - **Railway** — a realistic cross-section: a ballast bed, concrete sleepers and
-  two rusty rails (`src/TrackMesh.cpp`). Centrelines are smoothed through the
-  coarse surveyed points with a **centripetal Catmull-Rom** spline
-  (`src/TrackPath.cpp`), so curves are continuous. Sleepers are real 3-D boxes
-  near the camera and a repeating texture at distance (distance LOD). Track is
-  **superelevated (banked)** on curves from the OSM speed limit + curvature.
+  two rusty rails (`src/TrackMesh.cpp`). The export splits each line into separate
+  segments at medium transitions (surface / tunnel / bridge); `buildTrackPaths`
+  (`src/TrackPath.cpp`) **joins segments that meet end-to-end** (through degree-2
+  nodes of the same track type) into continuous routes, so the line is unbroken
+  through tunnels and the train can run straight through instead of derailing at a
+  portal. Centrelines are then smoothed through the coarse surveyed points with a
+  **centripetal Catmull-Rom** spline, so curves are continuous. Sleepers are real
+  3-D boxes near the camera and a repeating texture at distance (distance LOD).
+  Track is **superelevated (banked)** on curves from the OSM speed limit + curvature.
 - **Roads** — category-coloured asphalt ribbons (`src/RoadMesh.cpp`): the public
   network (Europavei/Riksvei/Fylkesvei/Kommunal) prominent, private tracks thin
   and faint.
