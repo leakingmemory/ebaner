@@ -13,7 +13,14 @@ Bodø main track ("track 1 end"), resolved from the `tracks.bin` geometry.
   glacier, water, built-up …), falling back to an elevation ramp otherwise. The
   overlapping LOD quadtree is de-overlapped (finest tile per area) and
   watertight-stitched so there are no cracks between resolutions
-  (`src/TerrainMesh.cpp`).
+  (`src/TerrainMesh.cpp`). Where a **surface** railway falls below the terrain, the
+  ground is **cut into a trench** to fit the track and ballast — a flat floor at the
+  ballast base with side walls sloping up at ~20° until they meet the original
+  ground — so the rails sit in a cutting instead of being buried. Tunnels and
+  bridges are left alone, and where a surface track enters a tunnel in a cutting the
+  trench stops at the mouth, leaving a vertical portal wall of terrain. The carve
+  edits the height grid as a world-space function (so LOD seams stay watertight) at
+  load time (`src/TerrainCarve.cpp`; set `EBANER_NOCARVE=1` to disable).
 - **Railway** — a realistic cross-section: a ballast bed, concrete sleepers and
   two rusty rails (`src/TrackMesh.cpp`). Centrelines are smoothed through the
   coarse surveyed points with a **centripetal Catmull-Rom** spline
@@ -191,6 +198,7 @@ the corresponding sources (national rail register + NVDB roads + OSM enrichment)
 | `EBANER_SCREENSHOT` | Render ~20 frames, write that frame to the given PPM, exit.   |
 | `EBANER_CAM`        | Scripted camera `"x,y,z,yawDeg,pitchDeg"` (scene-relative m). |
 | `EBANER_NOSTITCH`   | Skip the seam-stitching pass (to inspect raw tile seams).     |
+| `EBANER_NOCARVE`    | Skip carving railway cuttings into the terrain.               |
 | `EBANER_VEHICLE`    | Skip the start screen and preselect a vehicle (`0` or `1`).   |
 | `EBANER_AUDIO_DUMP` | Render a scripted brake sequence to the given WAV and exit.   |
 | `EBANER_AUDIO_DUMP_ENGINE` | Render an engine start/idle/stop to the given WAV, exit. |

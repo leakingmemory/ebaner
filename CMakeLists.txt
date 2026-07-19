@@ -75,6 +75,7 @@ add_custom_target(shaders DEPENDS ${SHADER_SPV})
 # lives in the individual executables.
 add_library(ebaner_engine STATIC
     src/TerrainData.cpp
+    src/TerrainCarve.cpp
     src/TerrainMesh.cpp
     src/Camera.cpp
     src/Textures.cpp

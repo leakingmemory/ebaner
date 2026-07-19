@@ -24,6 +24,7 @@
 struct TrackSegment {
     std::uint32_t trackId = 0;
     std::uint8_t trackType = 0; // 0=main line, 1=siding, 2=yard
+    std::uint8_t medium = 0x20; // 0x20 surface, 0x55 tunnel, 0x54 tube, 0x4C/0x42 bridge
     std::vector<glm::dvec3> pts;
     std::vector<std::uint16_t> speed; // per-vertex OSM speed km/h (0=unknown)
 };

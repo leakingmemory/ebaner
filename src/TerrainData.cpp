@@ -13,9 +13,12 @@
 
 #include "TerrainData.h"
 
+#include "TerrainCarve.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -102,6 +105,19 @@ void TerrainData::load(const std::string& datasetRoot, double halfWindow) {
                 tiles_.push_back(std::move(t));
             }
         }
+    }
+
+    // Carve trenches into the terrain where surface track falls below it, so the
+    // rails/ballast sit in a cutting instead of being buried. Re-derive the
+    // elevation range afterwards from the carved heights. Guarded for comparison.
+    if (std::getenv("EBANER_NOCARVE") == nullptr) {
+        carveTrackCuttings(tiles_, sceneOrigin_);
+        for (const Tile& t : tiles_)
+            for (float h : t.heights) {
+                if (h <= NODATA + 1.0f) continue;
+                minElev_ = std::min(minElev_, h);
+                maxElev_ = std::max(maxElev_, h);
+            }
     }
     if (maxElev_ <= minElev_) maxElev_ = minElev_ + 1.0f;
 
@@ -204,7 +220,8 @@ bool TerrainData::parseTracksBin(const std::string& path,
         if (p + 12 > end) break;
         std::memcpy(&trackId, p, 4);
         const std::uint8_t trackType = static_cast<std::uint8_t>(p[4]);
-        p += 8; // skip trackId, trackType, medium, electrified, reserved
+        const std::uint8_t medium = static_cast<std::uint8_t>(p[5]);
+        p += 8; // consume trackId, trackType, medium, electrified, reserved
         std::memcpy(&numVertices, p, 4);
         p += 4;
 
@@ -217,6 +234,7 @@ bool TerrainData::parseTracksBin(const std::string& path,
         TrackSegment seg;
         seg.trackId = trackId;
         seg.trackType = trackType;
+        seg.medium = medium;
         seg.pts.reserve(numVertices);
         bool ok = true;
         for (std::uint32_t v = 0; v < numVertices; ++v) {
