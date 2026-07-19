@@ -114,6 +114,7 @@ void VulkanRenderer::init(GLFWwindow* window,
     createDescriptorSetLayout();
     createGraphicsPipeline();
     createTrackPipeline();
+    createOverlayPipelines();
     createCommandPool();
     createTextureArray(textures);
     createDescriptorSet();
@@ -237,9 +238,14 @@ void VulkanRenderer::createLogicalDevice() {
         queueInfos.push_back(qi);
     }
 
+    VkPhysicalDeviceFeatures supported{};
+    vkGetPhysicalDeviceFeatures(physicalDevice_, &supported);
     VkPhysicalDeviceFeatures features{};
     features.fillModeNonSolid = VK_TRUE;  // harmless; allows wireframe if desired
     features.samplerAnisotropy = VK_TRUE; // anisotropic terrain-texture filtering
+    // Editor overlay geo-point sprites want a size > 1 px; enable if the device
+    // supports it (points fall back to 1 px otherwise).
+    features.largePoints = supported.largePoints;
 
     VkDeviceCreateInfo ci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     ci.queueCreateInfoCount = static_cast<uint32_t>(queueInfos.size());
@@ -485,10 +491,18 @@ void VulkanRenderer::createGraphicsPipeline() {
     ds.depthWriteEnable = VK_TRUE;
     ds.depthCompareOp = VK_COMPARE_OP_LESS;
 
+    // Alpha blend enabled so the track editor can ghost the terrain via the
+    // scene-alpha push constant; with params.x == 1 (the viewer) it is opaque.
     VkPipelineColorBlendAttachmentState cba{};
     cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    cba.blendEnable = VK_FALSE;
+    cba.blendEnable = VK_TRUE;
+    cba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    cba.colorBlendOp = VK_BLEND_OP_ADD;
+    cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    cba.alphaBlendOp = VK_BLEND_OP_ADD;
     VkPipelineColorBlendStateCreateInfo cb{
         VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
     cb.attachmentCount = 1;
@@ -603,10 +617,18 @@ void VulkanRenderer::createTrackPipeline() {
     ds.depthWriteEnable = VK_TRUE;
     ds.depthCompareOp = VK_COMPARE_OP_LESS;
 
+    // Alpha blend enabled (opaque when params.x == 1) so the editor can ghost the
+    // rails/roads/buildings via the scene-alpha push constant.
     VkPipelineColorBlendAttachmentState cba{};
     cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    cba.blendEnable = VK_FALSE;
+    cba.blendEnable = VK_TRUE;
+    cba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    cba.colorBlendOp = VK_BLEND_OP_ADD;
+    cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    cba.alphaBlendOp = VK_BLEND_OP_ADD;
     VkPipelineColorBlendStateCreateInfo cb{
         VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
     cb.attachmentCount = 1;
@@ -655,6 +677,152 @@ void VulkanRenderer::createTrackPipeline() {
 
     vkDestroyShaderModule(device_, vert, nullptr);
     vkDestroyShaderModule(device_, frag, nullptr);
+}
+
+void VulkanRenderer::createOverlayPipelines() {
+    // Two small pipelines for the editor's raw track-graph overlay: a line list
+    // (links) and a round point sprite (geo-points). Both reuse pipelineLayout_ and
+    // renderPass_; the vertex is position + colour only. Cheap to create even for
+    // the viewer, which never attaches an overlay (the draws are simply skipped).
+    auto vertCode = readFile(std::string(SHADER_DIR) + "/overlay.vert.spv");
+    auto lineFrag = readFile(std::string(SHADER_DIR) + "/overlay_line.frag.spv");
+    auto pointFrag = readFile(std::string(SHADER_DIR) + "/overlay_point.frag.spv");
+    VkShaderModule vert = createShaderModule(vertCode);
+    VkShaderModule lfrag = createShaderModule(lineFrag);
+    VkShaderModule pfrag = createShaderModule(pointFrag);
+
+    VkVertexInputBindingDescription binding{};
+    binding.binding = 0;
+    binding.stride = sizeof(LineVertex);
+    binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    std::array<VkVertexInputAttributeDescription, 2> attrs{{
+        {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(LineVertex, pos)},
+        {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(LineVertex, color)},
+    }};
+    VkPipelineVertexInputStateCreateInfo vertexInput{
+        VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    vertexInput.vertexBindingDescriptionCount = 1;
+    vertexInput.pVertexBindingDescriptions = &binding;
+    vertexInput.vertexAttributeDescriptionCount = static_cast<uint32_t>(attrs.size());
+    vertexInput.pVertexAttributeDescriptions = attrs.data();
+
+    VkPipelineInputAssemblyStateCreateInfo ia{
+        VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST; // set per pipeline below
+
+    VkPipelineViewportStateCreateInfo vp{
+        VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    vp.viewportCount = 1;
+    vp.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rs{
+        VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.cullMode = VK_CULL_MODE_NONE;
+    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo ms{
+        VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    // Depth test OFF so the overlay always draws on top: geo-points sit right at
+    // rail/terrain level and would otherwise be buried in that geometry. Drawing
+    // over everything gives the editor an x-ray view of the whole network.
+    VkPipelineDepthStencilStateCreateInfo ds{
+        VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    ds.depthTestEnable = VK_FALSE;
+    ds.depthWriteEnable = VK_FALSE;
+    ds.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+
+    VkPipelineColorBlendAttachmentState cba{};
+    cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                         VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    cba.blendEnable = VK_FALSE;
+    VkPipelineColorBlendStateCreateInfo cb{
+        VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    cb.attachmentCount = 1;
+    cb.pAttachments = &cba;
+
+    std::array<VkDynamicState, 2> dynamics{VK_DYNAMIC_STATE_VIEWPORT,
+                                           VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dyn{
+        VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dyn.dynamicStateCount = static_cast<uint32_t>(dynamics.size());
+    dyn.pDynamicStates = dynamics.data();
+
+    VkPipelineShaderStageCreateInfo vs{
+        VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    vs.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    vs.module = vert;
+    vs.pName = "main";
+    VkPipelineShaderStageCreateInfo fs{
+        VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    fs.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    fs.pName = "main";
+    VkPipelineShaderStageCreateInfo stages[] = {vs, fs};
+
+    VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    ci.stageCount = 2;
+    ci.pStages = stages;
+    ci.pVertexInputState = &vertexInput;
+    ci.pInputAssemblyState = &ia;
+    ci.pViewportState = &vp;
+    ci.pRasterizationState = &rs;
+    ci.pMultisampleState = &ms;
+    ci.pDepthStencilState = &ds;
+    ci.pColorBlendState = &cb;
+    ci.pDynamicState = &dyn;
+    ci.layout = pipelineLayout_;
+    ci.renderPass = renderPass_;
+    ci.subpass = 0;
+
+    // Line pipeline.
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+    stages[1].module = lfrag;
+    check(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &ci, nullptr,
+                                    &overlayLinePipeline_),
+          "vkCreateGraphicsPipelines(overlay line)");
+
+    // Point pipeline (round sprites; the vertex shader sets gl_PointSize).
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+    stages[1].module = pfrag;
+    check(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &ci, nullptr,
+                                    &overlayPointPipeline_),
+          "vkCreateGraphicsPipelines(overlay point)");
+
+    vkDestroyShaderModule(device_, vert, nullptr);
+    vkDestroyShaderModule(device_, lfrag, nullptr);
+    vkDestroyShaderModule(device_, pfrag, nullptr);
+}
+
+void VulkanRenderer::attachTrackGraph(const std::vector<LineVertex>& lines,
+                                      const std::vector<LineVertex>& points) {
+    auto upload = [&](const std::vector<LineVertex>& v, VkBuffer& buffer,
+                      VkDeviceMemory& memory) {
+        if (v.empty()) return;
+        const VkDeviceSize size = sizeof(LineVertex) * v.size();
+        VkBuffer staging;
+        VkDeviceMemory stagingMem;
+        createBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                     staging, stagingMem);
+        void* mapped;
+        vkMapMemory(device_, stagingMem, 0, size, 0, &mapped);
+        std::memcpy(mapped, v.data(), static_cast<std::size_t>(size));
+        vkUnmapMemory(device_, stagingMem);
+        createBuffer(size,
+                     VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, buffer, memory);
+        copyBuffer(staging, buffer, size);
+        vkDestroyBuffer(device_, staging, nullptr);
+        vkFreeMemory(device_, stagingMem, nullptr);
+    };
+    upload(lines, overlayLineVertexBuffer_, overlayLineVertexMemory_);
+    upload(points, overlayPointVertexBuffer_, overlayPointVertexMemory_);
+    overlayLineVertexCount_ = static_cast<uint32_t>(lines.size());
+    overlayPointVertexCount_ = static_cast<uint32_t>(points.size());
 }
 
 void VulkanRenderer::createCommandPool() {
@@ -1306,6 +1474,20 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageInde
                          vehicleGlassFirstIndex_, 0, 0);
     }
 
+    // Editor track-graph overlay: link lines then round geo-point sprites, on top
+    // of the scene (depth-tested against terrain, but not writing depth). Empty in
+    // the viewer, which never attaches a graph.
+    if (overlayLineVertexCount_ > 0) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, overlayLinePipeline_);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &overlayLineVertexBuffer_, &offset);
+        vkCmdDraw(cmd, overlayLineVertexCount_, 1, 0, 0);
+    }
+    if (overlayPointVertexCount_ > 0) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, overlayPointPipeline_);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &overlayPointVertexBuffer_, &offset);
+        vkCmdDraw(cmd, overlayPointVertexCount_, 1, 0, 0);
+    }
+
     // 2-D text overlay, drawn last (no depth) so it sits on top.
     if (textVertexCount_ > 0) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, textPipeline_);
@@ -1522,6 +1704,8 @@ void VulkanRenderer::cleanup() {
     cleanupSwapchain();
 
     vkDestroyPipeline(device_, textPipeline_, nullptr);
+    vkDestroyPipeline(device_, overlayPointPipeline_, nullptr);
+    vkDestroyPipeline(device_, overlayLinePipeline_, nullptr);
     vkDestroyPipeline(device_, vehicleGlassPipeline_, nullptr);
     vkDestroyPipeline(device_, trackPipeline_, nullptr);
     vkDestroyPipeline(device_, pipeline_, nullptr);
@@ -1542,6 +1726,10 @@ void VulkanRenderer::cleanup() {
     vkFreeMemory(device_, roadVertexMemory_, nullptr);
     vkDestroyBuffer(device_, vehicleIndexBuffer_, nullptr);
     vkFreeMemory(device_, vehicleIndexMemory_, nullptr);
+    vkDestroyBuffer(device_, overlayLineVertexBuffer_, nullptr);
+    vkFreeMemory(device_, overlayLineVertexMemory_, nullptr);
+    vkDestroyBuffer(device_, overlayPointVertexBuffer_, nullptr);
+    vkFreeMemory(device_, overlayPointVertexMemory_, nullptr);
     for (int i = 0; i < kMaxFramesInFlight; ++i) {
         if (vehicleVertexMemories_[i]) vkUnmapMemory(device_, vehicleVertexMemories_[i]);
         vkDestroyBuffer(device_, vehicleVertexBuffers_[i], nullptr);

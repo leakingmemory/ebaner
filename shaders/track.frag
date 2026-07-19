@@ -25,6 +25,7 @@ layout(push_constant) uniform PushConstants {
     mat4 viewProj;
     vec4 sunDir;   // xyz = direction to sun; w = min elevation
     vec4 camPos;   // xyz = camera position (scene-relative); w = max elevation
+    vec4 params;   // x = scene alpha (editor ghosting; 1 = opaque)
 } pc;
 
 layout(location = 0) out vec4 outColor;
@@ -60,5 +61,5 @@ void main() {
     // Glazing (vehicle windows/windscreen) is tagged with a texLayer sentinel and
     // drawn translucent; everything else is opaque.
     float alpha = (vTexLayer < -1.5) ? 0.30 : 1.0;
-    outColor = vec4(color, alpha);
+    outColor = vec4(color, alpha * pc.params.x);
 }

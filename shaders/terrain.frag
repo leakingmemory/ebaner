@@ -24,6 +24,7 @@ layout(push_constant) uniform PushConstants {
     mat4 viewProj;
     vec4 sunDir;   // xyz = direction TO sun (normalised); w = min elevation
     vec4 camPos;   // xyz = camera position (scene-relative);  w = max elevation
+    vec4 params;   // x = scene alpha (editor ghosting; 1 = opaque)
 } pc;
 
 layout(location = 0) out vec4 outColor;
@@ -91,5 +92,5 @@ void main() {
     float haze = clamp(dist / 40000.0, 0.0, 0.65);
     color = mix(color, vec3(0.70, 0.78, 0.86), haze);
 
-    outColor = vec4(color, 1.0);
+    outColor = vec4(color, pc.params.x);
 }

@@ -55,7 +55,8 @@ set(SHADER_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
 file(MAKE_DIRECTORY ${SHADER_OUT_DIR})
 
 set(SHADER_SPV)
-foreach(shader terrain.vert terrain.frag track.vert track.frag text.vert text.frag)
+foreach(shader terrain.vert terrain.frag track.vert track.frag text.vert text.frag
+               overlay.vert overlay_line.frag overlay_point.frag)
     set(src ${SHADER_DIR}/${shader})
     set(spv ${SHADER_OUT_DIR}/${shader}.spv)
     add_custom_command(
@@ -68,31 +69,44 @@ foreach(shader terrain.vert terrain.frag track.vert track.frag text.vert text.fr
 endforeach()
 add_custom_target(shaders DEPENDS ${SHADER_SPV})
 
-# ---- Executable -----------------------------------------------------------
-add_executable(ebaner
-    src/main.cpp
+# ---- Shared engine library ------------------------------------------------
+# The rendering/loading engine, shared by the `ebaner` viewer and the
+# `ebaner-trackedit` editor. App-specific code (vehicle sim, audio, driver cam)
+# lives in the individual executables.
+add_library(ebaner_engine STATIC
     src/TerrainData.cpp
     src/TerrainMesh.cpp
     src/Camera.cpp
     src/Textures.cpp
     src/TrackPath.cpp
     src/TrackMesh.cpp
+    src/TrackGraph.cpp
     src/RoadMesh.cpp
     src/BuildingMesh.cpp
     src/PlatformMesh.cpp
     src/EarClip.cpp
-    src/VehicleMesh.cpp
-    src/Vehicle.cpp
-    src/Audio.cpp
     src/Font.cpp
     src/VulkanRenderer.cpp)
 
-add_dependencies(ebaner shaders)
+add_dependencies(ebaner_engine shaders)
 
-target_link_libraries(ebaner PRIVATE Vulkan::Vulkan ${GLFW_TARGET})
+target_link_libraries(ebaner_engine PUBLIC Vulkan::Vulkan ${GLFW_TARGET})
 if(glm_FOUND)
-    target_link_libraries(ebaner PRIVATE glm::glm)
+    target_link_libraries(ebaner_engine PUBLIC glm::glm)
 endif()
+
+# Directory holding the compiled .spv files, exposed to apps at runtime.
+target_compile_definitions(ebaner_engine PUBLIC
+    SHADER_DIR="${SHADER_OUT_DIR}")
+
+# ---- ebaner (viewer + vehicle sim) ----------------------------------------
+add_executable(ebaner
+    src/main.cpp
+    src/VehicleMesh.cpp
+    src/Vehicle.cpp
+    src/Audio.cpp)
+add_dependencies(ebaner shaders)
+target_link_libraries(ebaner PRIVATE ebaner_engine)
 if(PULSE_FOUND)
     target_link_libraries(ebaner PRIVATE PkgConfig::PULSE)
     target_compile_definitions(ebaner PRIVATE HAVE_PULSE=1)
@@ -107,6 +121,8 @@ if(NOT PULSE_FOUND AND NOT PORTAUDIO_FOUND)
     message(STATUS "No audio backend found: building without sound")
 endif()
 
-# Directory holding the compiled .spv files, exposed to the app at runtime.
-target_compile_definitions(ebaner PRIVATE
-    SHADER_DIR="${SHADER_OUT_DIR}")
+# ---- ebaner-trackedit (track-network viewer / editor) ---------------------
+add_executable(ebaner-trackedit
+    src/trackedit_main.cpp)
+add_dependencies(ebaner-trackedit shaders)
+target_link_libraries(ebaner-trackedit PRIVATE ebaner_engine)

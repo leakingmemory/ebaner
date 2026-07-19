@@ -108,6 +108,10 @@ cmake -S . -B build
 cmake --build build -j
 ```
 
+This builds two executables that share the same rendering/loading engine
+(`libebaner_engine`): the **`ebaner`** viewer above, and **`ebaner-trackedit`**
+below.
+
 ## Run
 
 ```sh
@@ -136,6 +140,25 @@ counts, and vehicle physics (mass, inertia, tipping limit).
 | M            | Mute / unmute sound             |
 | Tab          | Release/grab cursor             |
 | Esc          | Quit                            |
+
+## Track editor (`ebaner-trackedit`)
+
+```sh
+./build/ebaner-trackedit ../norway-rails
+```
+
+A **WYSIWYG track-network viewer** that reuses the same engine: it renders the
+identical scene (terrain, roads, buildings, rails) and, on top, overlays the **raw
+rail geo-points** as round markers and the **links between consecutive points** of
+each track as lines — the surveyed geometry behind the smoothed rails. Markers/links
+are coloured by track type (**amber** main line, **cyan** siding, **magenta** yard).
+The terrain, rails and buildings are drawn **ghosted** (half-transparent, editor
+only) and the geo-point network is drawn **on top** (x-ray, sized so near points
+read clearly), so no point is buried in the terrain or rails. Walk around with the
+same free-fly controls
+(W/A/S/D, Q/E, mouse, Shift, Tab, Esc); a HUD shows the track and geo-point counts
+and the camera position. Editing the network (selecting/moving/adding points, saving
+back to `tracks.bin`) is not implemented yet — this is the viewing foundation.
 
 ## Data format
 

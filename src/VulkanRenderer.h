@@ -16,8 +16,9 @@
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
 
-#include "Font.h"      // TextVertex
-#include "TrackMesh.h" // TrackVertex, TrackDrawChunk
+#include "Font.h"       // TextVertex
+#include "TrackGraph.h" // LineVertex (editor overlay)
+#include "TrackMesh.h"  // TrackVertex, TrackDrawChunk
 
 #include <array>
 #include <cstdint>
@@ -32,6 +33,7 @@ struct PushConstants {
     glm::mat4 viewProj;
     glm::vec4 sunDir;  // xyz = direction to sun (normalised)
     glm::vec4 camPos;  // xyz = scene-relative camera position
+    glm::vec4 params{1.0f, 0.0f, 0.0f, 0.0f}; // x = scene alpha (1 = opaque)
 };
 
 // Land-cover texture array to upload (RGBA8, layer-major).
@@ -68,6 +70,12 @@ public:
     // Set the 2-D text overlay (screen-space triangles) drawn on top each frame.
     void setOverlayText(const std::vector<TextVertex>& vertices);
 
+    // Attach the editor's raw track-network overlay once: `lines` drawn as a line
+    // list, `points` as round point sprites (both `LineVertex`). Used by
+    // ebaner-trackedit; the viewer never calls it (overlay stays empty).
+    void attachTrackGraph(const std::vector<LineVertex>& lines,
+                          const std::vector<LineVertex>& points);
+
     void notifyResize() { framebufferResized_ = true; }
 
     // Requests that the next rendered frame be written to `path` (PPM).
@@ -89,6 +97,7 @@ private:
     void createDescriptorSetLayout();
     void createGraphicsPipeline();
     void createTrackPipeline();
+    void createOverlayPipelines(); // editor line + point overlay (unused by viewer)
     void createCommandPool();
     void createTextureArray(const LandTextureData& textures);
     void createDescriptorSet();
@@ -178,6 +187,8 @@ private:
     VkPipeline pipeline_ = VK_NULL_HANDLE;
     VkPipeline trackPipeline_ = VK_NULL_HANDLE; // railway ribbons (reuses layout)
     VkPipeline vehicleGlassPipeline_ = VK_NULL_HANDLE; // translucent vehicle glazing
+    VkPipeline overlayLinePipeline_ = VK_NULL_HANDLE;  // editor track-graph links
+    VkPipeline overlayPointPipeline_ = VK_NULL_HANDLE; // editor geo-point sprites
 
     VkCommandPool commandPool_ = VK_NULL_HANDLE;
     std::vector<VkCommandBuffer> commandBuffers_;
@@ -208,6 +219,14 @@ private:
     VkBuffer buildingIndexBuffer_ = VK_NULL_HANDLE;
     VkDeviceMemory buildingIndexMemory_ = VK_NULL_HANDLE;
     uint32_t buildingIndexCount_ = 0;
+
+    // Editor overlay: static line-list + point-list of the raw track graph.
+    VkBuffer overlayLineVertexBuffer_ = VK_NULL_HANDLE;
+    VkDeviceMemory overlayLineVertexMemory_ = VK_NULL_HANDLE;
+    uint32_t overlayLineVertexCount_ = 0;
+    VkBuffer overlayPointVertexBuffer_ = VK_NULL_HANDLE;
+    VkDeviceMemory overlayPointVertexMemory_ = VK_NULL_HANDLE;
+    uint32_t overlayPointVertexCount_ = 0;
 
     // Vehicle mesh is rebuilt every frame; one host-visible mapped vertex buffer
     // per in-flight frame (written after that frame's fence), static index buffer.
