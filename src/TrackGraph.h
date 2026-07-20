@@ -34,6 +34,11 @@ struct LineVertex {
 struct TrackGraph {
     std::vector<LineVertex> points; // draw as VK_PRIMITIVE_TOPOLOGY_POINT_LIST
     std::vector<LineVertex> lines;  // draw as VK_PRIMITIVE_TOPOLOGY_LINE_LIST
+    // Dead ends: track endpoints with no neighbouring endpoint (a broken link).
+    // Drawn bright red; `deadEndWorld` holds their world coords (parallel array),
+    // for authoring link edits in the editor.
+    std::vector<LineVertex> deadEnds;
+    std::vector<glm::dvec3> deadEndWorld;
     std::size_t trackCount = 0;     // distinct tracks (by trackId)
 };
 

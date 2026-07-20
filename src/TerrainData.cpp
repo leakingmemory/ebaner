@@ -14,6 +14,7 @@
 #include "TerrainData.h"
 
 #include "TerrainCarve.h"
+#include "TrackOverlay.h"
 
 #include <algorithm>
 #include <cmath>
@@ -106,6 +107,11 @@ void TerrainData::load(const std::string& datasetRoot, double halfWindow) {
             }
         }
     }
+
+    // Apply the manual track-edit overlay (drop-in link fixes) over the generated
+    // tiles before anything downstream reads them (carve, path building).
+    if (std::getenv("EBANER_NOOVERLAY") == nullptr)
+        applyTrackOverlay(tiles_, loadTrackOverlay(datasetRoot));
 
     // Carve trenches into the terrain where surface track falls below it, so the
     // rails/ballast sit in a cutting instead of being buried. Re-derive the

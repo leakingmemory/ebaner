@@ -798,6 +798,18 @@ void VulkanRenderer::createOverlayPipelines() {
 
 void VulkanRenderer::attachTrackGraph(const std::vector<LineVertex>& lines,
                                       const std::vector<LineVertex>& points) {
+    // Re-callable: the editor re-attaches after each edit. Drop any previous
+    // buffers first (rare event, so a full-device wait is fine).
+    if (overlayLineVertexBuffer_ || overlayPointVertexBuffer_) {
+        vkDeviceWaitIdle(device_);
+        vkDestroyBuffer(device_, overlayLineVertexBuffer_, nullptr);
+        vkFreeMemory(device_, overlayLineVertexMemory_, nullptr);
+        vkDestroyBuffer(device_, overlayPointVertexBuffer_, nullptr);
+        vkFreeMemory(device_, overlayPointVertexMemory_, nullptr);
+        overlayLineVertexBuffer_ = overlayPointVertexBuffer_ = VK_NULL_HANDLE;
+        overlayLineVertexMemory_ = overlayPointVertexMemory_ = VK_NULL_HANDLE;
+        overlayLineVertexCount_ = overlayPointVertexCount_ = 0;
+    }
     auto upload = [&](const std::vector<LineVertex>& v, VkBuffer& buffer,
                       VkDeviceMemory& memory) {
         if (v.empty()) return;

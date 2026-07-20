@@ -158,18 +158,29 @@ counts, and vehicle physics (mass, inertia, tipping limit).
 ./build/ebaner-trackedit ../norway-rails
 ```
 
-A **WYSIWYG track-network viewer** that reuses the same engine: it renders the
+A **WYSIWYG track-network editor** that reuses the same engine: it renders the
 identical scene (terrain, roads, buildings, rails) and, on top, overlays the **raw
 rail geo-points** as round markers and the **links between consecutive points** of
 each track as lines — the surveyed geometry behind the smoothed rails. Markers/links
-are coloured by track type (**amber** main line, **cyan** siding, **magenta** yard).
-The terrain, rails and buildings are drawn **ghosted** (half-transparent, editor
-only) and the geo-point network is drawn **on top** (x-ray, sized so near points
-read clearly), so no point is buried in the terrain or rails. Walk around with the
-same free-fly controls
-(W/A/S/D, Q/E, mouse, Shift, Tab, Esc); a HUD shows the track and geo-point counts
-and the camera position. Editing the network (selecting/moving/adding points, saving
-back to `tracks.bin`) is not implemented yet — this is the viewing foundation.
+are coloured by track type (**amber** main line, **cyan** siding, **magenta** yard),
+and **dead ends** (loose ends of a broken link) are marked in **red**. The terrain,
+rails and buildings are drawn **ghosted** (half-transparent, editor only) and the
+geo-point network is drawn **on top** (x-ray, sized so near points read clearly), so
+no point is buried in the terrain or rails. Walk around with the same free-fly
+controls (W/A/S/D, Q/E, mouse, Shift, Tab, Esc); a HUD shows the track / geo-point /
+dead-end counts and the camera position.
+
+**Fixing broken links.** Some exports leave a line disconnected across a gap (e.g.
+a tunnel approach), which derails the train at the loose end. Aim the centre
+crosshair at a red dead-end and press **Enter** to pick end **A**, aim at the other
+loose end and **Enter** again for **B**, then **L** to link them (**X** clears the
+selection). The edit is written to a **drop-in overlay**,
+`<dataset>/overlay/track-edits.txt` — a separate directory the generator never
+touches, so regenerated base tiles can be dropped in without losing manual edits. On
+the next load, `TerrainData` applies the overlay over the generated tiles (both the
+viewer and the editor), the two segments join into one continuous route, and the
+train runs across the former gap. (`EBANER_NOOVERLAY=1` ignores the overlay.) Only
+"link" edits exist so far; moving/adding/deleting points is future work.
 
 ## Data format
 
@@ -203,6 +214,7 @@ the corresponding sources (national rail register + NVDB roads + OSM enrichment)
 | `EBANER_CAM`        | Scripted camera `"x,y,z,yawDeg,pitchDeg"` (scene-relative m). |
 | `EBANER_NOSTITCH`   | Skip the seam-stitching pass (to inspect raw tile seams).     |
 | `EBANER_NOCARVE`    | Skip carving railway cuttings into the terrain.               |
+| `EBANER_NOOVERLAY`  | Ignore the `overlay/` track edits (link fixes).               |
 | `EBANER_VEHICLE`    | Skip the start screen and preselect a vehicle (`0` or `1`).   |
 | `EBANER_AUDIO_DUMP` | Render a scripted brake sequence to the given WAV and exit.   |
 | `EBANER_AUDIO_DUMP_ENGINE` | Render an engine start/idle/stop to the given WAV, exit. |

@@ -15,6 +15,7 @@
 
 #include "TerrainData.h"
 
+#include <cmath>
 #include <unordered_set>
 
 namespace {
@@ -40,6 +41,10 @@ TrackGraph buildTrackGraph(const TerrainData& data) {
     const glm::dvec3 origin = data.sceneOrigin();
     std::unordered_set<std::uint32_t> seen;
     TrackGraph g;
+
+    // Endpoints (scene + world) of every segment, to detect dead ends afterwards.
+    struct End { glm::vec3 scene; glm::dvec3 world; };
+    std::vector<End> ends;
 
     for (const Tile& t : data.tiles()) {
         for (const TrackSegment& seg : t.tracks) {
@@ -67,6 +72,25 @@ TrackGraph buildTrackGraph(const TerrainData& data) {
                 g.lines.push_back({pts[k], lc});
                 g.lines.push_back({pts[k + 1], lc});
             }
+            ends.push_back({pts.front(), seg.pts.front()});
+            ends.push_back({pts.back(), seg.pts.back()});
+        }
+    }
+
+    // Dead ends: an endpoint with no other endpoint within ~1 m horizontally. These
+    // are the loose ends of broken links; the editor lets you connect two of them.
+    constexpr float kNodeTol = 1.0f;
+    for (std::size_t i = 0; i < ends.size(); ++i) {
+        bool joined = false;
+        for (std::size_t j = 0; j < ends.size() && !joined; ++j) {
+            if (j == i) continue;
+            if (std::hypot(ends[i].scene.x - ends[j].scene.x,
+                           ends[i].scene.y - ends[j].scene.y) <= kNodeTol)
+                joined = true;
+        }
+        if (!joined) {
+            g.deadEnds.push_back({ends[i].scene, glm::vec3(1.0f, 0.15f, 0.12f)});
+            g.deadEndWorld.push_back(ends[i].world);
         }
     }
     return g;

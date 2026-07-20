@@ -11,11 +11,13 @@
 // should have received a copy of the license along with ebaner; if not, see
 // <https://www.gnu.org/licenses/>.
 
-// ebaner-trackedit: a WYSIWYG track-network viewer that reuses ebaner's engine.
+// ebaner-trackedit: a WYSIWYG track-network editor that reuses ebaner's engine.
 // It renders the same scene (terrain, roads, buildings, rails) and overlays the
 // raw rail geo-points (round markers) and the links between consecutive points of
-// each track (lines). Walk around with the same free-fly controls. Editing of the
-// network is not implemented yet; this is the viewing foundation.
+// each track (lines). Dead ends (loose ends of broken links) are marked in red.
+// Aim the crosshair at two dead ends and link them; the edit is written to a
+// drop-in overlay (`<dataset>/overlay/track-edits.txt`) that the loader applies
+// over the generated tiles, so the train can then run across the former gap.
 
 #include "BuildingMesh.h"
 #include "Camera.h"
@@ -27,6 +29,7 @@
 #include "Textures.h"
 #include "TrackGraph.h"
 #include "TrackMesh.h"
+#include "TrackOverlay.h"
 #include "TrackPath.h"
 #include "VulkanRenderer.h"
 
@@ -41,6 +44,7 @@
 #include <cstdlib>
 #include <exception>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -103,8 +107,9 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "Failed to load terrain: %s\n", e.what());
         return EXIT_FAILURE;
     }
-    std::printf("[trackedit] %zu tracks, %zu geo-points, %zu links\n",
-                graph.trackCount, graph.points.size(), graph.lines.size() / 2);
+    std::printf("[trackedit] %zu tracks, %zu geo-points, %zu links, %zu dead-ends\n",
+                graph.trackCount, graph.points.size(), graph.lines.size() / 2,
+                graph.deadEnds.size());
 
     // --- Window ---
     if (!glfwInit()) {
@@ -164,7 +169,6 @@ int main(int argc, char** argv) {
                       tracks.vertices(), tracks.indices(), tracks.alwaysIndexCount(),
                       tracks.sleeperChunks(), roads.vertices(), roads.indices(),
                       structVerts, structIndices);
-        renderer.attachTrackGraph(graph.lines, graph.points);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "Vulkan init failed: %s\n", e.what());
         glfwDestroyWindow(window);
@@ -172,14 +176,35 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
+    // --- Editor state ---
+    int selA = -1, selB = -1; // selected dead-end indices (into graph.deadEnds)
+    std::vector<std::pair<glm::vec3, glm::vec3>> sessionLinks; // scene endpoints, green
+    auto rebuildOverlay = [&]() {
+        std::vector<LineVertex> lns = graph.lines;
+        const glm::vec3 green(0.2f, 1.0f, 0.35f), yellow(1.0f, 0.95f, 0.2f);
+        for (const auto& [a, b] : sessionLinks) {
+            lns.push_back({a, green});
+            lns.push_back({b, green});
+        }
+        std::vector<LineVertex> pts = graph.points;
+        pts.insert(pts.end(), graph.deadEnds.begin(), graph.deadEnds.end());
+        if (selA >= 0) pts.push_back({graph.deadEnds[selA].pos, yellow});
+        if (selB >= 0) pts.push_back({graph.deadEnds[selB].pos, yellow});
+        renderer.attachTrackGraph(lns, pts);
+    };
+    rebuildOverlay();
+
     std::printf("\nControls: WASD move, Q/E down/up, mouse look, Shift boost, "
                 "Tab release cursor, Esc quit\n"
-                "Overlay: amber = main line, cyan = siding, magenta = yard; "
-                "dots = raw geo-points, lines = links.\n\n");
+                "Editing: aim crosshair at a red dead-end, Enter to pick A then B, "
+                "L to link (saved to overlay/), X to clear.\n"
+                "Overlay: amber = main line, cyan = siding, magenta = yard, "
+                "red = dead end; dots = geo-points, lines = links.\n\n");
 
     const glm::vec3 sunDir = glm::normalize(glm::vec3(0.4f, -0.5f, 0.75f));
     const char* shotPath = std::getenv("EBANER_SCREENSHOT");
     int frame = 0;
+    bool prevEnter = false, prevL = false, prevX = false;
     double lastTime = glfwGetTime();
 
     while (!glfwWindowShouldClose(window)) {
@@ -203,7 +228,45 @@ int main(int argc, char** argv) {
         const bool fast = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS;
         g_camera.move(fwd, right, up, dt, fast);
 
-        // HUD: a dark backing panel plus a couple of info lines.
+        // Pick the dead-end nearest the camera's forward ray (crosshair aim).
+        int hover = -1;
+        {
+            const glm::vec3 cp = g_camera.position(), fwv = g_camera.forward();
+            float bestAng = 0.06f; // ~3.4 deg cone
+            for (std::size_t i = 0; i < graph.deadEnds.size(); ++i) {
+                const glm::vec3 v = graph.deadEnds[i].pos - cp;
+                const float t = glm::dot(v, fwv);
+                if (t < 1.0f) continue; // behind / too close
+                const float ang = glm::length(v - fwv * t) / t;
+                if (ang < bestAng) { bestAng = ang; hover = static_cast<int>(i); }
+            }
+        }
+
+        // Editing keys (edge-triggered): Enter pick A/B, L link, X clear.
+        const bool kEnter = glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS;
+        const bool kL = glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS;
+        const bool kX = glfwGetKey(window, GLFW_KEY_X) == GLFW_PRESS;
+        if (kEnter && !prevEnter && hover >= 0) {
+            if (selA < 0) selA = hover;
+            else if (hover != selA) selB = hover;
+            rebuildOverlay();
+        }
+        if (kX && !prevX) { selA = selB = -1; rebuildOverlay(); }
+        if (kL && !prevL && selA >= 0 && selB >= 0) {
+            const TrackEdit e{graph.deadEndWorld[selA], graph.deadEndWorld[selB]};
+            if (appendTrackEdit(datasetRoot, e)) {
+                sessionLinks.push_back({graph.deadEnds[selA].pos, graph.deadEnds[selB].pos});
+                std::printf("[trackedit] linked dead-ends -> %s/overlay/track-edits.txt "
+                            "(re-run to drive across it)\n", datasetRoot.c_str());
+            } else {
+                std::fprintf(stderr, "[trackedit] failed to write overlay file\n");
+            }
+            selA = selB = -1;
+            rebuildOverlay();
+        }
+        prevEnter = kEnter; prevL = kL; prevX = kX;
+
+        // HUD: a dark backing panel plus info lines, and a centre crosshair.
         {
             std::vector<TextVertex> tv;
             const float sc = std::max(2.0f, static_cast<float>(fbh) / 240.0f);
@@ -213,23 +276,39 @@ int main(int argc, char** argv) {
                     return glm::vec2(px / fbw * 2.0f - 1.0f, py / fbh * 2.0f - 1.0f);
                 };
                 const float x1 =
-                    std::min(static_cast<float>(fbw) - 20.0f, 40.0f + 30.0f * 8.0f * sc);
-                const float y1 = 40.0f + 4.0f * lh;
+                    std::min(static_cast<float>(fbw) - 20.0f, 40.0f + 44.0f * 8.0f * sc);
+                const float y1 = 40.0f + 6.0f * lh;
                 const glm::vec3 bg(0.04f, 0.05f, 0.09f);
                 const glm::vec2 a = ndc(20.0f, 20.0f), b = ndc(x1, 20.0f),
                                 c = ndc(x1, y1), d = ndc(20.0f, y1);
                 tv.push_back({a, bg}); tv.push_back({b, bg}); tv.push_back({c, bg});
                 tv.push_back({a, bg}); tv.push_back({c, bg}); tv.push_back({d, bg});
             }
-            char buf[128];
+            char buf[160];
             appendText(tv, "EBANER-TRACKEDIT", x, 40.0f, sc,
                        glm::vec3(1.0f, 0.95f, 0.5f), fbw, fbh);
-            std::snprintf(buf, sizeof(buf), "TRACKS %zu   GEO-POINTS %zu",
-                          graph.trackCount, graph.points.size());
+            std::snprintf(buf, sizeof(buf), "TRACKS %zu  GEO-POINTS %zu  DEAD-ENDS %zu",
+                          graph.trackCount, graph.points.size(), graph.deadEnds.size());
             appendText(tv, buf, x, 40.0f + lh, sc, glm::vec3(0.8f, 0.9f, 1.0f), fbw, fbh);
             const glm::vec3 p = g_camera.position();
             std::snprintf(buf, sizeof(buf), "POS %.0f %.0f %.0f", p.x, p.y, p.z);
             appendText(tv, buf, x, 40.0f + 2 * lh, sc, glm::vec3(0.7f, 0.85f, 0.7f),
+                       fbw, fbh);
+            appendText(tv, "AIM RED DEAD-END: Enter pick A/B, L link, X clear",
+                       x, 40.0f + 3 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
+            std::snprintf(buf, sizeof(buf), "A %s  B %s  hover %s",
+                          selA >= 0 ? "set" : "-", selB >= 0 ? "set" : "-",
+                          hover >= 0 ? "yes" : "-");
+            appendText(tv, buf, x, 40.0f + 4 * lh, sc,
+                       (selA >= 0 && selB >= 0) ? glm::vec3(1.0f, 0.9f, 0.3f)
+                                                : glm::vec3(0.7f, 0.85f, 0.7f),
+                       fbw, fbh);
+            std::snprintf(buf, sizeof(buf), "SESSION LINKS %zu", sessionLinks.size());
+            appendText(tv, buf, x, 40.0f + 5 * lh, sc, glm::vec3(0.6f, 0.9f, 0.6f),
+                       fbw, fbh);
+            // Crosshair: a '+' at screen centre (tinted when a dead-end is hovered).
+            appendText(tv, "+", fbw * 0.5f - 4.0f * sc, fbh * 0.5f - 4.0f * sc, sc,
+                       hover >= 0 ? glm::vec3(1.0f, 0.3f, 0.25f) : glm::vec3(1.0f),
                        fbw, fbh);
             renderer.setOverlayText(tv);
         }
