@@ -32,7 +32,8 @@ struct LineVertex {
 // is the *unsmoothed* geometry (unlike buildTrackPaths), coloured by track type,
 // lifted slightly above the rails so it doesn't z-fight them.
 struct TrackGraph {
-    std::vector<LineVertex> points; // draw as VK_PRIMITIVE_TOPOLOGY_POINT_LIST
+    std::vector<LineVertex> points;      // draw as VK_PRIMITIVE_TOPOLOGY_POINT_LIST
+    std::vector<glm::dvec3> pointWorld;   // world coord per point (for selection/edits)
     std::vector<LineVertex> lines;  // draw as VK_PRIMITIVE_TOPOLOGY_LINE_LIST
     // Dead ends: track endpoints with no neighbouring endpoint (a broken link).
     // Drawn bright red; `deadEndWorld` holds their world coords (parallel array),

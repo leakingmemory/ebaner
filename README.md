@@ -170,6 +170,11 @@ no point is buried in the terrain or rails. Walk around with the same free-fly
 controls (W/A/S/D, Q/E, mouse, Shift, Tab, Esc); a HUD shows the track / geo-point /
 dead-end counts and the camera position.
 
+**Selecting points.** Press **Tab** to free the cursor, then **left-click** a
+geo-point to select it (it turns **white**); **Ctrl+click** toggles points for a
+multi-selection; clicking empty space clears it. Picking is screen-space from the
+cursor. This is groundwork for future edit operations — selection only for now.
+
 **Fixing broken links.** Some exports leave a line disconnected across a gap (e.g.
 a tunnel approach), which derails the train at the loose end. Aim the centre
 crosshair at a red dead-end and press **Enter** to pick end **A**, aim at the other

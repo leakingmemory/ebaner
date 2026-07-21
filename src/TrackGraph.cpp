@@ -53,21 +53,29 @@ TrackGraph buildTrackGraph(const TerrainData& data) {
 
             // Convert to scene-relative and drop coincident points (mirrors
             // buildTrackPaths so the overlay lines up with the rendered rails).
+            // Keep each kept point's world coord for selection / future edits.
             std::vector<glm::vec3> pts;
+            std::vector<glm::dvec3> ptsW;
             pts.reserve(seg.pts.size());
+            ptsW.reserve(seg.pts.size());
             for (const glm::dvec3& w : seg.pts) {
                 const glm::vec3 p(static_cast<float>(w.x - origin.x),
                                   static_cast<float>(w.y - origin.y),
                                   static_cast<float>(w.z - origin.z) + kLift);
-                if (pts.empty() || glm::distance(pts.back(), p) > 1e-3f)
+                if (pts.empty() || glm::distance(pts.back(), p) > 1e-3f) {
                     pts.push_back(p);
+                    ptsW.push_back(w);
+                }
             }
             if (pts.size() < 2) continue;
             ++g.trackCount;
 
             const glm::vec3 pc = pointColor(seg.trackType);
             const glm::vec3 lc = lineColor(seg.trackType);
-            for (const glm::vec3& p : pts) g.points.push_back({p, pc});
+            for (std::size_t k = 0; k < pts.size(); ++k) {
+                g.points.push_back({pts[k], pc});
+                g.pointWorld.push_back(ptsW[k]);
+            }
             for (std::size_t k = 0; k + 1 < pts.size(); ++k) {
                 g.lines.push_back({pts[k], lc});
                 g.lines.push_back({pts[k + 1], lc});

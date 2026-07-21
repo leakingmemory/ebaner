@@ -43,6 +43,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -179,9 +180,11 @@ int main(int argc, char** argv) {
     // --- Editor state ---
     int selA = -1, selB = -1; // selected dead-end indices (into graph.deadEnds)
     std::vector<std::pair<glm::vec3, glm::vec3>> sessionLinks; // scene endpoints, green
+    std::set<int> selected;   // selected geo-points (indices into graph.points)
     auto rebuildOverlay = [&]() {
         std::vector<LineVertex> lns = graph.lines;
-        const glm::vec3 green(0.2f, 1.0f, 0.35f), yellow(1.0f, 0.95f, 0.2f);
+        const glm::vec3 green(0.2f, 1.0f, 0.35f), yellow(1.0f, 0.95f, 0.2f),
+            white(1.0f, 1.0f, 1.0f);
         for (const auto& [a, b] : sessionLinks) {
             lns.push_back({a, green});
             lns.push_back({b, green});
@@ -190,21 +193,24 @@ int main(int argc, char** argv) {
         pts.insert(pts.end(), graph.deadEnds.begin(), graph.deadEnds.end());
         if (selA >= 0) pts.push_back({graph.deadEnds[selA].pos, yellow});
         if (selB >= 0) pts.push_back({graph.deadEnds[selB].pos, yellow});
+        for (int i : selected) pts.push_back({graph.points[i].pos, white}); // on top
         renderer.attachTrackGraph(lns, pts);
     };
     rebuildOverlay();
 
     std::printf("\nControls: WASD move, Q/E down/up, mouse look, Shift boost, "
                 "Tab release cursor, Esc quit\n"
-                "Editing: aim crosshair at a red dead-end, Enter to pick A then B, "
+                "Select (cursor freed with Tab): click a geo-point, Ctrl+click for "
+                "several, click empty to clear.\n"
+                "Link fix: aim crosshair at a red dead-end, Enter to pick A then B, "
                 "L to link (saved to overlay/), X to clear.\n"
                 "Overlay: amber = main line, cyan = siding, magenta = yard, "
-                "red = dead end; dots = geo-points, lines = links.\n\n");
+                "red = dead end, white = selected.\n\n");
 
     const glm::vec3 sunDir = glm::normalize(glm::vec3(0.4f, -0.5f, 0.75f));
     const char* shotPath = std::getenv("EBANER_SCREENSHOT");
     int frame = 0;
-    bool prevEnter = false, prevL = false, prevX = false;
+    bool prevEnter = false, prevL = false, prevX = false, prevML = false;
     double lastTime = glfwGetTime();
 
     while (!glfwWindowShouldClose(window)) {
@@ -228,7 +234,10 @@ int main(int argc, char** argv) {
         const bool fast = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS;
         g_camera.move(fwd, right, up, dt, fast);
 
-        // Pick the dead-end nearest the camera's forward ray (crosshair aim).
+        const float aspect = static_cast<float>(fbw) / static_cast<float>(fbh);
+        const glm::mat4 viewProj = g_camera.projMatrix(aspect) * g_camera.viewMatrix();
+
+        // Link tool: pick the dead-end nearest the camera's forward ray (crosshair).
         int hover = -1;
         {
             const glm::vec3 cp = g_camera.position(), fwv = g_camera.forward();
@@ -239,6 +248,28 @@ int main(int argc, char** argv) {
                 if (t < 1.0f) continue; // behind / too close
                 const float ang = glm::length(v - fwv * t) / t;
                 if (ang < bestAng) { bestAng = ang; hover = static_cast<int>(i); }
+            }
+        }
+
+        // Selection: pick the geo-point under the free cursor (screen-space). Only
+        // when the cursor is released (Tab) — captured mode is for mouse-look.
+        int pointHover = -1;
+        glm::vec2 hoverPx(0.0f);
+        if (!g_mouseCaptured) {
+            double mx = 0.0, my = 0.0;
+            glfwGetCursorPos(window, &mx, &my);
+            int winw = fbw, winh = fbh;
+            glfwGetWindowSize(window, &winw, &winh);
+            const glm::vec2 cur(static_cast<float>(mx) * fbw / std::max(winw, 1),
+                                static_cast<float>(my) * fbh / std::max(winh, 1));
+            float best = 14.0f; // px pick radius
+            for (std::size_t i = 0; i < graph.points.size(); ++i) {
+                const glm::vec4 clip = viewProj * glm::vec4(graph.points[i].pos, 1.0f);
+                if (clip.w <= 0.0f) continue; // behind the camera
+                const glm::vec2 px((clip.x / clip.w * 0.5f + 0.5f) * fbw,
+                                   (clip.y / clip.w * 0.5f + 0.5f) * fbh);
+                const float d = glm::length(px - cur);
+                if (d < best) { best = d; pointHover = static_cast<int>(i); hoverPx = px; }
             }
         }
 
@@ -266,18 +297,44 @@ int main(int argc, char** argv) {
         }
         prevEnter = kEnter; prevL = kL; prevX = kX;
 
+        // Click to select (cursor freed only). Ctrl+click toggles for multi-select;
+        // plain click selects one; clicking empty space clears.
+        const bool ctrl = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
+                          glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
+        const bool mL = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+        if (!g_mouseCaptured && mL && !prevML) {
+            if (pointHover >= 0) {
+                if (ctrl) {
+                    if (!selected.insert(pointHover).second) selected.erase(pointHover);
+                } else {
+                    selected.clear();
+                    selected.insert(pointHover);
+                }
+            } else if (!ctrl) {
+                selected.clear();
+            }
+            rebuildOverlay();
+        }
+        prevML = mL;
+
         // HUD: a dark backing panel plus info lines, and a centre crosshair.
         {
             std::vector<TextVertex> tv;
             const float sc = std::max(2.0f, static_cast<float>(fbh) / 240.0f);
             const float x = 40.0f, lh = 12.0f * sc;
+            auto ndc = [&](float px, float py) {
+                return glm::vec2(px / fbw * 2.0f - 1.0f, py / fbh * 2.0f - 1.0f);
+            };
+            auto quad = [&](float cx, float cy, float hw, float hh, const glm::vec3& col) {
+                const glm::vec2 a = ndc(cx - hw, cy - hh), b = ndc(cx + hw, cy - hh),
+                                c = ndc(cx + hw, cy + hh), d = ndc(cx - hw, cy + hh);
+                tv.push_back({a, col}); tv.push_back({b, col}); tv.push_back({c, col});
+                tv.push_back({a, col}); tv.push_back({c, col}); tv.push_back({d, col});
+            };
             {
-                auto ndc = [&](float px, float py) {
-                    return glm::vec2(px / fbw * 2.0f - 1.0f, py / fbh * 2.0f - 1.0f);
-                };
                 const float x1 =
-                    std::min(static_cast<float>(fbw) - 20.0f, 40.0f + 44.0f * 8.0f * sc);
-                const float y1 = 40.0f + 6.0f * lh;
+                    std::min(static_cast<float>(fbw) - 20.0f, 40.0f + 48.0f * 8.0f * sc);
+                const float y1 = 40.0f + 8.0f * lh;
                 const glm::vec3 bg(0.04f, 0.05f, 0.09f);
                 const glm::vec2 a = ndc(20.0f, 20.0f), b = ndc(x1, 20.0f),
                                 c = ndc(x1, y1), d = ndc(20.0f, y1);
@@ -303,19 +360,33 @@ int main(int argc, char** argv) {
                        (selA >= 0 && selB >= 0) ? glm::vec3(1.0f, 0.9f, 0.3f)
                                                 : glm::vec3(0.7f, 0.85f, 0.7f),
                        fbw, fbh);
-            std::snprintf(buf, sizeof(buf), "SESSION LINKS %zu", sessionLinks.size());
+            std::snprintf(buf, sizeof(buf), "SESSION LINKS %zu   SELECTED %zu",
+                          sessionLinks.size(), selected.size());
             appendText(tv, buf, x, 40.0f + 5 * lh, sc, glm::vec3(0.6f, 0.9f, 0.6f),
                        fbw, fbh);
+            appendText(tv,
+                       g_mouseCaptured ? "SELECT: press Tab to free the cursor"
+                                       : "SELECT: click point, Ctrl+click multi, "
+                                         "click empty to clear",
+                       x, 40.0f + 6 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
             // Crosshair: a '+' at screen centre (tinted when a dead-end is hovered).
             appendText(tv, "+", fbw * 0.5f - 4.0f * sc, fbh * 0.5f - 4.0f * sc, sc,
                        hover >= 0 ? glm::vec3(1.0f, 0.3f, 0.25f) : glm::vec3(1.0f),
                        fbw, fbh);
+            // Hover marker: a green square ring around the geo-point under the cursor.
+            if (pointHover >= 0) {
+                const glm::vec3 hc(0.2f, 1.0f, 0.4f);
+                const float R = 9.0f, T = 1.5f;
+                quad(hoverPx.x, hoverPx.y - R, R, T, hc);
+                quad(hoverPx.x, hoverPx.y + R, R, T, hc);
+                quad(hoverPx.x - R, hoverPx.y, T, R, hc);
+                quad(hoverPx.x + R, hoverPx.y, T, R, hc);
+            }
             renderer.setOverlayText(tv);
         }
 
-        const float aspect = static_cast<float>(fbw) / static_cast<float>(fbh);
         PushConstants pc{};
-        pc.viewProj = g_camera.projMatrix(aspect) * g_camera.viewMatrix();
+        pc.viewProj = viewProj;
         pc.sunDir = glm::vec4(sunDir, data.minElevation());
         pc.camPos = glm::vec4(g_camera.position(), data.maxElevation());
         // Ghost the terrain/rails so the raw geo-point network reads clearly on top.
