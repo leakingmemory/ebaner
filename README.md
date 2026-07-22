@@ -196,6 +196,13 @@ straight, **endpoint-anchored** grade between them (a `elev x y z` overlay line 
 point — only the elevation changes). The bump flattens for the rails, the smoothed
 path the train rides, and the terrain carve.
 
+**Connecting a siding to the track it crosses.** Sidings often overshoot the track
+they should join — the end pokes past it with a red dead-end on the far side. Select
+that dead-end and press **J**: its end snaps onto the nearest track its trajectory
+crosses (a `move` overlay edit), trimming the overshoot to a clean turnout point; once
+the end lies on the track it's no longer flagged red. (Only the geometry is moved — the
+crossed track isn't split, so the vehicle's through-routes are unaffected.)
+
 **Fixing broken links.** Some exports leave a line disconnected across a gap (e.g. a
 tunnel approach), which derails the train at the loose end. Aim the centre crosshair
 at a red dead-end and **Enter** to pick end **A**, aim at the other loose end and

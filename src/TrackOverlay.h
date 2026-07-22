@@ -25,9 +25,11 @@ struct Tile;
 // as lines in `<datasetRoot>/overlay/track-edits.txt` (world coords, EPSG:25833):
 //   link ax ay az bx by bz   - connect two track ends across a broken gap
 //   elev x y z               - override the elevation of the nearest track vertex
+//   move ax ay az bx by bz   - move the nearest track vertex from a to b
 struct TrackEdit {
-    enum Kind { Link, Elev } kind = Link;
-    glm::dvec3 a{0.0}, b{0.0}; // Link: the two endpoints. Elev: a = {x, y, newZ}.
+    enum Kind { Link, Elev, Move } kind = Link;
+    // Link: the two endpoints. Elev: a = {x, y, newZ}. Move: a = old pos, b = new pos.
+    glm::dvec3 a{0.0}, b{0.0};
 };
 
 // Read the overlay file (empty vector if absent).

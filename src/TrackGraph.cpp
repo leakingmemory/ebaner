@@ -42,9 +42,13 @@ TrackGraph buildTrackGraph(const TerrainData& data) {
     std::unordered_set<std::uint32_t> seen;
     TrackGraph g;
 
-    // Endpoints (scene + world) of every segment, to detect dead ends afterwards.
-    struct End { glm::vec3 scene; glm::dvec3 world; };
+    // Endpoints (scene + world) and all edges of every segment, to detect dead
+    // ends afterwards (an endpoint is a dead end only if it neither meets another
+    // endpoint nor lies on another track's line).
+    struct End { glm::vec3 scene; glm::dvec3 world; std::uint32_t track; };
     std::vector<End> ends;
+    struct Edge { glm::vec2 a, b; std::uint32_t track; };
+    std::vector<Edge> edges;
 
     for (const Tile& t : data.tiles()) {
         for (const TrackSegment& seg : t.tracks) {
@@ -80,15 +84,25 @@ TrackGraph buildTrackGraph(const TerrainData& data) {
             for (std::size_t k = 0; k + 1 < pts.size(); ++k) {
                 g.lines.push_back({pts[k], lc});
                 g.lines.push_back({pts[k + 1], lc});
+                edges.push_back({glm::vec2(pts[k]), glm::vec2(pts[k + 1]), seg.trackId});
             }
-            ends.push_back({pts.front(), seg.pts.front()});
-            ends.push_back({pts.back(), seg.pts.back()});
+            ends.push_back({pts.front(), seg.pts.front(), seg.trackId});
+            ends.push_back({pts.back(), seg.pts.back(), seg.trackId});
         }
     }
 
-    // Dead ends: an endpoint with no other endpoint within ~1 m horizontally. These
-    // are the loose ends of broken links; the editor lets you connect two of them.
-    constexpr float kNodeTol = 1.0f;
+    // Distance from point p to segment a-b (2-D).
+    auto distToSeg = [](const glm::vec2& p, const glm::vec2& a, const glm::vec2& b) {
+        const glm::vec2 ab = b - a;
+        const float l2 = glm::dot(ab, ab);
+        const float t = l2 > 1e-9f ? glm::clamp(glm::dot(p - a, ab) / l2, 0.0f, 1.0f) : 0.0f;
+        return glm::length(p - (a + ab * t));
+    };
+
+    // Dead ends: an endpoint that neither meets another endpoint (~1 m) nor lies on a
+    // *different* track's line (~1.5 m). The loose ends of broken links; the editor
+    // lets you connect two of them, or snap one onto the track it crosses.
+    constexpr float kNodeTol = 1.0f, kTouchTol = 0.6f;
     for (std::size_t i = 0; i < ends.size(); ++i) {
         bool joined = false;
         for (std::size_t j = 0; j < ends.size() && !joined; ++j) {
@@ -97,6 +111,11 @@ TrackGraph buildTrackGraph(const TerrainData& data) {
                            ends[i].scene.y - ends[j].scene.y) <= kNodeTol)
                 joined = true;
         }
+        const glm::vec2 ep(ends[i].scene);
+        for (std::size_t e = 0; e < edges.size() && !joined; ++e)
+            if (edges[e].track != ends[i].track &&
+                distToSeg(ep, edges[e].a, edges[e].b) <= kTouchTol)
+                joined = true;
         if (!joined) {
             g.deadEnds.push_back({ends[i].scene, glm::vec3(1.0f, 0.15f, 0.12f)});
             g.deadEndWorld.push_back(ends[i].world);

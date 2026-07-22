@@ -260,6 +260,64 @@ int main(int argc, char** argv) {
         }
         applyEditsLive(es, /*keepSelection=*/true);
     };
+    // Connect a selected track *endpoint* to the nearest track its end trajectory
+    // crosses: move the endpoint onto that track (trims a siding that overshoots).
+    auto doConnect = [&]() {
+        constexpr double kMaxSnap = 25.0; // m from the endpoint
+        auto cross2 = [](const glm::dvec2& a, const glm::dvec2& b) {
+            return a.x * b.y - a.y * b.x;
+        };
+        std::vector<TrackEdit> moves;
+        int skipped = 0;
+        const int np = static_cast<int>(graph.points.size());
+        for (int i : selected) {
+            const std::uint32_t tid = graph.pointTrack[i];
+            const bool isFirst = i == 0 || graph.pointTrack[i - 1] != tid;
+            const bool isLast = i + 1 >= np || graph.pointTrack[i + 1] != tid;
+            if (isFirst == isLast) { ++skipped; continue; } // mid-track, not an endpoint
+            const int nb = isFirst ? i + 1 : i - 1;
+            const glm::dvec3 D = graph.pointWorld[i];
+            const glm::dvec2 A(graph.pointWorld[nb].x, graph.pointWorld[nb].y); // P
+            const glm::dvec2 dir(D.x - A.x, D.y - A.y); // P -> D
+            // Nearest crossing (to D) of the infinite P->D line with another track.
+            double best = kMaxSnap;
+            glm::dvec3 X(0.0);
+            bool has = false;
+            for (int j = 0; j + 1 < np; ++j) {
+                if (graph.pointTrack[j] != graph.pointTrack[j + 1]) continue; // track break
+                if (graph.pointTrack[j] == tid) continue;                     // same track
+                const glm::dvec3 M0 = graph.pointWorld[j], M1 = graph.pointWorld[j + 1];
+                const glm::dvec2 seg(M1.x - M0.x, M1.y - M0.y);
+                const double denom = cross2(dir, seg);
+                if (std::abs(denom) < 1e-9) continue; // parallel
+                const glm::dvec2 w(M0.x - A.x, M0.y - A.y);
+                const double t = cross2(w, seg) / denom; // along the P->D line
+                const double u = cross2(w, dir) / denom; // along the crossed edge
+                if (u < 0.0 || u > 1.0 || t < 0.0) continue; // off the edge / behind P
+                const glm::dvec3 P(M0.x + seg.x * u, M0.y + seg.y * u,
+                                   M0.z + (M1.z - M0.z) * u);
+                const double d = std::hypot(P.x - D.x, P.y - D.y);
+                if (d < best) { best = d; X = P; has = true; }
+            }
+            if (has) {
+                TrackEdit e;
+                e.kind = TrackEdit::Move;
+                e.a = D;
+                e.b = X;
+                moves.push_back(e);
+            } else {
+                ++skipped;
+            }
+        }
+        if (!moves.empty()) {
+            std::printf("[trackedit] connected %zu end(s) to intersecting track "
+                        "(preview; Ctrl+S to save)\n", moves.size());
+            applyEditsLive(moves, /*keepSelection=*/true);
+        } else {
+            std::printf("[trackedit] connect: select a dead-end whose line crosses a "
+                        "track (skipped %d)\n", skipped);
+        }
+    };
     rebuildOverlay();
 
     std::printf("\nControls: WASD move, Q/E down/up, mouse look, Shift boost, "
@@ -267,8 +325,8 @@ int main(int argc, char** argv) {
                 "Select (cursor freed with Tab): click a geo-point, Ctrl+click for "
                 "several, click empty to clear.\n"
                 "Edit: G straighten the selected span's grade; Up/Down raise/lower the "
-                "selection; Enter/Enter+L link two red dead ends. Edits preview live; "
-                "Ctrl+S to save to overlay/.\n"
+                "selection; J join a selected dead-end onto the track it crosses; "
+                "Enter/Enter+L link two red dead ends. Live preview; Ctrl+S saves.\n"
                 "Overlay: amber = main line, cyan = siding, magenta = yard, "
                 "red = dead end, white = selected.\n\n");
 
@@ -276,7 +334,8 @@ int main(int argc, char** argv) {
     const char* shotPath = std::getenv("EBANER_SCREENSHOT");
     int frame = 0;
     bool prevEnter = false, prevL = false, prevX = false, prevML = false,
-         prevG = false, prevS = false, prevUp = false, prevDown = false;
+         prevG = false, prevS = false, prevUp = false, prevDown = false,
+         prevJ = false;
     float elevRepeat = 0.0f; // auto-repeat throttle for Up/Down raise/lower
     double lastTime = glfwGetTime();
 
@@ -348,6 +407,7 @@ int main(int argc, char** argv) {
         const bool kL = glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS;
         const bool kX = glfwGetKey(window, GLFW_KEY_X) == GLFW_PRESS;
         const bool kG = glfwGetKey(window, GLFW_KEY_G) == GLFW_PRESS;
+        const bool kJ = glfwGetKey(window, GLFW_KEY_J) == GLFW_PRESS;
         // Save is Ctrl+S (plain S is the backward-movement key).
         const bool kSave = ctrl && glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS;
         if (kEnter && !prevEnter && hover >= 0) {
@@ -366,6 +426,8 @@ int main(int argc, char** argv) {
         }
         // G: straighten the selected span's elevation to a continuous grade.
         if (kG && !prevG) doRegrade();
+        // J: connect the selected dead-end(s) onto the track their line crosses.
+        if (kJ && !prevJ) doConnect();
         // Up/Down: raise/lower the selected point(s). Auto-repeats while held (an
         // immediate first step, then throttled) so big changes don't need many taps.
         constexpr double kElevStep = 0.1; // metres per step (auto-repeats while held)
@@ -392,6 +454,7 @@ int main(int argc, char** argv) {
             }
         }
         prevEnter = kEnter; prevL = kL; prevX = kX; prevG = kG; prevS = kSave;
+        prevJ = kJ;
 
         // Click to select (cursor freed only). Ctrl+click toggles for multi-select;
         // plain click selects one; clicking empty space clears.
@@ -427,7 +490,7 @@ int main(int argc, char** argv) {
             };
             {
                 const float x1 =
-                    std::min(static_cast<float>(fbw) - 20.0f, 40.0f + 48.0f * 8.0f * sc);
+                    std::min(static_cast<float>(fbw) - 20.0f, 40.0f + 54.0f * 8.0f * sc);
                 const float y1 = 40.0f + 8.0f * lh;
                 const glm::vec3 bg(0.04f, 0.05f, 0.09f);
                 const glm::vec2 a = ndc(20.0f, 20.0f), b = ndc(x1, 20.0f),
@@ -461,7 +524,7 @@ int main(int argc, char** argv) {
                 else std::snprintf(selz, sizeof(selz), " z=%.2f..%.2f", zmin, zmax);
             }
             std::snprintf(buf, sizeof(buf),
-                          "SELECTED %zu%s   G grade  Up/Down raise/lower 0.1m",
+                          "SELECTED %zu%s   G grade  Up/Dn elev  J join-track",
                           selected.size(), selz);
             appendText(tv, buf, x, 40.0f + 4 * lh, sc,
                        selected.empty() ? glm::vec3(0.7f, 0.85f, 0.7f)

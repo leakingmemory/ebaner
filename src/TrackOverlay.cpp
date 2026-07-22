@@ -94,6 +94,9 @@ std::vector<TrackEdit> loadTrackOverlay(const std::string& datasetRoot) {
         if (n == 7 && std::string(kind) == "link") {
             e.kind = TrackEdit::Link;
             edits.push_back(e);
+        } else if (n == 7 && std::string(kind) == "move") {
+            e.kind = TrackEdit::Move; // a = old pos, b = new pos
+            edits.push_back(e);
         } else if (n == 4 && std::string(kind) == "elev") {
             e.kind = TrackEdit::Elev; // a = {x, y, newZ}
             edits.push_back(e);
@@ -107,6 +110,7 @@ void applyTrackOverlay(std::vector<Tile>& tiles, const std::vector<TrackEdit>& e
     constexpr double kVertexTol = 2.0; // m; snap an elev override to a real vertex
     int elev = 0, links = 0;
 
+    int moves = 0;
     // Elevation overrides first, so a link's endpoint reflects any regraded z.
     for (const TrackEdit& e : edits) {
         if (e.kind != TrackEdit::Elev) continue;
@@ -114,6 +118,15 @@ void applyTrackOverlay(std::vector<Tile>& tiles, const std::vector<TrackEdit>& e
         if (nearestVertex(tiles, e.a.x, e.a.y, kVertexTol, ti, si, vi)) {
             tiles[ti].tracks[si].pts[vi].z = e.a.z;
             ++elev;
+        }
+    }
+    // Vertex moves (e.g. snapping a siding end onto the track it crosses).
+    for (const TrackEdit& e : edits) {
+        if (e.kind != TrackEdit::Move) continue;
+        int ti = 0, si = 0, vi = 0;
+        if (nearestVertex(tiles, e.a.x, e.a.y, kVertexTol, ti, si, vi)) {
+            tiles[ti].tracks[si].pts[vi] = e.b;
+            ++moves;
         }
     }
 
@@ -137,8 +150,9 @@ void applyTrackOverlay(std::vector<Tile>& tiles, const std::vector<TrackEdit>& e
         tiles[tia].tracks.push_back(std::move(c));
         ++links;
     }
-    if (elev > 0 || links > 0)
-        std::printf("[TrackOverlay] applied %d elev + %d link edit(s)\n", elev, links);
+    if (elev > 0 || links > 0 || moves > 0)
+        std::printf("[TrackOverlay] applied %d elev + %d move + %d link edit(s)\n",
+                    elev, moves, links);
 }
 
 bool appendTrackEdits(const std::string& datasetRoot,
@@ -153,11 +167,13 @@ bool appendTrackEdits(const std::string& datasetRoot,
     // fails. Fixed with 3 decimals round-trips the float coords well within tol.
     f << std::fixed << std::setprecision(3);
     for (const TrackEdit& e : edits) {
-        if (e.kind == TrackEdit::Elev)
+        if (e.kind == TrackEdit::Elev) {
             f << "elev " << e.a.x << ' ' << e.a.y << ' ' << e.a.z << '\n';
-        else
-            f << "link " << e.a.x << ' ' << e.a.y << ' ' << e.a.z << ' ' << e.b.x
+        } else {
+            const char* kw = e.kind == TrackEdit::Move ? "move" : "link";
+            f << kw << ' ' << e.a.x << ' ' << e.a.y << ' ' << e.a.z << ' ' << e.b.x
               << ' ' << e.b.y << ' ' << e.b.z << '\n';
+        }
     }
     return static_cast<bool>(f);
 }
