@@ -45,6 +45,10 @@ std::string tileDir(const std::string& root, int lod, int col, int row) {
 
 } // namespace
 
+void TerrainData::applyTrackEdits(const std::vector<TrackEdit>& edits) {
+    applyTrackOverlay(tiles_, edits);
+}
+
 void TerrainData::load(const std::string& datasetRoot, double halfWindow) {
     if (!fs::exists(datasetRoot)) {
         throw std::runtime_error("dataset root not found: " + datasetRoot);

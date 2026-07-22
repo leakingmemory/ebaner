@@ -170,22 +170,33 @@ no point is buried in the terrain or rails. Walk around with the same free-fly
 controls (W/A/S/D, Q/E, mouse, Shift, Tab, Esc); a HUD shows the track / geo-point /
 dead-end counts and the camera position.
 
+**Editing model.** Edits **preview immediately** in the editor (applied to the
+in-memory geometry the same way the viewer applies them at load) and are written to a
+**drop-in overlay**, `<dataset>/overlay/track-edits.txt`, only when you press
+**Ctrl+S** — a separate directory the generator never touches, so regenerated base
+tiles can be dropped in without losing manual edits. On the next load, `TerrainData`
+applies the overlay over the generated tiles for **both** the viewer and the editor.
+(`EBANER_NOOVERLAY=1` ignores the overlay; unsaved edits are discarded on quit — the
+HUD shows the unsaved count.)
+
 **Selecting points.** Press **Tab** to free the cursor, then **left-click** a
 geo-point to select it (it turns **white**); **Ctrl+click** toggles points for a
 multi-selection; clicking empty space clears it. Picking is screen-space from the
-cursor. This is groundwork for future edit operations — selection only for now.
+cursor.
 
-**Fixing broken links.** Some exports leave a line disconnected across a gap (e.g.
-a tunnel approach), which derails the train at the loose end. Aim the centre
-crosshair at a red dead-end and press **Enter** to pick end **A**, aim at the other
-loose end and **Enter** again for **B**, then **L** to link them (**X** clears the
-selection). The edit is written to a **drop-in overlay**,
-`<dataset>/overlay/track-edits.txt` — a separate directory the generator never
-touches, so regenerated base tiles can be dropped in without losing manual edits. On
-the next load, `TerrainData` applies the overlay over the generated tiles (both the
-viewer and the editor), the two segments join into one continuous route, and the
-train runs across the former gap. (`EBANER_NOOVERLAY=1` ignores the overlay.) Only
-"link" edits exist so far; moving/adding/deleting points is future work.
+**Straightening a grade (`G`).** Where a track profile has a vertical bump that
+shouldn't be there, select points on that track (at least the two ends of the run)
+and press **G**: every point from the first to the last selected is snapped onto a
+straight, **endpoint-anchored** grade between them (a `elev x y z` overlay line per
+point — only the elevation changes). The bump flattens for the rails, the smoothed
+path the train rides, and the terrain carve.
+
+**Fixing broken links.** Some exports leave a line disconnected across a gap (e.g. a
+tunnel approach), which derails the train at the loose end. Aim the centre crosshair
+at a red dead-end and **Enter** to pick end **A**, aim at the other loose end and
+**Enter** again for **B**, then **L** to link them (a `link …` overlay edit; **X**
+clears the pick). The two segments join into one continuous route and the train runs
+across the former gap.
 
 ## Data format
 

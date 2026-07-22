@@ -21,22 +21,24 @@
 struct Tile;
 
 // Manual track edits kept as a drop-in overlay, separate from the generated tiles
-// so a regenerated base dataset can be dropped in without losing the edits. v1 has
-// a single edit kind: a "link" connecting two track ends across a gap the exporter
-// left broken. Stored as lines in `<datasetRoot>/overlay/track-edits.txt`:
-//   link ax ay az bx by bz     (world coordinates, EPSG:25833)
+// so a regenerated base dataset can be dropped in without losing the edits. Stored
+// as lines in `<datasetRoot>/overlay/track-edits.txt` (world coords, EPSG:25833):
+//   link ax ay az bx by bz   - connect two track ends across a broken gap
+//   elev x y z               - override the elevation of the nearest track vertex
 struct TrackEdit {
-    glm::dvec3 a{0.0}, b{0.0}; // world endpoints to connect
+    enum Kind { Link, Elev } kind = Link;
+    glm::dvec3 a{0.0}, b{0.0}; // Link: the two endpoints. Elev: a = {x, y, newZ}.
 };
 
 // Read the overlay file (empty vector if absent).
 std::vector<TrackEdit> loadTrackOverlay(const std::string& datasetRoot);
 
-// Apply edits to the loaded tiles: for each link, snap a and b to the nearest
-// existing track-segment endpoints and append a synthetic connector segment so the
-// two routes join into one continuous line (see buildTrackPaths).
+// Apply edits to the loaded tiles: Elev edits override the nearest track vertex's z;
+// each Link snaps a/b to the nearest track-segment endpoints and appends a synthetic
+// connector segment so the two routes join into one continuous line (buildTrackPaths).
 void applyTrackOverlay(std::vector<Tile>& tiles, const std::vector<TrackEdit>& edits);
 
-// Append one edit to the overlay file, creating `overlay/` if needed.
-// Returns false on write failure.
-bool appendTrackEdit(const std::string& datasetRoot, const TrackEdit& edit);
+// Append edits to the overlay file (batch; opens once), creating `overlay/` if
+// needed. Returns false on write failure.
+bool appendTrackEdits(const std::string& datasetRoot,
+                      const std::vector<TrackEdit>& edits);

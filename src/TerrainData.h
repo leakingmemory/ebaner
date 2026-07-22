@@ -18,6 +18,8 @@
 #include <string>
 #include <vector>
 
+struct TrackEdit;
+
 // One railway track segment: a polyline in world coords (EPSG:25833, metres).
 // trackId is globally unique and consistent across tiles (a segment crossing a
 // tile boundary appears in full in every tile it touches).
@@ -88,6 +90,11 @@ public:
     void load(const std::string& datasetRoot, double halfWindowMetres = 20000.0);
 
     const std::vector<Tile>& tiles() const { return tiles_; }
+
+    // Apply track-edit overlays to the loaded tiles in-session (mutating the
+    // geometry), so the editor can preview edits before they are saved. The saved
+    // overlay file is already applied during load().
+    void applyTrackEdits(const std::vector<TrackEdit>& edits);
 
     // Samples ground elevation (m) at world (x,y), preferring the finest LOD
     // tile that covers the point with valid data. Returns false if no loaded

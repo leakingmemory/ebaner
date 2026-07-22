@@ -16,6 +16,7 @@
 #include <glm/glm.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 class TerrainData;
@@ -34,6 +35,8 @@ struct LineVertex {
 struct TrackGraph {
     std::vector<LineVertex> points;      // draw as VK_PRIMITIVE_TOPOLOGY_POINT_LIST
     std::vector<glm::dvec3> pointWorld;   // world coord per point (for selection/edits)
+    std::vector<std::uint32_t> pointTrack; // trackId per point (points are contiguous
+                                           // and in order per track)
     std::vector<LineVertex> lines;  // draw as VK_PRIMITIVE_TOPOLOGY_LINE_LIST
     // Dead ends: track endpoints with no neighbouring endpoint (a broken link).
     // Drawn bright red; `deadEndWorld` holds their world coords (parallel array),

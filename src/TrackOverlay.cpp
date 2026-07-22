@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <string>
 
 namespace fs = std::filesystem;
@@ -54,6 +55,29 @@ bool nearestEndpoint(const std::vector<Tile>& tiles, const glm::dvec3& q, double
     }
     return found;
 }
+
+// Nearest track *vertex* (any point, not just endpoints) to a world (x,y), across
+// all tiles. Returns tile/segment/vertex indices to mutate, or false if none in tol.
+bool nearestVertex(const std::vector<Tile>& tiles, double qx, double qy, double tol,
+                   int& tileIdx, int& segIdx, int& vertIdx) {
+    double best = tol;
+    bool found = false;
+    for (int ti = 0; ti < static_cast<int>(tiles.size()); ++ti) {
+        const std::vector<TrackSegment>& segs = tiles[ti].tracks;
+        for (int si = 0; si < static_cast<int>(segs.size()); ++si) {
+            const std::vector<glm::dvec3>& p = segs[si].pts;
+            for (int vi = 0; vi < static_cast<int>(p.size()); ++vi) {
+                const double d = std::hypot(p[vi].x - qx, p[vi].y - qy);
+                if (d < best) {
+                    best = d;
+                    tileIdx = ti; segIdx = si; vertIdx = vi;
+                    found = true;
+                }
+            }
+        }
+    }
+    return found;
+}
 } // namespace
 
 std::vector<TrackEdit> loadTrackOverlay(const std::string& datasetRoot) {
@@ -65,18 +89,36 @@ std::vector<TrackEdit> loadTrackOverlay(const std::string& datasetRoot) {
         if (line.empty() || line[0] == '#') continue;
         char kind[32] = {};
         TrackEdit e;
-        if (std::sscanf(line.c_str(), "%31s %lf %lf %lf %lf %lf %lf", kind, &e.a.x,
-                        &e.a.y, &e.a.z, &e.b.x, &e.b.y, &e.b.z) == 7 &&
-            std::string(kind) == "link")
+        const int n = std::sscanf(line.c_str(), "%31s %lf %lf %lf %lf %lf %lf", kind,
+                                  &e.a.x, &e.a.y, &e.a.z, &e.b.x, &e.b.y, &e.b.z);
+        if (n == 7 && std::string(kind) == "link") {
+            e.kind = TrackEdit::Link;
             edits.push_back(e);
+        } else if (n == 4 && std::string(kind) == "elev") {
+            e.kind = TrackEdit::Elev; // a = {x, y, newZ}
+            edits.push_back(e);
+        }
     }
     return edits;
 }
 
 void applyTrackOverlay(std::vector<Tile>& tiles, const std::vector<TrackEdit>& edits) {
     if (tiles.empty() || edits.empty()) return;
-    int applied = 0;
+    constexpr double kVertexTol = 2.0; // m; snap an elev override to a real vertex
+    int elev = 0, links = 0;
+
+    // Elevation overrides first, so a link's endpoint reflects any regraded z.
+    for (const TrackEdit& e : edits) {
+        if (e.kind != TrackEdit::Elev) continue;
+        int ti = 0, si = 0, vi = 0;
+        if (nearestVertex(tiles, e.a.x, e.a.y, kVertexTol, ti, si, vi)) {
+            tiles[ti].tracks[si].pts[vi].z = e.a.z;
+            ++elev;
+        }
+    }
+
     for (std::size_t i = 0; i < edits.size(); ++i) {
+        if (edits[i].kind != TrackEdit::Link) continue;
         glm::dvec3 ea, eb;
         std::uint8_t ta = 0, tb = 0;
         int tia = 0, tib = 0;
@@ -93,19 +135,29 @@ void applyTrackOverlay(std::vector<Tile>& tiles, const std::vector<TrackEdit>& e
         c.medium = 0x55;       // tunnel
         c.pts = {ea, eb};
         tiles[tia].tracks.push_back(std::move(c));
-        ++applied;
+        ++links;
     }
-    if (applied > 0)
-        std::printf("[TrackOverlay] applied %d/%zu link edit(s)\n", applied,
-                    edits.size());
+    if (elev > 0 || links > 0)
+        std::printf("[TrackOverlay] applied %d elev + %d link edit(s)\n", elev, links);
 }
 
-bool appendTrackEdit(const std::string& datasetRoot, const TrackEdit& edit) {
+bool appendTrackEdits(const std::string& datasetRoot,
+                      const std::vector<TrackEdit>& edits) {
+    if (edits.empty()) return true;
     std::error_code ec;
     fs::create_directories(datasetRoot + "/overlay", ec);
     std::ofstream f(overlayFile(datasetRoot), std::ios::app);
     if (!f) return false;
-    f << "link " << edit.a.x << ' ' << edit.a.y << ' ' << edit.a.z << ' ' << edit.b.x
-      << ' ' << edit.b.y << ' ' << edit.b.z << '\n';
+    // Full precision: default ostream is 6 significant figures, which mangles the
+    // ~7-digit UTM coordinates (e.g. 7463588 -> "7.46359e+06") so the reload snap
+    // fails. Fixed with 3 decimals round-trips the float coords well within tol.
+    f << std::fixed << std::setprecision(3);
+    for (const TrackEdit& e : edits) {
+        if (e.kind == TrackEdit::Elev)
+            f << "elev " << e.a.x << ' ' << e.a.y << ' ' << e.a.z << '\n';
+        else
+            f << "link " << e.a.x << ' ' << e.a.y << ' ' << e.a.z << ' ' << e.b.x
+              << ' ' << e.b.y << ' ' << e.b.z << '\n';
+    }
     return static_cast<bool>(f);
 }

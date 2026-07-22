@@ -75,6 +75,7 @@ TrackGraph buildTrackGraph(const TerrainData& data) {
             for (std::size_t k = 0; k < pts.size(); ++k) {
                 g.points.push_back({pts[k], pc});
                 g.pointWorld.push_back(ptsW[k]);
+                g.pointTrack.push_back(seg.trackId);
             }
             for (std::size_t k = 0; k + 1 < pts.size(); ++k) {
                 g.lines.push_back({pts[k], lc});

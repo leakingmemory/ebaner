@@ -178,17 +178,12 @@ int main(int argc, char** argv) {
     }
 
     // --- Editor state ---
-    int selA = -1, selB = -1; // selected dead-end indices (into graph.deadEnds)
-    std::vector<std::pair<glm::vec3, glm::vec3>> sessionLinks; // scene endpoints, green
-    std::set<int> selected;   // selected geo-points (indices into graph.points)
+    int selA = -1, selB = -1;      // picked dead-end indices (into graph.deadEnds)
+    std::set<int> selected;        // selected geo-points (indices into graph.points)
+    std::vector<TrackEdit> pending; // edits made this session, not yet saved
     auto rebuildOverlay = [&]() {
         std::vector<LineVertex> lns = graph.lines;
-        const glm::vec3 green(0.2f, 1.0f, 0.35f), yellow(1.0f, 0.95f, 0.2f),
-            white(1.0f, 1.0f, 1.0f);
-        for (const auto& [a, b] : sessionLinks) {
-            lns.push_back({a, green});
-            lns.push_back({b, green});
-        }
+        const glm::vec3 yellow(1.0f, 0.95f, 0.2f), white(1.0f, 1.0f, 1.0f);
         std::vector<LineVertex> pts = graph.points;
         pts.insert(pts.end(), graph.deadEnds.begin(), graph.deadEnds.end());
         if (selA >= 0) pts.push_back({graph.deadEnds[selA].pos, yellow});
@@ -196,21 +191,66 @@ int main(int argc, char** argv) {
         for (int i : selected) pts.push_back({graph.points[i].pos, white}); // on top
         renderer.attachTrackGraph(lns, pts);
     };
+    // Apply edits to the loaded data in-session and rebuild the graph, so they
+    // preview immediately (same path ebaner uses at load). Nothing is written to
+    // disk until the user saves.
+    auto applyEditsLive = [&](const std::vector<TrackEdit>& es) {
+        pending.insert(pending.end(), es.begin(), es.end());
+        data.applyTrackEdits(es);
+        graph = buildTrackGraph(data);
+        selected.clear();
+        selA = selB = -1;
+        rebuildOverlay();
+    };
+    // Straighten the selected span's elevation onto an endpoint-anchored grade.
+    auto doRegrade = [&]() {
+        if (selected.size() < 2) {
+            std::printf("[trackedit] regrade: select >=2 points first\n");
+            return;
+        }
+        const int lo = *selected.begin(), hi = *selected.rbegin();
+        const std::uint32_t tid = graph.pointTrack[lo];
+        for (int i : selected)
+            if (graph.pointTrack[i] != tid) {
+                std::printf("[trackedit] regrade: select points on ONE track\n");
+                return;
+            }
+        std::vector<double> cum(hi - lo + 1, 0.0);
+        for (int i = lo + 1; i <= hi; ++i)
+            cum[i - lo] = cum[i - 1 - lo] +
+                std::hypot(graph.pointWorld[i].x - graph.pointWorld[i - 1].x,
+                           graph.pointWorld[i].y - graph.pointWorld[i - 1].y);
+        const double dtot = cum[hi - lo];
+        const double z0 = graph.pointWorld[lo].z, z1 = graph.pointWorld[hi].z;
+        std::vector<TrackEdit> es;
+        for (int i = lo; i <= hi; ++i) {
+            TrackEdit e;
+            e.kind = TrackEdit::Elev;
+            const double nz = dtot > 1e-6 ? z0 + (z1 - z0) * (cum[i - lo] / dtot) : z0;
+            e.a = glm::dvec3(graph.pointWorld[i].x, graph.pointWorld[i].y, nz);
+            es.push_back(e);
+        }
+        const double grade = dtot > 1e-6 ? (z1 - z0) / dtot * 100.0 : 0.0;
+        std::printf("[trackedit] regraded %zu points, grade %+.2f%% over %.0f m "
+                    "(preview; Ctrl+S to save)\n", es.size(), grade, dtot);
+        applyEditsLive(es);
+    };
     rebuildOverlay();
 
     std::printf("\nControls: WASD move, Q/E down/up, mouse look, Shift boost, "
                 "Tab release cursor, Esc quit\n"
                 "Select (cursor freed with Tab): click a geo-point, Ctrl+click for "
                 "several, click empty to clear.\n"
-                "Link fix: aim crosshair at a red dead-end, Enter to pick A then B, "
-                "L to link (saved to overlay/), X to clear.\n"
+                "Edit: G straighten the selected span's grade; Enter/Enter+L link two "
+                "red dead ends. Edits preview live; Ctrl+S to save to overlay/.\n"
                 "Overlay: amber = main line, cyan = siding, magenta = yard, "
                 "red = dead end, white = selected.\n\n");
 
     const glm::vec3 sunDir = glm::normalize(glm::vec3(0.4f, -0.5f, 0.75f));
     const char* shotPath = std::getenv("EBANER_SCREENSHOT");
     int frame = 0;
-    bool prevEnter = false, prevL = false, prevX = false, prevML = false;
+    bool prevEnter = false, prevL = false, prevX = false, prevML = false,
+         prevG = false, prevS = false;
     double lastTime = glfwGetTime();
 
     while (!glfwWindowShouldClose(window)) {
@@ -273,10 +313,16 @@ int main(int argc, char** argv) {
             }
         }
 
-        // Editing keys (edge-triggered): Enter pick A/B, L link, X clear.
+        // Editing keys (edge-triggered): Enter pick A/B, L link, X clear, G grade,
+        // S save. Edits preview immediately (applyEditsLive); S writes to disk.
+        const bool ctrl = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
+                          glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
         const bool kEnter = glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS;
         const bool kL = glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS;
         const bool kX = glfwGetKey(window, GLFW_KEY_X) == GLFW_PRESS;
+        const bool kG = glfwGetKey(window, GLFW_KEY_G) == GLFW_PRESS;
+        // Save is Ctrl+S (plain S is the backward-movement key).
+        const bool kSave = ctrl && glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS;
         if (kEnter && !prevEnter && hover >= 0) {
             if (selA < 0) selA = hover;
             else if (hover != selA) selB = hover;
@@ -284,23 +330,29 @@ int main(int argc, char** argv) {
         }
         if (kX && !prevX) { selA = selB = -1; rebuildOverlay(); }
         if (kL && !prevL && selA >= 0 && selB >= 0) {
-            const TrackEdit e{graph.deadEndWorld[selA], graph.deadEndWorld[selB]};
-            if (appendTrackEdit(datasetRoot, e)) {
-                sessionLinks.push_back({graph.deadEnds[selA].pos, graph.deadEnds[selB].pos});
-                std::printf("[trackedit] linked dead-ends -> %s/overlay/track-edits.txt "
-                            "(re-run to drive across it)\n", datasetRoot.c_str());
+            TrackEdit e;
+            e.kind = TrackEdit::Link;
+            e.a = graph.deadEndWorld[selA];
+            e.b = graph.deadEndWorld[selB];
+            applyEditsLive({e});
+            std::printf("[trackedit] linked dead-ends (preview; S to save)\n");
+        }
+        // G: straighten the selected span's elevation to a continuous grade.
+        if (kG && !prevG) doRegrade();
+        // Ctrl+S: save pending edits to the overlay file.
+        if (kSave && !prevS && !pending.empty()) {
+            if (appendTrackEdits(datasetRoot, pending)) {
+                std::printf("[trackedit] saved %zu edit(s) -> %s/overlay/track-edits.txt\n",
+                            pending.size(), datasetRoot.c_str());
+                pending.clear();
             } else {
                 std::fprintf(stderr, "[trackedit] failed to write overlay file\n");
             }
-            selA = selB = -1;
-            rebuildOverlay();
         }
-        prevEnter = kEnter; prevL = kL; prevX = kX;
+        prevEnter = kEnter; prevL = kL; prevX = kX; prevG = kG; prevS = kSave;
 
         // Click to select (cursor freed only). Ctrl+click toggles for multi-select;
         // plain click selects one; clicking empty space clears.
-        const bool ctrl = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
-                          glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
         const bool mL = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
         if (!g_mouseCaptured && mL && !prevML) {
             if (pointHover >= 0) {
@@ -351,18 +403,20 @@ int main(int argc, char** argv) {
             std::snprintf(buf, sizeof(buf), "POS %.0f %.0f %.0f", p.x, p.y, p.z);
             appendText(tv, buf, x, 40.0f + 2 * lh, sc, glm::vec3(0.7f, 0.85f, 0.7f),
                        fbw, fbh);
-            appendText(tv, "AIM RED DEAD-END: Enter pick A/B, L link, X clear",
+            appendText(tv, "LINK: aim red dead-end, Enter A/B, L link, X clear",
                        x, 40.0f + 3 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
-            std::snprintf(buf, sizeof(buf), "A %s  B %s  hover %s",
-                          selA >= 0 ? "set" : "-", selB >= 0 ? "set" : "-",
-                          hover >= 0 ? "yes" : "-");
+            std::snprintf(buf, sizeof(buf), "SELECTED %zu   G straighten grade   "
+                          "(A %s B %s)", selected.size(), selA >= 0 ? "set" : "-",
+                          selB >= 0 ? "set" : "-");
             appendText(tv, buf, x, 40.0f + 4 * lh, sc,
-                       (selA >= 0 && selB >= 0) ? glm::vec3(1.0f, 0.9f, 0.3f)
-                                                : glm::vec3(0.7f, 0.85f, 0.7f),
+                       selected.size() >= 2 ? glm::vec3(1.0f, 0.9f, 0.3f)
+                                            : glm::vec3(0.7f, 0.85f, 0.7f),
                        fbw, fbh);
-            std::snprintf(buf, sizeof(buf), "SESSION LINKS %zu   SELECTED %zu",
-                          sessionLinks.size(), selected.size());
-            appendText(tv, buf, x, 40.0f + 5 * lh, sc, glm::vec3(0.6f, 0.9f, 0.6f),
+            std::snprintf(buf, sizeof(buf), "UNSAVED %zu   %s", pending.size(),
+                          pending.empty() ? "" : "Ctrl+S to save");
+            appendText(tv, buf, x, 40.0f + 5 * lh, sc,
+                       pending.empty() ? glm::vec3(0.6f, 0.9f, 0.6f)
+                                       : glm::vec3(1.0f, 0.6f, 0.3f),
                        fbw, fbh);
             appendText(tv,
                        g_mouseCaptured ? "SELECT: press Tab to free the cursor"
