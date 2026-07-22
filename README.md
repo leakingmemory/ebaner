@@ -45,6 +45,16 @@ Bodø main track ("track 1 end"), resolved from the `tracks.bin` geometry.
   Norwegian standard: an asphalt centre with light **concrete edge slabs** and a
   painted **yellow safety line** where the slabs begin, on the track-facing
   long edges.
+- **Switch stands** — a classic Norwegian manual switch stand (sporveksel) at
+  every turnout, i.e. wherever one track's end joins another track's line
+  (`src/SwitchMesh.cpp`). Each stand is a weighted lever (a bar ending in a low
+  **cylindrical counterweight**) driving a throw rod to the movable rail, plus a
+  tall post carrying a rotating **indicator target**. The target reads: a
+  **vertical line** = set straight through, an **arrow** = a train would be
+  diverted to the siding, a **filled circle** = movement allowed from the siding
+  onto the main line but not the reverse. For now every switch is drawn in the
+  straight-through setting, so each target shows the vertical line and the
+  weighted lever stands out at right angles to the track.
 - **Rail vehicle** — chosen on an in-window **start screen** (a text menu): a
   single-axle wheelset, a dual-axle bogie (two wheelsets + frame), a full-length
   **carriage underframe** on two dual-axle bogies (one at each end), or a longer

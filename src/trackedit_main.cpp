@@ -24,6 +24,7 @@
 #include "Font.h"
 #include "PlatformMesh.h"
 #include "RoadMesh.h"
+#include "SwitchMesh.h"
 #include "TerrainData.h"
 #include "TerrainMesh.h"
 #include "Textures.h"
@@ -93,6 +94,7 @@ int main(int argc, char** argv) {
     RoadMesh roads;
     BuildingMesh buildings;
     PlatformMesh platforms;
+    SwitchMesh switches;
     TrackGraph graph;
     std::vector<TrackPath> paths;
     try {
@@ -103,6 +105,7 @@ int main(int argc, char** argv) {
         roads.build(data);
         buildings.build(data);
         platforms.build(data, paths);
+        switches.build(data);
         graph = buildTrackGraph(data); // raw geo-points + links overlay
     } catch (const std::exception& e) {
         std::fprintf(stderr, "Failed to load terrain: %s\n", e.what());
@@ -159,6 +162,15 @@ int main(int argc, char** argv) {
                            platforms.vertices().end());
         structIndices.reserve(structIndices.size() + platforms.indices().size());
         for (std::uint32_t idx : platforms.indices())
+            structIndices.push_back(idx + vbase);
+    }
+    // Switch stands are the same solid-lit static geometry; merge them in too.
+    {
+        const std::uint32_t vbase = static_cast<std::uint32_t>(structVerts.size());
+        structVerts.insert(structVerts.end(), switches.vertices().begin(),
+                           switches.vertices().end());
+        structIndices.reserve(structIndices.size() + switches.indices().size());
+        for (std::uint32_t idx : switches.indices())
             structIndices.push_back(idx + vbase);
     }
 
