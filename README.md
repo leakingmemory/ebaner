@@ -182,7 +182,12 @@ HUD shows the unsaved count.)
 **Selecting points.** Press **Tab** to free the cursor, then **left-click** a
 geo-point to select it (it turns **white**); **Ctrl+click** toggles points for a
 multi-selection; clicking empty space clears it. Picking is screen-space from the
-cursor.
+cursor. The **elevation** of the point under the cursor is labelled beside it, and the
+HUD shows the selected point's elevation (or the `min..max` range for a group).
+
+**Raising / lowering.** With points selected, **Up** / **Down** nudge their elevation
+by 0.1 m (auto-repeating while held, so bigger moves just hold the key). Each is an
+`elev` override, previewed live and saved with Ctrl+S — handy for fixing a stray point.
 
 **Straightening a grade (`G`).** Where a track profile has a vertical bump that
 shouldn't be there, select points on that track (at least the two ends of the run)

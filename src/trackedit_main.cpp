@@ -194,12 +194,24 @@ int main(int argc, char** argv) {
     // Apply edits to the loaded data in-session and rebuild the graph, so they
     // preview immediately (same path ebaner uses at load). Nothing is written to
     // disk until the user saves.
-    auto applyEditsLive = [&](const std::vector<TrackEdit>& es) {
-        pending.insert(pending.end(), es.begin(), es.end());
+    auto applyEditsLive = [&](const std::vector<TrackEdit>& es,
+                              bool keepSelection = false) {
+        for (const TrackEdit& e : es) {
+            // De-dupe elevation overrides by (x,y) so repeated nudges keep one line
+            // per point (last write wins; fewer `elev` lines on save).
+            if (e.kind == TrackEdit::Elev)
+                pending.erase(std::remove_if(pending.begin(), pending.end(),
+                    [&](const TrackEdit& p) {
+                        return p.kind == TrackEdit::Elev &&
+                               std::hypot(p.a.x - e.a.x, p.a.y - e.a.y) < 0.5;
+                    }), pending.end());
+            pending.push_back(e);
+        }
         data.applyTrackEdits(es);
         graph = buildTrackGraph(data);
-        selected.clear();
-        selA = selB = -1;
+        // Elev edits keep the point count/order, so the selection stays valid; link
+        // edits add a segment (indices shift) so the selection must clear.
+        if (!keepSelection) { selected.clear(); selA = selB = -1; }
         rebuildOverlay();
     };
     // Straighten the selected span's elevation onto an endpoint-anchored grade.
@@ -233,7 +245,20 @@ int main(int argc, char** argv) {
         const double grade = dtot > 1e-6 ? (z1 - z0) / dtot * 100.0 : 0.0;
         std::printf("[trackedit] regraded %zu points, grade %+.2f%% over %.0f m "
                     "(preview; Ctrl+S to save)\n", es.size(), grade, dtot);
-        applyEditsLive(es);
+        applyEditsLive(es, /*keepSelection=*/true);
+    };
+    // Raise (+) / lower (-) every selected point's elevation by `delta` metres.
+    auto doElevStep = [&](double delta) {
+        if (selected.empty()) return;
+        std::vector<TrackEdit> es;
+        for (int i : selected) {
+            TrackEdit e;
+            e.kind = TrackEdit::Elev;
+            e.a = glm::dvec3(graph.pointWorld[i].x, graph.pointWorld[i].y,
+                             graph.pointWorld[i].z + delta);
+            es.push_back(e);
+        }
+        applyEditsLive(es, /*keepSelection=*/true);
     };
     rebuildOverlay();
 
@@ -241,8 +266,9 @@ int main(int argc, char** argv) {
                 "Tab release cursor, Esc quit\n"
                 "Select (cursor freed with Tab): click a geo-point, Ctrl+click for "
                 "several, click empty to clear.\n"
-                "Edit: G straighten the selected span's grade; Enter/Enter+L link two "
-                "red dead ends. Edits preview live; Ctrl+S to save to overlay/.\n"
+                "Edit: G straighten the selected span's grade; Up/Down raise/lower the "
+                "selection; Enter/Enter+L link two red dead ends. Edits preview live; "
+                "Ctrl+S to save to overlay/.\n"
                 "Overlay: amber = main line, cyan = siding, magenta = yard, "
                 "red = dead end, white = selected.\n\n");
 
@@ -250,7 +276,8 @@ int main(int argc, char** argv) {
     const char* shotPath = std::getenv("EBANER_SCREENSHOT");
     int frame = 0;
     bool prevEnter = false, prevL = false, prevX = false, prevML = false,
-         prevG = false, prevS = false;
+         prevG = false, prevS = false, prevUp = false, prevDown = false;
+    float elevRepeat = 0.0f; // auto-repeat throttle for Up/Down raise/lower
     double lastTime = glfwGetTime();
 
     while (!glfwWindowShouldClose(window)) {
@@ -339,6 +366,21 @@ int main(int argc, char** argv) {
         }
         // G: straighten the selected span's elevation to a continuous grade.
         if (kG && !prevG) doRegrade();
+        // Up/Down: raise/lower the selected point(s). Auto-repeats while held (an
+        // immediate first step, then throttled) so big changes don't need many taps.
+        constexpr double kElevStep = 0.1; // metres per step (auto-repeats while held)
+        const bool kUp = glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS;
+        const bool kDn = glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS;
+        if ((kUp || kDn) && !selected.empty()) {
+            elevRepeat -= dt;
+            if ((kUp && !prevUp) || (kDn && !prevDown) || elevRepeat <= 0.0f) {
+                doElevStep(kUp ? kElevStep : -kElevStep);
+                elevRepeat = 0.09f;
+            }
+        } else {
+            elevRepeat = 0.0f;
+        }
+        prevUp = kUp; prevDown = kDn;
         // Ctrl+S: save pending edits to the overlay file.
         if (kSave && !prevS && !pending.empty()) {
             if (appendTrackEdits(datasetRoot, pending)) {
@@ -403,14 +445,27 @@ int main(int argc, char** argv) {
             std::snprintf(buf, sizeof(buf), "POS %.0f %.0f %.0f", p.x, p.y, p.z);
             appendText(tv, buf, x, 40.0f + 2 * lh, sc, glm::vec3(0.7f, 0.85f, 0.7f),
                        fbw, fbh);
-            appendText(tv, "LINK: aim red dead-end, Enter A/B, L link, X clear",
-                       x, 40.0f + 3 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
-            std::snprintf(buf, sizeof(buf), "SELECTED %zu   G straighten grade   "
-                          "(A %s B %s)", selected.size(), selA >= 0 ? "set" : "-",
-                          selB >= 0 ? "set" : "-");
+            std::snprintf(buf, sizeof(buf), "LINK: Enter A/B (A %s B %s), L link, X clear",
+                          selA >= 0 ? "set" : "-", selB >= 0 ? "set" : "-");
+            appendText(tv, buf, x, 40.0f + 3 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f),
+                       fbw, fbh);
+            // Selection + elevation (single z, or min..max over the selection).
+            char selz[48] = "";
+            if (!selected.empty()) {
+                double zmin = 1e9, zmax = -1e9;
+                for (int i : selected) {
+                    const double z = graph.pointWorld[i].z;
+                    zmin = std::min(zmin, z); zmax = std::max(zmax, z);
+                }
+                if (selected.size() == 1) std::snprintf(selz, sizeof(selz), " z=%.2f", zmin);
+                else std::snprintf(selz, sizeof(selz), " z=%.2f..%.2f", zmin, zmax);
+            }
+            std::snprintf(buf, sizeof(buf),
+                          "SELECTED %zu%s   G grade  Up/Down raise/lower 0.1m",
+                          selected.size(), selz);
             appendText(tv, buf, x, 40.0f + 4 * lh, sc,
-                       selected.size() >= 2 ? glm::vec3(1.0f, 0.9f, 0.3f)
-                                            : glm::vec3(0.7f, 0.85f, 0.7f),
+                       selected.empty() ? glm::vec3(0.7f, 0.85f, 0.7f)
+                                        : glm::vec3(1.0f, 0.9f, 0.3f),
                        fbw, fbh);
             std::snprintf(buf, sizeof(buf), "UNSAVED %zu   %s", pending.size(),
                           pending.empty() ? "" : "Ctrl+S to save");
@@ -427,7 +482,8 @@ int main(int argc, char** argv) {
             appendText(tv, "+", fbw * 0.5f - 4.0f * sc, fbh * 0.5f - 4.0f * sc, sc,
                        hover >= 0 ? glm::vec3(1.0f, 0.3f, 0.25f) : glm::vec3(1.0f),
                        fbw, fbh);
-            // Hover marker: a green square ring around the geo-point under the cursor.
+            // Hover marker: a green square ring around the geo-point under the cursor,
+            // with its elevation labelled beside it.
             if (pointHover >= 0) {
                 const glm::vec3 hc(0.2f, 1.0f, 0.4f);
                 const float R = 9.0f, T = 1.5f;
@@ -435,6 +491,9 @@ int main(int argc, char** argv) {
                 quad(hoverPx.x, hoverPx.y + R, R, T, hc);
                 quad(hoverPx.x - R, hoverPx.y, T, R, hc);
                 quad(hoverPx.x + R, hoverPx.y, T, R, hc);
+                std::snprintf(buf, sizeof(buf), "z=%.2f", graph.pointWorld[pointHover].z);
+                appendText(tv, buf, hoverPx.x + 13.0f, hoverPx.y - 4.0f, sc * 0.7f,
+                           glm::vec3(0.85f, 1.0f, 0.85f), fbw, fbh);
             }
             renderer.setOverlayText(tv);
         }
