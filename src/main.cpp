@@ -56,8 +56,11 @@ float g_driverYaw = 0.0f, g_driverPitch = 0.0f; // look offsets relative to the 
 constexpr float kLookSens = 0.0022f; // radians per pixel (matches Camera)
 Audio* g_audio = nullptr; // for the M mute toggle in the key callback
 bool g_throwSwitch = false; // T pressed: throw the switch under the crosshair
+bool g_menuOpen = false;    // Escape menu overlay (pauses the sim)
+int g_menuSel = 0;          // highlighted menu item
 
 void cursorCallback(GLFWwindow*, double x, double y) {
+    if (g_menuOpen) return; // menu open: freeze mouselook
     if (!g_mouseCaptured) { g_firstMouse = true; return; }
     if (g_firstMouse) { g_lastX = x; g_lastY = y; g_firstMouse = false; return; }
     const float dx = static_cast<float>(x - g_lastX);
@@ -73,9 +76,9 @@ void cursorCallback(GLFWwindow*, double x, double y) {
 }
 
 void keyCallback(GLFWwindow* win, int key, int, int action, int) {
-    if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
-        glfwSetWindowShouldClose(win, GLFW_TRUE);
-    }
+    // Escape toggles the menu overlay; while it is open the other hotkeys are inert.
+    if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) g_menuOpen = !g_menuOpen;
+    if (g_menuOpen) return;
     // Tab toggles mouse capture (handy for debugging).
     if (key == GLFW_KEY_TAB && action == GLFW_PRESS) {
         g_mouseCaptured = !g_mouseCaptured;
@@ -247,7 +250,7 @@ int main(int argc, char** argv) {
         "C chase vehicle, V driver view (switch cab), I engines start/stop, "
         "Up/Down push vehicle, , / . power/brake lever, Space emergency, "
         "F/N/R reverser, T throw aimed switch, M mute, Tab release cursor, "
-        "Esc quit\n\n");
+        "Esc menu\n\n");
 
     // Directional sun (scene space): from the south-west, fairly high.
     const glm::vec3 sunDir = glm::normalize(glm::vec3(0.4f, -0.5f, 0.75f));
@@ -315,6 +318,8 @@ int main(int argc, char** argv) {
     bool prevBrkDown = false, prevBrkUp = false, prevBrkEmerg = false;
     bool prevSafety = false, prevEngine = false;
     bool prevRevF = false, prevRevN = false, prevRevR = false;
+    bool prevMenuEnter = false, prevMenuUp = false, prevMenuDown = false;
+    const std::vector<std::string> kMenuItems = {"Exit"};
 
     // Open the audio device now that the heavy startup work is done, so the audio
     // thread isn't starved (which causes ALSA under-runs) during loading.
@@ -331,7 +336,21 @@ int main(int argc, char** argv) {
         glfwGetFramebufferSize(window, &fbw, &fbh);
         if (fbw == 0 || fbh == 0) { continue; } // minimised
 
-        if (mode == Mode::Menu) {
+        if (g_menuOpen) {
+            // --- Escape menu (pauses the sim) ---
+            auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
+            const bool mU = down(GLFW_KEY_UP), mD = down(GLFW_KEY_DOWN),
+                       mE = down(GLFW_KEY_ENTER);
+            const int n = static_cast<int>(kMenuItems.size());
+            if (mU && !prevMenuUp) g_menuSel = (g_menuSel + n - 1) % n;
+            if (mD && !prevMenuDown) g_menuSel = (g_menuSel + 1) % n;
+            if (mE && !prevMenuEnter && kMenuItems[g_menuSel] == "Exit")
+                glfwSetWindowShouldClose(window, GLFW_TRUE);
+            prevMenuUp = mU; prevMenuDown = mD; prevMenuEnter = mE;
+            std::vector<TextVertex> tv;
+            appendMenu(tv, "MENU", kMenuItems, g_menuSel, fbw, fbh);
+            renderer.setOverlayText(tv);
+        } else if (mode == Mode::Menu) {
             // --- Start screen: pick a vehicle ---
             auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
             const bool kUp = down(GLFW_KEY_UP), kDn = down(GLFW_KEY_DOWN);

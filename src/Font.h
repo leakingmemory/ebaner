@@ -31,3 +31,9 @@ struct TextVertex {
 // size (to convert to NDC). Monospace, 8*pxScale px per character cell.
 void appendText(std::vector<TextVertex>& out, const std::string& text, float xPx,
                 float yPx, float pxScale, const glm::vec3& color, int fbW, int fbH);
+
+// Append a centred modal menu: a dark panel carrying `title` and the `items` list,
+// with the item at `selected` highlighted (marked and brighter). Drawn opaque over
+// the scene with the same text overlay, `fbW`/`fbH` being the framebuffer size.
+void appendMenu(std::vector<TextVertex>& out, const std::string& title,
+                const std::vector<std::string>& items, int selected, int fbW, int fbH);

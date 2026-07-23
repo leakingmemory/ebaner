@@ -13,6 +13,9 @@
 
 #include "Font.h"
 
+#include <algorithm>
+#include <cstddef>
+
 namespace {
 
 // 8x8 monochrome bitmap font, public domain (Daniel Hepper / IBM VGA fonts,
@@ -180,5 +183,44 @@ void appendText(std::vector<TextVertex>& out, const std::string& text, float xPx
                 }
         }
         penX += 8.0f * pxScale; // monospace advance
+    }
+}
+
+void appendMenu(std::vector<TextVertex>& out, const std::string& title,
+                const std::vector<std::string>& items, int selected, int fbW, int fbH) {
+    if (fbW <= 0 || fbH <= 0) return;
+    const float sc = std::max(2.0f, static_cast<float>(fbH) / 240.0f);
+    const float charW = 8.0f * sc; // monospace cell width
+    const float lh = 12.0f * sc;   // line height
+    const float pad = 16.0f * sc;
+
+    std::size_t maxChars = title.size();
+    for (const std::string& it : items) maxChars = std::max(maxChars, it.size() + 2);
+
+    const float contentW = static_cast<float>(maxChars) * charW;
+    const float contentH = 1.5f * lh + static_cast<float>(items.size()) * lh; // title + gap + items
+    const float pw = contentW + 2.0f * pad;
+    const float ph = contentH + 2.0f * pad;
+    const float px0 = 0.5f * static_cast<float>(fbW) - 0.5f * pw;
+    const float py0 = 0.5f * static_cast<float>(fbH) - 0.5f * ph;
+
+    auto ndc = [&](float px, float py) {
+        return glm::vec2(px / static_cast<float>(fbW) * 2.0f - 1.0f,
+                         py / static_cast<float>(fbH) * 2.0f - 1.0f);
+    };
+    const glm::vec3 pc(0.04f, 0.05f, 0.09f); // dark panel
+    const glm::vec2 a = ndc(px0, py0), b = ndc(px0 + pw, py0),
+                    c = ndc(px0 + pw, py0 + ph), d = ndc(px0, py0 + ph);
+    out.push_back({a, pc}); out.push_back({b, pc}); out.push_back({c, pc});
+    out.push_back({a, pc}); out.push_back({c, pc}); out.push_back({d, pc});
+
+    const float tx = px0 + pad;
+    appendText(out, title, tx, py0 + pad, sc, glm::vec3(1.0f, 0.95f, 0.5f), fbW, fbH);
+    float y = py0 + pad + 1.5f * lh;
+    for (int i = 0; i < static_cast<int>(items.size()); ++i) {
+        const bool hi = (i == selected);
+        appendText(out, (hi ? "> " : "  ") + items[i], tx, y, sc,
+                   hi ? glm::vec3(1.0f) : glm::vec3(0.6f, 0.6f, 0.65f), fbW, fbH);
+        y += lh;
     }
 }

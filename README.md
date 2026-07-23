@@ -173,7 +173,7 @@ counts, and vehicle physics (mass, inertia, tipping limit).
 | T            | Throw the switch under the crosshair (straight ⇄ diverging) |
 | M            | Mute / unmute sound             |
 | Tab          | Release/grab cursor             |
-| Esc          | Quit                            |
+| Esc          | Open menu (Exit); press again to resume |
 
 ## Track editor (`ebaner-trackedit`)
 

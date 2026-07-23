@@ -56,9 +56,12 @@ Camera g_camera;
 double g_lastX = 0.0, g_lastY = 0.0;
 bool g_firstMouse = true;
 bool g_mouseCaptured = true;
+bool g_menuOpen = false; // Escape menu overlay
+int g_menuSel = 0;
 VulkanRenderer* g_renderer = nullptr;
 
 void cursorCallback(GLFWwindow*, double x, double y) {
+    if (g_menuOpen) return; // menu open: freeze mouselook
     if (!g_mouseCaptured) { g_firstMouse = true; return; }
     if (g_firstMouse) { g_lastX = x; g_lastY = y; g_firstMouse = false; return; }
     const float dx = static_cast<float>(x - g_lastX);
@@ -69,8 +72,9 @@ void cursorCallback(GLFWwindow*, double x, double y) {
 }
 
 void keyCallback(GLFWwindow* win, int key, int, int action, int) {
-    if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
-        glfwSetWindowShouldClose(win, GLFW_TRUE);
+    // Escape toggles the menu overlay; while it is open the other hotkeys are inert.
+    if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) g_menuOpen = !g_menuOpen;
+    if (g_menuOpen) return;
     if (key == GLFW_KEY_TAB && action == GLFW_PRESS) {
         g_mouseCaptured = !g_mouseCaptured;
         glfwSetInputMode(win, GLFW_CURSOR,
@@ -336,7 +340,7 @@ int main(int argc, char** argv) {
     rebuildOverlay();
 
     std::printf("\nControls: WASD move, Q/E down/up, mouse look, Shift boost, "
-                "Tab release cursor, Esc quit\n"
+                "Tab release cursor, Esc menu\n"
                 "Select (cursor freed with Tab): click a geo-point, Ctrl+click for "
                 "several, click empty to clear.\n"
                 "Edit: G straighten the selected span's grade; Up/Down raise/lower the "
@@ -351,6 +355,8 @@ int main(int argc, char** argv) {
     bool prevEnter = false, prevL = false, prevX = false, prevML = false,
          prevG = false, prevS = false, prevUp = false, prevDown = false,
          prevJ = false;
+    bool prevMenuEnter = false, prevMenuUp = false, prevMenuDown = false;
+    const std::vector<std::string> kMenuItems = {"Exit"};
     float elevRepeat = 0.0f; // auto-repeat throttle for Up/Down raise/lower
     double lastTime = glfwGetTime();
 
@@ -363,6 +369,37 @@ int main(int argc, char** argv) {
         int fbw = 0, fbh = 0;
         glfwGetFramebufferSize(window, &fbw, &fbh);
         if (fbw == 0 || fbh == 0) continue; // minimised
+
+        if (g_menuOpen) {
+            // --- Escape menu: draw over the frozen scene, ignore editing input ---
+            auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
+            const bool mU = down(GLFW_KEY_UP), mD = down(GLFW_KEY_DOWN),
+                       mE = down(GLFW_KEY_ENTER);
+            const int n = static_cast<int>(kMenuItems.size());
+            if (mU && !prevMenuUp) g_menuSel = (g_menuSel + n - 1) % n;
+            if (mD && !prevMenuDown) g_menuSel = (g_menuSel + 1) % n;
+            if (mE && !prevMenuEnter && kMenuItems[g_menuSel] == "Exit")
+                glfwSetWindowShouldClose(window, GLFW_TRUE);
+            prevMenuUp = mU; prevMenuDown = mD; prevMenuEnter = mE;
+
+            std::vector<TextVertex> tv;
+            appendMenu(tv, "MENU", kMenuItems, g_menuSel, fbw, fbh);
+            renderer.setOverlayText(tv);
+
+            const float aspect = static_cast<float>(fbw) / static_cast<float>(fbh);
+            PushConstants pc{};
+            pc.viewProj = g_camera.projMatrix(aspect) * g_camera.viewMatrix();
+            pc.sunDir = glm::vec4(sunDir, data.minElevation());
+            pc.camPos = glm::vec4(g_camera.position(), data.maxElevation());
+            pc.params = glm::vec4(0.5f, 0.0f, 0.0f, 0.0f);
+            if (shotPath) {
+                if (frame == 20) renderer.requestCapture(shotPath);
+                if (frame == 24) glfwSetWindowShouldClose(window, GLFW_TRUE);
+            }
+            renderer.drawFrame(pc);
+            ++frame;
+            continue;
+        }
 
         // Free-fly movement.
         float fwd = 0.0f, right = 0.0f, up = 0.0f;
