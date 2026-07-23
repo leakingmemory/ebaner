@@ -378,20 +378,89 @@ std::vector<float> Vehicle::axleOffsets() const {
     return out;
 }
 
-VehicleFrame Vehicle::railFrame(float o, float h) const {
+TrackPose Vehicle::walkPose(float bodyOffset) const {
     const float d = static_cast<float>(orient_);
-    if (h < 1e-3f) {
-        const TrackPose p = path_->poseAt(s_ + d * o);
-        // Rotate 180 deg about up when d < 0: flip tangent & right, keep up (so
-        // up = tangent x right is preserved and the frame stays right-handed).
-        return {p.pos, d * p.right, d * p.tangent, p.up};
+    if (!net_ || !paths_ || pathIdx_ < 0) { // no network: straight sample on path_
+        TrackPose p = path_->poseAt(s_ + d * bodyOffset);
+        p.tangent = d * p.tangent;
+        p.right = d * p.right;
+        return p;
     }
-    // Chord the part's rear (o-h) and front (o+h) body ends. Passing the d-scaled
-    // arcs makes chordFrame's tangent already point d*pathTangent (right follows).
-    VehicleFrame f = chordFrame(path_->poseAt(s_ + d * (o - h)),
-                                path_->poseAt(s_ + d * (o + h)),
-                                d * path_->poseAt(s_ + d * o).tangent);
-    f.pos = path_->poseAt(s_ + d * o).pos; // exact centre (sections rely on this)
+
+    constexpr float kTol = 0.05f;              // "at the junction" slack (m)
+    const std::vector<Turnout>& tos = net_->turnouts();
+    int cp = pathIdx_;                          // current path index
+    float cs = s_;                              // current arc-length on it
+    int nose = orient_;                         // path-s direction toward the nose
+    const int walkSign = bodyOffset >= 0.0f ? 1 : -1; // +1 toward nose, -1 toward tail
+    float remaining = std::abs(bodyOffset);
+    int prevCross = -1;                         // don't immediately re-cross a turnout
+
+    for (int guard = 0; guard < 64 && remaining > 1e-4f; ++guard) {
+        const TrackPath& P = (*paths_)[cp];
+        const int arcDir = walkSign * nose;               // path-s direction we move in
+        const float distToEnd = arcDir > 0 ? (P.length() - cs) : cs;
+
+        // Nearest turnout junction reached in the travel direction, with its target.
+        float bestDist = std::min(remaining, distToEnd);
+        int toPath = -1, toTurn = -1;
+        float toS = 0.0f;
+        for (int i = 0; i < static_cast<int>(tos.size()); ++i) {
+            if (i == prevCross) continue;
+            const Turnout& to = tos[i];
+            if (to.mainPath < 0 || to.sidingPath < 0) continue;
+            const SwitchState st = net_->state(i);
+            // main -> siding: walking toe->frog on a diverging switch.
+            if (cp == to.mainPath && st == SwitchState::Diverging && arcDir == to.facingS) {
+                const float dj = (to.sMain - cs) * static_cast<float>(arcDir);
+                const float adv = std::max(dj, 0.0f);
+                if (dj > -kTol && adv <= bestDist) {
+                    bestDist = adv; toPath = to.sidingPath; toS = to.sSiding; toTurn = i;
+                }
+            }
+            // siding -> main: reaching the junction end while heading toward it.
+            if (cp == to.sidingPath) {
+                const bool towardEnd =
+                    static_cast<float>(arcDir) * (to.sSiding < 1.0f ? -1.0f : 1.0f) > 0.0f;
+                const float dj = (to.sSiding - cs) * static_cast<float>(arcDir);
+                const float adv = std::max(dj, 0.0f);
+                if (towardEnd && dj > -kTol && adv <= bestDist) {
+                    bestDist = adv; toPath = to.mainPath; toS = to.sMain; toTurn = i;
+                }
+            }
+        }
+
+        if (toTurn < 0) { // no junction ahead: advance (clamped at a dead-end)
+            cs += arcDir * std::min(remaining, distToEnd);
+            break;
+        }
+        // Advance to the junction and cross onto the connected path, carrying the
+        // world travel direction so the nose direction stays continuous.
+        cs += arcDir * bestDist;
+        remaining -= bestDist;
+        const glm::vec3 fwdWorld = static_cast<float>(arcDir) * P.poseAt(cs).tangent;
+        const int contArcDir =
+            glm::dot(fwdWorld, (*paths_)[toPath].poseAt(toS).tangent) >= 0.0f ? 1 : -1;
+        cp = toPath;
+        cs = toS;
+        nose = walkSign * contArcDir;
+        prevCross = toTurn;
+    }
+
+    TrackPose p = (*paths_)[cp].poseAt(cs);
+    const float nf = static_cast<float>(nose); // orient tangent/right toward the nose
+    p.tangent = nf * p.tangent;
+    p.right = nf * p.right;
+    return p;
+}
+
+VehicleFrame Vehicle::railFrame(float o, float h) const {
+    const TrackPose po = walkPose(o);
+    if (h < 1e-3f) return {po.pos, po.right, po.tangent, po.up}; // single point
+    // Chord the part's rear (o-h) and front (o+h) body ends; each is placed on the
+    // rail it is physically on, so the part bends where the network branches.
+    VehicleFrame f = chordFrame(walkPose(o - h), walkPose(o + h), po.tangent);
+    f.pos = po.pos; // exact centre (sections rely on this)
     return f;
 }
 
@@ -418,18 +487,17 @@ std::vector<VehicleFrame> Vehicle::bodySectionFrames() const {
     std::vector<VehicleFrame> out;
     if (centres.size() < 2) return out; // <2 bogies carry no underframe body
     const int n = static_cast<int>(centres.size()) - 1; // sections between bogies
-    const float d = static_cast<float>(orient_);
     for (int i = 0; i < n; ++i) {
         // Body-section centre, tiled evenly along the body length.
         const float mid = -0.5f * length_ + (i + 0.5f) * length_ / n;
         if (state_ == VehicleState::OnRail) {
             // Orientation from the section's bogie pair (so the body flexes at the
-            // shared middle bogie); position on the track at the section centre.
-            // d-scaled arcs rotate the body rigidly with orient_ (see railFrame).
-            VehicleFrame f = chordFrame(path_->poseAt(s_ + d * centres[i]),
-                                        path_->poseAt(s_ + d * centres[i + 1]),
-                                        d * path_->poseAt(s_ + d * mid).tangent);
-            f.pos = path_->poseAt(s_ + d * mid).pos;
+            // shared middle bogie); each bogie sits on the rail it is on, so a
+            // section spanning a turnout bends at its articulation.
+            const TrackPose pm = walkPose(mid);
+            VehicleFrame f =
+                chordFrame(walkPose(centres[i]), walkPose(centres[i + 1]), pm.tangent);
+            f.pos = pm.pos;
             out.push_back(f);
         } else { // derailed: frozen body axes, section offset along the tangent
             out.push_back({pos_ + fTangent_ * mid, fRight_, fTangent_, fUp_});

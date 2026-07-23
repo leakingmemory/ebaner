@@ -239,6 +239,15 @@ private:
     // physical heading and the same cab leads.
     VehicleFrame railFrame(float o, float h) const;
 
+    // World pose at a signed body offset (`+` = toward the nose) reached by walking
+    // the connected track network from the centre (path_, s_, orient_), crossing
+    // turnouts by rail geometry (diverging switch: toe->frog follows the siding; a
+    // siding always joins the main at its junction end). The tangent/right point
+    // nose-ward. Lets each axle sit on the rail it is physically on, so a diverting
+    // train bends through the turnout. Falls back to a straight path sample if there
+    // is no switch network.
+    TrackPose walkPose(float bodyOffset) const;
+
     // Resolve turnout crossings between sBefore and s_ on the current path (divert /
     // merge / trailing-break / facing-broken derail). Returns true if it derailed.
     bool crossTurnouts(float sBefore);

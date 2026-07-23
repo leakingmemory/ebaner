@@ -184,6 +184,12 @@ void SwitchNetwork::build(const TerrainData& data,
         // common track to route through, so leave this switch inert.
         const float mlen = paths[main].length();
         if (std::min(sMain, mlen - sMain) < 5.0f) continue;
+        // The two tracks must actually meet at the junction, not just cross in plan
+        // (the 2 m detection tolerance is XY-only). A large height difference means a
+        // bridge/over-under, not a switch — leave it inert so the train can't "divert"
+        // onto a track several metres above or below.
+        if (std::abs(paths[main].poseAt(sMain).pos.z - paths[siding].poseAt(sSiding).pos.z) > 1.5f)
+            continue;
 
         t.mainPath = main;
         t.sMain = sMain;
