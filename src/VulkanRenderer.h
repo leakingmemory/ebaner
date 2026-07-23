@@ -67,6 +67,13 @@ public:
     void attachVehicle(const std::vector<TrackVertex>& vertices,
                        const std::vector<std::uint32_t>& indices,
                        std::uint32_t glassFirstIndex = 0);
+    // Attach the movable switch-stand geometry (solid-lit, track pipeline). Unlike
+    // the vehicle it changes topology when a switch is thrown, so `updateSwitches`
+    // recreates the device-local buffers (a rare, user-triggered event).
+    void attachSwitches(const std::vector<TrackVertex>& vertices,
+                        const std::vector<std::uint32_t>& indices);
+    void updateSwitches(const std::vector<TrackVertex>& vertices,
+                        const std::vector<std::uint32_t>& indices);
     // Set the 2-D text overlay (screen-space triangles) drawn on top each frame.
     void setOverlayText(const std::vector<TextVertex>& vertices);
 
@@ -109,6 +116,8 @@ private:
                            const std::vector<std::uint32_t>& indices);
     void createBuildingBuffers(const std::vector<TrackVertex>& vertices,
                                const std::vector<std::uint32_t>& indices);
+    void createSwitchBuffers(const std::vector<TrackVertex>& vertices,
+                             const std::vector<std::uint32_t>& indices);
     void createVehicleBuffers(const std::vector<TrackVertex>& vertices,
                               const std::vector<std::uint32_t>& indices,
                               std::uint32_t glassFirstIndex);
@@ -219,6 +228,13 @@ private:
     VkBuffer buildingIndexBuffer_ = VK_NULL_HANDLE;
     VkDeviceMemory buildingIndexMemory_ = VK_NULL_HANDLE;
     uint32_t buildingIndexCount_ = 0;
+
+    // Movable switch stands (dynamic: recreated when a switch is thrown).
+    VkBuffer switchVertexBuffer_ = VK_NULL_HANDLE;
+    VkDeviceMemory switchVertexMemory_ = VK_NULL_HANDLE;
+    VkBuffer switchIndexBuffer_ = VK_NULL_HANDLE;
+    VkDeviceMemory switchIndexMemory_ = VK_NULL_HANDLE;
+    uint32_t switchIndexCount_ = 0;
 
     // Editor overlay: static line-list + point-list of the raw track graph.
     VkBuffer overlayLineVertexBuffer_ = VK_NULL_HANDLE;

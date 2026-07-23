@@ -25,6 +25,7 @@
 #include "PlatformMesh.h"
 #include "RoadMesh.h"
 #include "SwitchMesh.h"
+#include "SwitchNetwork.h"
 #include "TerrainData.h"
 #include "TerrainMesh.h"
 #include "Textures.h"
@@ -95,6 +96,7 @@ int main(int argc, char** argv) {
     BuildingMesh buildings;
     PlatformMesh platforms;
     SwitchMesh switches;
+    SwitchNetwork switchNet;
     TrackGraph graph;
     std::vector<TrackPath> paths;
     try {
@@ -105,7 +107,8 @@ int main(int argc, char** argv) {
         roads.build(data);
         buildings.build(data);
         platforms.build(data, paths);
-        switches.build(data);
+        switchNet.build(data, paths);   // turnout detection + routing (all straight)
+        switches.build(switchNet);
         graph = buildTrackGraph(data); // raw geo-points + links overlay
     } catch (const std::exception& e) {
         std::fprintf(stderr, "Failed to load terrain: %s\n", e.what());

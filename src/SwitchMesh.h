@@ -18,21 +18,21 @@
 #include <cstdint>
 #include <vector>
 
-class TerrainData;
+class SwitchNetwork;
 
-// Places a classic Norwegian manual switch stand (sporveksel) at every turnout in
-// the network: a weighted lever (a bar ending in a low cylindrical counterweight)
-// driving a throw rod to the movable rail, plus a tall post carrying a rotating
-// indicator target. A turnout is detected where one track's endpoint lies on
-// another track's line. Every switch is drawn in the straight-through setting for
-// now, so each target shows the vertical-line indication and the lever points along
-// the through track (opposite the direction a train would be diverted).
+// Builds the classic Norwegian manual switch stand (sporveksel) at every turnout in a
+// SwitchNetwork: a weighted lever (a near-horizontal bar at right angles to the track,
+// ending in a low cylindrical counterweight) driving a throw rod to the movable rail,
+// plus a tall post carrying a rotating indicator target. The lever position and the
+// two-faced target (arrow one side, filled circle the other, vertical line edge-on)
+// are drawn for each switch's current state, so a re-build after a throw animates it.
 //
-// Reuses TrackVertex and the track/building pipeline (solid-lit, texLayer < 0);
-// merged into the building buffers by the caller, like PlatformMesh.
+// Solid-lit TrackVertex geometry (texLayer < 0), drawn with the track/building
+// pipeline. The viewer keeps it in a dynamic buffer (re-built on a throw); the editor
+// merges it into the static building buffers.
 class SwitchMesh {
 public:
-    void build(const TerrainData& data);
+    void build(const SwitchNetwork& net);
 
     const std::vector<TrackVertex>& vertices() const { return vertices_; }
     const std::vector<std::uint32_t>& indices() const { return indices_; }

@@ -13,6 +13,9 @@
 
 #include "Vehicle.h"
 
+#include "SwitchNetwork.h"
+#include "TrackPath.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -103,6 +106,92 @@ Vehicle::Vehicle(const TrackPath* path, const VehicleSpec& spec, float s,
       bcPres_(kBCEmergency),  // brakes start in emergency (held)
       engineCount_(spec.body == BodyClass93 ? 2 : 0) {} // one diesel per cab end
 
+void Vehicle::attachNetwork(const std::vector<TrackPath>* paths, SwitchNetwork* net) {
+    paths_ = paths;
+    net_ = net;
+    pathIdx_ = (paths_ && path_) ? static_cast<int>(path_ - paths_->data()) : -1;
+}
+
+bool Vehicle::consumeSwitchChanged() {
+    const bool c = switchChanged_;
+    switchChanged_ = false;
+    return c;
+}
+
+void Vehicle::derailFreeze() {
+    const VehicleFrame e = bodyFrame();
+    pos_ = e.pos;
+    fRight_ = e.right;
+    fTangent_ = e.tangent;
+    fUp_ = e.up;
+    vel_ = v_ * e.tangent;
+    state_ = VehicleState::Derailed;
+}
+
+void Vehicle::swapPath(int newIdx, float newS) {
+    // Preserve the physical velocity vector across the join: if the new path's +s
+    // tangent opposes the old one, flip v_ and orient_ together so speed/direction and
+    // the driver's controls stay physically continuous.
+    const glm::vec3 tOld = path_->poseAt(s_).tangent;
+    const glm::vec3 tNew = (*paths_)[newIdx].poseAt(newS).tangent;
+    const float g = glm::dot(tOld, tNew) >= 0.0f ? 1.0f : -1.0f;
+    v_ *= g;
+    orient_ *= g;
+    path_ = &(*paths_)[newIdx];
+    pathIdx_ = newIdx;
+    s_ = newS;
+}
+
+bool Vehicle::crossTurnouts(float sBefore) {
+    const std::vector<Turnout>& tos = net_->turnouts();
+    if (sBefore == s_) return false;
+    const int dirS = (s_ > sBefore) ? 1 : -1; // travel direction along +s this step
+    auto crossed = [&](float x) { return (x - sBefore) * (x - s_) <= 0.0f; };
+    // A swap lands the train exactly on the turnout's junction s; skip re-evaluating
+    // that same turnout for the one following frame, else the boundary re-triggers as a
+    // spurious trailing move (which would wrongly break the switch we just merged over).
+    const int skip = skipTurnout_;
+    skipTurnout_ = -1;
+
+    for (int i = 0; i < static_cast<int>(tos.size()); ++i) {
+        if (i == skip) continue;
+        const Turnout& to = tos[i];
+        if (to.mainPath < 0 || to.sidingPath < 0) continue;
+        const SwitchState st = net_->state(i);
+
+        if (pathIdx_ == to.mainPath && crossed(to.sMain)) {
+            const bool facing = dirS == to.facingS;
+            if (facing) {
+                if (st == SwitchState::Diverging) { skipTurnout_ = i; swapPath(to.sidingPath, to.sSiding); return false; }
+                if (st == SwitchState::Broken) { derailFreeze(); return true; }
+                // Straight: run straight through on the main.
+            } else { // trailing from the straight branch
+                if (st == SwitchState::Diverging) { // set against us: force + break it
+                    net_->setState(i, SwitchState::Broken);
+                    switchChanged_ = true;
+                }
+                // Straight / Broken: continue onto the common track.
+            }
+            return false;
+        }
+        if (pathIdx_ == to.sidingPath && crossed(to.sSiding)) {
+            // Trailing merge from the diverging branch onto the main — only when
+            // actually moving toward the branch's end at the turnout.
+            const bool towardEnd = (to.sSiding < 1.0f) ? (dirS < 0) : (dirS > 0);
+            if (towardEnd) {
+                if (st == SwitchState::Straight) { // set against us: force + break it
+                    net_->setState(i, SwitchState::Broken);
+                    switchChanged_ = true;
+                }
+                skipTurnout_ = i;
+                swapPath(to.mainPath, to.sMain);
+                return false;
+            }
+        }
+    }
+    return false;
+}
+
 void Vehicle::setBrakeNotch(int cab, int notch) {
     if (cab == 0 || cab == 1) brakeNotch_[cab] = std::clamp(notch, 0, kEmergencyNotch);
 }
@@ -192,7 +281,10 @@ float Vehicle::tractionDemand() const {
     // `so` in the cab mesh / drivercam), so a given reverser direction drives the
     // train opposite ways from each end. Fold that into the sign here.
     const float cabSign = (a == 0) ? -1.0f : 1.0f;
-    return cabSign * static_cast<float>(reverser_[a] * effectivePowerNotch()) /
+    // orient_ keeps a cab's physical forward mapped to the right track direction after
+    // a path swap at a switch (see swapPath).
+    return orient_ * cabSign *
+           static_cast<float>(reverser_[a] * effectivePowerNotch()) /
            static_cast<float>(kMaxPowerNotch);
 }
 
@@ -286,15 +378,27 @@ std::vector<float> Vehicle::axleOffsets() const {
     return out;
 }
 
+VehicleFrame Vehicle::railFrame(float o, float h) const {
+    const float d = static_cast<float>(orient_);
+    if (h < 1e-3f) {
+        const TrackPose p = path_->poseAt(s_ + d * o);
+        // Rotate 180 deg about up when d < 0: flip tangent & right, keep up (so
+        // up = tangent x right is preserved and the frame stays right-handed).
+        return {p.pos, d * p.right, d * p.tangent, p.up};
+    }
+    // Chord the part's rear (o-h) and front (o+h) body ends. Passing the d-scaled
+    // arcs makes chordFrame's tangent already point d*pathTangent (right follows).
+    VehicleFrame f = chordFrame(path_->poseAt(s_ + d * (o - h)),
+                                path_->poseAt(s_ + d * (o + h)),
+                                d * path_->poseAt(s_ + d * o).tangent);
+    f.pos = path_->poseAt(s_ + d * o).pos; // exact centre (sections rely on this)
+    return f;
+}
+
 VehicleFrame Vehicle::bodyFrame() const {
     if (state_ != VehicleState::OnRail)
         return {pos_, fRight_, fTangent_, fUp_};
-    const float half = supportHalf();
-    if (half < 1e-3f) return frameOf(path_->poseAt(s_)); // single axle
-    // Chord the two support points (end bogies for a carriage/module, the two
-    // axles for a lone bogie).
-    return chordFrame(path_->poseAt(s_ - half), path_->poseAt(s_ + half),
-                      path_->poseAt(s_).tangent);
+    return railFrame(0.0f, supportHalf()); // single axle: supportHalf()==0 -> a point
 }
 
 std::vector<VehicleFrame> Vehicle::bogieFrames() const {
@@ -302,9 +406,7 @@ std::vector<VehicleFrame> Vehicle::bogieFrames() const {
     std::vector<VehicleFrame> out;
     for (float c : bogieCentres()) {
         if (state_ == VehicleState::OnRail)
-            out.push_back(chordFrame(path_->poseAt(s_ + c - wb),
-                                     path_->poseAt(s_ + c + wb),
-                                     path_->poseAt(s_ + c).tangent));
+            out.push_back(railFrame(c, wb));
         else // derailed: bogie pivots offset along the frozen body tangent
             out.push_back({pos_ + fTangent_ * c, fRight_, fTangent_, fUp_});
     }
@@ -316,16 +418,18 @@ std::vector<VehicleFrame> Vehicle::bodySectionFrames() const {
     std::vector<VehicleFrame> out;
     if (centres.size() < 2) return out; // <2 bogies carry no underframe body
     const int n = static_cast<int>(centres.size()) - 1; // sections between bogies
+    const float d = static_cast<float>(orient_);
     for (int i = 0; i < n; ++i) {
         // Body-section centre, tiled evenly along the body length.
         const float mid = -0.5f * length_ + (i + 0.5f) * length_ / n;
         if (state_ == VehicleState::OnRail) {
             // Orientation from the section's bogie pair (so the body flexes at the
             // shared middle bogie); position on the track at the section centre.
-            VehicleFrame f = chordFrame(path_->poseAt(s_ + centres[i]),
-                                        path_->poseAt(s_ + centres[i + 1]),
-                                        path_->poseAt(s_ + mid).tangent);
-            f.pos = path_->poseAt(s_ + mid).pos;
+            // d-scaled arcs rotate the body rigidly with orient_ (see railFrame).
+            VehicleFrame f = chordFrame(path_->poseAt(s_ + d * centres[i]),
+                                        path_->poseAt(s_ + d * centres[i + 1]),
+                                        d * path_->poseAt(s_ + d * mid).tangent);
+            f.pos = path_->poseAt(s_ + d * mid).pos;
             out.push_back(f);
         } else { // derailed: frozen body axes, section offset along the tangent
             out.push_back({pos_ + fTangent_ * mid, fRight_, fTangent_, fUp_});
@@ -338,7 +442,7 @@ std::vector<VehicleFrame> Vehicle::axleFrames() const {
     std::vector<VehicleFrame> out;
     for (float off : axleOffsets()) {
         if (state_ == VehicleState::OnRail)
-            out.push_back(frameOf(path_->poseAt(s_ + off)));
+            out.push_back(railFrame(off, 0.0f));
         else // derailed: axles offset from the frozen body along its tangent
             out.push_back({pos_ + fTangent_ * off, fRight_, fTangent_, fUp_});
     }
@@ -425,7 +529,7 @@ void Vehicle::update(float dt, float pushInput) {
         // Driving acceleration: gravity along the track (downhill in +s is
         // positive) plus the hand push (a force, so a = F/m).
         const float aGrav = -kG * bf.tangent.z;
-        const float aPush = pushInput * kPushForce / mass_;
+        const float aPush = orient_ * pushInput * kPushForce / mass_;
         v_ += (aGrav + aPush) * dt;
 
         // Traction: a torque converter feeding a 5-speed automatic gearbox. Only the
@@ -485,13 +589,29 @@ void Vehicle::update(float dt, float pushInput) {
         const float resist = std::min(resistDecel * dt, std::abs(v_));
         v_ -= std::copysign(resist, v_);
 
+        const float sBefore = s_;
         s_ += v_ * dt;
 
-        // Derail when the leading or trailing axle passes an end of the track.
+        // Turnouts first: a divert/merge swaps the path (so the end-of-path check
+        // below sees the new one); a facing move into a broken switch derails here.
+        if (net_ && crossTurnouts(sBefore)) return;
+
+        // Derail when the leading or trailing axle passes an end of the track — but
+        // only at a genuine dead-end. A path end that a turnout connects to (a siding
+        // end at the switch) is a junction: the body legitimately straddles it while
+        // diverting/merging, and a reversing train is handed back to the main by
+        // crossTurnouts at the body-centre crossing, so it never truly runs off there.
         const float L = path_->length();
         float outerHalf = 0.0f;
         for (float o : axleOffsets()) outerHalf = std::max(outerHalf, std::abs(o));
-        if (s_ - outerHalf < 0.0f || s_ + outerHalf > L) {
+        bool connFront = false, connBack = false;
+        if (net_)
+            for (const Turnout& to : net_->turnouts())
+                if (to.sidingPath == pathIdx_)
+                    (to.sSiding < 1.0f ? connFront : connBack) = true;
+        const bool offFront = s_ - outerHalf < 0.0f;
+        const bool offBack = s_ + outerHalf > L;
+        if ((offFront && !connFront) || (offBack && !connBack)) {
             const VehicleFrame e = bodyFrame(); // frozen at exit
             pos_ = e.pos;
             fRight_ = e.right;

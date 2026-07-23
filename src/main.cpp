@@ -17,6 +17,7 @@
 #include "PlatformMesh.h"
 #include "RoadMesh.h"
 #include "SwitchMesh.h"
+#include "SwitchNetwork.h"
 #include "TerrainData.h"
 #include "TerrainMesh.h"
 #include "Textures.h"
@@ -54,6 +55,7 @@ int g_driverPos = -1; // driver camera: -1 off, else cab index (0 front, 1 rear)
 float g_driverYaw = 0.0f, g_driverPitch = 0.0f; // look offsets relative to the train
 constexpr float kLookSens = 0.0022f; // radians per pixel (matches Camera)
 Audio* g_audio = nullptr; // for the M mute toggle in the key callback
+bool g_throwSwitch = false; // T pressed: throw the switch under the crosshair
 
 void cursorCallback(GLFWwindow*, double x, double y) {
     if (!g_mouseCaptured) { g_firstMouse = true; return; }
@@ -91,6 +93,8 @@ void keyCallback(GLFWwindow* win, int key, int, int action, int) {
     }
     // M mutes / unmutes the synthesized sound.
     if (key == GLFW_KEY_M && action == GLFW_PRESS && g_audio) g_audio->toggleMuted();
+    // T throws the switch stand the crosshair is aimed at.
+    if (key == GLFW_KEY_T && action == GLFW_PRESS) g_throwSwitch = true;
 }
 
 VulkanRenderer* g_renderer = nullptr;
@@ -121,6 +125,7 @@ int main(int argc, char** argv) {
     BuildingMesh buildings;
     PlatformMesh platforms;
     SwitchMesh switches;
+    SwitchNetwork switchNet;
     std::vector<TrackPath> paths;
     try {
         data.load(datasetRoot);
@@ -130,11 +135,13 @@ int main(int argc, char** argv) {
         roads.build(data);
         buildings.build(data);
         platforms.build(data, paths);
-        switches.build(data);
+        switchNet.build(data, paths);   // turnout detection + routing
+        switches.build(switchNet);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "Failed to load terrain: %s\n", e.what());
         return EXIT_FAILURE;
     }
+
 
     // --- First rail vehicle: a wheelset on the main line near the start ---
     const TrackPath* vpath = nullptr;
@@ -215,16 +222,8 @@ int main(int argc, char** argv) {
         for (std::uint32_t idx : platforms.indices())
             structIndices.push_back(idx + vbase);
     }
-    // Switch stands are the same solid-lit static geometry; merge them in too.
-    {
-        const std::uint32_t vbase =
-            static_cast<std::uint32_t>(structVerts.size());
-        structVerts.insert(structVerts.end(), switches.vertices().begin(),
-                           switches.vertices().end());
-        structIndices.reserve(structIndices.size() + switches.indices().size());
-        for (std::uint32_t idx : switches.indices())
-            structIndices.push_back(idx + vbase);
-    }
+    // Switch stands go in a dynamic buffer (rebuilt when a switch is thrown), not the
+    // static struct bucket — attached just after renderer.init below.
 
     // --- Renderer ---
     VulkanRenderer renderer;
@@ -241,12 +240,14 @@ int main(int argc, char** argv) {
         glfwTerminate();
         return EXIT_FAILURE;
     }
+    renderer.attachSwitches(switches.vertices(), switches.indices());
 
     std::printf(
         "\nControls: WASD move, Q/E down/up, mouse look, Shift boost, "
         "C chase vehicle, V driver view (switch cab), I engines start/stop, "
         "Up/Down push vehicle, , / . power/brake lever, Space emergency, "
-        "F/N/R reverser, M mute, Tab release cursor, Esc quit\n\n");
+        "F/N/R reverser, T throw aimed switch, M mute, Tab release cursor, "
+        "Esc quit\n\n");
 
     // Directional sun (scene space): from the south-west, fairly high.
     const glm::vec3 sunDir = glm::normalize(glm::vec3(0.4f, -0.5f, 0.75f));
@@ -270,6 +271,7 @@ int main(int argc, char** argv) {
         const float L = vpath->length(), margin = outerHalf + 1.0f;
         if (L > 2.0f * margin) startS = std::clamp(vs, margin, L - margin);
         vehicle.emplace(vpath, sp, startS);
+        vehicle->attachNetwork(&paths, &switchNet); // divert at switches
         vmesh.build(*vehicle);
         renderer.attachVehicle(vmesh.vertices(), vmesh.indices(),
                                vmesh.glassFirstIndex());
@@ -449,6 +451,11 @@ int main(int argc, char** argv) {
             const float simDt = std::min(dt, 0.05f);
             const VehicleState prev = vehicle->state();
             vehicle->update(simDt, pushInput);
+            if (vehicle->consumeSwitchChanged()) { // a switch was forced/broken
+                switches.build(switchNet);
+                renderer.updateSwitches(switches.vertices(), switches.indices());
+                std::printf("[Switch] forced -> broken (neutral)\n");
+            }
             if (vehicle->state() != prev) {
                 static const char* kNames[] = {"OnRail", "Derailed", "Stopped"};
                 std::printf("[Vehicle] -> %s (speed %.1f m/s)\n",
@@ -477,6 +484,38 @@ int main(int argc, char** argv) {
             audio.update(*vehicle, simDt, distGain, engGain[0], engGain[1]);
             vmesh.build(*vehicle);
             renderer.updateVehicleVertices(vmesh.vertices());
+
+            // Aim: the switch stand nearest the camera's forward ray (the crosshair),
+            // in front and within a small cone. T throws it.
+            int aimedSwitch = -1;
+            {
+                const glm::vec3 cp = g_camera.position();
+                const glm::vec3 cd = glm::normalize(g_camera.forward());
+                const glm::dvec3 org = switchNet.sceneOrigin();
+                float bestAng = 0.06f; // ~3.4 deg
+                const auto& tos = switchNet.turnouts();
+                for (int i = 0; i < static_cast<int>(tos.size()); ++i) {
+                    const glm::vec3 X(static_cast<float>(tos[i].world.x - org.x),
+                                      static_cast<float>(tos[i].world.y - org.y),
+                                      static_cast<float>(tos[i].world.z - org.z) + 1.6f);
+                    const glm::vec3 rel = X - cp;
+                    const float t = glm::dot(rel, cd);
+                    if (t < 3.0f || t > 250.0f) continue;
+                    const float ang = glm::length(rel - cd * t) / t;
+                    if (ang < bestAng) { bestAng = ang; aimedSwitch = i; }
+                }
+            }
+            if (g_throwSwitch) {
+                g_throwSwitch = false;
+                if (aimedSwitch >= 0) {
+                    switchNet.toggle(aimedSwitch);
+                    switches.build(switchNet);
+                    renderer.updateSwitches(switches.vertices(), switches.indices());
+                    std::printf("[Switch] %d -> %s\n", aimedSwitch,
+                                switchNet.state(aimedSwitch) == SwitchState::Straight
+                                    ? "straight" : "diverging");
+                }
+            }
 
             // HUD: speed, reservoir/brake pressures and the brake notch.
             {
@@ -528,6 +567,21 @@ int main(int argc, char** argv) {
                     }
                     appendText(tv, buf, x, y, sc, glm::vec3(0.7f, 0.85f, 0.7f), fbw, fbh);
                     y += lh;
+                }
+                // Centre crosshair + the aimed switch's state and throw prompt.
+                appendText(tv, "+", fbw * 0.5f - 3.0f * sc, fbh * 0.5f - 6.0f * sc, sc,
+                           glm::vec3(1.0f, 1.0f, 1.0f), fbw, fbh);
+                if (aimedSwitch >= 0) {
+                    const SwitchState ss = switchNet.state(aimedSwitch);
+                    const char* sn = ss == SwitchState::Straight    ? "STRAIGHT"
+                                     : ss == SwitchState::Diverging  ? "DIVERGING"
+                                                                     : "BROKEN";
+                    const bool broken = ss == SwitchState::Broken;
+                    std::snprintf(buf, sizeof(buf), "SWITCH %s   T to throw", sn);
+                    appendText(tv, buf, fbw * 0.5f - 66.0f * sc, fbh * 0.5f + 14.0f * sc,
+                               sc,
+                               broken ? glm::vec3(1.0f, 0.5f, 0.3f) : glm::vec3(0.6f, 1.0f, 0.8f),
+                               fbw, fbh);
                 }
                 renderer.setOverlayText(tv);
             }

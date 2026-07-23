@@ -87,6 +87,7 @@ add_library(ebaner_engine STATIC
     src/BuildingMesh.cpp
     src/PlatformMesh.cpp
     src/SwitchMesh.cpp
+    src/SwitchNetwork.cpp
     src/EarClip.cpp
     src/Font.cpp
     src/VulkanRenderer.cpp)

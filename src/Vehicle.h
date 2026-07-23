@@ -20,6 +20,7 @@
 #include <vector>
 
 class TrackPath;
+class SwitchNetwork;
 
 // How the body is drawn on top of the running gear.
 enum VehicleBodyStyle {
@@ -94,10 +95,17 @@ public:
     Vehicle(const TrackPath* path, const VehicleSpec& spec, float s,
             float initialSpeed = 0.0f);
 
-    // Advance the simulation. `pushInput` in [-1, +1] is a hand push along the
-    // track (+1 = toward increasing s), applied only while on the rails. Gravity
-    // also accelerates it; light rolling resistance coasts it to a stop; running
-    // off either end derails it (then ground friction stops it).
+    // Attach the switch network so the vehicle can divert at turnouts. `paths` is
+    // the same vector the constructor's TrackPath points into (turnouts index it).
+    void attachNetwork(const std::vector<TrackPath>* paths, SwitchNetwork* net);
+    // True once (then cleared) after the vehicle forced/broke a switch, so the caller
+    // can rebuild the switch-stand mesh.
+    bool consumeSwitchChanged();
+
+    // Advance the simulation. `pushInput` in [-1, +1] is a hand push (physically
+    // forward = +1), applied only while on the rails. Gravity also accelerates it;
+    // light rolling resistance coasts it to a stop; running off a path end (or a
+    // facing move into a broken switch) derails it (then ground friction stops it).
     void update(float dt, float pushInput = 0.0f);
 
     // Rigid body frame for the camera / vehicle frame, in the current state.
@@ -224,6 +232,21 @@ private:
     // a carriage/module, the two axles for a lone bogie, 0 for a single axle).
     float supportHalf() const;
 
+    // On-rail rigid frame for a body part at body-offset `o` (measured toward the
+    // nominal +s / cab-1 end) with chord half-length `h` (0 = a single point). The
+    // body is rigidly rotated 180 deg about vertical when orient_ = -1 (a diverted
+    // train that runs against the new path's +s), so the drawn body keeps its
+    // physical heading and the same cab leads.
+    VehicleFrame railFrame(float o, float h) const;
+
+    // Resolve turnout crossings between sBefore and s_ on the current path (divert /
+    // merge / trailing-break / facing-broken derail). Returns true if it derailed.
+    bool crossTurnouts(float sBefore);
+    // Move onto another path, preserving the physical velocity vector (and flipping
+    // orient_ so the reverser/push keep driving the same physical way).
+    void swapPath(int newIdx, float newS);
+    void derailFreeze(); // freeze the body pose and go to Derailed
+
     const TrackPath* path_;
     float s_;
     float mass_;
@@ -253,4 +276,12 @@ private:
     glm::vec3 pos_{0.0f};               // derailed free-body position
     glm::vec3 vel_{0.0f};               // derailed velocity
     glm::vec3 fRight_{0.0f}, fTangent_{1.0f, 0.0f, 0.0f}, fUp_{0.0f, 0.0f, 1.0f};
+
+    // Switch-network routing.
+    const std::vector<TrackPath>* paths_ = nullptr; // path pool (path_ points inside)
+    SwitchNetwork* net_ = nullptr;
+    int pathIdx_ = -1;             // index of path_ within *paths_
+    int orient_ = 1;              // physical-forward sign vs +s (flips on a path swap)
+    bool switchChanged_ = false;   // set when the vehicle broke a switch
+    int skipTurnout_ = -1;        // turnout to skip for one frame after swapping through it
 };

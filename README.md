@@ -47,14 +47,26 @@ Bodø main track ("track 1 end"), resolved from the `tracks.bin` geometry.
   long edges.
 - **Switch stands** — a classic Norwegian manual switch stand (sporveksel) at
   every turnout, i.e. wherever one track's end joins another track's line
-  (`src/SwitchMesh.cpp`). Each stand is a weighted lever (a bar ending in a low
-  **cylindrical counterweight**) driving a throw rod to the movable rail, plus a
-  tall post carrying a rotating **indicator target**. The target reads: a
-  **vertical line** = set straight through, an **arrow** = a train would be
-  diverted to the siding, a **filled circle** = movement allowed from the siding
-  onto the main line but not the reverse. For now every switch is drawn in the
-  straight-through setting, so each target shows the vertical line and the
-  weighted lever stands out at right angles to the track.
+  (`src/SwitchMesh.cpp`, `src/SwitchNetwork.cpp`). Each stand is a weighted lever
+  (a bar ending in a low **cylindrical counterweight**) driving a throw rod to the
+  movable rail, plus a tall post carrying a rotating **indicator target**. The
+  target is one mechanical two-faced plate — an **arrow** on one face, a **filled
+  circle** on the other, and edge-on it reads as a **vertical line**. Set straight
+  it is edge-on to the track so both ends see the line; thrown to diverging it
+  turns 90° so the toe/common approach sees the arrow (a facing train will be
+  diverted to the siding) and the branch approach sees the filled circle (a train
+  may run from the siding onto the main, but not the reverse). A broken switch
+  sits part-turned with the lever centred.
+- **Movable switches** — the switches actually route the train. Aim the centre
+  crosshair at a stand and press **T** to throw it (straight ⇄ diverging); the
+  lever and target animate and a train reaching the turnout is diverted to the
+  set track. Enter a switch **facing** (from the common/toe side) and it takes you
+  to the track it is set for — into a **broken** (neutral) switch it **derails**.
+  Enter it **trailing** (from one of the two branches toward the common track)
+  with the switch set against you and the train forces it through: it continues
+  onto the common track but the switch is left **broken** in the neutral position
+  (throw it again to repair it). Trailing through an already-broken switch just
+  continues onto the common track.
 - **Rail vehicle** — chosen on an in-window **start screen** (a text menu): a
   single-axle wheelset, a dual-axle bogie (two wheelsets + frame), a full-length
   **carriage underframe** on two dual-axle bogies (one at each end), or a longer
@@ -158,6 +170,7 @@ counts, and vehicle physics (mass, inertia, tipping limit).
 | , / .        | Combined lever: step toward power / toward brake (the viewed cab) |
 | Space        | Emergency brake                 |
 | F / N / R    | Reverser: Forward / Neutral / Reverse (the viewed cab) |
+| T            | Throw the switch under the crosshair (straight ⇄ diverging) |
 | M            | Mute / unmute sound             |
 | Tab          | Release/grab cursor             |
 | Esc          | Quit                            |

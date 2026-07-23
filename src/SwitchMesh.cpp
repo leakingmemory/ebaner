@@ -13,109 +13,24 @@
 
 #include "SwitchMesh.h"
 
-#include "TerrainData.h"
+#include "SwitchNetwork.h"
 
-#include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <unordered_set>
 
 namespace {
 // Cast-iron dark grey for the mechanism, timber brown for the base, and a white
-// target with a dark frame/painted line.
+// target with a dark frame/painted symbol.
 const glm::vec3 kIron{0.22f, 0.23f, 0.25f};
 const glm::vec3 kTimber{0.35f, 0.26f, 0.17f};
 const glm::vec3 kTarget{0.90f, 0.90f, 0.88f};
 const glm::vec3 kDark{0.12f, 0.12f, 0.13f};
-
-// 2-D distance from p to segment a-b, plus the clamped parameter t along a->b.
-struct SegHit { float dist; float t; };
-SegHit distToSeg(const glm::dvec2& p, const glm::dvec2& a, const glm::dvec2& b) {
-    const glm::dvec2 ab = b - a;
-    const double l2 = glm::dot(ab, ab);
-    const double t = l2 > 1e-9 ? glm::clamp(glm::dot(p - a, ab) / l2, 0.0, 1.0) : 0.0;
-    return {static_cast<float>(glm::length(p - (a + ab * t))), static_cast<float>(t)};
-}
-
-// A detected turnout: world point on the through track, plus the (horizontal, unit)
-// through direction and the diverging track's leaving direction.
-struct Turnout {
-    glm::dvec3 x;   // world point on the crossed track (z = rail head there)
-    glm::dvec2 thru; // along the crossed (through) track
-    glm::dvec2 div;  // the diverging track's interior direction from its end
-};
 } // namespace
 
-void SwitchMesh::build(const TerrainData& data) {
-    const glm::dvec3 origin = data.sceneOrigin();
-
-    // Unique track polylines (a segment repeats across every tile it touches).
-    std::unordered_set<std::uint32_t> seen;
-    std::vector<const TrackSegment*> segs;
-    for (const Tile& t : data.tiles())
-        for (const TrackSegment& s : t.tracks)
-            if (s.pts.size() >= 2 && seen.insert(s.trackId).second) segs.push_back(&s);
-
-    // A turnout is where one track's endpoint lies on a *different* track's line.
-    std::vector<Turnout> turnouts;
-    for (const TrackSegment* sp : segs) {
-        const std::vector<glm::dvec3>& p = sp->pts;
-        const std::pair<glm::dvec3, glm::dvec3> endsWithNb[2] = {
-            {p.front(), p[1]}, {p.back(), p[p.size() - 2]}};
-        for (const auto& [end, nb] : endsWithNb) {
-            const glm::dvec2 e2(end.x, end.y);
-            float best = 2.0f;    // metres; the touch tolerance
-            glm::dvec3 hitX{0.0};
-            glm::dvec2 hitThru{0.0};
-            const TrackSegment* hitSeg = nullptr;
-            for (const TrackSegment* op : segs) {
-                if (op == sp) continue;
-                const std::vector<glm::dvec3>& q = op->pts;
-                for (std::size_t k = 0; k + 1 < q.size(); ++k) {
-                    const glm::dvec2 a(q[k].x, q[k].y), b(q[k + 1].x, q[k + 1].y);
-                    const SegHit h = distToSeg(e2, a, b);
-                    if (h.dist < best) {
-                        best = h.dist;
-                        const double z = q[k].z + (q[k + 1].z - q[k].z) * h.t;
-                        hitX = glm::dvec3(e2.x, e2.y, z);
-                        hitThru = b - a;
-                        hitSeg = op;
-                    }
-                }
-            }
-            if (!hitSeg) continue;
-            const double tl = glm::length(hitThru);
-            const glm::dvec2 dv(nb.x - end.x, nb.y - end.y);
-            const double dl = glm::length(dv);
-            if (tl < 1e-6 || dl < 1e-6) continue;
-            const glm::dvec2 T = hitThru / tl, D = dv / dl;
-
-            // Reject a straight end-to-end stitch (two track ends joined collinearly,
-            // e.g. a tunnel break rejoined into a continuous route) — that is not a
-            // turnout. A real turnout has the through track passing *through* the
-            // point (the touch lands well inside it) or, at a yard track's end, the
-            // branch leaves at a clear angle. So keep the junction only if one holds.
-            constexpr double kEndMargin = 10.0;   // m: through track continues past the point
-            constexpr double kMinDivergeDeg = 8.0; // deg: a genuine branch at an end-to-end meet
-            const double endDist =
-                std::min(std::hypot(e2.x - hitSeg->pts.front().x, e2.y - hitSeg->pts.front().y),
-                         std::hypot(e2.x - hitSeg->pts.back().x, e2.y - hitSeg->pts.back().y));
-            const double angDeg =
-                glm::degrees(std::acos(std::clamp(std::abs(T.x * D.x + T.y * D.y), 0.0, 1.0)));
-            if (endDist < kEndMargin && angDeg < kMinDivergeDeg) continue;
-
-            turnouts.push_back({hitX, T, D});
-        }
-    }
-
-    // Collapse turnouts sharing a point (both tracks' ends meet there) to one stand.
-    std::vector<Turnout> uniq;
-    for (const Turnout& t : turnouts) {
-        bool dup = false;
-        for (const Turnout& u : uniq)
-            if (std::hypot(t.x.x - u.x.x, t.x.y - u.x.y) < 3.0) { dup = true; break; }
-        if (!dup) uniq.push_back(t);
-    }
+void SwitchMesh::build(const SwitchNetwork& net) {
+    vertices_.clear();
+    indices_.clear();
+    const glm::dvec3 origin = net.sceneOrigin();
 
     // --- Geometry helpers (scene-relative floats) ---
     auto tri = [&](const glm::vec3& p0, const glm::vec3& p1, const glm::vec3& p2,
@@ -150,9 +65,9 @@ void SwitchMesh::build(const TerrainData& data) {
     auto prism = [&](const glm::vec3& p0, const glm::vec3& p1, float rad, int n,
                      const glm::vec3& col) {
         glm::vec3 axis = p1 - p0;
-        const float L = glm::length(axis);
-        if (L < 1e-6f) return;
-        axis /= L;
+        const float Ln = glm::length(axis);
+        if (Ln < 1e-6f) return;
+        axis /= Ln;
         const glm::vec3 ref = std::abs(axis.z) < 0.9f ? glm::vec3(0, 0, 1)
                                                       : glm::vec3(1, 0, 0);
         const glm::vec3 e1 = glm::normalize(glm::cross(axis, ref));
@@ -164,61 +79,95 @@ void SwitchMesh::build(const TerrainData& data) {
             const glm::vec3 d1 = e1 * std::cos(a1) + e2 * std::sin(a1);
             quad(p0 + d0 * rad, p1 + d0 * rad, p1 + d1 * rad, p0 + d1 * rad,
                  glm::normalize(d0 + d1), col);
-            tri(p1 + d0 * rad, c0 + axis * (L * 0.5f), p1 + d1 * rad, axis, col);
-            tri(p0 + d1 * rad, c0 - axis * (L * 0.5f), p0 + d0 * rad, -axis, col);
+            tri(p1 + d0 * rad, c0 + axis * (Ln * 0.5f), p1 + d1 * rad, axis, col);
+            tri(p0 + d1 * rad, c0 - axis * (Ln * 0.5f), p0 + d0 * rad, -axis, col);
         }
     };
+    // A filled disc (the "filled circle" target face), facing +n, in the (w,up) plane.
+    auto disc = [&](const glm::vec3& c, const glm::vec3& n, const glm::vec3& w,
+                    const glm::vec3& up, float rad, const glm::vec3& col) {
+        constexpr int N = 12;
+        for (int i = 0; i < N; ++i) {
+            const float a0 = 6.2831853f * i / N, a1 = 6.2831853f * (i + 1) / N;
+            const glm::vec3 p0 = c + (w * std::cos(a0) + up * std::sin(a0)) * rad;
+            const glm::vec3 p1 = c + (w * std::cos(a1) + up * std::sin(a1)) * rad;
+            tri(c, p0, p1, n, col);
+        }
+    };
+    // A filled arrowhead (the diverging target face), facing +n, pointing along +w.
+    auto arrow = [&](const glm::vec3& c, const glm::vec3& n, const glm::vec3& w,
+                     const glm::vec3& up, float sz, const glm::vec3& col) {
+        tri(c + w * sz, c - w * sz * 0.5f + up * sz, c - w * sz * 0.5f - up * sz, n, col);
+    };
 
-    // --- One switch stand per turnout ---
     const glm::vec3 UP(0, 0, 1);
-    for (const Turnout& t : uniq) {
+    const auto& turnouts = net.turnouts();
+    for (std::size_t idx = 0; idx < turnouts.size(); ++idx) {
+        const Turnout& t = turnouts[idx];
+        const SwitchState st = net.state(static_cast<int>(idx));
+
         const glm::vec3 T(static_cast<float>(t.thru.x), static_cast<float>(t.thru.y), 0.0f);
         // Side unit S: horizontal perpendicular to the track, toward the diverging
         // route, so the stand sits on the side the points swing to.
         glm::vec3 S(-T.y, T.x, 0.0f);
         if (t.div.x * S.x + t.div.y * S.y < 0.0f) S = -S;
-        // Local ground origin, ~0.25 m below the rail head, offset clear of the gauge.
-        const glm::vec3 C(static_cast<float>(t.x.x - origin.x) + S.x * 2.6f,
-                          static_cast<float>(t.x.y - origin.y) + S.y * 2.6f,
-                          static_cast<float>(t.x.z - origin.z) - 0.25f);
-        // worldPos(local right, fwd, up)
+        // Frog direction along the main (toward where the branch heads); toe = -frog.
+        const glm::vec3 frog =
+            T * ((t.div.x * T.x + t.div.y * T.y) >= 0.0f ? 1.0f : -1.0f);
+        const glm::vec3 C(static_cast<float>(t.world.x - origin.x) + S.x * 2.6f,
+                          static_cast<float>(t.world.y - origin.y) + S.y * 2.6f,
+                          static_cast<float>(t.world.z - origin.z) - 0.25f);
         auto L = [&](float lr, float lf, float lu) { return C + S * lr + T * lf + UP * lu; };
 
-        // Timber base slab.
+        // Static parts: timber base, throw rod, pivot pedestal, signal post.
         box(L(0, 0, 0.09f), S, T, UP, 0.55f, 0.5f, 0.09f, kTimber);
-        // Throw rod running toward the rails (-S) to the point blades.
         box(L(-1.05f, 0, 0.22f), S, T, UP, 0.95f, 0.03f, 0.03f, kIron);
-        // Pivot pedestal.
         box(L(0, 0, 0.5f), S, T, UP, 0.13f, 0.13f, 0.34f, kIron);
+        const glm::vec3 postC = L(0.0f, 0.32f, 1.1f);
+        box(postC, S, T, UP, 0.05f, 0.05f, 0.95f, kIron);
 
-        // Weighted lever: from the pedestal top, out at right angles to the track
-        // (+S) and near horizontal (as it lies in either thrown position), so the
-        // counterweight sits clear of the rails and in view.
-        const float ang = 0.17f; // ~10 deg below horizontal
-        const glm::vec3 leverDir = glm::normalize(S * std::cos(ang) - UP * std::sin(ang));
+        // Weighted lever: out at right angles to the track (+S), near horizontal, and
+        // swung fore/aft along the track to show the state (centred when broken).
+        const float yaw = st == SwitchState::Straight    ? 0.32f
+                          : st == SwitchState::Diverging  ? -0.32f
+                                                          : 0.0f;      // radians about UP
+        const float ang = st == SwitchState::Broken ? 0.30f : 0.17f;   // droop when broken
+        const glm::vec3 leverHoriz = glm::normalize(S * std::cos(yaw) + T * std::sin(yaw));
+        const glm::vec3 leverDir =
+            glm::normalize(leverHoriz * std::cos(ang) - UP * std::sin(ang));
         const glm::vec3 pivotTop = L(0, 0, 0.84f);
         const glm::vec3 le1 = glm::normalize(glm::cross(leverDir, UP));
         const glm::vec3 le2 = glm::cross(leverDir, le1);
         const float leverLen = 1.0f;
         box(pivotTop + leverDir * (leverLen * 0.5f), leverDir, le1, le2,
             leverLen * 0.5f, 0.05f, 0.05f, kIron);
-        // Cylindrical counterweight at the low end, drum axis across the lever.
         const glm::vec3 wc = pivotTop + leverDir * leverLen;
         prism(wc - le1 * 0.18f, wc + le1 * 0.18f, 0.18f, 8, kIron);
 
-        // Signal post and rotating indicator target, offset a little along the track.
-        const glm::vec3 postC = L(0.0f, 0.32f, 1.1f);
-        box(postC, S, T, UP, 0.05f, 0.05f, 0.95f, kIron);
-        // Target plate: thin along the track-normal S, its broad faces parallel to
-        // the track, so a train sighting along the rails sees only the narrow edge ->
-        // the vertical-line ("go straight") indication. White plate, dark frame +
-        // painted vertical stripe (each layer proud of the last so it shows).
+        // --- Mechanical target plate ---
+        // Thin along its normal `n`, broad faces ±n. Straight: n = S (edge-on to the
+        // track -> both approaches see the vertical-line edge). Diverging: n = toe dir
+        // (broad faces across the track -> the toe/facing side sees the arrow, the
+        // frog/branch side the circle). Broken: n at ~45deg (ambiguous).
         const glm::vec3 tgtC = L(0.0f, 0.32f, 2.15f);
-        box(tgtC, S, T, UP, 0.05f, 0.20f, 0.32f, kDark);        // frame
-        box(tgtC, S, T, UP, 0.06f, 0.17f, 0.28f, kTarget);      // white face, proud
-        box(tgtC, S, T, UP, 0.07f, 0.03f, 0.24f, kDark);        // painted vertical line
+        glm::vec3 n = S;
+        if (st == SwitchState::Diverging) n = -frog;                    // toe faces the plate
+        else if (st == SwitchState::Broken) n = glm::normalize(S - frog);
+        const glm::vec3 w = glm::normalize(glm::cross(UP, n));          // plate width axis
+        box(tgtC, n, w, UP, 0.05f, 0.20f, 0.32f, kDark);               // frame
+        box(tgtC, n, w, UP, 0.06f, 0.17f, 0.28f, kTarget);            // white face
+        if (st == SwitchState::Straight) {
+            // Vertical line painted on both broad faces.
+            box(tgtC, n, w, UP, 0.07f, 0.03f, 0.24f, kDark);
+        } else if (st == SwitchState::Diverging) {
+            // Arrow toward the toe (+n), filled circle toward the branches (-n); the
+            // arrow points to the side the diverging route leaves (toward S).
+            const float dir = glm::dot(w, S) >= 0.0f ? 1.0f : -1.0f;
+            arrow(tgtC + n * 0.075f, n, w * dir, UP, 0.14f, kDark);
+            disc(tgtC - n * 0.075f, -n, w, UP, 0.13f, kDark);
+        }
     }
 
     std::printf("[SwitchMesh] %zu stands, %zu vertices, %zu triangles\n",
-                uniq.size(), vertices_.size(), indices_.size() / 3);
+                turnouts.size(), vertices_.size(), indices_.size() / 3);
 }
