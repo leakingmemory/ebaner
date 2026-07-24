@@ -122,6 +122,7 @@ int main(int argc, char** argv) {
                 graph.trackCount, graph.points.size(), graph.lines.size() / 2,
                 graph.deadEnds.size());
 
+
     // --- Window ---
     if (!glfwInit()) {
         std::fprintf(stderr, "glfwInit failed\n");
@@ -200,6 +201,29 @@ int main(int argc, char** argv) {
     int selA = -1, selB = -1;      // picked dead-end indices (into graph.deadEnds)
     std::set<int> selected;        // selected geo-points (indices into graph.points)
     std::vector<TrackEdit> pending; // edits made this session, not yet saved
+
+    // Existing overlay lines, so a save can rewrite them (not just append). Any legacy
+    // elevation override (no track id) whose point coincides with vertices from more
+    // than one track is ambiguous -- it may have snapped to the wrong siding -- so it
+    // is auto-staged for removal; saving drops it and the user can re-do it per-track.
+    std::vector<TrackEdit> existing = loadTrackOverlay(datasetRoot);
+    std::vector<char> removeExisting(existing.size(), 0);
+    for (std::size_t k = 0; k < existing.size(); ++k) {
+        const TrackEdit& e = existing[k];
+        if (e.kind != TrackEdit::Elev || e.track != 0) continue;
+        std::set<std::uint32_t> tracks;
+        for (std::size_t i = 0; i < graph.points.size(); ++i)
+            if (std::hypot(graph.pointWorld[i].x - e.a.x, graph.pointWorld[i].y - e.a.y) < 1.0)
+                tracks.insert(graph.pointTrack[i]);
+        if (tracks.size() > 1) removeExisting[k] = 1;
+    }
+    {
+        std::size_t amb = 0;
+        for (char r : removeExisting) amb += r;
+        if (amb) std::printf("[trackedit] %zu ambiguous elev override(s) staged for "
+                             "removal (Ctrl+S to apply)\n", amb);
+    }
+
     auto rebuildOverlay = [&]() {
         std::vector<LineVertex> lns = graph.lines;
         const glm::vec3 yellow(1.0f, 0.95f, 0.2f), white(1.0f, 1.0f, 1.0f);
@@ -216,12 +240,13 @@ int main(int argc, char** argv) {
     auto applyEditsLive = [&](const std::vector<TrackEdit>& es,
                               bool keepSelection = false) {
         for (const TrackEdit& e : es) {
-            // De-dupe elevation overrides by (x,y) so repeated nudges keep one line
-            // per point (last write wins; fewer `elev` lines on save).
+            // De-dupe elevation overrides by (x,y) AND track so repeated nudges keep
+            // one line per point (last write wins), while a coincident point on a
+            // different siding keeps its own edit.
             if (e.kind == TrackEdit::Elev)
                 pending.erase(std::remove_if(pending.begin(), pending.end(),
                     [&](const TrackEdit& p) {
-                        return p.kind == TrackEdit::Elev &&
+                        return p.kind == TrackEdit::Elev && p.track == e.track &&
                                std::hypot(p.a.x - e.a.x, p.a.y - e.a.y) < 0.5;
                     }), pending.end());
             pending.push_back(e);
@@ -259,6 +284,7 @@ int main(int argc, char** argv) {
             e.kind = TrackEdit::Elev;
             const double nz = dtot > 1e-6 ? z0 + (z1 - z0) * (cum[i - lo] / dtot) : z0;
             e.a = glm::dvec3(graph.pointWorld[i].x, graph.pointWorld[i].y, nz);
+            e.track = graph.pointTrack[i]; // target this track's vertex specifically
             es.push_back(e);
         }
         const double grade = dtot > 1e-6 ? (z1 - z0) / dtot * 100.0 : 0.0;
@@ -275,9 +301,35 @@ int main(int argc, char** argv) {
             e.kind = TrackEdit::Elev;
             e.a = glm::dvec3(graph.pointWorld[i].x, graph.pointWorld[i].y,
                              graph.pointWorld[i].z + delta);
+            e.track = graph.pointTrack[i]; // target this track's vertex specifically
             es.push_back(e);
         }
         applyEditsLive(es, /*keepSelection=*/true);
+    };
+    // Cycle the single selection to the next geo-point coincident with it (within ~1 m
+    // in x,y), ordered by track, so overlapping siding points at a shared node can each
+    // be reached and edited. Raising one changes its z and separates it thereafter.
+    auto doCycleCoincident = [&]() {
+        if (selected.size() != 1) return;
+        const int cur = *selected.begin();
+        const glm::dvec3 P = graph.pointWorld[cur];
+        std::vector<int> group;
+        for (int i = 0; i < static_cast<int>(graph.points.size()); ++i)
+            if (std::hypot(graph.pointWorld[i].x - P.x, graph.pointWorld[i].y - P.y) < 1.0)
+                group.push_back(i);
+        if (group.size() < 2) return;
+        std::sort(group.begin(), group.end(), [&](int a, int b) {
+            if (graph.pointTrack[a] != graph.pointTrack[b])
+                return graph.pointTrack[a] < graph.pointTrack[b];
+            return a < b;
+        });
+        const auto it = std::find(group.begin(), group.end(), cur);
+        const int next = group[((it - group.begin()) + 1) % group.size()];
+        selected.clear();
+        selected.insert(next);
+        rebuildOverlay();
+        std::printf("[trackedit] cycled to track %#x z=%.2f (%zu coincident here)\n",
+                    graph.pointTrack[next], graph.pointWorld[next].z, group.size());
     };
     // Connect a selected track *endpoint* to the nearest track its end trajectory
     // crosses: move the endpoint onto that track (trims a siding that overshoots).
@@ -344,7 +396,8 @@ int main(int argc, char** argv) {
                 "Select (cursor freed with Tab): click a geo-point, Ctrl+click for "
                 "several, click empty to clear.\n"
                 "Edit: G straighten the selected span's grade; Up/Down raise/lower the "
-                "selection; J join a selected dead-end onto the track it crosses; "
+                "selection; N cycle the selection through coincident points (shared "
+                "nodes); J join a selected dead-end onto the track it crosses; "
                 "Enter/Enter+L link two red dead ends. Live preview; Ctrl+S saves.\n"
                 "Overlay: amber = main line, cyan = siding, magenta = yard, "
                 "red = dead end, white = selected.\n\n");
@@ -354,7 +407,7 @@ int main(int argc, char** argv) {
     int frame = 0;
     bool prevEnter = false, prevL = false, prevX = false, prevML = false,
          prevG = false, prevS = false, prevUp = false, prevDown = false,
-         prevJ = false;
+         prevJ = false, prevN = false;
     bool prevMenuEnter = false, prevMenuUp = false, prevMenuDown = false;
     const std::vector<std::string> kMenuItems = {"Exit"};
     float elevRepeat = 0.0f; // auto-repeat throttle for Up/Down raise/lower
@@ -460,6 +513,7 @@ int main(int argc, char** argv) {
         const bool kX = glfwGetKey(window, GLFW_KEY_X) == GLFW_PRESS;
         const bool kG = glfwGetKey(window, GLFW_KEY_G) == GLFW_PRESS;
         const bool kJ = glfwGetKey(window, GLFW_KEY_J) == GLFW_PRESS;
+        const bool kN = glfwGetKey(window, GLFW_KEY_N) == GLFW_PRESS;
         // Save is Ctrl+S (plain S is the backward-movement key).
         const bool kSave = ctrl && glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS;
         if (kEnter && !prevEnter && hover >= 0) {
@@ -480,6 +534,8 @@ int main(int argc, char** argv) {
         if (kG && !prevG) doRegrade();
         // J: connect the selected dead-end(s) onto the track their line crosses.
         if (kJ && !prevJ) doConnect();
+        // N: cycle the selection through geo-points coincident with it (shared nodes).
+        if (kN && !prevN) doCycleCoincident();
         // Up/Down: raise/lower the selected point(s). Auto-repeats while held (an
         // immediate first step, then throttled) so big changes don't need many taps.
         constexpr double kElevStep = 0.1; // metres per step (auto-repeats while held)
@@ -495,18 +551,29 @@ int main(int argc, char** argv) {
             elevRepeat = 0.0f;
         }
         prevUp = kUp; prevDown = kDn;
-        // Ctrl+S: save pending edits to the overlay file.
-        if (kSave && !prevS && !pending.empty()) {
-            if (appendTrackEdits(datasetRoot, pending)) {
-                std::printf("[trackedit] saved %zu edit(s) -> %s/overlay/track-edits.txt\n",
-                            pending.size(), datasetRoot.c_str());
+        // Ctrl+S: rewrite the overlay = kept existing lines + this session's edits,
+        // dropping any staged-for-removal (ambiguous) overrides.
+        const std::size_t removals =
+            static_cast<std::size_t>(std::count(removeExisting.begin(),
+                                                removeExisting.end(), char(1)));
+        if (kSave && !prevS && (!pending.empty() || removals > 0)) {
+            std::vector<TrackEdit> out;
+            for (std::size_t k = 0; k < existing.size(); ++k)
+                if (!removeExisting[k]) out.push_back(existing[k]);
+            out.insert(out.end(), pending.begin(), pending.end());
+            if (writeTrackOverlay(datasetRoot, out)) {
+                std::printf("[trackedit] saved: %zu line(s) (%zu added, %zu removed) -> "
+                            "%s/overlay/track-edits.txt\n", out.size(), pending.size(),
+                            removals, datasetRoot.c_str());
+                existing = std::move(out);            // new on-disk baseline
+                removeExisting.assign(existing.size(), 0);
                 pending.clear();
             } else {
                 std::fprintf(stderr, "[trackedit] failed to write overlay file\n");
             }
         }
         prevEnter = kEnter; prevL = kL; prevX = kX; prevG = kG; prevS = kSave;
-        prevJ = kJ;
+        prevJ = kJ; prevN = kN;
 
         // Click to select (cursor freed only). Ctrl+click toggles for multi-select;
         // plain click selects one; clicking empty space clears.
@@ -542,7 +609,7 @@ int main(int argc, char** argv) {
             };
             {
                 const float x1 =
-                    std::min(static_cast<float>(fbw) - 20.0f, 40.0f + 54.0f * 8.0f * sc);
+                    std::min(static_cast<float>(fbw) - 20.0f, 40.0f + 68.0f * 8.0f * sc);
                 const float y1 = 40.0f + 8.0f * lh;
                 const glm::vec3 bg(0.04f, 0.05f, 0.09f);
                 const glm::vec2 a = ndc(20.0f, 20.0f), b = ndc(x1, 20.0f),
@@ -565,28 +632,34 @@ int main(int argc, char** argv) {
             appendText(tv, buf, x, 40.0f + 3 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f),
                        fbw, fbh);
             // Selection + elevation (single z, or min..max over the selection).
-            char selz[48] = "";
+            char selz[64] = "";
             if (!selected.empty()) {
                 double zmin = 1e9, zmax = -1e9;
                 for (int i : selected) {
                     const double z = graph.pointWorld[i].z;
                     zmin = std::min(zmin, z); zmax = std::max(zmax, z);
                 }
-                if (selected.size() == 1) std::snprintf(selz, sizeof(selz), " z=%.2f", zmin);
+                if (selected.size() == 1) // show the track id so coincident points differ
+                    std::snprintf(selz, sizeof(selz), " trk %#x z=%.2f",
+                                  graph.pointTrack[*selected.begin()], zmin);
                 else std::snprintf(selz, sizeof(selz), " z=%.2f..%.2f", zmin, zmax);
             }
             std::snprintf(buf, sizeof(buf),
-                          "SELECTED %zu%s   G grade  Up/Dn elev  J join-track",
+                          "SELECTED %zu%s   G grade  Up/Dn elev  J join  N cycle",
                           selected.size(), selz);
             appendText(tv, buf, x, 40.0f + 4 * lh, sc,
                        selected.empty() ? glm::vec3(0.7f, 0.85f, 0.7f)
                                         : glm::vec3(1.0f, 0.9f, 0.3f),
                        fbw, fbh);
-            std::snprintf(buf, sizeof(buf), "UNSAVED %zu   %s", pending.size(),
-                          pending.empty() ? "" : "Ctrl+S to save");
+            const std::size_t rmv = static_cast<std::size_t>(
+                std::count(removeExisting.begin(), removeExisting.end(), char(1)));
+            char rmvbuf[48] = "";
+            if (rmv) std::snprintf(rmvbuf, sizeof(rmvbuf), "  %zu ambiguous to remove", rmv);
+            std::snprintf(buf, sizeof(buf), "UNSAVED %zu%s   %s", pending.size(), rmvbuf,
+                          (pending.empty() && rmv == 0) ? "" : "Ctrl+S to save");
             appendText(tv, buf, x, 40.0f + 5 * lh, sc,
-                       pending.empty() ? glm::vec3(0.6f, 0.9f, 0.6f)
-                                       : glm::vec3(1.0f, 0.6f, 0.3f),
+                       (pending.empty() && rmv == 0) ? glm::vec3(0.6f, 0.9f, 0.6f)
+                                                     : glm::vec3(1.0f, 0.6f, 0.3f),
                        fbw, fbh);
             appendText(tv,
                        g_mouseCaptured ? "SELECT: press Tab to free the cursor"

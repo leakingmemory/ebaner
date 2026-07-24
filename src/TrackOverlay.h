@@ -15,6 +15,7 @@
 
 #include <glm/glm.hpp>
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -24,12 +25,16 @@ struct Tile;
 // so a regenerated base dataset can be dropped in without losing the edits. Stored
 // as lines in `<datasetRoot>/overlay/track-edits.txt` (world coords, EPSG:25833):
 //   link ax ay az bx by bz   - connect two track ends across a broken gap
-//   elev x y z               - override the elevation of the nearest track vertex
+//   elev x y z [trackid]     - override the elevation of the nearest track vertex
+//                              (optional trackid disambiguates coincident points)
 //   move ax ay az bx by bz   - move the nearest track vertex from a to b
 struct TrackEdit {
     enum Kind { Link, Elev, Move } kind = Link;
     // Link: the two endpoints. Elev: a = {x, y, newZ}. Move: a = old pos, b = new pos.
     glm::dvec3 a{0.0}, b{0.0};
+    // Elev/Move: restrict the vertex match to this track (0 = any track). Lets
+    // coincident points from different sidings be edited independently.
+    std::uint32_t track = 0;
 };
 
 // Read the overlay file (empty vector if absent).
@@ -44,3 +49,9 @@ void applyTrackOverlay(std::vector<Tile>& tiles, const std::vector<TrackEdit>& e
 // needed. Returns false on write failure.
 bool appendTrackEdits(const std::string& datasetRoot,
                       const std::vector<TrackEdit>& edits);
+
+// Rewrite the whole overlay file to exactly `edits` (truncating), creating
+// `overlay/` if needed. Used to drop edits (e.g. ambiguous overrides) rather than
+// only append. Returns false on write failure.
+bool writeTrackOverlay(const std::string& datasetRoot,
+                       const std::vector<TrackEdit>& edits);
