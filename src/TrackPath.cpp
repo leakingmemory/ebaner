@@ -341,16 +341,46 @@ std::vector<TrackPath> buildTrackPaths(const TerrainData& data) {
     std::unordered_map<int, std::vector<int>> node;
     for (int e = 0; e < nEnds; ++e) node[dsu.find(e)].push_back(e);
 
-    // --- Partner links: at a degree-2 node joining two different segments of the
-    // same track type, each endpoint's partner is the other. ---
+    // --- Partner links: chain segments head-to-tail through a node. ---
+    // At a plain degree-2 join the two ends partner (a track continuing, possibly
+    // curving). At a multi-way junction (>=3 ends, a turnout) the through route is the
+    // straightest same-type pair; partnering it lets a siding continue across the
+    // junction instead of dead-ending there (the others stay as diverging branches,
+    // which SwitchNetwork then picks up as switches).
+    // Unit direction from an endpoint into its own segment (i.e. away from the node).
+    auto dirOut = [&](int e) -> glm::vec2 {
+        const Seg& s = segs[e >> 1];
+        const glm::vec3& tip = (e & 1) ? s.pts.back() : s.pts.front();
+        const glm::vec3& nb = (e & 1) ? s.pts[s.pts.size() - 2] : s.pts[1];
+        glm::vec2 d(nb.x - tip.x, nb.y - tip.y);
+        const float L = glm::length(d);
+        return L > 1e-6f ? d / L : glm::vec2(1.0f, 0.0f);
+    };
+    auto joinable = [&](int a, int b) {
+        return (a >> 1) != (b >> 1) &&                 // not the same segment (tiny loop)
+               segs[a >> 1].trackType == segs[b >> 1].trackType;
+    };
     std::vector<int> partner(nEnds, -1);
     for (auto& [root, ends] : node) {
-        if (ends.size() != 2) continue;               // dead end / junction
-        const int a = ends[0], b = ends[1];
-        if ((a >> 1) == (b >> 1)) continue;            // same segment (tiny loop)
-        if (segs[a >> 1].trackType != segs[b >> 1].trackType) continue;
-        partner[a] = b;
-        partner[b] = a;
+        if (ends.size() < 2) continue;                 // dead end
+        if (ends.size() == 2) {
+            const int a = ends[0], b = ends[1];
+            if (joinable(a, b)) { partner[a] = b; partner[b] = a; }
+            continue;
+        }
+        // Multi-way: chain the straightest same-type pair (dirOut nearly opposite, so
+        // the track runs through). Require it to be reasonably straight so a sharp branch
+        // is never taken for the through route.
+        int ba = -1, bb = -1;
+        float best = -0.7f;                            // <= this => through (<~45 deg bend)
+        for (std::size_t p = 0; p < ends.size(); ++p)
+            for (std::size_t q = p + 1; q < ends.size(); ++q) {
+                const int a = ends[p], b = ends[q];
+                if (!joinable(a, b)) continue;
+                const float d = glm::dot(dirOut(a), dirOut(b));
+                if (d < best) { best = d; ba = a; bb = b; }
+            }
+        if (ba >= 0) { partner[ba] = bb; partner[bb] = ba; }
     }
 
     // --- Chain segments head-to-tail through partner links into routes. ---
