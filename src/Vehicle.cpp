@@ -593,10 +593,12 @@ void Vehicle::update(float dt, float pushInput) {
     }
 
     if (state_ == VehicleState::OnRail) {
-        const VehicleFrame bf = bodyFrame();
-        // Driving acceleration: gravity along the track (downhill in +s is
-        // positive) plus the hand push (a force, so a = F/m).
-        const float aGrav = -kG * bf.tangent.z;
+        // Driving acceleration: gravity along the track plus the hand push (a force,
+        // so a = F/m). Gravity acts on v_, which is velocity in the path's +s frame, so
+        // it uses the raw path tangent: bodyFrame()'s tangent carries orient_, which after
+        // a divert flips the vehicle (orient_ = -1) would invert gravity — the vehicle
+        // speeding up uphill and slowing downhill.
+        const float aGrav = -kG * path_->poseAt(s_).tangent.z;
         const float aPush = orient_ * pushInput * kPushForce / mass_;
         v_ += (aGrav + aPush) * dt;
 
