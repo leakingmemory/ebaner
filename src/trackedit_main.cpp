@@ -512,32 +512,79 @@ int main(int argc, char** argv) {
         // drop the near-duplicate.
         const double off = glm::clamp(4.5 / std::sin(theta), 7.0, 14.0);
         std::vector<TrackEdit> rails;
+        // Reject a diagonal that duplicates one we're adding now OR one already in the
+        // overlay (existing on disk + this session's pending), so re-running K on a
+        // half-built slip only adds the missing diagonal instead of a duplicate.
+        // Only a near-identical rail counts as a duplicate. The tolerance is tight (1 m)
+        // because at a shallow diamond the two diagonals of a double slip are nearly the
+        // same line (~2 m apart) yet connect different track pairs — they must both be
+        // allowed. A genuine re-run reproduces a rail exactly (0 m), so 1 m still catches it.
+        auto sameRail = [](const TrackEdit& r, const TrackEdit& e) {
+            const bool same = std::hypot(r.a.x - e.a.x, r.a.y - e.a.y) < 1.0 &&
+                              std::hypot(r.b.x - e.b.x, r.b.y - e.b.y) < 1.0;
+            const bool swap = std::hypot(r.a.x - e.b.x, r.a.y - e.b.y) < 1.0 &&
+                              std::hypot(r.b.x - e.a.x, r.b.y - e.a.y) < 1.0;
+            return same || swap;
+        };
         auto dup = [&](const TrackEdit& e) {
-            for (const TrackEdit& r : rails) {
-                const bool same = std::hypot(r.a.x - e.a.x, r.a.y - e.a.y) < 3.0 &&
-                                  std::hypot(r.b.x - e.b.x, r.b.y - e.b.y) < 3.0;
-                const bool swap = std::hypot(r.a.x - e.b.x, r.a.y - e.b.y) < 3.0 &&
-                                  std::hypot(r.b.x - e.a.x, r.b.y - e.a.y) < 3.0;
-                if (same || swap) return true;
-            }
+            for (const TrackEdit& r : rails) if (sameRail(r, e)) return true;
+            for (const TrackEdit& r : pending)
+                if (r.kind == TrackEdit::Rail && sameRail(r, e)) return true;
+            for (const TrackEdit& r : existing)
+                if (r.kind == TrackEdit::Rail && sameRail(r, e)) return true;
             return false;
         };
-        // A connector end that lands on a track's *endpoint* (the track terminates at the
-        // crossing — common where a siding stubs into the diamond) makes no clean switch:
-        // the track doesn't pass through there. Skip such a diagonal.
-        auto atEnd = [](const std::vector<glm::dvec3>& poly, const glm::dvec3& p) {
-            return std::hypot(poly.front().x - p.x, poly.front().y - p.y) < 1.5 ||
-                   std::hypot(poly.back().x - p.x, poly.back().y - p.y) < 1.5;
+        // If a diagonal's end lands on a track's *terminus* (a siding stubbing into the
+        // diamond, e.g. one line ending where the next begins), hop onto the track that
+        // continues collinearly from there, so the connector reaches a through track and a
+        // real switch forms at each end (rather than skipping that diagonal).
+        auto resolveEnd = [&](const std::vector<glm::dvec3>& poly0,
+                              glm::dvec2 target) -> glm::dvec3 {
+            const std::vector<glm::dvec3>* cur = &poly0;
+            glm::dvec3 p = snap(*cur, target);
+            for (int hop = 0; hop < 2; ++hop) {
+                const glm::dvec3 f = cur->front(), b = cur->back();
+                const bool atF = std::hypot(f.x - p.x, f.y - p.y) < 1.5;
+                const bool atB = std::hypot(b.x - p.x, b.y - p.y) < 1.5;
+                if (!atF && !atB) break;
+                const glm::dvec3 term = atF ? f : b;
+                glm::dvec2 want(target.x - term.x, target.y - term.y);
+                const double wl = glm::length(want);
+                if (wl < 1e-6) break;
+                want /= wl;
+                const std::vector<glm::dvec3>* cont = nullptr;
+                double bestAlign = 0.3;
+                for (const auto& pr : polys) {
+                    const auto& pl = pr.second;
+                    if (&pl == cur || pl.size() < 2) continue;
+                    for (int end = 0; end < 2; ++end) {
+                        const glm::dvec3 e = end ? pl.back() : pl.front();
+                        if (std::hypot(e.x - term.x, e.y - term.y) > 2.5) continue;
+                        const glm::dvec3 nb = end ? pl[pl.size() - 2] : pl[1];
+                        glm::dvec2 dir(nb.x - e.x, nb.y - e.y);
+                        const double L = glm::length(dir);
+                        if (L < 1e-6) continue;
+                        const double a = glm::dot(dir / L, want);
+                        if (a > bestAlign) { bestAlign = a; cont = &pl; }
+                    }
+                }
+                if (!cont) break; // a genuine dead end
+                cur = cont;
+                p = snap(*cur, target);
+            }
+            return p;
         };
         for (double s : {1.0, -1.0}) {
             TrackEdit e; e.kind = TrackEdit::Rail;
-            e.a = snap(A, X - dA * (off * s));
-            e.b = snap(B, X + dB * (off * s));
-            if (std::hypot(e.a.x - e.b.x, e.a.y - e.b.y) > 2.0 && !atEnd(A, e.a) &&
-                !atEnd(B, e.b) && !dup(e))
+            e.a = resolveEnd(A, X - dA * (off * s));
+            e.b = resolveEnd(B, X + dB * (off * s));
+            if (std::hypot(e.a.x - e.b.x, e.a.y - e.b.y) > 2.0 && !dup(e))
                 rails.push_back(e);
         }
-        if (rails.empty()) { std::printf("[trackedit] slip: rails degenerate\n"); return; }
+        if (rails.empty()) {
+            std::printf("[trackedit] slip: nothing to add (already built here?)\n");
+            return;
+        }
         applyEditsLive(rails);
         std::printf("[trackedit] slip: added %zu rail(s) at %#x x %#x (%.0f deg) "
                     "(preview; Ctrl+S to save)\n", rails.size(), polys[ai].first,
