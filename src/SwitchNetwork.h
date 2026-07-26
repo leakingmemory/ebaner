@@ -41,6 +41,7 @@ struct Turnout {
     int   sidingPath = -1;   // diverging branch (one of its ends is at `world`)
     float sSiding    = 0.0f; // 0 or length: which end of sidingPath sits at `world`
     int   facingS    = 1;    // +1 if moving in +s on mainPath is a *facing* approach
+    std::uint32_t sidingTrack = 0; // branch track id (dedup keeps one switch per branch)
 };
 
 // The set of throwable switches in the loaded network, with mutable per-switch state.

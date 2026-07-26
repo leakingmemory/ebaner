@@ -122,7 +122,6 @@ int main(int argc, char** argv) {
                 graph.trackCount, graph.points.size(), graph.lines.size() / 2,
                 graph.deadEnds.size());
 
-
     // --- Window ---
     if (!glfwInit()) {
         std::fprintf(stderr, "glfwInit failed\n");
@@ -331,6 +330,219 @@ int main(int argc, char** argv) {
         std::printf("[trackedit] cycled to track %#x z=%.2f (%zu coincident here)\n",
                     graph.pointTrack[next], graph.pointWorld[next].z, group.size());
     };
+    // Add a connecting rail between two selected geo-points on different tracks. Its
+    // ends land on those tracks, so the switch detection makes a switch at each end
+    // (a crossover/slip the export omitted). Appears live; switches form on reload.
+    auto doAddRail = [&]() {
+        if (selected.size() != 2) {
+            std::printf("[trackedit] add rail: select exactly 2 points (on 2 tracks)\n");
+            return;
+        }
+        auto it = selected.begin();
+        const int i0 = *it++, i1 = *it;
+        if (graph.pointTrack[i0] == graph.pointTrack[i1]) {
+            std::printf("[trackedit] add rail: the 2 points are on the same track\n");
+            return;
+        }
+        TrackEdit e;
+        e.kind = TrackEdit::Rail;
+        e.a = graph.pointWorld[i0];
+        e.b = graph.pointWorld[i1];
+        applyEditsLive({e}); // rail adds a segment -> indices shift -> selection clears
+        std::printf("[trackedit] added connecting rail (preview; Ctrl+S to save)\n");
+    };
+    // Build a scissors (double) crossover between two roughly-parallel tracks: select
+    // one point on each track (opposite each other) and press C. Lays two short
+    // crossover rails that cross in the middle (the diamond) — a switch on each track
+    // at each end, so trains can cross between the two lines either way. Uses the
+    // overlay-applied elevations, so pick a spot where both tracks are at grade.
+    auto doScissors = [&]() {
+        if (selected.size() != 2) {
+            std::printf("[trackedit] scissors: select 1 point on each of the two tracks\n");
+            return;
+        }
+        auto it = selected.begin();
+        const int i0 = *it++, i1 = *it;
+        const std::uint32_t tA = graph.pointTrack[i0], tB = graph.pointTrack[i1];
+        if (tA == tB) {
+            std::printf("[trackedit] scissors: the 2 points are on the same track\n");
+            return;
+        }
+        std::vector<glm::dvec3> A, B;
+        for (std::size_t i = 0; i < graph.points.size(); ++i) {
+            if (graph.pointTrack[i] == tA) A.push_back(graph.pointWorld[i]);
+            else if (graph.pointTrack[i] == tB) B.push_back(graph.pointWorld[i]);
+        }
+        if (A.size() < 2 || B.size() < 2) return;
+        auto dirAt = [](const std::vector<glm::dvec3>& poly, glm::dvec2 x) {
+            double bd = 1e30; glm::dvec2 dir(1, 0);
+            for (std::size_t i = 0; i + 1 < poly.size(); ++i) {
+                glm::dvec2 a(poly[i].x, poly[i].y), b(poly[i + 1].x, poly[i + 1].y);
+                glm::dvec2 ab = b - a; double L2 = glm::dot(ab, ab);
+                double t = L2 > 1e-9 ? glm::clamp(glm::dot(x - a, ab) / L2, 0.0, 1.0) : 0.0;
+                double d = glm::length(x - (a + ab * t));
+                if (d < bd) { bd = d; dir = L2 > 1e-9 ? ab / std::sqrt(L2) : glm::dvec2(1, 0); }
+            }
+            return dir;
+        };
+        auto snap = [](const std::vector<glm::dvec3>& poly, glm::dvec2 target) {
+            double bd = 1e30; glm::dvec3 best(0.0);
+            for (std::size_t i = 0; i + 1 < poly.size(); ++i) {
+                glm::dvec2 a(poly[i].x, poly[i].y), b(poly[i + 1].x, poly[i + 1].y);
+                glm::dvec2 ab = b - a; double L2 = glm::dot(ab, ab);
+                double t = L2 > 1e-9 ? glm::clamp(glm::dot(target - a, ab) / L2, 0.0, 1.0) : 0.0;
+                double d = glm::length(target - (a + ab * t));
+                if (d < bd) { bd = d; best = glm::mix(poly[i], poly[i + 1], t); }
+            }
+            return best;
+        };
+        const glm::dvec3 P0 = graph.pointWorld[i0], P1 = graph.pointWorld[i1];
+        const glm::dvec2 p0(P0.x, P0.y), p1(P1.x, P1.y);
+        const glm::dvec2 along = dirAt(A, p0);
+        constexpr double half = 13.0; // half the crossover length along the tracks
+        std::vector<TrackEdit> rails;
+        auto add = [&](glm::dvec3 a, glm::dvec3 b) {
+            if (std::hypot(a.x - b.x, a.y - b.y) > 2.0) {
+                TrackEdit e; e.kind = TrackEdit::Rail; e.a = a; e.b = b; rails.push_back(e);
+            }
+        };
+        add(snap(A, p0 - along * half), snap(B, p1 + along * half)); // one diagonal
+        add(snap(B, p1 - along * half), snap(A, p0 + along * half)); // the crossing one
+        if (rails.empty()) { std::printf("[trackedit] scissors: degenerate\n"); return; }
+        applyEditsLive(rails);
+        std::printf("[trackedit] scissors: added %zu crossover rail(s) between %#x and "
+                    "%#x (preview; Ctrl+S to save)\n", rails.size(), tA, tB);
+    };
+    // Auto-build a slip switch (kryssveksel) at a diamond crossing: select the point in
+    // the middle of the crossing and press K. Finds the two tracks that cross there and
+    // adds the two shallow diagonal connecting rails (a switch on each track at each
+    // end), so trains can turn through it. Uses the overlay-applied elevations.
+    auto doAutoDiamond = [&]() {
+        if (selected.size() != 1) {
+            std::printf("[trackedit] slip: select 1 point in the middle of the crossing\n");
+            return;
+        }
+        const glm::dvec3 P = graph.pointWorld[*selected.begin()];
+        // Per-track polylines (each track is one contiguous run in the graph).
+        std::vector<std::pair<std::uint32_t, std::vector<glm::dvec3>>> polys;
+        for (std::size_t i = 0; i < graph.points.size(); ++i) {
+            if (polys.empty() || polys.back().first != graph.pointTrack[i])
+                polys.push_back({graph.pointTrack[i], {}});
+            polys.back().second.push_back(graph.pointWorld[i]);
+        }
+        // Nearest edge crossing (interior of both) to the selected point.
+        auto seg2 = [](glm::dvec2 a, glm::dvec2 b, glm::dvec2 c, glm::dvec2 d,
+                       glm::dvec2& ip) {
+            const double den = (b.x - a.x) * (d.y - c.y) - (b.y - a.y) * (d.x - c.x);
+            if (std::abs(den) < 1e-9) return false;
+            const double t = ((c.x - a.x) * (d.y - c.y) - (c.y - a.y) * (d.x - c.x)) / den;
+            const double u = ((c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x)) / den;
+            if (t <= 0.0 || t >= 1.0 || u <= 0.0 || u >= 1.0) return false;
+            ip = a + (b - a) * t;
+            return true;
+        };
+        double best = 12.0; // m from P
+        int ai = -1, bi = -1;
+        glm::dvec2 X(0.0);
+        for (std::size_t p = 0; p < polys.size(); ++p)
+            for (std::size_t q = p + 1; q < polys.size(); ++q) {
+                const auto& A = polys[p].second;
+                const auto& B = polys[q].second;
+                for (std::size_t i = 0; i + 1 < A.size(); ++i)
+                    for (std::size_t j = 0; j + 1 < B.size(); ++j) {
+                        glm::dvec2 ip;
+                        if (seg2({A[i].x, A[i].y}, {A[i + 1].x, A[i + 1].y},
+                                 {B[j].x, B[j].y}, {B[j + 1].x, B[j + 1].y}, ip)) {
+                            const double d = std::hypot(ip.x - P.x, ip.y - P.y);
+                            if (d < best) { best = d; ai = (int)p; bi = (int)q; X = ip; }
+                        }
+                    }
+            }
+        if (ai < 0) {
+            std::printf("[trackedit] slip: no crossing within 12 m of the selected point\n");
+            return;
+        }
+        const auto& A = polys[ai].second;
+        const auto& B = polys[bi].second;
+        // Unit direction of a polyline at its nearest edge to x; and nearest point on it
+        // (interpolated, carrying z).
+        auto dirAt = [](const std::vector<glm::dvec3>& poly, glm::dvec2 x) {
+            double bd = 1e30; glm::dvec2 dir(1, 0);
+            for (std::size_t i = 0; i + 1 < poly.size(); ++i) {
+                glm::dvec2 a(poly[i].x, poly[i].y), b(poly[i + 1].x, poly[i + 1].y);
+                glm::dvec2 ab = b - a; double L2 = glm::dot(ab, ab);
+                double t = L2 > 1e-9 ? glm::clamp(glm::dot(x - a, ab) / L2, 0.0, 1.0) : 0.0;
+                double d = glm::length(x - (a + ab * t));
+                if (d < bd) { bd = d; dir = L2 > 1e-9 ? ab / std::sqrt(L2) : glm::dvec2(1, 0); }
+            }
+            return dir;
+        };
+        auto snap = [](const std::vector<glm::dvec3>& poly, glm::dvec2 target) {
+            double bd = 1e30; glm::dvec3 best(0.0);
+            for (std::size_t i = 0; i + 1 < poly.size(); ++i) {
+                glm::dvec2 a(poly[i].x, poly[i].y), b(poly[i + 1].x, poly[i + 1].y);
+                glm::dvec2 ab = b - a; double L2 = glm::dot(ab, ab);
+                double t = L2 > 1e-9 ? glm::clamp(glm::dot(target - a, ab) / L2, 0.0, 1.0) : 0.0;
+                double d = glm::length(target - (a + ab * t));
+                if (d < bd) { bd = d; best = glm::mix(poly[i], poly[i + 1], t); }
+            }
+            return best;
+        };
+        glm::dvec2 dA = dirAt(A, X), dB = dirAt(B, X);
+        if (glm::dot(dA, dB) < 0.0) dB = -dB; // acute crossing
+        const double theta = std::acos(glm::clamp(glm::dot(dA, dB), -1.0, 1.0));
+        const double deg = glm::degrees(theta);
+        // Reject only a genuinely parallel pair (no real crossing) or one so steep no
+        // branch could ever take it. A shallow diamond is fine: the connecting rails run
+        // longer and each meets the crossed tracks shallowly, but they are the diversion
+        // lines the user wants, and the switch detector makes a switch at each end.
+        if (deg < 2.0) {
+            std::printf("[trackedit] slip: tracks are parallel here (%.0f deg) — no crossing\n", deg);
+            return;
+        }
+        if (deg * 0.5 > 35.0) {
+            std::printf("[trackedit] slip: crossing angle %.0f deg too steep for a switch\n", deg);
+            return;
+        }
+        // Diversion diagonals across the crossing: each runs from one track (short of the
+        // crossing) to the other (past it), so a switch forms at each end — throw both to
+        // divert. Offset the ends from the crossing so the tracks are ~a track's width
+        // apart there. A steep diamond yields two distinct diagonals (a double slip); a
+        // shallow one collapses them to a single line (the second would just overlap), so
+        // drop the near-duplicate.
+        const double off = glm::clamp(4.5 / std::sin(theta), 7.0, 14.0);
+        std::vector<TrackEdit> rails;
+        auto dup = [&](const TrackEdit& e) {
+            for (const TrackEdit& r : rails) {
+                const bool same = std::hypot(r.a.x - e.a.x, r.a.y - e.a.y) < 3.0 &&
+                                  std::hypot(r.b.x - e.b.x, r.b.y - e.b.y) < 3.0;
+                const bool swap = std::hypot(r.a.x - e.b.x, r.a.y - e.b.y) < 3.0 &&
+                                  std::hypot(r.b.x - e.a.x, r.b.y - e.a.y) < 3.0;
+                if (same || swap) return true;
+            }
+            return false;
+        };
+        // A connector end that lands on a track's *endpoint* (the track terminates at the
+        // crossing — common where a siding stubs into the diamond) makes no clean switch:
+        // the track doesn't pass through there. Skip such a diagonal.
+        auto atEnd = [](const std::vector<glm::dvec3>& poly, const glm::dvec3& p) {
+            return std::hypot(poly.front().x - p.x, poly.front().y - p.y) < 1.5 ||
+                   std::hypot(poly.back().x - p.x, poly.back().y - p.y) < 1.5;
+        };
+        for (double s : {1.0, -1.0}) {
+            TrackEdit e; e.kind = TrackEdit::Rail;
+            e.a = snap(A, X - dA * (off * s));
+            e.b = snap(B, X + dB * (off * s));
+            if (std::hypot(e.a.x - e.b.x, e.a.y - e.b.y) > 2.0 && !atEnd(A, e.a) &&
+                !atEnd(B, e.b) && !dup(e))
+                rails.push_back(e);
+        }
+        if (rails.empty()) { std::printf("[trackedit] slip: rails degenerate\n"); return; }
+        applyEditsLive(rails);
+        std::printf("[trackedit] slip: added %zu rail(s) at %#x x %#x (%.0f deg) "
+                    "(preview; Ctrl+S to save)\n", rails.size(), polys[ai].first,
+                    polys[bi].first, glm::degrees(theta));
+    };
     // Connect a selected track *endpoint* to the nearest track its end trajectory
     // crosses: move the endpoint onto that track (trims a siding that overshoots).
     auto doConnect = [&]() {
@@ -397,8 +609,12 @@ int main(int argc, char** argv) {
                 "several, click empty to clear.\n"
                 "Edit: G straighten the selected span's grade; Up/Down raise/lower the "
                 "selection; N cycle the selection through coincident points (shared "
-                "nodes); J join a selected dead-end onto the track it crosses; "
-                "Enter/Enter+L link two red dead ends. Live preview; Ctrl+S saves.\n"
+                "nodes); R add a connecting rail between 2 selected points on different "
+                "tracks (builds a switch at each end); C build a scissors (double) "
+                "crossover between 2 selected points on two parallel tracks; K auto-build "
+                "a slip switch at the crossing under the selected point; J "
+                "join a selected dead-end onto the track it crosses; Enter/Enter+L link "
+                "two red dead ends. Live preview; Ctrl+S saves.\n"
                 "Overlay: amber = main line, cyan = siding, magenta = yard, "
                 "red = dead end, white = selected.\n\n");
 
@@ -407,7 +623,7 @@ int main(int argc, char** argv) {
     int frame = 0;
     bool prevEnter = false, prevL = false, prevX = false, prevML = false,
          prevG = false, prevS = false, prevUp = false, prevDown = false,
-         prevJ = false, prevN = false;
+         prevJ = false, prevN = false, prevR = false, prevK = false, prevC = false;
     bool prevMenuEnter = false, prevMenuUp = false, prevMenuDown = false;
     const std::vector<std::string> kMenuItems = {"Exit"};
     float elevRepeat = 0.0f; // auto-repeat throttle for Up/Down raise/lower
@@ -514,6 +730,9 @@ int main(int argc, char** argv) {
         const bool kG = glfwGetKey(window, GLFW_KEY_G) == GLFW_PRESS;
         const bool kJ = glfwGetKey(window, GLFW_KEY_J) == GLFW_PRESS;
         const bool kN = glfwGetKey(window, GLFW_KEY_N) == GLFW_PRESS;
+        const bool kR = glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS;
+        const bool kK = glfwGetKey(window, GLFW_KEY_K) == GLFW_PRESS;
+        const bool kC = glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS;
         // Save is Ctrl+S (plain S is the backward-movement key).
         const bool kSave = ctrl && glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS;
         if (kEnter && !prevEnter && hover >= 0) {
@@ -536,6 +755,12 @@ int main(int argc, char** argv) {
         if (kJ && !prevJ) doConnect();
         // N: cycle the selection through geo-points coincident with it (shared nodes).
         if (kN && !prevN) doCycleCoincident();
+        // R: add a connecting rail between 2 selected points (builds a switch each end).
+        if (kR && !prevR) doAddRail();
+        // K: auto-build a slip (kryssveksel) at the crossing under the selected point.
+        if (kK && !prevK) doAutoDiamond();
+        // C: build a scissors (double) crossover between the 2 selected tracks' points.
+        if (kC && !prevC) doScissors();
         // Up/Down: raise/lower the selected point(s). Auto-repeats while held (an
         // immediate first step, then throttled) so big changes don't need many taps.
         constexpr double kElevStep = 0.1; // metres per step (auto-repeats while held)
@@ -573,7 +798,7 @@ int main(int argc, char** argv) {
             }
         }
         prevEnter = kEnter; prevL = kL; prevX = kX; prevG = kG; prevS = kSave;
-        prevJ = kJ; prevN = kN;
+        prevJ = kJ; prevN = kN; prevR = kR; prevK = kK; prevC = kC;
 
         // Click to select (cursor freed only). Ctrl+click toggles for multi-select;
         // plain click selects one; clicking empty space clears.
@@ -609,7 +834,7 @@ int main(int argc, char** argv) {
             };
             {
                 const float x1 =
-                    std::min(static_cast<float>(fbw) - 20.0f, 40.0f + 68.0f * 8.0f * sc);
+                    std::min(static_cast<float>(fbw) - 20.0f, 40.0f + 76.0f * 8.0f * sc);
                 const float y1 = 40.0f + 8.0f * lh;
                 const glm::vec3 bg(0.04f, 0.05f, 0.09f);
                 const glm::vec2 a = ndc(20.0f, 20.0f), b = ndc(x1, 20.0f),
@@ -645,7 +870,7 @@ int main(int argc, char** argv) {
                 else std::snprintf(selz, sizeof(selz), " z=%.2f..%.2f", zmin, zmax);
             }
             std::snprintf(buf, sizeof(buf),
-                          "SELECTED %zu%s   G grade  Up/Dn elev  J join  N cycle",
+                          "SELECTED %zu%s   keys: G Up/Dn N J R K C",
                           selected.size(), selz);
             appendText(tv, buf, x, 40.0f + 4 * lh, sc,
                        selected.empty() ? glm::vec3(0.7f, 0.85f, 0.7f)

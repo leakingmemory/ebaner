@@ -102,8 +102,11 @@ void SwitchMesh::build(const SwitchNetwork& net) {
 
     const glm::vec3 UP(0, 0, 1);
     const auto& turnouts = net.turnouts();
+    int stands = 0;
     for (std::size_t idx = 0; idx < turnouts.size(); ++idx) {
         const Turnout& t = turnouts[idx];
+        if (t.mainPath < 0) continue; // inert turnout (a crossing) — no working switch
+        ++stands;
         const SwitchState st = net.state(static_cast<int>(idx));
 
         const glm::vec3 T(static_cast<float>(t.thru.x), static_cast<float>(t.thru.y), 0.0f);
@@ -168,6 +171,6 @@ void SwitchMesh::build(const SwitchNetwork& net) {
         }
     }
 
-    std::printf("[SwitchMesh] %zu stands, %zu vertices, %zu triangles\n",
-                turnouts.size(), vertices_.size(), indices_.size() / 3);
+    std::printf("[SwitchMesh] %d stands, %zu vertices, %zu triangles\n",
+                stands, vertices_.size(), indices_.size() / 3);
 }

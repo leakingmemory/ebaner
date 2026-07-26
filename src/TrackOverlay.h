@@ -21,6 +21,12 @@
 
 struct Tile;
 
+// Connecting rails added by the editor's `rail`/slip tools get trackIds at or above
+// this base. They are intentional switch connectors, so the switch detector skips its
+// shallow-angle stitch filter for them (a slip at a diamond meets the crossed tracks
+// very shallowly, yet each end is a real switch the user asked for).
+constexpr std::uint32_t kRailIdBase = 0xE0000000;
+
 // Manual track edits kept as a drop-in overlay, separate from the generated tiles
 // so a regenerated base dataset can be dropped in without losing the edits. Stored
 // as lines in `<datasetRoot>/overlay/track-edits.txt` (world coords, EPSG:25833):
@@ -28,9 +34,12 @@ struct Tile;
 //   elev x y z [trackid]     - override the elevation of the nearest track vertex
 //                              (optional trackid disambiguates coincident points)
 //   move ax ay az bx by bz   - move the nearest track vertex from a to b
+//   rail ax ay az bx by bz   - add a new connecting rail (a-b); its ends land on the
+//                              tracks there, so a switch forms at each (build a
+//                              crossover/slip the export omitted)
 struct TrackEdit {
-    enum Kind { Link, Elev, Move } kind = Link;
-    // Link: the two endpoints. Elev: a = {x, y, newZ}. Move: a = old pos, b = new pos.
+    enum Kind { Link, Elev, Move, Rail } kind = Link;
+    // Link/Rail: the two endpoints. Elev: a = {x, y, newZ}. Move: a = old, b = new pos.
     glm::dvec3 a{0.0}, b{0.0};
     // Elev/Move: restrict the vertex match to this track (0 = any track). Lets
     // coincident points from different sidings be edited independently.

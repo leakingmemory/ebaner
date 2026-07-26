@@ -27,6 +27,8 @@ namespace fs = std::filesystem;
 namespace {
 constexpr double kSnapTol = 8.0;             // m; snap an edit end to a real endpoint
 std::uint32_t kConnectorIdBase = 0xF0000000; // synthetic connector trackIds
+// kRailIdBase (0xE0000000) is declared in TrackOverlay.h so the switch detector can
+// recognise editor-added connecting rails.
 
 std::string overlayFile(const std::string& root) {
     return root + "/overlay/track-edits.txt";
@@ -101,6 +103,9 @@ std::vector<TrackEdit> loadTrackOverlay(const std::string& datasetRoot) {
         } else if (n == 7 && std::string(kind) == "move") {
             e.kind = TrackEdit::Move; // a = old pos, b = new pos
             edits.push_back(e);
+        } else if (n == 7 && std::string(kind) == "rail") {
+            e.kind = TrackEdit::Rail; // a, b = the new connecting rail's ends
+            edits.push_back(e);
         } else if ((n == 4 || n == 5) && std::string(kind) == "elev") {
             e.kind = TrackEdit::Elev; // a = {x, y, newZ}
             // Optional 4th number (parsed into b.x) is the track id to disambiguate
@@ -116,9 +121,24 @@ std::vector<TrackEdit> loadTrackOverlay(const std::string& datasetRoot) {
 void applyTrackOverlay(std::vector<Tile>& tiles, const std::vector<TrackEdit>& edits) {
     if (tiles.empty() || edits.empty()) return;
     constexpr double kVertexTol = 2.0; // m; snap an elev override to a real vertex
-    int elev = 0, links = 0;
+    int elev = 0, links = 0, rails = 0;
 
     int moves = 0;
+    // Added connecting rails: a new surface segment whose ends sit on the tracks
+    // there, so the turnout detection makes a switch at each end (a crossover the
+    // export omitted). Added first, so elev/move can target it too if needed.
+    for (std::size_t i = 0; i < edits.size(); ++i) {
+        if (edits[i].kind != TrackEdit::Rail) continue;
+        if (std::hypot(edits[i].a.x - edits[i].b.x, edits[i].a.y - edits[i].b.y) < 1.0)
+            continue; // degenerate
+        TrackSegment r;
+        r.trackId = kRailIdBase + static_cast<std::uint32_t>(i);
+        r.trackType = 1;  // siding
+        r.medium = 0x20;  // surface (drawn as a real rail, not carved)
+        r.pts = {edits[i].a, edits[i].b};
+        tiles[0].tracks.push_back(std::move(r));
+        ++rails;
+    }
     // Elevation overrides first, so a link's endpoint reflects any regraded z.
     for (const TrackEdit& e : edits) {
         if (e.kind != TrackEdit::Elev) continue;
@@ -158,9 +178,9 @@ void applyTrackOverlay(std::vector<Tile>& tiles, const std::vector<TrackEdit>& e
         tiles[tia].tracks.push_back(std::move(c));
         ++links;
     }
-    if (elev > 0 || links > 0 || moves > 0)
-        std::printf("[TrackOverlay] applied %d elev + %d move + %d link edit(s)\n",
-                    elev, moves, links);
+    if (elev > 0 || links > 0 || moves > 0 || rails > 0)
+        std::printf("[TrackOverlay] applied %d elev + %d move + %d link + %d rail edit(s)\n",
+                    elev, moves, links, rails);
 }
 
 namespace {
@@ -176,7 +196,8 @@ void writeEdits(std::ofstream& f, const std::vector<TrackEdit>& edits) {
             if (e.track != 0) f << ' ' << e.track; // disambiguate coincident points
             f << '\n';
         } else {
-            const char* kw = e.kind == TrackEdit::Move ? "move" : "link";
+            const char* kw = e.kind == TrackEdit::Move ? "move"
+                             : e.kind == TrackEdit::Rail ? "rail" : "link";
             f << kw << ' ' << e.a.x << ' ' << e.a.y << ' ' << e.a.z << ' ' << e.b.x
               << ' ' << e.b.y << ' ' << e.b.z << '\n';
         }

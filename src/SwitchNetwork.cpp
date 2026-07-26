@@ -14,6 +14,7 @@
 #include "SwitchNetwork.h"
 
 #include "TerrainData.h"
+#include "TrackOverlay.h"
 #include "TrackPath.h"
 
 #include <algorithm>
@@ -78,6 +79,13 @@ void SwitchNetwork::build(const TerrainData& data,
             const TrackSegment* hitSeg = nullptr;
             for (const TrackSegment* op : segs) {
                 if (op == sp) continue;
+                // The crossed (through/main) track must *pass through* the endpoint, not
+                // itself end there. Skipping tracks that end near the point makes the
+                // main resolve correctly at a multi-way node (several branches meeting a
+                // through line) and rejects a plain end-to-end stitch (two ends meeting).
+                if (std::hypot(e2.x - op->pts.front().x, e2.y - op->pts.front().y) < 3.0 ||
+                    std::hypot(e2.x - op->pts.back().x, e2.y - op->pts.back().y) < 3.0)
+                    continue;
                 const std::vector<glm::dvec3>& q = op->pts;
                 for (std::size_t k = 0; k + 1 < q.size(); ++k) {
                     const glm::dvec2 a(q[k].x, q[k].y), b(q[k + 1].x, q[k + 1].y);
@@ -101,28 +109,43 @@ void SwitchNetwork::build(const TerrainData& data,
             // Reject a straight end-to-end stitch (two ends joined collinearly, e.g. a
             // tunnel break rejoined into a continuous route): keep the junction only if
             // the through track passes *through* it or the branch clearly diverges.
-            constexpr double kEndMargin = 10.0;    // m
-            constexpr double kMinDivergeDeg = 8.0; // deg
+            constexpr double kEndMargin = 10.0;     // m
+            constexpr double kMinDivergeDeg = 8.0;  // deg (below this, an end-to-end join)
+            constexpr double kMaxDivergeDeg = 35.0; // deg (above this it's a crossing)
             const double endDist =
                 std::min(std::hypot(e2.x - hitSeg->pts.front().x, e2.y - hitSeg->pts.front().y),
                          std::hypot(e2.x - hitSeg->pts.back().x, e2.y - hitSeg->pts.back().y));
             const double angDeg =
                 glm::degrees(std::acos(std::clamp(std::abs(T.x * D.x + T.y * D.y), 0.0, 1.0)));
-            if (endDist < kEndMargin && angDeg < kMinDivergeDeg) continue;
+            // A connecting rail the user added at a diamond (a slip's diagonal) meets the
+            // crossed tracks very shallowly, yet each end is a switch they explicitly
+            // asked for — so skip the stitch/angle filters for those. For real tracks,
+            // keep rejecting collinear stitches and too-steep crossings.
+            const bool isConnector = sp->trackId >= kRailIdBase;
+            if (!isConnector) {
+                if (endDist < kEndMargin && angDeg < kMinDivergeDeg) continue;
+                // Too steep to be a switch: the branch would have to turn sharply, so this
+                // is a crossing (diamond), not a turnout — a train just runs straight past.
+                if (angDeg > kMaxDivergeDeg) continue;
+            }
 
             Turnout to;
             to.world = hitX;
             to.thru = T;
             to.div = D;
+            to.sidingTrack = sp->trackId;
             raw.push_back(to);
         }
     }
 
-    // Collapse turnouts sharing a point (both tracks' ends meet there) to one.
+    // Collapse duplicates of the *same* branch at a point (a branch detected from both
+    // its own end and a coincident one), but keep separate branches — at a multi-way
+    // node several sidings meet the main and each needs its own switch.
     for (const Turnout& t : raw) {
         bool dup = false;
         for (const Turnout& u : turnouts_)
-            if (std::hypot(t.world.x - u.world.x, t.world.y - u.world.y) < 3.0) {
+            if (t.sidingTrack == u.sidingTrack &&
+                std::hypot(t.world.x - u.world.x, t.world.y - u.world.y) < 3.0) {
                 dup = true;
                 break;
             }
@@ -133,6 +156,7 @@ void SwitchNetwork::build(const TerrainData& data,
     int resolved = 0;
     for (Turnout& t : turnouts_) {
         const glm::dvec2 X(t.world.x - origin_.x, t.world.y - origin_.y);
+        const bool isConn = t.sidingTrack >= kRailIdBase; // an editor-added slip connector
 
         int siding = -1, main = -1;
         double bestSide = 0.3, bestMain = 0.7; // required direction agreement
@@ -167,9 +191,13 @@ void SwitchNetwork::build(const TerrainData& data,
                     sSiding = es;
                 }
             }
-            // Main: the through track, tangent parallel to `thru` at X.
+            // Main: the through track, tangent parallel to `thru` at X. It must pass
+            // *through* the point, so a path that ends here (the connecting rail itself,
+            // whose end sits on the crossed track) is never the main — otherwise at a
+            // shallow slip the near-parallel connector could win and the switch would
+            // collapse to main == siding.
             const double m = std::abs(glm::dot(tan, t.thru));
-            if (m > bestMain) {
+            if ((!isConn || !(nearFront || nearBack)) && m > bestMain) {
                 bestMain = m;
                 main = pi;
                 sMain = s;

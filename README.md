@@ -226,6 +226,30 @@ crosses (a `move` overlay edit), trimming the overshoot to a clean turnout point
 the end lies on the track it's no longer flagged red. (Only the geometry is moved — the
 crossed track isn't split, so the vehicle's through-routes are unaffected.)
 
+**Adding a connecting rail (building a switch).** The export sometimes omits the
+short connecting rails at a crossover or slip, so two tracks that should be joined
+by switches only cross. Select two geo-points on **different** tracks (click one,
+Ctrl+click the other) and press **R**: a straight connecting rail is added between
+them (a `rail …` overlay edit). Its ends sit on the two tracks, so the switch
+detection makes a **switch at each end** — a train can then divert across it (main ⇄
+siding). Keep the meeting angle shallow, as a real turnout does; too steep and it is
+treated as a crossing rather than a switch. Live preview; Ctrl+S saves; the switch
+stands appear on reload / in the viewer.
+
+**Scissors crossover (`C`).** For two roughly-parallel tracks (e.g. the main and a
+loop), select one geo-point on **each** track, opposite each other, and press **C**: it
+lays a **double crossover** — two short diagonal rails that cross in the middle (the
+diamond), a switch on each track at each end — so trains can cross between the two lines
+either way as well as run straight, like a station-throat scissors. Pick a spot where
+both tracks are at grade (it uses the overlay-applied elevations). Live preview; Ctrl+S
+saves; switch stands appear on reload / in the viewer.
+
+**Auto-slip at a diamond (`K`).** For an actual diamond crossing (two tracks crossing at
+a clear angle), select a single geo-point in the **middle of the crossing** and press
+**K**: it finds the two crossing tracks and adds the two diagonal connecting rails (a
+slip), a switch on each track at each end. Uses the overlay-applied elevations; skipped
+if the crossing is nearly parallel (use `C`) or too steep to be a switch.
+
 **Fixing broken links.** Some exports leave a line disconnected across a gap (e.g. a
 tunnel approach), which derails the train at the loose end. Aim the centre crosshair
 at a red dead-end and **Enter** to pick end **A**, aim at the other loose end and
