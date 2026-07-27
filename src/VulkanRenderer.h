@@ -74,6 +74,16 @@ public:
                         const std::vector<std::uint32_t>& indices);
     void updateSwitches(const std::vector<TrackVertex>& vertices,
                         const std::vector<std::uint32_t>& indices);
+    // Editor render-preview: recreate the terrain / track / struct (building) buffers
+    // to reflect pending edits. Heavy and user-triggered; each waits for GPU idle.
+    void updateTerrain(const std::vector<Vertex>& vertices,
+                       const std::vector<std::uint32_t>& indices);
+    void updateTracks(const std::vector<TrackVertex>& vertices,
+                      const std::vector<std::uint32_t>& indices,
+                      std::uint32_t alwaysIndexCount,
+                      const std::vector<TrackDrawChunk>& sleeperChunks);
+    void updateStructs(const std::vector<TrackVertex>& vertices,
+                       const std::vector<std::uint32_t>& indices);
     // Set the 2-D text overlay (screen-space triangles) drawn on top each frame.
     void setOverlayText(const std::vector<TextVertex>& vertices);
 

@@ -49,6 +49,16 @@ void TerrainData::applyTrackEdits(const std::vector<TrackEdit>& edits) {
     applyTrackOverlay(tiles_, edits);
 }
 
+void TerrainData::recarve() {
+    // Reset each tile to its pre-carve height, then carve again with the current
+    // (edited) track geometry — so cuttings/embankments reflect edits without
+    // stacking on the previous carve. Mirrors the load()-time carve guard.
+    for (std::size_t i = 0; i < tiles_.size() && i < pristineHeights_.size(); ++i)
+        tiles_[i].heights = pristineHeights_[i];
+    if (std::getenv("EBANER_NOCARVE") == nullptr)
+        carveTrackCuttings(tiles_, sceneOrigin_);
+}
+
 void TerrainData::load(const std::string& datasetRoot, double halfWindow) {
     if (!fs::exists(datasetRoot)) {
         throw std::runtime_error("dataset root not found: " + datasetRoot);
@@ -116,6 +126,12 @@ void TerrainData::load(const std::string& datasetRoot, double halfWindow) {
     // tiles before anything downstream reads them (carve, path building).
     if (std::getenv("EBANER_NOOVERLAY") == nullptr)
         applyTrackOverlay(tiles_, loadTrackOverlay(datasetRoot));
+
+    // Keep a pristine copy of every tile's heightfield before carving, so the editor
+    // can re-carve from it after an edit (recarve()) instead of stacking cuttings.
+    pristineHeights_.clear();
+    pristineHeights_.reserve(tiles_.size());
+    for (const Tile& t : tiles_) pristineHeights_.push_back(t.heights);
 
     // Carve trenches into the terrain where surface track falls below it, so the
     // rails/ballast sit in a cutting instead of being buried. Re-derive the

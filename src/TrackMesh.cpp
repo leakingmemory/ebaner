@@ -71,6 +71,11 @@ std::vector<float> sampleDistances(float length, float step) {
 } // namespace
 
 void TrackMesh::build(const std::vector<TrackPath>& paths) {
+    // Reset accumulators so build() is idempotent (the editor rebuilds to re-preview).
+    vertices_.clear();
+    indices_.clear();
+    chunks_.clear();
+    alwaysIndexCount_ = 0;
 
     // Emit one quad (two triangles) with an outward-facing normal. The normal is
     // the geometric normal, flipped to point away from `inside` so lighting is

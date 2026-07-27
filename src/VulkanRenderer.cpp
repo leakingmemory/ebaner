@@ -1058,6 +1058,15 @@ void VulkanRenderer::createDescriptorSet() {
 
 void VulkanRenderer::createMeshBuffers(const std::vector<Vertex>& vertices,
                                        const std::vector<std::uint32_t>& indices) {
+    // Idempotent: free any previous terrain buffers first (editor re-preview).
+    if (vertexBuffer_ != VK_NULL_HANDLE) {
+        vkDestroyBuffer(device_, indexBuffer_, nullptr);
+        vkFreeMemory(device_, indexMemory_, nullptr);
+        vkDestroyBuffer(device_, vertexBuffer_, nullptr);
+        vkFreeMemory(device_, vertexMemory_, nullptr);
+        vertexBuffer_ = indexBuffer_ = VK_NULL_HANDLE;
+        vertexMemory_ = indexMemory_ = VK_NULL_HANDLE;
+    }
     indexCount_ = static_cast<uint32_t>(indices.size());
 
     auto upload = [&](const void* data, VkDeviceSize size, VkBufferUsageFlags usage,
@@ -1090,6 +1099,15 @@ void VulkanRenderer::createMeshBuffers(const std::vector<Vertex>& vertices,
 void VulkanRenderer::createTrackBuffers(
     const std::vector<TrackVertex>& vertices,
     const std::vector<std::uint32_t>& indices) {
+    // Idempotent: free any previous track buffers first (editor re-preview).
+    if (trackVertexBuffer_ != VK_NULL_HANDLE) {
+        vkDestroyBuffer(device_, trackIndexBuffer_, nullptr);
+        vkFreeMemory(device_, trackIndexMemory_, nullptr);
+        vkDestroyBuffer(device_, trackVertexBuffer_, nullptr);
+        vkFreeMemory(device_, trackVertexMemory_, nullptr);
+        trackVertexBuffer_ = trackIndexBuffer_ = VK_NULL_HANDLE;
+        trackVertexMemory_ = trackIndexMemory_ = VK_NULL_HANDLE;
+    }
     trackIndexCount_ = static_cast<uint32_t>(indices.size());
     if (indices.empty()) return; // no tracks in the loaded area
 
@@ -1157,6 +1175,15 @@ void VulkanRenderer::createRoadBuffers(
 void VulkanRenderer::createBuildingBuffers(
     const std::vector<TrackVertex>& vertices,
     const std::vector<std::uint32_t>& indices) {
+    // Idempotent: free any previous struct/building buffers first (editor re-preview).
+    if (buildingVertexBuffer_ != VK_NULL_HANDLE) {
+        vkDestroyBuffer(device_, buildingIndexBuffer_, nullptr);
+        vkFreeMemory(device_, buildingIndexMemory_, nullptr);
+        vkDestroyBuffer(device_, buildingVertexBuffer_, nullptr);
+        vkFreeMemory(device_, buildingVertexMemory_, nullptr);
+        buildingVertexBuffer_ = buildingIndexBuffer_ = VK_NULL_HANDLE;
+        buildingVertexMemory_ = buildingIndexMemory_ = VK_NULL_HANDLE;
+    }
     buildingIndexCount_ = static_cast<uint32_t>(indices.size());
     if (indices.empty()) return; // no buildings in the loaded area
 
@@ -1238,6 +1265,31 @@ void VulkanRenderer::updateSwitches(const std::vector<TrackVertex>& vertices,
     // A throw is rare and user-triggered; wait for the GPU to be idle, then recreate.
     vkDeviceWaitIdle(device_);
     createSwitchBuffers(vertices, indices);
+}
+
+// Editor render-preview: recreate the heavy static buffers to reflect pending edits.
+// Rare, user-triggered (the P key), so a full wait-idle + recreate is fine; the
+// per-frame command recording picks up the new buffers next frame.
+void VulkanRenderer::updateTerrain(const std::vector<Vertex>& vertices,
+                                   const std::vector<std::uint32_t>& indices) {
+    vkDeviceWaitIdle(device_);
+    createMeshBuffers(vertices, indices);
+}
+
+void VulkanRenderer::updateTracks(const std::vector<TrackVertex>& vertices,
+                                  const std::vector<std::uint32_t>& indices,
+                                  std::uint32_t alwaysIndexCount,
+                                  const std::vector<TrackDrawChunk>& sleeperChunks) {
+    vkDeviceWaitIdle(device_);
+    createTrackBuffers(vertices, indices);
+    trackAlwaysIndexCount_ = alwaysIndexCount;
+    sleeperChunks_ = sleeperChunks;
+}
+
+void VulkanRenderer::updateStructs(const std::vector<TrackVertex>& vertices,
+                                   const std::vector<std::uint32_t>& indices) {
+    vkDeviceWaitIdle(device_);
+    createBuildingBuffers(vertices, indices);
 }
 
 void VulkanRenderer::createVehicleBuffers(

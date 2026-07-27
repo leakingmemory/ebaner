@@ -38,6 +38,9 @@ inline std::uint64_t keyOf(int lod, int col, int row) {
 } // namespace
 
 void TerrainMesh::build(const TerrainData& data) {
+    // Reset accumulators so build() is idempotent (the editor rebuilds to re-preview).
+    vertices_.clear();
+    indices_.clear();
     const glm::dvec3 origin = data.sceneOrigin();
     const auto& tiles = data.tiles();
 

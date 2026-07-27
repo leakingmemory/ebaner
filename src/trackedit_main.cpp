@@ -257,6 +257,35 @@ int main(int argc, char** argv) {
         if (!keepSelection) { selected.clear(); selA = selB = -1; }
         rebuildOverlay();
     };
+    // Rebuild the *rendered* world (rails/sleepers, carved terrain, switch stands) from
+    // the current edited data, so the preview shows how an edit actually renders — not
+    // just the wireframe overlay. Heavy (terrain is ~1.8M verts), so it is on demand (P),
+    // not per edit. Mirrors the load-time build + the struct merge below.
+    auto rebuildRenderPreview = [&]() {
+        const double t0 = glfwGetTime();
+        data.recarve();                       // re-cut terrain from pristine + edited track
+        paths = buildTrackPaths(data);
+        tracks.build(paths);
+        mesh.build(data);
+        switchNet.build(data, paths);
+        switches.build(switchNet);
+        std::vector<TrackVertex> sv = buildings.vertices();
+        std::vector<std::uint32_t> si = buildings.indices();
+        auto merge = [&](const std::vector<TrackVertex>& v,
+                         const std::vector<std::uint32_t>& idx) {
+            const std::uint32_t base = static_cast<std::uint32_t>(sv.size());
+            sv.insert(sv.end(), v.begin(), v.end());
+            for (std::uint32_t k : idx) si.push_back(k + base);
+        };
+        merge(platforms.vertices(), platforms.indices());
+        merge(switches.vertices(), switches.indices());
+        renderer.updateTerrain(mesh.vertices(), mesh.indices());
+        renderer.updateTracks(tracks.vertices(), tracks.indices(),
+                              tracks.alwaysIndexCount(), tracks.sleeperChunks());
+        renderer.updateStructs(sv, si);
+        std::printf("[trackedit] render preview refreshed (%.0f ms)\n",
+                    (glfwGetTime() - t0) * 1000.0);
+    };
     // Straighten the selected span's elevation onto an endpoint-anchored grade.
     auto doRegrade = [&]() {
         if (selected.size() < 2) {
@@ -661,7 +690,9 @@ int main(int argc, char** argv) {
                 "crossover between 2 selected points on two parallel tracks; K auto-build "
                 "a slip switch at the crossing under the selected point; J "
                 "join a selected dead-end onto the track it crosses; Enter/Enter+L link "
-                "two red dead ends. Live preview; Ctrl+S saves.\n"
+                "two red dead ends. P re-renders the actual track + terrain + switch "
+                "stands to preview how the edits look. Live wireframe preview; Ctrl+S "
+                "saves.\n"
                 "Overlay: amber = main line, cyan = siding, magenta = yard, "
                 "red = dead end, white = selected.\n\n");
 
@@ -670,7 +701,8 @@ int main(int argc, char** argv) {
     int frame = 0;
     bool prevEnter = false, prevL = false, prevX = false, prevML = false,
          prevG = false, prevS = false, prevUp = false, prevDown = false,
-         prevJ = false, prevN = false, prevR = false, prevK = false, prevC = false;
+         prevJ = false, prevN = false, prevR = false, prevK = false, prevC = false,
+         prevP = false;
     bool prevMenuEnter = false, prevMenuUp = false, prevMenuDown = false;
     const std::vector<std::string> kMenuItems = {"Exit"};
     float elevRepeat = 0.0f; // auto-repeat throttle for Up/Down raise/lower
@@ -780,6 +812,7 @@ int main(int argc, char** argv) {
         const bool kR = glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS;
         const bool kK = glfwGetKey(window, GLFW_KEY_K) == GLFW_PRESS;
         const bool kC = glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS;
+        const bool kP = glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS;
         // Save is Ctrl+S (plain S is the backward-movement key).
         const bool kSave = ctrl && glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS;
         if (kEnter && !prevEnter && hover >= 0) {
@@ -808,6 +841,9 @@ int main(int argc, char** argv) {
         if (kK && !prevK) doAutoDiamond();
         // C: build a scissors (double) crossover between the 2 selected tracks' points.
         if (kC && !prevC) doScissors();
+        // P: re-render the actual track + terrain (cuttings) + switch stands from the
+        // current edits, so the preview shows how it will really look (heavy; on demand).
+        if (kP && !prevP) rebuildRenderPreview();
         // Up/Down: raise/lower the selected point(s). Auto-repeats while held (an
         // immediate first step, then throttled) so big changes don't need many taps.
         constexpr double kElevStep = 0.1; // metres per step (auto-repeats while held)
@@ -845,7 +881,7 @@ int main(int argc, char** argv) {
             }
         }
         prevEnter = kEnter; prevL = kL; prevX = kX; prevG = kG; prevS = kSave;
-        prevJ = kJ; prevN = kN; prevR = kR; prevK = kK; prevC = kC;
+        prevJ = kJ; prevN = kN; prevR = kR; prevK = kK; prevC = kC; prevP = kP;
 
         // Click to select (cursor freed only). Ctrl+click toggles for multi-select;
         // plain click selects one; clicking empty space clears.
@@ -917,7 +953,7 @@ int main(int argc, char** argv) {
                 else std::snprintf(selz, sizeof(selz), " z=%.2f..%.2f", zmin, zmax);
             }
             std::snprintf(buf, sizeof(buf),
-                          "SELECTED %zu%s   keys: G Up/Dn N J R K C",
+                          "SELECTED %zu%s   keys: G Up/Dn N J R K C   P render",
                           selected.size(), selz);
             appendText(tv, buf, x, 40.0f + 4 * lh, sc,
                        selected.empty() ? glm::vec3(0.7f, 0.85f, 0.7f)

@@ -96,6 +96,11 @@ public:
     // overlay file is already applied during load().
     void applyTrackEdits(const std::vector<TrackEdit>& edits);
 
+    // Re-carve the terrain cuttings from the pristine (pre-carve) heightfield using
+    // the current (possibly edited) track geometry. Lets the editor preview how an
+    // edit re-shapes the terrain without double-carving the already-carved heights.
+    void recarve();
+
     // Samples ground elevation (m) at world (x,y), preferring the finest LOD
     // tile that covers the point with valid data. Returns false if no loaded
     // tile has valid (non-NODATA) coverage there.
@@ -145,6 +150,9 @@ private:
                                   std::vector<PlatformSegment>& out);
 
     std::vector<Tile> tiles_;
+    // Per-tile heightfield as loaded, before carveTrackCuttings — the source recarve()
+    // resets to so re-carving after an edit doesn't stack on already-carved terrain.
+    std::vector<std::vector<float>> pristineHeights_;
     glm::dvec3 sceneOrigin_{0.0};
     glm::dvec3 startWorld_{0.0};  // world coords of track-1 terminus
     glm::vec3 startPos_{0.0f};
