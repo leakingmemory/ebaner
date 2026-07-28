@@ -874,10 +874,12 @@ int main(int argc, char** argv) {
         }
 
         // Selection: pick the geo-point under the free cursor (screen-space). Only
-        // when the cursor is released (Tab) — captured mode is for mouse-look.
+        // when the cursor is released (Tab) — captured mode is for mouse-look. Geometry
+        // mode only; in circuits mode the continuous "add border" ring is the affordance
+        // (a border sits anywhere along the line, not on a data point).
         int pointHover = -1;
         glm::vec2 hoverPx(0.0f);
-        if (!g_mouseCaptured) {
+        if (!g_mouseCaptured && mode == EdMode::Geometry) {
             double mx = 0.0, my = 0.0;
             glfwGetCursorPos(window, &mx, &my);
             int winw = fbw, winh = fbh;
@@ -924,7 +926,7 @@ int main(int argc, char** argv) {
                 return viewProj * glm::vec4(float(w.x - o.x), float(w.y - o.y),
                                             float(w.z - o.z), 1.0f);
             };
-            float best = 18.0f; // px pick radius (thin lines -> forgiving)
+            float best = 24.0f; // px pick radius (thin lines / sparse points -> forgiving)
             for (const TrackPoly& p : polys) {
                 const double total = polyLength(p.pts);
                 if (total < 1e-6) continue;
@@ -952,7 +954,12 @@ int main(int argc, char** argv) {
                     const float d = glm::length(cur - (pa + ab * st));
                     if (d < best) {
                         best = d; circHit = true; circTrack = p.id;
-                        const double u = u0 + (u1 - u0) * st; // world param on the segment
+                        // Screen param st -> object param must be perspective-correct, else
+                        // the border lands offset from the click on a foreshortened segment
+                        // (viewing along the track). c0/c1 are the clipped clip-space verts.
+                        const double denom = (1.0 - st) / c0.w + st / c1.w;
+                        const double localU = denom > 1e-20 ? (st / c1.w) / denom : st;
+                        const double u = u0 + (u1 - u0) * localU; // world param on segment
                         circWorld = glm::mix(P0, P1, u);
                         circFrac = (acc + seg * u) / total;
                         circPx = pa + ab * st;
