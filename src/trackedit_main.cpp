@@ -29,6 +29,7 @@
 #include "TerrainData.h"
 #include "TerrainMesh.h"
 #include "Textures.h"
+#include "TrackCircuits.h"
 #include "TrackGraph.h"
 #include "TrackMesh.h"
 #include "TrackOverlay.h"
@@ -201,6 +202,30 @@ int main(int argc, char** argv) {
     std::set<int> selected;        // selected geo-points (indices into graph.points)
     std::vector<TrackEdit> pending; // edits made this session, not yet saved
 
+    // --- Modes: geometry editing (default) vs track-circuit (sensing-section) authoring,
+    // switched from the Escape menu. ---
+    enum class EdMode { Geometry, Circuits };
+    EdMode mode = EdMode::Geometry;
+    TrackCircuits tc = loadTrackCircuits(datasetRoot); // borders + sections (own overlay)
+    bool circuitsDirty = false;      // unsaved circuit changes
+    int selBorder = -1;              // selected border (index into tc.borders)
+    int nextSectionId = 1;           // auto-increment section id
+    SectionResult pendingFlood;      // last flood result, highlighted as a preview
+    bool showPending = false;
+    // Per-track world polylines (rebuilt from graph), for border projection/rendering
+    // and the section flood-fill. Kept in sync with the graph.
+    std::vector<TrackPoly> polys;
+    auto buildPolys = [&]() {
+        polys.clear();
+        for (std::size_t i = 0; i < graph.pointWorld.size(); ++i) {
+            if (polys.empty() || polys.back().id != graph.pointTrack[i])
+                polys.push_back({graph.pointTrack[i], {}});
+            polys.back().pts.push_back(graph.pointWorld[i]);
+        }
+    };
+    buildPolys();
+    for (const Section& s : tc.sections) nextSectionId = std::max(nextSectionId, s.id + 1);
+
     // Existing overlay lines, so a save can rewrite them (not just append). Any legacy
     // elevation override (no track id) whose point coincides with vertices from more
     // than one track is ambiguous -- it may have snapped to the wrong siding -- so it
@@ -231,6 +256,61 @@ int main(int argc, char** argv) {
         if (selA >= 0) pts.push_back({graph.deadEnds[selA].pos, yellow});
         if (selB >= 0) pts.push_back({graph.deadEnds[selB].pos, yellow});
         for (int i : selected) pts.push_back({graph.points[i].pos, white}); // on top
+        if (mode == EdMode::Circuits) {
+            const glm::dvec3 o = data.sceneOrigin();
+            auto sc = [&](glm::dvec3 w, float lift) {
+                return glm::vec3(float(w.x - o.x), float(w.y - o.y), float(w.z - o.z) + lift);
+            };
+            auto dirAt = [&](std::uint32_t t, double f) {
+                glm::dvec3 a = fracToWorld(polys, t, std::max(0.0, f - 0.002));
+                glm::dvec3 b = fracToWorld(polys, t, std::min(1.0, f + 0.002));
+                glm::dvec2 d(b.x - a.x, b.y - a.y);
+                const double L = glm::length(d);
+                return L > 1e-6 ? glm::dvec2(d / L) : glm::dvec2(1.0, 0.0);
+            };
+            // Vivid section hues, distinct from cyan sidings and red borders.
+            const glm::vec3 secPal[] = {{0.2f, 1.0f, 0.4f}, {1.0f, 0.2f, 1.0f},
+                                        {1.0f, 0.6f, 0.1f}, {1.0f, 1.0f, 0.2f},
+                                        {0.6f, 0.3f, 1.0f}};
+            auto drawRun = [&](const SectionInterval& iv, glm::vec3 col) {
+                glm::dvec3 prev = fracToWorld(polys, iv.trackId, iv.from);
+                if (prev.x == 0.0 && prev.y == 0.0) return; // track gone (stale)
+                for (int k = 1; k <= 24; ++k) {
+                    const double f = iv.from + (iv.to - iv.from) * k / 24.0;
+                    const glm::dvec3 cur = fracToWorld(polys, iv.trackId, f);
+                    // Float the ribbon ~1.2 m above the rail so it reads clearly, distinct
+                    // from the ground-level graph lines.
+                    lns.push_back({sc(prev, 1.2f), col});
+                    lns.push_back({sc(cur, 1.2f), col});
+                    prev = cur;
+                }
+            };
+            for (const Section& s : tc.sections)
+                for (const auto& iv : s.parts) drawRun(iv, secPal[((s.id - 1) % 5 + 5) % 5]);
+            if (showPending) {
+                const glm::vec3 col = pendingFlood.enclosed ? glm::vec3(0.3f, 1.0f, 0.5f)
+                                                            : glm::vec3(1.0f, 0.5f, 0.1f);
+                for (const auto& iv : pendingFlood.parts) drawRun(iv, col);
+            }
+            for (std::size_t bi = 0; bi < tc.borders.size(); ++bi) {
+                const Border& b = tc.borders[bi];
+                const glm::dvec3 w = fracToWorld(polys, b.trackId, b.frac);
+                if (w.x == 0.0 && w.y == 0.0) continue; // track gone
+                const glm::dvec2 d = dirAt(b.trackId, b.frac);
+                const glm::dvec3 perp(-d.y, d.x, 0.0);
+                const glm::vec3 col = static_cast<int>(bi) == selBorder
+                                          ? glm::vec3(1.0f, 1.0f, 1.0f)
+                                          : glm::vec3(1.0f, 0.15f, 0.15f);
+                // A visible gate: a perpendicular tick across the rails plus a vertical
+                // post, and a point marker on top — clear from any angle.
+                lns.push_back({sc(w - perp * 2.5, 0.6f), col});
+                lns.push_back({sc(w + perp * 2.5, 0.6f), col});
+                lns.push_back({sc(w, 0.3f), col});
+                lns.push_back({sc(w, 4.0f), col});
+                pts.push_back({sc(w, 4.0f), col});
+                pts.push_back({sc(w, 0.7f), col});
+            }
+        }
         renderer.attachTrackGraph(lns, pts);
     };
     // Apply edits to the loaded data in-session and rebuild the graph, so they
@@ -252,6 +332,7 @@ int main(int argc, char** argv) {
         }
         data.applyTrackEdits(es);
         graph = buildTrackGraph(data);
+        buildPolys(); // keep circuit polylines (border projection/flood) in sync
         // Elev edits keep the point count/order, so the selection stays valid; link
         // edits add a segment (indices shift) so the selection must clear.
         if (!keepSelection) { selected.clear(); selA = selB = -1; }
@@ -694,7 +775,11 @@ int main(int argc, char** argv) {
                 "stands to preview how the edits look. Live wireframe preview; Ctrl+S "
                 "saves.\n"
                 "Overlay: amber = main line, cyan = siding, magenta = yard, "
-                "red = dead end, white = selected.\n\n");
+                "red = dead end, white = selected.\n"
+                "Modes (Esc menu): Geometry edit (above) | Track circuits — click a track "
+                "line to drop a border point (insulated joint), X deletes it, hover inside "
+                "a border-bounded block and press Enter to save it as a sensing section; "
+                "Ctrl+S writes overlay/track-circuits.txt.\n\n");
 
     const glm::vec3 sunDir = glm::normalize(glm::vec3(0.4f, -0.5f, 0.75f));
     const char* shotPath = std::getenv("EBANER_SCREENSHOT");
@@ -704,7 +789,8 @@ int main(int argc, char** argv) {
          prevJ = false, prevN = false, prevR = false, prevK = false, prevC = false,
          prevP = false;
     bool prevMenuEnter = false, prevMenuUp = false, prevMenuDown = false;
-    const std::vector<std::string> kMenuItems = {"Exit"};
+    const std::vector<std::string> kMenuItems = {"Geometry edit", "Track circuits",
+                                                 "Exit"};
     float elevRepeat = 0.0f; // auto-repeat throttle for Up/Down raise/lower
     double lastTime = glfwGetTime();
 
@@ -726,8 +812,18 @@ int main(int argc, char** argv) {
             const int n = static_cast<int>(kMenuItems.size());
             if (mU && !prevMenuUp) g_menuSel = (g_menuSel + n - 1) % n;
             if (mD && !prevMenuDown) g_menuSel = (g_menuSel + 1) % n;
-            if (mE && !prevMenuEnter && kMenuItems[g_menuSel] == "Exit")
-                glfwSetWindowShouldClose(window, GLFW_TRUE);
+            if (mE && !prevMenuEnter) {
+                const std::string& sel = kMenuItems[g_menuSel];
+                if (sel == "Exit") {
+                    glfwSetWindowShouldClose(window, GLFW_TRUE);
+                } else { // pick a mode and close the menu
+                    mode = sel == "Track circuits" ? EdMode::Circuits : EdMode::Geometry;
+                    selected.clear(); selA = selB = -1; selBorder = -1;
+                    showPending = false;
+                    rebuildOverlay();
+                    g_menuOpen = false;
+                }
+            }
             prevMenuUp = mU; prevMenuDown = mD; prevMenuEnter = mE;
 
             std::vector<TextVertex> tv;
@@ -799,6 +895,84 @@ int main(int argc, char** argv) {
             }
         }
 
+        // Circuits mode: pick the nearest track *segment* under the free cursor (a border
+        // can sit between geo-points) as trackId + arc-length fraction, plus the nearest
+        // existing border for select/delete.
+        bool circHit = false;
+        std::uint32_t circTrack = 0;
+        double circFrac = 0.0;
+        glm::dvec3 circWorld(0.0);
+        glm::vec2 circPx(0.0f);
+        int borderHover = -1;
+        if (mode == EdMode::Circuits && !g_mouseCaptured) {
+            double mx = 0.0, my = 0.0;
+            glfwGetCursorPos(window, &mx, &my);
+            int winw = fbw, winh = fbh;
+            glfwGetWindowSize(window, &winw, &winh);
+            const glm::vec2 cur(static_cast<float>(mx) * fbw / std::max(winw, 1),
+                                static_cast<float>(my) * fbh / std::max(winh, 1));
+            const glm::dvec3 o = data.sceneOrigin();
+            auto proj = [&](const glm::dvec3& w, glm::vec2& px) -> bool {
+                const glm::vec4 clip = viewProj * glm::vec4(float(w.x - o.x), float(w.y - o.y),
+                                                            float(w.z - o.z), 1.0f);
+                if (clip.w <= 0.0f) return false;
+                px = glm::vec2((clip.x / clip.w * 0.5f + 0.5f) * fbw,
+                               (clip.y / clip.w * 0.5f + 0.5f) * fbh);
+                return true;
+            };
+            auto clip = [&](const glm::dvec3& w) {
+                return viewProj * glm::vec4(float(w.x - o.x), float(w.y - o.y),
+                                            float(w.z - o.z), 1.0f);
+            };
+            float best = 18.0f; // px pick radius (thin lines -> forgiving)
+            for (const TrackPoly& p : polys) {
+                const double total = polyLength(p.pts);
+                if (total < 1e-6) continue;
+                double acc = 0.0;
+                for (std::size_t i = 1; i < p.pts.size(); ++i) {
+                    const glm::dvec3 P0 = p.pts[i - 1], P1 = p.pts[i];
+                    const double seg = std::hypot(P1.x - P0.x, P1.y - P0.y);
+                    // Clip the segment to the near plane so a long (main-line) segment with
+                    // one endpoint behind the camera is still pickable; keep the world-param
+                    // range [u0,u1] the visible screen part maps back to.
+                    glm::vec4 c0 = clip(P0), c1 = clip(P1);
+                    constexpr float eps = 0.01f;
+                    double u0 = 0.0, u1 = 1.0;
+                    if (c0.w < eps && c1.w < eps) { acc += seg; continue; }
+                    if (c0.w < eps) { float tt = (eps - c0.w) / (c1.w - c0.w); u0 = tt; c0 = glm::mix(c0, c1, tt); }
+                    else if (c1.w < eps) { float tt = (eps - c1.w) / (c0.w - c1.w); u1 = 1.0 - tt; c1 = glm::mix(c1, c0, tt); }
+                    const glm::vec2 pa((c0.x / c0.w * 0.5f + 0.5f) * fbw,
+                                       (c0.y / c0.w * 0.5f + 0.5f) * fbh);
+                    const glm::vec2 pb((c1.x / c1.w * 0.5f + 0.5f) * fbw,
+                                       (c1.y / c1.w * 0.5f + 0.5f) * fbh);
+                    const glm::vec2 ab = pb - pa;
+                    const float L2 = glm::dot(ab, ab);
+                    const float st = L2 > 1e-6f ? glm::clamp(glm::dot(cur - pa, ab) / L2,
+                                                            0.0f, 1.0f) : 0.0f;
+                    const float d = glm::length(cur - (pa + ab * st));
+                    if (d < best) {
+                        best = d; circHit = true; circTrack = p.id;
+                        const double u = u0 + (u1 - u0) * st; // world param on the segment
+                        circWorld = glm::mix(P0, P1, u);
+                        circFrac = (acc + seg * u) / total;
+                        circPx = pa + ab * st;
+                    }
+                    acc += seg;
+                }
+            }
+            float bb = 14.0f; // px, nearest existing border
+            for (std::size_t bi = 0; bi < tc.borders.size(); ++bi) {
+                const glm::dvec3 w = fracToWorld(polys, tc.borders[bi].trackId,
+                                                 tc.borders[bi].frac);
+                if (w.x == 0.0 && w.y == 0.0) continue;
+                glm::vec2 px;
+                if (proj(w, px)) {
+                    const float d = glm::length(px - cur);
+                    if (d < bb) { bb = d; borderHover = static_cast<int>(bi); }
+                }
+            }
+        }
+
         // Editing keys (edge-triggered): Enter pick A/B, L link, X clear, G grade,
         // S save. Edits preview immediately (applyEditsLive); S writes to disk.
         const bool ctrl = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
@@ -815,41 +989,74 @@ int main(int argc, char** argv) {
         const bool kP = glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS;
         // Save is Ctrl+S (plain S is the backward-movement key).
         const bool kSave = ctrl && glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS;
-        if (kEnter && !prevEnter && hover >= 0) {
-            if (selA < 0) selA = hover;
-            else if (hover != selA) selB = hover;
-            rebuildOverlay();
+        if (mode == EdMode::Geometry) {
+            if (kEnter && !prevEnter && hover >= 0) {
+                if (selA < 0) selA = hover;
+                else if (hover != selA) selB = hover;
+                rebuildOverlay();
+            }
+            if (kX && !prevX) { selA = selB = -1; rebuildOverlay(); }
+            if (kL && !prevL && selA >= 0 && selB >= 0) {
+                TrackEdit e;
+                e.kind = TrackEdit::Link;
+                e.a = graph.deadEndWorld[selA];
+                e.b = graph.deadEndWorld[selB];
+                applyEditsLive({e});
+                std::printf("[trackedit] linked dead-ends (preview; S to save)\n");
+            }
+            // G: straighten the selected span's elevation to a continuous grade.
+            if (kG && !prevG) doRegrade();
+            // J: connect the selected dead-end(s) onto the track their line crosses.
+            if (kJ && !prevJ) doConnect();
+            // N: cycle the selection through geo-points coincident with it (shared nodes).
+            if (kN && !prevN) doCycleCoincident();
+            // R: add a connecting rail between 2 points (builds a switch each end).
+            if (kR && !prevR) doAddRail();
+            // K: auto-build a slip at the crossing under the selected point.
+            if (kK && !prevK) doAutoDiamond();
+            // C: build a scissors (double) crossover between 2 selected tracks' points.
+            if (kC && !prevC) doScissors();
+        } else { // --- Circuits mode ---
+            // Enter: seed a section at the hovered track spot and flood-fill it.
+            if (kEnter && !prevEnter && circHit) {
+                pendingFlood = floodSection(polys, tc.borders, circTrack, circFrac);
+                showPending = true;
+                if (pendingFlood.enclosed) {
+                    Section s;
+                    s.id = nextSectionId++;
+                    s.parts = pendingFlood.parts;
+                    tc.sections.push_back(s);
+                    circuitsDirty = true;
+                    std::printf("[trackedit] section %d: %zu track(s), %.0f m, %d joint(s), "
+                                "%d dead-end(s) (Ctrl+S to save)\n", s.id, s.parts.size(),
+                                pendingFlood.lengthM, pendingFlood.borderEnds,
+                                pendingFlood.deadEnds);
+                } else {
+                    std::printf("[trackedit] not enclosed: block spans %zu track(s), %.0f m "
+                                "with no border — place border points to bound it\n",
+                                pendingFlood.parts.size(), pendingFlood.lengthM);
+                }
+                rebuildOverlay();
+            }
+            // X: delete the selected (or hovered) border.
+            if (kX && !prevX) {
+                const int del = selBorder >= 0 ? selBorder : borderHover;
+                if (del >= 0 && del < static_cast<int>(tc.borders.size())) {
+                    tc.borders.erase(tc.borders.begin() + del);
+                    selBorder = -1; circuitsDirty = true;
+                    std::printf("[trackedit] border removed (Ctrl+S to save)\n");
+                    rebuildOverlay();
+                }
+            }
         }
-        if (kX && !prevX) { selA = selB = -1; rebuildOverlay(); }
-        if (kL && !prevL && selA >= 0 && selB >= 0) {
-            TrackEdit e;
-            e.kind = TrackEdit::Link;
-            e.a = graph.deadEndWorld[selA];
-            e.b = graph.deadEndWorld[selB];
-            applyEditsLive({e});
-            std::printf("[trackedit] linked dead-ends (preview; S to save)\n");
-        }
-        // G: straighten the selected span's elevation to a continuous grade.
-        if (kG && !prevG) doRegrade();
-        // J: connect the selected dead-end(s) onto the track their line crosses.
-        if (kJ && !prevJ) doConnect();
-        // N: cycle the selection through geo-points coincident with it (shared nodes).
-        if (kN && !prevN) doCycleCoincident();
-        // R: add a connecting rail between 2 selected points (builds a switch each end).
-        if (kR && !prevR) doAddRail();
-        // K: auto-build a slip (kryssveksel) at the crossing under the selected point.
-        if (kK && !prevK) doAutoDiamond();
-        // C: build a scissors (double) crossover between the 2 selected tracks' points.
-        if (kC && !prevC) doScissors();
-        // P: re-render the actual track + terrain (cuttings) + switch stands from the
-        // current edits, so the preview shows how it will really look (heavy; on demand).
+        // P: re-render the actual track + terrain (cuttings) + switch stands (both modes).
         if (kP && !prevP) rebuildRenderPreview();
         // Up/Down: raise/lower the selected point(s). Auto-repeats while held (an
         // immediate first step, then throttled) so big changes don't need many taps.
         constexpr double kElevStep = 0.1; // metres per step (auto-repeats while held)
         const bool kUp = glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS;
         const bool kDn = glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS;
-        if ((kUp || kDn) && !selected.empty()) {
+        if (mode == EdMode::Geometry && (kUp || kDn) && !selected.empty()) {
             elevRepeat -= dt;
             if ((kUp && !prevUp) || (kDn && !prevDown) || elevRepeat <= 0.0f) {
                 doElevStep(kUp ? kElevStep : -kElevStep);
@@ -864,7 +1071,18 @@ int main(int argc, char** argv) {
         const std::size_t removals =
             static_cast<std::size_t>(std::count(removeExisting.begin(),
                                                 removeExisting.end(), char(1)));
-        if (kSave && !prevS && (!pending.empty() || removals > 0)) {
+        if (kSave && !prevS && mode == EdMode::Circuits && circuitsDirty) {
+            // Circuits mode: save the sensing sections to their own overlay file.
+            if (writeTrackCircuits(datasetRoot, tc)) {
+                std::printf("[trackedit] saved %zu border(s), %zu section(s) -> "
+                            "%s/overlay/track-circuits.txt\n", tc.borders.size(),
+                            tc.sections.size(), datasetRoot.c_str());
+                circuitsDirty = false;
+            } else {
+                std::fprintf(stderr, "[trackedit] failed to write track-circuits file\n");
+            }
+        } else if (kSave && !prevS && mode == EdMode::Geometry &&
+                   (!pending.empty() || removals > 0)) {
             std::vector<TrackEdit> out;
             for (std::size_t k = 0; k < existing.size(); ++k)
                 if (!removeExisting[k]) out.push_back(existing[k]);
@@ -886,7 +1104,7 @@ int main(int argc, char** argv) {
         // Click to select (cursor freed only). Ctrl+click toggles for multi-select;
         // plain click selects one; clicking empty space clears.
         const bool mL = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
-        if (!g_mouseCaptured && mL && !prevML) {
+        if (!g_mouseCaptured && mL && !prevML && mode == EdMode::Geometry) {
             if (pointHover >= 0) {
                 if (ctrl) {
                     if (!selected.insert(pointHover).second) selected.erase(pointHover);
@@ -896,6 +1114,18 @@ int main(int argc, char** argv) {
                 }
             } else if (!ctrl) {
                 selected.clear();
+            }
+            rebuildOverlay();
+        } else if (!g_mouseCaptured && mL && !prevML && mode == EdMode::Circuits) {
+            // Click a border to select it, else drop a new border on the nearest track.
+            if (borderHover >= 0) {
+                selBorder = borderHover;
+            } else if (circHit) {
+                tc.borders.push_back({circTrack, circFrac});
+                selBorder = static_cast<int>(tc.borders.size()) - 1;
+                circuitsDirty = true;
+                std::printf("[trackedit] border on %#x at %.3f (Ctrl+S to save)\n",
+                            circTrack, circFrac);
             }
             rebuildOverlay();
         }
@@ -935,10 +1165,9 @@ int main(int argc, char** argv) {
             std::snprintf(buf, sizeof(buf), "POS %.0f %.0f %.0f", p.x, p.y, p.z);
             appendText(tv, buf, x, 40.0f + 2 * lh, sc, glm::vec3(0.7f, 0.85f, 0.7f),
                        fbw, fbh);
-            std::snprintf(buf, sizeof(buf), "LINK: Enter A/B (A %s B %s), L link, X clear",
-                          selA >= 0 ? "set" : "-", selB >= 0 ? "set" : "-");
-            appendText(tv, buf, x, 40.0f + 3 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f),
-                       fbw, fbh);
+          if (mode == EdMode::Geometry) {
+            std::snprintf(buf, sizeof(buf), "MODE: GEOMETRY (Esc menu to switch)");
+            appendText(tv, buf, x, 40.0f + 3 * lh, sc, glm::vec3(0.7f, 0.85f, 1.0f), fbw, fbh);
             // Selection + elevation (single z, or min..max over the selection).
             char selz[64] = "";
             if (!selected.empty()) {
@@ -974,6 +1203,24 @@ int main(int argc, char** argv) {
                                        : "SELECT: click point, Ctrl+click multi, "
                                          "click empty to clear",
                        x, 40.0f + 6 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
+          } else { // --- Circuits mode HUD ---
+            appendText(tv, "MODE: TRACK CIRCUITS (Esc menu to switch)", x, 40.0f + 3 * lh,
+                       sc, glm::vec3(1.0f, 0.6f, 0.6f), fbw, fbh);
+            std::snprintf(buf, sizeof(buf),
+                          "BORDERS %zu  SECTIONS %zu   click=border  X=delete  Enter=section",
+                          tc.borders.size(), tc.sections.size());
+            appendText(tv, buf, x, 40.0f + 4 * lh, sc, glm::vec3(0.9f, 0.85f, 0.7f), fbw, fbh);
+            std::snprintf(buf, sizeof(buf), "UNSAVED %s   %s",
+                          circuitsDirty ? "yes" : "no", circuitsDirty ? "Ctrl+S to save" : "");
+            appendText(tv, buf, x, 40.0f + 5 * lh, sc,
+                       circuitsDirty ? glm::vec3(1.0f, 0.6f, 0.3f) : glm::vec3(0.6f, 0.9f, 0.6f),
+                       fbw, fbh);
+            appendText(tv,
+                       g_mouseCaptured ? "CIRCUITS: press Tab to free the cursor"
+                                       : "CIRCUITS: click a track to add a border; hover "
+                                         "inside a bounded block + Enter = section",
+                       x, 40.0f + 6 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
+          }
             // Crosshair: a '+' at screen centre (tinted when a dead-end is hovered).
             appendText(tv, "+", fbw * 0.5f - 4.0f * sc, fbh * 0.5f - 4.0f * sc, sc,
                        hover >= 0 ? glm::vec3(1.0f, 0.3f, 0.25f) : glm::vec3(1.0f),
@@ -990,6 +1237,20 @@ int main(int argc, char** argv) {
                 std::snprintf(buf, sizeof(buf), "z=%.2f", graph.pointWorld[pointHover].z);
                 appendText(tv, buf, hoverPx.x + 13.0f, hoverPx.y - 4.0f, sc * 0.7f,
                            glm::vec3(0.85f, 1.0f, 0.85f), fbw, fbh);
+            }
+            // Circuits: a ring at the candidate border spot on the nearest track (or the
+            // existing border it would select), so the click target is visible.
+            if (mode == EdMode::Circuits && circHit) {
+                const bool onBorder = borderHover >= 0;
+                const glm::vec3 hc = onBorder ? glm::vec3(1.0f, 1.0f, 0.3f)
+                                              : glm::vec3(0.3f, 0.8f, 1.0f);
+                const float R = 10.0f, T = 2.0f;
+                quad(circPx.x, circPx.y - R, R, T, hc);
+                quad(circPx.x, circPx.y + R, R, T, hc);
+                quad(circPx.x - R, circPx.y, T, R, hc);
+                quad(circPx.x + R, circPx.y, T, R, hc);
+                appendText(tv, onBorder ? "select border" : "add border",
+                           circPx.x + 13.0f, circPx.y - 4.0f, sc * 0.7f, hc, fbw, fbh);
             }
             renderer.setOverlayText(tv);
         }

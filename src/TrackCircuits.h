@@ -1,0 +1,87 @@
+// ebaner - a Vulkan viewer for terrainmapper rail/terrain exports.
+// Copyright (C) 2026 Jan-Espen Oversand <sigsegv@radiotube.org>
+//
+// This file is part of ebaner. ebaner is free software: you can redistribute it
+// and/or modify it under the terms of version 3 of the GNU General Public License
+// as published by the Free Software Foundation.
+//
+// ebaner is distributed in the hope that it will be useful, but WITHOUT ANY
+// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+// PARTICULAR PURPOSE. See the GNU General Public License for more details. You
+// should have received a copy of the license along with ebaner; if not, see
+// <https://www.gnu.org/licenses/>.
+
+#pragma once
+
+#include <glm/glm.hpp>
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+// Track-circuit (train-present sensing) authoring data, kept as a drop-in overlay
+// separate from the geometry edits so the signaling layer can consume it and a
+// regenerated import doesn't lose it. Everything is anchored by track id + a
+// fractional arc-length position, so a border/section follows small geometry changes
+// and survives re-imports as long as the track keeps its id and rough path.
+//
+// File `<datasetRoot>/overlay/track-circuits.txt` (frac is authoritative; the world
+// x/y on a border line is a cached hint for readability + staleness only):
+//   border  <trackIdHex> <frac> <x> <y>
+//   section <id> <name> <trackIdHex>:<from>:<to> <trackIdHex>:<from>:<to> ...
+
+// A border point (an insulated joint): a position along one track.
+struct Border {
+    std::uint32_t trackId = 0;
+    double frac = 0.0; // arc-length fraction 0..1 along the track's polyline
+};
+
+// One track's contribution to a section: the [from,to] fraction range it covers.
+struct SectionInterval {
+    std::uint32_t trackId = 0;
+    double from = 0.0, to = 1.0;
+};
+
+// A sensing section: a border-bounded connected block of track (may span turnouts).
+struct Section {
+    int id = 0;
+    std::string name;
+    std::vector<SectionInterval> parts;
+};
+
+struct TrackCircuits {
+    std::vector<Border> borders;
+    std::vector<Section> sections;
+};
+
+// One track's ordered world polyline (as grouped from the editor's graph by trackId).
+struct TrackPoly {
+    std::uint32_t id = 0;
+    std::vector<glm::dvec3> pts;
+};
+
+// --- File IO (mirrors loadTrackOverlay/writeTrackOverlay) ---
+TrackCircuits loadTrackCircuits(const std::string& datasetRoot);
+bool writeTrackCircuits(const std::string& datasetRoot, const TrackCircuits& tc);
+
+// --- Geometry helpers ---
+// Total planar (x,y) length of a polyline.
+double polyLength(const std::vector<glm::dvec3>& pts);
+// World position at `frac` along a track (interpolated). Returns {0} if id absent.
+glm::dvec3 fracToWorld(const std::vector<TrackPoly>& polys, std::uint32_t trackId,
+                       double frac);
+
+// --- Section flood-fill ---
+// The connected block of track containing the seed, bounded by border points and real
+// track dead-ends. `enclosed` is true if at least one border bounds it (i.e. the user
+// has carved it out of the network rather than grabbing the whole thing).
+struct SectionResult {
+    std::vector<SectionInterval> parts;
+    bool enclosed = false;
+    int borderEnds = 0;   // interval ends stopped at a border (insulated joint)
+    int deadEnds = 0;     // interval ends stopped at a real track terminus (buffer)
+    double lengthM = 0.0; // total planar length of the block
+};
+SectionResult floodSection(const std::vector<TrackPoly>& polys,
+                           const std::vector<Border>& borders,
+                           std::uint32_t seedTrack, double seedFrac);
