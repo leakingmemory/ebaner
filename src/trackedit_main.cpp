@@ -59,7 +59,18 @@ bool g_firstMouse = true;
 bool g_mouseCaptured = true;
 bool g_menuOpen = false; // Escape menu overlay
 int g_menuSel = 0;
+bool g_naming = false;    // typing a section name (modal text entry)
+std::string g_nameBuf;    // the name being typed
 VulkanRenderer* g_renderer = nullptr;
+
+// Text entry for section names: printable characters go into g_nameBuf while naming.
+// Space -> '_' and non-token characters are dropped so the name stays a single token
+// (the overlay stores `section <id> <name> ...` whitespace-delimited).
+void charCallback(GLFWwindow*, unsigned int cp) {
+    if (!g_naming) return;
+    if (cp == ' ') cp = '_';
+    if (cp > 32 && cp < 127 && g_nameBuf.size() < 24) g_nameBuf.push_back(static_cast<char>(cp));
+}
 
 void cursorCallback(GLFWwindow*, double x, double y) {
     if (g_menuOpen) return; // menu open: freeze mouselook
@@ -73,6 +84,7 @@ void cursorCallback(GLFWwindow*, double x, double y) {
 }
 
 void keyCallback(GLFWwindow* win, int key, int, int action, int) {
+    if (g_naming) return; // typing a name: only charCallback + loop-polled edit keys act
     // Escape toggles the menu overlay; while it is open the other hotkeys are inert.
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) g_menuOpen = !g_menuOpen;
     if (g_menuOpen) return;
@@ -150,6 +162,7 @@ int main(int argc, char** argv) {
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     glfwSetCursorPosCallback(window, cursorCallback);
     glfwSetKeyCallback(window, keyCallback);
+    glfwSetCharCallback(window, charCallback);
     glfwSetFramebufferSizeCallback(window, resizeCallback);
 
     // --- Land-cover textures ---
@@ -209,9 +222,15 @@ int main(int argc, char** argv) {
     TrackCircuits tc = loadTrackCircuits(datasetRoot); // borders + sections (own overlay)
     bool circuitsDirty = false;      // unsaved circuit changes
     int selBorder = -1;              // selected border (index into tc.borders)
+    int selSection = -1;             // selected section (index into tc.sections)
+    int namingSection = -1;          // section being renamed (index), -1 = none
     int nextSectionId = 1;           // auto-increment section id
     SectionResult pendingFlood;      // last flood result, highlighted as a preview
     bool showPending = false;
+    // Every section carries a name (used later by signaling); give existing data loaded
+    // without one a default "S<id>" so it is always identifiable.
+    for (Section& s : tc.sections)
+        if (s.name.empty() || s.name == "-") s.name = "S" + std::to_string(s.id);
     // Per-track world polylines (rebuilt from graph), for border projection/rendering
     // and the section flood-fill. Kept in sync with the graph.
     std::vector<TrackPoly> polys;
@@ -285,8 +304,12 @@ int main(int argc, char** argv) {
                     prev = cur;
                 }
             };
-            for (const Section& s : tc.sections)
-                for (const auto& iv : s.parts) drawRun(iv, secPal[((s.id - 1) % 5 + 5) % 5]);
+            for (std::size_t si = 0; si < tc.sections.size(); ++si) {
+                const glm::vec3 col = static_cast<int>(si) == selSection
+                    ? glm::vec3(1.0f, 1.0f, 1.0f)               // selected -> white
+                    : secPal[((tc.sections[si].id - 1) % 5 + 5) % 5];
+                for (const auto& iv : tc.sections[si].parts) drawRun(iv, col);
+            }
             if (showPending) {
                 const glm::vec3 col = pendingFlood.enclosed ? glm::vec3(0.3f, 1.0f, 0.5f)
                                                             : glm::vec3(1.0f, 0.5f, 0.1f);
@@ -778,8 +801,9 @@ int main(int argc, char** argv) {
                 "red = dead end, white = selected.\n"
                 "Modes (Esc menu): Geometry edit (above) | Track circuits — click a track "
                 "line to drop a border point (insulated joint), X deletes it, hover inside "
-                "a border-bounded block and press Enter to save it as a sensing section; "
-                "Ctrl+S writes overlay/track-circuits.txt.\n\n");
+                "a border-bounded block and press Enter to save it as a sensing section "
+                "(auto-named S1, S2, ...); right-click a section to select it and F2 to "
+                "rename it; Ctrl+S writes overlay/track-circuits.txt.\n\n");
 
     const glm::vec3 sunDir = glm::normalize(glm::vec3(0.4f, -0.5f, 0.75f));
     const char* shotPath = std::getenv("EBANER_SCREENSHOT");
@@ -787,7 +811,8 @@ int main(int argc, char** argv) {
     bool prevEnter = false, prevL = false, prevX = false, prevML = false,
          prevG = false, prevS = false, prevUp = false, prevDown = false,
          prevJ = false, prevN = false, prevR = false, prevK = false, prevC = false,
-         prevP = false;
+         prevP = false, prevF2 = false, prevMR = false;
+    bool prevNameEnter = false, prevNameEsc = false, prevNameBs = false;
     bool prevMenuEnter = false, prevMenuUp = false, prevMenuDown = false;
     const std::vector<std::string> kMenuItems = {"Geometry edit", "Track circuits",
                                                  "Exit"};
@@ -830,6 +855,55 @@ int main(int argc, char** argv) {
             appendMenu(tv, "MENU", kMenuItems, g_menuSel, fbw, fbh);
             renderer.setOverlayText(tv);
 
+            const float aspect = static_cast<float>(fbw) / static_cast<float>(fbh);
+            PushConstants pc{};
+            pc.viewProj = g_camera.projMatrix(aspect) * g_camera.viewMatrix();
+            pc.sunDir = glm::vec4(sunDir, data.minElevation());
+            pc.camPos = glm::vec4(g_camera.position(), data.maxElevation());
+            pc.params = glm::vec4(0.5f, 0.0f, 0.0f, 0.0f);
+            if (shotPath) {
+                if (frame == 20) renderer.requestCapture(shotPath);
+                if (frame == 24) glfwSetWindowShouldClose(window, GLFW_TRUE);
+            }
+            renderer.drawFrame(pc);
+            ++frame;
+            continue;
+        }
+
+        if (g_naming) {
+            // --- Modal section-name entry: charCallback fills g_nameBuf; here we handle
+            // Enter (commit), Esc (cancel), Backspace (delete). All other input is inert. ---
+            auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
+            const bool e = down(GLFW_KEY_ENTER), esc = down(GLFW_KEY_ESCAPE),
+                       bs = down(GLFW_KEY_BACKSPACE);
+            if (e && !prevNameEnter) {
+                if (namingSection >= 0 && namingSection < static_cast<int>(tc.sections.size())) {
+                    Section& s = tc.sections[namingSection];
+                    s.name = g_nameBuf.empty() ? ("S" + std::to_string(s.id)) : g_nameBuf;
+                    circuitsDirty = true;
+                    std::printf("[trackedit] section %d named \"%s\" (Ctrl+S to save)\n",
+                                s.id, s.name.c_str());
+                    rebuildOverlay();
+                }
+                g_naming = false; namingSection = -1;
+            }
+            if (esc && !prevNameEsc) { g_naming = false; namingSection = -1; }
+            if (bs && !prevNameBs && !g_nameBuf.empty()) g_nameBuf.pop_back();
+            prevNameEnter = e; prevNameEsc = esc; prevNameBs = bs;
+
+            const float scn = std::max(2.0f, static_cast<float>(fbh) / 240.0f);
+            std::vector<TextVertex> tv;
+            char nb[128];
+            std::snprintf(nb, sizeof(nb), "NAME SECTION %d:  %s_",
+                          namingSection >= 0 && namingSection < static_cast<int>(tc.sections.size())
+                              ? tc.sections[namingSection].id : 0,
+                          g_nameBuf.c_str());
+            appendText(tv, nb, fbw * 0.5f - 220.0f, fbh * 0.45f, scn * 1.4f,
+                       glm::vec3(1.0f, 0.95f, 0.4f), fbw, fbh);
+            appendText(tv, "type a name   Enter = confirm   Esc = cancel   Backspace = edit",
+                       fbw * 0.5f - 220.0f, fbh * 0.45f + 34.0f, scn * 0.85f,
+                       glm::vec3(0.85f, 0.85f, 0.8f), fbw, fbh);
+            renderer.setOverlayText(tv);
             const float aspect = static_cast<float>(fbw) / static_cast<float>(fbh);
             PushConstants pc{};
             pc.viewProj = g_camera.projMatrix(aspect) * g_camera.viewMatrix();
@@ -906,6 +980,7 @@ int main(int argc, char** argv) {
         glm::dvec3 circWorld(0.0);
         glm::vec2 circPx(0.0f);
         int borderHover = -1;
+        int sectionHover = -1; // section whose interval is under the cursor
         if (mode == EdMode::Circuits && !g_mouseCaptured) {
             double mx = 0.0, my = 0.0;
             glfwGetCursorPos(window, &mx, &my);
@@ -978,6 +1053,13 @@ int main(int argc, char** argv) {
                     if (d < bb) { bb = d; borderHover = static_cast<int>(bi); }
                 }
             }
+            // Which section is under the cursor (its interval contains the pick)?
+            if (circHit)
+                for (std::size_t si = 0; si < tc.sections.size(); ++si)
+                    for (const auto& iv : tc.sections[si].parts)
+                        if (iv.trackId == circTrack && circFrac >= iv.from - 1e-4 &&
+                            circFrac <= iv.to + 1e-4)
+                            sectionHover = static_cast<int>(si);
         }
 
         // Editing keys (edge-triggered): Enter pick A/B, L link, X clear, G grade,
@@ -994,6 +1076,7 @@ int main(int argc, char** argv) {
         const bool kK = glfwGetKey(window, GLFW_KEY_K) == GLFW_PRESS;
         const bool kC = glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS;
         const bool kP = glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS;
+        const bool kF2 = glfwGetKey(window, GLFW_KEY_F2) == GLFW_PRESS;
         // Save is Ctrl+S (plain S is the backward-movement key).
         const bool kSave = ctrl && glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS;
         if (mode == EdMode::Geometry) {
@@ -1031,8 +1114,10 @@ int main(int argc, char** argv) {
                 if (pendingFlood.enclosed) {
                     Section s;
                     s.id = nextSectionId++;
+                    s.name = "S" + std::to_string(s.id); // default name; F2 to rename
                     s.parts = pendingFlood.parts;
                     tc.sections.push_back(s);
+                    selSection = static_cast<int>(tc.sections.size()) - 1;
                     circuitsDirty = true;
                     std::printf("[trackedit] section %d: %zu track(s), %.0f m, %d joint(s), "
                                 "%d dead-end(s) (Ctrl+S to save)\n", s.id, s.parts.size(),
@@ -1053,6 +1138,15 @@ int main(int argc, char** argv) {
                     selBorder = -1; circuitsDirty = true;
                     std::printf("[trackedit] border removed (Ctrl+S to save)\n");
                     rebuildOverlay();
+                }
+            }
+            // F2: rename the selected (or hovered) section — start modal text entry.
+            if (kF2 && !prevF2) {
+                const int t = selSection >= 0 ? selSection : sectionHover;
+                if (t >= 0 && t < static_cast<int>(tc.sections.size())) {
+                    namingSection = t;
+                    g_nameBuf = tc.sections[t].name == "-" ? "" : tc.sections[t].name;
+                    g_naming = true;
                 }
             }
         }
@@ -1107,6 +1201,7 @@ int main(int argc, char** argv) {
         }
         prevEnter = kEnter; prevL = kL; prevX = kX; prevG = kG; prevS = kSave;
         prevJ = kJ; prevN = kN; prevR = kR; prevK = kK; prevC = kC; prevP = kP;
+        prevF2 = kF2;
 
         // Click to select (cursor freed only). Ctrl+click toggles for multi-select;
         // plain click selects one; clicking empty space clears.
@@ -1137,6 +1232,13 @@ int main(int argc, char** argv) {
             rebuildOverlay();
         }
         prevML = mL;
+        // Right-click (circuits mode) selects the section under the cursor (F2 renames it).
+        const bool mR = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+        if (!g_mouseCaptured && mR && !prevMR && mode == EdMode::Circuits) {
+            selSection = sectionHover;
+            rebuildOverlay();
+        }
+        prevMR = mR;
 
         // HUD: a dark backing panel plus info lines, and a centre crosshair.
         {
@@ -1213,9 +1315,12 @@ int main(int argc, char** argv) {
           } else { // --- Circuits mode HUD ---
             appendText(tv, "MODE: TRACK CIRCUITS (Esc menu to switch)", x, 40.0f + 3 * lh,
                        sc, glm::vec3(1.0f, 0.6f, 0.6f), fbw, fbh);
-            std::snprintf(buf, sizeof(buf),
-                          "BORDERS %zu  SECTIONS %zu   click=border  X=delete  Enter=section",
-                          tc.borders.size(), tc.sections.size());
+            char selname[48] = "";
+            if (selSection >= 0 && selSection < static_cast<int>(tc.sections.size()))
+                std::snprintf(selname, sizeof(selname), "  sel: %s",
+                              tc.sections[selSection].name.c_str());
+            std::snprintf(buf, sizeof(buf), "BORDERS %zu  SECTIONS %zu%s",
+                          tc.borders.size(), tc.sections.size(), selname);
             appendText(tv, buf, x, 40.0f + 4 * lh, sc, glm::vec3(0.9f, 0.85f, 0.7f), fbw, fbh);
             std::snprintf(buf, sizeof(buf), "UNSAVED %s   %s",
                           circuitsDirty ? "yes" : "no", circuitsDirty ? "Ctrl+S to save" : "");
@@ -1224,9 +1329,23 @@ int main(int argc, char** argv) {
                        fbw, fbh);
             appendText(tv,
                        g_mouseCaptured ? "CIRCUITS: press Tab to free the cursor"
-                                       : "CIRCUITS: click a track to add a border; hover "
-                                         "inside a bounded block + Enter = section",
+                                       : "CIRCUITS: click=border  X=delete  Enter=section  "
+                                         "right-click=select section  F2=rename",
                        x, 40.0f + 6 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
+            // Section name labels floating at each section's midpoint.
+            for (const Section& s : tc.sections) {
+                if (s.parts.empty()) continue;
+                const auto& iv = s.parts.front();
+                const glm::dvec3 w = fracToWorld(polys, iv.trackId, 0.5 * (iv.from + iv.to));
+                if (w.x == 0.0 && w.y == 0.0) continue;
+                const glm::dvec3 o = data.sceneOrigin();
+                const glm::vec4 clip = viewProj * glm::vec4(float(w.x - o.x), float(w.y - o.y),
+                                                            float(w.z - o.z) + 2.0f, 1.0f);
+                if (clip.w <= 0.0f) continue;
+                const float px = (clip.x / clip.w * 0.5f + 0.5f) * fbw;
+                const float py = (clip.y / clip.w * 0.5f + 0.5f) * fbh;
+                appendText(tv, s.name, px, py, sc * 0.8f, glm::vec3(1.0f, 1.0f, 0.6f), fbw, fbh);
+            }
           }
             // Crosshair: a '+' at screen centre (tinted when a dead-end is hovered).
             appendText(tv, "+", fbw * 0.5f - 4.0f * sc, fbh * 0.5f - 4.0f * sc, sc,
