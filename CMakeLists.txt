@@ -84,6 +84,7 @@ add_library(ebaner_engine STATIC
     src/TrackGraph.cpp
     src/TrackOverlay.cpp
     src/TrackCircuits.cpp
+    src/SignalPaths.cpp
     src/RoadMesh.cpp
     src/BuildingMesh.cpp
     src/PlatformMesh.cpp

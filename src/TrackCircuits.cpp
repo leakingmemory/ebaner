@@ -236,3 +236,83 @@ SectionResult floodSection(const std::vector<TrackPoly>& polys,
     r.enclosed = r.borderEnds >= 1;
     return r;
 }
+
+// ------------------------------------------------------------- signal routing
+namespace {
+// World unit tangent at `frac` along `track`, pointing toward +frac when dir=+1.
+glm::dvec2 tangentAt(const std::vector<TrackPoly>& polys, std::uint32_t track,
+                     double frac, int dir) {
+    constexpr double e = 1e-3;
+    const glm::dvec3 a = fracToWorld(polys, track, std::clamp(frac - e, 0.0, 1.0));
+    const glm::dvec3 b = fracToWorld(polys, track, std::clamp(frac + e, 0.0, 1.0));
+    glm::dvec2 t(b.x - a.x, b.y - a.y);
+    const double L = glm::length(t);
+    t = L > 1e-9 ? t / L : glm::dvec2(1.0, 0.0);
+    return t * static_cast<double>(dir);
+}
+
+struct RouteCtx {
+    const std::vector<TrackPoly>* polys;
+    const std::unordered_map<std::uint32_t, std::vector<Conn>>* conns;
+    std::uint32_t endTrack;
+    double endFrac;
+    std::vector<std::vector<SectionInterval>>* results; // capped at 2
+    int budget; // node-expansion budget; guards against combinatorial blow-up
+};
+
+constexpr int kRouteMaxTracks = 8; // a "mini" path spans few tracks; bounds the search
+
+// Walk `track` from `entryFrac` toward `dir`; at each junction ahead either finish (if the
+// destination lies ahead on the end track) or cross onto a connected track, but only via
+// forward (non-reversing) moves. Records one directed interval per track traversed.
+void routeDFS(RouteCtx& ctx, std::uint32_t track, double entryFrac, int dir,
+              std::vector<std::uint32_t>& visited, std::vector<SectionInterval>& route,
+              int depth) {
+    if (ctx.results->size() >= 2 || depth > kRouteMaxTracks || --ctx.budget < 0) return;
+    // Finish: destination on this track, ahead in the travel direction.
+    if (track == ctx.endTrack && dir * (ctx.endFrac - entryFrac) > 1e-6) {
+        route.push_back({track, entryFrac, ctx.endFrac});
+        ctx.results->push_back(route);
+        route.pop_back();
+        // fall through: a junction before the destination may yield another route
+    }
+    const auto it = ctx.conns->find(track);
+    if (it == ctx.conns->end()) return;
+    for (const Conn& c : it->second) {
+        if (dir * (c.here - entryFrac) <= 1e-6) continue; // not ahead of where we are
+        if (track == ctx.endTrack && dir * (c.here - ctx.endFrac) > 1e-6)
+            continue; // past the destination border on the end track
+        if (std::find(visited.begin(), visited.end(), c.other) != visited.end())
+            continue; // simple path (no track revisit)
+        // Forward continuation onto `other` at `there`: pick the direction aligned with our
+        // heading at the junction; reject if it would reverse (illegal turn at a turnout).
+        const glm::dvec2 headIn = tangentAt(*ctx.polys, track, c.here, dir);
+        const glm::dvec2 tPlus = tangentAt(*ctx.polys, c.other, c.there, +1);
+        const int ndir = glm::dot(tPlus, headIn) >= 0.0 ? +1 : -1;
+        const glm::dvec2 headOut = tangentAt(*ctx.polys, c.other, c.there, ndir);
+        if (glm::dot(headOut, headIn) <= 0.0) continue; // reversing -> not a valid move
+        route.push_back({track, entryFrac, c.here});
+        visited.push_back(c.other);
+        routeDFS(ctx, c.other, c.there, ndir, visited, route, depth + 1);
+        visited.pop_back();
+        route.pop_back();
+        if (ctx.results->size() >= 2) return;
+    }
+}
+} // namespace
+
+int findSignalRoute(const std::vector<TrackPoly>& polys, const Border& start,
+                    const Border& end, std::vector<SectionInterval>& out) {
+    out.clear();
+    const auto conns = buildConns(polys);
+    std::vector<std::vector<SectionInterval>> results;
+    RouteCtx ctx{&polys, &conns, end.trackId, end.frac, &results, 500000};
+    for (int dir = 1; dir >= -1; dir -= 2) { // leave the start border either way
+        std::vector<std::uint32_t> visited{start.trackId};
+        std::vector<SectionInterval> route;
+        routeDFS(ctx, start.trackId, start.frac, dir, visited, route, 0);
+        if (results.size() >= 2) break;
+    }
+    if (results.size() == 1) out = results[0];
+    return static_cast<int>(results.size());
+}

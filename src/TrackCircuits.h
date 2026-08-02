@@ -85,3 +85,13 @@ struct SectionResult {
 SectionResult floodSection(const std::vector<TrackPoly>& polys,
                            const std::vector<Border>& borders,
                            std::uint32_t seedTrack, double seedFrac);
+
+// --- Directed route finder (for mini signal paths) ---
+// Enumerate directed routes from `start` to `end` (both trackId + arc-length anchors)
+// through the connected network, taking only forward (non-reversing) moves at junctions
+// so turnout legality (toe<->through / toe<->diverging, never through<->diverging) falls
+// out of the geometry. Returns the number of distinct routes found (capped at 2); when
+// exactly one exists, fills `out` with its ordered directed intervals (from -> to is the
+// travel direction, so `from` may exceed `to`). 0 = no route, >=2 = ambiguous.
+int findSignalRoute(const std::vector<TrackPoly>& polys, const Border& start,
+                    const Border& end, std::vector<SectionInterval>& out);
