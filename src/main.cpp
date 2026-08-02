@@ -61,6 +61,9 @@ bool g_menuOpen = false;    // Escape menu overlay (pauses the sim)
 int g_menuSel = 0;          // highlighted menu item
 bool g_mapMode = false;     // traffic-manager 2-D map view
 bool g_mapDirty = false;    // (re)build the map overlay this frame
+float g_mapZoom = 1.0f;     // map zoom: 1 = ~4 km tall, higher = zoomed in
+constexpr float kMapZoomMin = 0.5f;  // ~8 km tall (zoomed out)
+constexpr float kMapZoomMax = 40.0f; // ~100 m tall (zoomed in)
 
 void cursorCallback(GLFWwindow*, double x, double y) {
     if (g_menuOpen) return; // menu open: freeze mouselook
@@ -76,6 +79,13 @@ void cursorCallback(GLFWwindow*, double x, double y) {
     } else {
         g_camera.look(dx, dy);
     }
+}
+
+void scrollCallback(GLFWwindow*, double, double yoff) {
+    // Mouse wheel zooms the traffic-manager map (ignored in the cab view).
+    if (!g_mapMode) return;
+    g_mapZoom = glm::clamp(g_mapZoom * std::pow(1.15f, static_cast<float>(yoff)),
+                           kMapZoomMin, kMapZoomMax);
 }
 
 void keyCallback(GLFWwindow* win, int key, int, int action, int) {
@@ -105,6 +115,14 @@ void keyCallback(GLFWwindow* win, int key, int, int action, int) {
     if (key == GLFW_KEY_O && action == GLFW_PRESS) {
         g_mapMode = !g_mapMode;
         g_mapDirty = g_mapMode;
+    }
+    // Z / X zoom the map in / out (keyboard alternative to the scroll wheel;
+    // repeat-enabled so holding the key keeps zooming).
+    if (g_mapMode && (action == GLFW_PRESS || action == GLFW_REPEAT)) {
+        if (key == GLFW_KEY_Z)
+            g_mapZoom = glm::min(g_mapZoom * 1.25f, kMapZoomMax);
+        if (key == GLFW_KEY_X)
+            g_mapZoom = glm::max(g_mapZoom / 1.25f, kMapZoomMin);
     }
 }
 
@@ -211,6 +229,7 @@ int main(int argc, char** argv) {
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     glfwSetCursorPosCallback(window, cursorCallback);
     glfwSetKeyCallback(window, keyCallback);
+    glfwSetScrollCallback(window, scrollCallback);
     glfwSetFramebufferSizeCallback(window, resizeCallback);
 
     // --- Land-cover textures ---
@@ -315,6 +334,23 @@ int main(int argc, char** argv) {
         (void)g;
     };
 
+    // Where the map is centred (scene-relative): the centroid of the routed turnouts -
+    // the Bodo station throat, which is the operational detail the view is about, so
+    // zooming stays framed on it. Falls back to the scene origin if there are none.
+    glm::vec2 mapCenter(0.0f);
+    {
+        const glm::dvec3 org = switchNet.sceneOrigin();
+        const auto& tos = switchNet.turnouts();
+        glm::dvec2 sum(0.0);
+        int n = 0;
+        for (const auto& t : tos) {
+            if (t.mainPath < 0) continue; // inert crossing: not a working switch
+            sum += glm::dvec2(t.world.x - org.x, t.world.y - org.y);
+            ++n;
+        }
+        if (n > 0) mapCenter = glm::vec2(sum / static_cast<double>(n));
+    }
+
     // Traffic-manager 2-D map overlay: the track network (coloured by type) plus a
     // diamond at each working switch, coloured by its current position.
     auto buildMapOverlay = [&]() {
@@ -365,8 +401,11 @@ int main(int argc, char** argv) {
         appendText(tv, "switch: straight green / diverging orange / broken red",
                    x, y, sc * 0.75f, glm::vec3(0.85f, 0.9f, 0.85f), fbw, fbh);
         y += lh;
-        appendText(tv, "O: back to cab   Esc: menu   (view ~4 km)", x, y,
-                   sc * 0.75f, glm::vec3(0.7f, 0.85f, 0.7f), fbw, fbh);
+        char hint[80];
+        std::snprintf(hint, sizeof(hint),
+                      "O: back to cab   Esc: menu   scroll or Z/X: zoom (view %.1f km)",
+                      4.0f / g_mapZoom);
+        appendText(tv, hint, x, y, sc * 0.75f, glm::vec3(0.7f, 0.85f, 0.7f), fbw, fbh);
     };
 
     enum class Mode { Menu, Sim };
@@ -737,15 +776,18 @@ int main(int argc, char** argv) {
         const float aspect = static_cast<float>(fbw) / static_cast<float>(fbh);
         PushConstants pc{};
         if (g_mapMode) {
-            // Orthographic top-down over Bodo (scene origin), north up. ~4 km tall (half
-            // = 2000 m), wider on wide screens. Column-major; row1 negated to flip Y for
-            // Vulkan clip space; z mapped into [0,1] so nothing is depth-clipped.
-            const float halfH = 2000.0f, halfW = halfH * aspect;
+            // Orthographic top-down over Bodo (scene origin), north up. ~4 km tall at
+            // zoom 1 (half = 2000 m), scaled by g_mapZoom, wider on wide screens.
+            // Column-major; row1 negated to flip Y for Vulkan clip space; z mapped into
+            // [0,1] so nothing is depth-clipped.
+            const float halfH = 2000.0f / g_mapZoom, halfW = halfH * aspect;
             const float zn = -2000.0f, zf = 3000.0f;
             glm::mat4 proj(0.0f);
             proj[0][0] = 1.0f / halfW;
             proj[1][1] = -1.0f / halfH;
             proj[2][2] = 1.0f / (zf - zn);
+            proj[3][0] = -mapCenter.x / halfW;  // translate the map centre to the origin
+            proj[3][1] = mapCenter.y / halfH;   // (Y negated to match proj[1][1])
             proj[3][2] = -zn / (zf - zn);
             proj[3][3] = 1.0f;
             pc.viewProj = proj;
