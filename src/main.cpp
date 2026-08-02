@@ -18,6 +18,7 @@
 #include "RoadMesh.h"
 #include "SwitchMesh.h"
 #include "SwitchNetwork.h"
+#include "SwitchTypes.h"
 #include "TerrainData.h"
 #include "TerrainMesh.h"
 #include "Textures.h"
@@ -169,6 +170,7 @@ int main(int argc, char** argv) {
         buildings.build(data);
         platforms.build(data, paths);
         switchNet.build(data, paths);   // turnout detection + routing
+        applySwitchTypes(switchNet, loadSwitchTypes(datasetRoot)); // manual/motor overrides
         switches.build(switchNet);
         graph = buildTrackGraph(data);
     } catch (const std::exception& e) {
@@ -471,6 +473,21 @@ int main(int argc, char** argv) {
             };
             seg(n, e); seg(e, s); seg(s, w); seg(w, n); // diamond outline
             points.push_back({c, col});
+            // Motor-driven switches get an outer ring so they read as remotely worked,
+            // regardless of the state colour.
+            if (switchNet.type(static_cast<int>(i)) == SwitchType::Motor) {
+                const glm::vec3 ringCol(0.6f, 0.7f, 1.0f);
+                const float rr = 30.0f; // m, ring radius (outside the diamond)
+                constexpr int kN = 12;
+                glm::vec3 prev = c + glm::vec3(rr, 0, 0);
+                for (int k = 1; k <= kN; ++k) {
+                    const float a = 6.2831853f * k / kN;
+                    const glm::vec3 cur = c + glm::vec3(std::cos(a) * rr, std::sin(a) * rr, 0);
+                    lines.push_back({prev, ringCol});
+                    lines.push_back({cur, ringCol});
+                    prev = cur;
+                }
+            }
         }
         renderer.attachTrackGraph(lines, points);
     };
@@ -495,7 +512,7 @@ int main(int argc, char** argv) {
         appendText(tv, "main amber / siding cyan / yard magenta", x, y,
                    sc * 0.75f, glm::vec3(0.85f, 0.9f, 1.0f), fbw, fbh);
         y += lh;
-        appendText(tv, "switch: straight green / diverging orange / broken red",
+        appendText(tv, "switch: straight green / diverging orange / broken red / motor ringed",
                    x, y, sc * 0.75f, glm::vec3(0.85f, 0.9f, 0.85f), fbw, fbh);
         y += lh;
         // Track-circuit legend, and the names of any occupied sections (live).
@@ -795,7 +812,10 @@ int main(int argc, char** argv) {
             }
             if (g_throwSwitch) {
                 g_throwSwitch = false;
-                if (!g_mapMode && aimedSwitch >= 0) {
+                // Motor (point-machine) switches can't be hand-thrown - they're worked
+                // remotely (a later feature). Only manual switches respond to T.
+                if (!g_mapMode && aimedSwitch >= 0 &&
+                    switchNet.type(aimedSwitch) != SwitchType::Motor) {
                     switchNet.toggle(aimedSwitch);
                     switches.build(switchNet);
                     renderer.updateSwitches(switches.vertices(), switches.indices());
@@ -870,11 +890,16 @@ int main(int argc, char** argv) {
                                      : ss == SwitchState::Diverging  ? "DIVERGING"
                                                                      : "BROKEN";
                     const bool broken = ss == SwitchState::Broken;
-                    std::snprintf(buf, sizeof(buf), "SWITCH %s   T to throw", sn);
-                    appendText(tv, buf, fbw * 0.5f - 66.0f * sc, fbh * 0.5f + 14.0f * sc,
-                               sc,
-                               broken ? glm::vec3(1.0f, 0.5f, 0.3f) : glm::vec3(0.6f, 1.0f, 0.8f),
-                               fbw, fbh);
+                    const bool motor = switchNet.type(aimedSwitch) == SwitchType::Motor;
+                    if (motor)
+                        std::snprintf(buf, sizeof(buf), "SWITCH %s   MOTOR - no hand throw", sn);
+                    else
+                        std::snprintf(buf, sizeof(buf), "SWITCH %s   T to throw", sn);
+                    const glm::vec3 col = motor    ? glm::vec3(0.6f, 0.7f, 1.0f)
+                                          : broken ? glm::vec3(1.0f, 0.5f, 0.3f)
+                                                   : glm::vec3(0.6f, 1.0f, 0.8f);
+                    appendText(tv, buf, fbw * 0.5f - (motor ? 92.0f : 66.0f) * sc,
+                               fbh * 0.5f + 14.0f * sc, sc, col, fbw, fbh);
                 }
                 renderer.setOverlayText(tv);
             }

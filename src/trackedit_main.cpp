@@ -26,6 +26,7 @@
 #include "RoadMesh.h"
 #include "SwitchMesh.h"
 #include "SwitchNetwork.h"
+#include "SwitchTypes.h"
 #include "TerrainData.h"
 #include "TerrainMesh.h"
 #include "Textures.h"
@@ -125,6 +126,7 @@ int main(int argc, char** argv) {
         buildings.build(data);
         platforms.build(data, paths);
         switchNet.build(data, paths);   // turnout detection + routing (all straight)
+        applySwitchTypes(switchNet, loadSwitchTypes(datasetRoot)); // manual/motor overrides
         switches.build(switchNet);
         graph = buildTrackGraph(data); // raw geo-points + links overlay
     } catch (const std::exception& e) {
@@ -215,10 +217,12 @@ int main(int argc, char** argv) {
     std::set<int> selected;        // selected geo-points (indices into graph.points)
     std::vector<TrackEdit> pending; // edits made this session, not yet saved
 
-    // --- Modes: geometry editing (default) vs track-circuit (sensing-section) authoring,
-    // switched from the Escape menu. ---
-    enum class EdMode { Geometry, Circuits };
+    // --- Modes: geometry editing (default), track-circuit (sensing-section) authoring,
+    // and switch (turnout) properties, switched from the Escape menu. ---
+    enum class EdMode { Geometry, Circuits, Switches };
     EdMode mode = EdMode::Geometry;
+    int selTurnout = -1;             // selected turnout (index into switchNet.turnouts())
+    bool switchTypesDirty = false;   // unsaved switch-type changes
     TrackCircuits tc = loadTrackCircuits(datasetRoot); // borders + sections (own overlay)
     bool circuitsDirty = false;      // unsaved circuit changes
     int selBorder = -1;              // selected border (index into tc.borders)
@@ -333,6 +337,29 @@ int main(int argc, char** argv) {
                 pts.push_back({sc(w, 4.0f), col});
                 pts.push_back({sc(w, 0.7f), col});
             }
+        } else if (mode == EdMode::Switches) {
+            // A marker at each working turnout, coloured by type (manual = amber,
+            // motor = cyan); the selected one is white and larger.
+            const glm::dvec3 o = data.sceneOrigin();
+            const auto& tos = switchNet.turnouts();
+            for (std::size_t i = 0; i < tos.size(); ++i) {
+                if (tos[i].mainPath < 0) continue; // inert crossing: no working switch
+                const bool selh = static_cast<int>(i) == selTurnout;
+                const bool motor = switchNet.type(static_cast<int>(i)) == SwitchType::Motor;
+                const glm::vec3 col = selh    ? glm::vec3(1.0f, 1.0f, 1.0f)
+                                      : motor ? glm::vec3(0.3f, 0.8f, 1.0f)
+                                              : glm::vec3(1.0f, 0.7f, 0.2f);
+                const glm::vec3 c(static_cast<float>(tos[i].world.x - o.x),
+                                  static_cast<float>(tos[i].world.y - o.y),
+                                  static_cast<float>(tos[i].world.z - o.z) + 3.0f);
+                const float r = selh ? 3.5f : 2.2f; // m, marker half-diagonal
+                const glm::vec3 n(0, r, 0), s(0, -r, 0), e(r, 0, 0), w(-r, 0, 0);
+                auto seg = [&](glm::vec3 a, glm::vec3 b) {
+                    lns.push_back({c + a, col}); lns.push_back({c + b, col});
+                };
+                seg(n, e); seg(e, s); seg(s, w); seg(w, n); // diamond outline
+                pts.push_back({c, col});
+            }
         }
         renderer.attachTrackGraph(lns, pts);
     };
@@ -389,6 +416,23 @@ int main(int argc, char** argv) {
         renderer.updateStructs(sv, si);
         std::printf("[trackedit] render preview refreshed (%.0f ms)\n",
                     (glfwGetTime() - t0) * 1000.0);
+    };
+    // Rebuild just the switch stands into the static struct buffer (buildings +
+    // platforms + switches) — the tail of rebuildRenderPreview without the terrain
+    // recarve — so a switch-type change updates its stand immediately and cheaply.
+    auto rebuildStructs = [&]() {
+        switches.build(switchNet);
+        std::vector<TrackVertex> sv = buildings.vertices();
+        std::vector<std::uint32_t> si = buildings.indices();
+        auto merge = [&](const std::vector<TrackVertex>& v,
+                         const std::vector<std::uint32_t>& idx) {
+            const std::uint32_t base = static_cast<std::uint32_t>(sv.size());
+            sv.insert(sv.end(), v.begin(), v.end());
+            for (std::uint32_t k : idx) si.push_back(k + base);
+        };
+        merge(platforms.vertices(), platforms.indices());
+        merge(switches.vertices(), switches.indices());
+        renderer.updateStructs(sv, si);
     };
     // Straighten the selected span's elevation onto an endpoint-anchored grade.
     auto doRegrade = [&]() {
@@ -811,11 +855,11 @@ int main(int argc, char** argv) {
     bool prevEnter = false, prevL = false, prevX = false, prevML = false,
          prevG = false, prevS = false, prevUp = false, prevDown = false,
          prevJ = false, prevN = false, prevR = false, prevK = false, prevC = false,
-         prevP = false, prevF2 = false, prevMR = false;
+         prevP = false, prevF2 = false, prevMR = false, prevM = false;
     bool prevNameEnter = false, prevNameEsc = false, prevNameBs = false;
     bool prevMenuEnter = false, prevMenuUp = false, prevMenuDown = false;
     const std::vector<std::string> kMenuItems = {"Geometry edit", "Track circuits",
-                                                 "Exit"};
+                                                 "Switches", "Exit"};
     float elevRepeat = 0.0f; // auto-repeat throttle for Up/Down raise/lower
     double lastTime = glfwGetTime();
 
@@ -842,8 +886,11 @@ int main(int argc, char** argv) {
                 if (sel == "Exit") {
                     glfwSetWindowShouldClose(window, GLFW_TRUE);
                 } else { // pick a mode and close the menu
-                    mode = sel == "Track circuits" ? EdMode::Circuits : EdMode::Geometry;
+                    mode = sel == "Track circuits" ? EdMode::Circuits
+                           : sel == "Switches"     ? EdMode::Switches
+                                                   : EdMode::Geometry;
                     selected.clear(); selA = selB = -1; selBorder = -1;
+                    selTurnout = -1;
                     showPending = false;
                     rebuildOverlay();
                     g_menuOpen = false;
@@ -1062,6 +1109,33 @@ int main(int argc, char** argv) {
                             sectionHover = static_cast<int>(si);
         }
 
+        // Switches mode: pick the nearest working turnout by its world position
+        // projected to screen (mirrors the geo-point pick).
+        int turnoutHover = -1;
+        glm::vec2 turnoutHoverPx(0.0f);
+        if (mode == EdMode::Switches && !g_mouseCaptured) {
+            double mx = 0.0, my = 0.0;
+            glfwGetCursorPos(window, &mx, &my);
+            int winw = fbw, winh = fbh;
+            glfwGetWindowSize(window, &winw, &winh);
+            const glm::vec2 cur(static_cast<float>(mx) * fbw / std::max(winw, 1),
+                                static_cast<float>(my) * fbh / std::max(winh, 1));
+            const glm::dvec3 o = data.sceneOrigin();
+            const auto& tos = switchNet.turnouts();
+            float best = 18.0f; // px pick radius
+            for (std::size_t i = 0; i < tos.size(); ++i) {
+                if (tos[i].mainPath < 0) continue; // inert crossing
+                const glm::vec4 clip = viewProj * glm::vec4(float(tos[i].world.x - o.x),
+                                                            float(tos[i].world.y - o.y),
+                                                            float(tos[i].world.z - o.z), 1.0f);
+                if (clip.w <= 0.0f) continue;
+                const glm::vec2 px((clip.x / clip.w * 0.5f + 0.5f) * fbw,
+                                   (clip.y / clip.w * 0.5f + 0.5f) * fbh);
+                const float d = glm::length(px - cur);
+                if (d < best) { best = d; turnoutHover = static_cast<int>(i); turnoutHoverPx = px; }
+            }
+        }
+
         // Editing keys (edge-triggered): Enter pick A/B, L link, X clear, G grade,
         // S save. Edits preview immediately (applyEditsLive); S writes to disk.
         const bool ctrl = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
@@ -1077,6 +1151,7 @@ int main(int argc, char** argv) {
         const bool kC = glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS;
         const bool kP = glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS;
         const bool kF2 = glfwGetKey(window, GLFW_KEY_F2) == GLFW_PRESS;
+        const bool kM = glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS;
         // Save is Ctrl+S (plain S is the backward-movement key).
         const bool kSave = ctrl && glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS;
         if (mode == EdMode::Geometry) {
@@ -1106,7 +1181,7 @@ int main(int argc, char** argv) {
             if (kK && !prevK) doAutoDiamond();
             // C: build a scissors (double) crossover between 2 selected tracks' points.
             if (kC && !prevC) doScissors();
-        } else { // --- Circuits mode ---
+        } else if (mode == EdMode::Circuits) { // --- Circuits mode ---
             // Enter: seed a section at the hovered track spot and flood-fill it.
             if (kEnter && !prevEnter && circHit) {
                 pendingFlood = floodSection(polys, tc.borders, circTrack, circFrac);
@@ -1148,6 +1223,20 @@ int main(int argc, char** argv) {
                     g_nameBuf = tc.sections[t].name == "-" ? "" : tc.sections[t].name;
                     g_naming = true;
                 }
+            }
+        } else { // --- Switches mode ---
+            // M: toggle the selected switch between manual and motor-driven; the stand
+            // visual updates immediately and the change is staged for Ctrl+S.
+            if (kM && !prevM && selTurnout >= 0) {
+                const SwitchType cur = switchNet.type(selTurnout);
+                switchNet.setType(selTurnout, cur == SwitchType::Motor ? SwitchType::Manual
+                                                                       : SwitchType::Motor);
+                switchTypesDirty = true;
+                rebuildStructs();  // refresh the 3-D stand (light: no terrain recarve)
+                rebuildOverlay();  // refresh the type-coloured marker
+                std::printf("[trackedit] switch %d -> %s (Ctrl+S to save)\n", selTurnout,
+                            switchNet.type(selTurnout) == SwitchType::Motor ? "motor"
+                                                                            : "manual");
             }
         }
         // P: re-render the actual track + terrain (cuttings) + switch stands (both modes).
@@ -1198,10 +1287,20 @@ int main(int argc, char** argv) {
             } else {
                 std::fprintf(stderr, "[trackedit] failed to write overlay file\n");
             }
+        } else if (kSave && !prevS && mode == EdMode::Switches && switchTypesDirty) {
+            // Switches mode: save the manual/motor overrides to their own overlay file.
+            const std::vector<SwitchTypeOverride> ovr = collectSwitchOverrides(switchNet);
+            if (writeSwitchTypes(datasetRoot, ovr)) {
+                std::printf("[trackedit] saved %zu motor switch(es) -> "
+                            "%s/overlay/switch-types.txt\n", ovr.size(), datasetRoot.c_str());
+                switchTypesDirty = false;
+            } else {
+                std::fprintf(stderr, "[trackedit] failed to write switch-types file\n");
+            }
         }
         prevEnter = kEnter; prevL = kL; prevX = kX; prevG = kG; prevS = kSave;
         prevJ = kJ; prevN = kN; prevR = kR; prevK = kK; prevC = kC; prevP = kP;
-        prevF2 = kF2;
+        prevF2 = kF2; prevM = kM;
 
         // Click to select (cursor freed only). Ctrl+click toggles for multi-select;
         // plain click selects one; clicking empty space clears.
@@ -1229,6 +1328,10 @@ int main(int argc, char** argv) {
                 std::printf("[trackedit] border on %#x at %.3f (Ctrl+S to save)\n",
                             circTrack, circFrac);
             }
+            rebuildOverlay();
+        } else if (!g_mouseCaptured && mL && !prevML && mode == EdMode::Switches) {
+            // Click a turnout to select it; clicking empty space clears the selection.
+            selTurnout = turnoutHover;
             rebuildOverlay();
         }
         prevML = mL;
@@ -1312,7 +1415,7 @@ int main(int argc, char** argv) {
                                        : "SELECT: click point, Ctrl+click multi, "
                                          "click empty to clear",
                        x, 40.0f + 6 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
-          } else { // --- Circuits mode HUD ---
+          } else if (mode == EdMode::Circuits) { // --- Circuits mode HUD ---
             appendText(tv, "MODE: TRACK CIRCUITS (Esc menu to switch)", x, 40.0f + 3 * lh,
                        sc, glm::vec3(1.0f, 0.6f, 0.6f), fbw, fbh);
             char selname[48] = "";
@@ -1346,6 +1449,31 @@ int main(int argc, char** argv) {
                 const float py = (clip.y / clip.w * 0.5f + 0.5f) * fbh;
                 appendText(tv, s.name, px, py, sc * 0.8f, glm::vec3(1.0f, 1.0f, 0.6f), fbw, fbh);
             }
+          } else { // --- Switches mode HUD ---
+            appendText(tv, "MODE: SWITCHES (Esc menu to switch)", x, 40.0f + 3 * lh,
+                       sc, glm::vec3(0.5f, 0.85f, 1.0f), fbw, fbh);
+            char selty[48] = "";
+            if (selTurnout >= 0)
+                std::snprintf(selty, sizeof(selty), "  sel: %s",
+                              switchNet.type(selTurnout) == SwitchType::Motor ? "MOTOR"
+                                                                              : "MANUAL");
+            std::snprintf(buf, sizeof(buf), "SWITCHES %zu%s", switchNet.size(), selty);
+            appendText(tv, buf, x, 40.0f + 4 * lh, sc,
+                       selTurnout >= 0 ? glm::vec3(1.0f, 0.9f, 0.3f)
+                                       : glm::vec3(0.9f, 0.85f, 0.7f),
+                       fbw, fbh);
+            std::snprintf(buf, sizeof(buf), "UNSAVED %s   %s",
+                          switchTypesDirty ? "yes" : "no",
+                          switchTypesDirty ? "Ctrl+S to save" : "");
+            appendText(tv, buf, x, 40.0f + 5 * lh, sc,
+                       switchTypesDirty ? glm::vec3(1.0f, 0.6f, 0.3f)
+                                        : glm::vec3(0.6f, 0.9f, 0.6f),
+                       fbw, fbh);
+            appendText(tv,
+                       g_mouseCaptured ? "SWITCHES: press Tab to free the cursor"
+                                       : "SWITCHES: click=select turnout  "
+                                         "M=manual/motor toggle  (amber=manual cyan=motor)",
+                       x, 40.0f + 6 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
           }
             // Crosshair: a '+' at screen centre (tinted when a dead-end is hovered).
             appendText(tv, "+", fbw * 0.5f - 4.0f * sc, fbh * 0.5f - 4.0f * sc, sc,
@@ -1377,6 +1505,19 @@ int main(int argc, char** argv) {
                 quad(circPx.x + R, circPx.y, T, R, hc);
                 appendText(tv, onBorder ? "select border" : "add border",
                            circPx.x + 13.0f, circPx.y - 4.0f, sc * 0.7f, hc, fbw, fbh);
+            }
+            // Switches: a ring around the turnout under the cursor, labelled with its type.
+            if (mode == EdMode::Switches && turnoutHover >= 0) {
+                const bool motor = switchNet.type(turnoutHover) == SwitchType::Motor;
+                const glm::vec3 hc = motor ? glm::vec3(0.3f, 0.8f, 1.0f)
+                                           : glm::vec3(1.0f, 0.7f, 0.2f);
+                const float R = 11.0f, T = 2.0f;
+                quad(turnoutHoverPx.x, turnoutHoverPx.y - R, R, T, hc);
+                quad(turnoutHoverPx.x, turnoutHoverPx.y + R, R, T, hc);
+                quad(turnoutHoverPx.x - R, turnoutHoverPx.y, T, R, hc);
+                quad(turnoutHoverPx.x + R, turnoutHoverPx.y, T, R, hc);
+                appendText(tv, motor ? "motor" : "manual", turnoutHoverPx.x + 14.0f,
+                           turnoutHoverPx.y - 4.0f, sc * 0.7f, hc, fbw, fbh);
             }
             renderer.setOverlayText(tv);
         }

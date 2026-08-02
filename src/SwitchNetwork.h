@@ -25,6 +25,11 @@ class TrackPath;
 // (neutral) after a train has forced it while trailing through set against it.
 enum class SwitchState { Straight, Diverging, Broken };
 
+// How a switch is operated: Manual (a weighted hand-lever, thrown on the ground) or
+// Motor (a point machine, thrown remotely - cannot be hand-thrown in the cab). The
+// type is authored in the track editor and persisted as a drop-in overlay.
+enum class SwitchType { Manual, Motor };
+
 // A detected turnout: the geometry needed to draw its stand, plus the routing needed
 // for the vehicle to divert. A turnout joins three track ends at `world`: the common
 // (toe) side and the through (straight) side are the two directions of the *main*
@@ -61,8 +66,14 @@ public:
     // Throw the switch: Straight <-> Diverging; a Broken switch is repaired to Straight.
     void toggle(int i);
 
+    // Manual (hand-thrown) vs Motor (point machine). Defaults to Manual on build();
+    // applySwitchTypes() (SwitchTypes.h) sets the authored overrides after build().
+    SwitchType type(int i) const { return type_[i]; }
+    void setType(int i, SwitchType t) { type_[i] = t; }
+
 private:
     std::vector<Turnout> turnouts_;
     std::vector<SwitchState> state_;
+    std::vector<SwitchType> type_;
     glm::dvec3 origin_{0.0};
 };

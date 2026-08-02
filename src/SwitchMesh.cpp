@@ -108,6 +108,7 @@ void SwitchMesh::build(const SwitchNetwork& net) {
         if (t.mainPath < 0) continue; // inert turnout (a crossing) — no working switch
         ++stands;
         const SwitchState st = net.state(static_cast<int>(idx));
+        const SwitchType ty = net.type(static_cast<int>(idx));
 
         const glm::vec3 T(static_cast<float>(t.thru.x), static_cast<float>(t.thru.y), 0.0f);
         // Side unit S: horizontal perpendicular to the track, toward the diverging
@@ -122,30 +123,38 @@ void SwitchMesh::build(const SwitchNetwork& net) {
                           static_cast<float>(t.world.z - origin.z) - 0.25f);
         auto L = [&](float lr, float lf, float lu) { return C + S * lr + T * lf + UP * lu; };
 
-        // Static parts: timber base, throw rod, pivot pedestal, signal post.
-        box(L(0, 0, 0.09f), S, T, UP, 0.55f, 0.5f, 0.09f, kTimber);
-        box(L(-1.05f, 0, 0.22f), S, T, UP, 0.95f, 0.03f, 0.03f, kIron);
-        box(L(0, 0, 0.5f), S, T, UP, 0.13f, 0.13f, 0.34f, kIron);
+        // Static parts shared by both types: timber base, throw rod, indicator post.
+        box(L(0, 0, 0.09f), S, T, UP, 0.55f, 0.5f, 0.09f, kTimber);     // base
+        box(L(-1.05f, 0, 0.22f), S, T, UP, 0.95f, 0.03f, 0.03f, kIron); // throw rod to points
         const glm::vec3 postC = L(0.0f, 0.32f, 1.1f);
-        box(postC, S, T, UP, 0.05f, 0.05f, 0.95f, kIron);
+        box(postC, S, T, UP, 0.05f, 0.05f, 0.95f, kIron);              // indicator post
 
-        // Weighted lever: out at right angles to the track (+S), near horizontal, and
-        // swung fore/aft along the track to show the state (centred when broken).
-        const float yaw = st == SwitchState::Straight    ? 0.32f
-                          : st == SwitchState::Diverging  ? -0.32f
-                                                          : 0.0f;      // radians about UP
-        const float ang = st == SwitchState::Broken ? 0.30f : 0.17f;   // droop when broken
-        const glm::vec3 leverHoriz = glm::normalize(S * std::cos(yaw) + T * std::sin(yaw));
-        const glm::vec3 leverDir =
-            glm::normalize(leverHoriz * std::cos(ang) - UP * std::sin(ang));
-        const glm::vec3 pivotTop = L(0, 0, 0.84f);
-        const glm::vec3 le1 = glm::normalize(glm::cross(leverDir, UP));
-        const glm::vec3 le2 = glm::cross(leverDir, le1);
-        const float leverLen = 1.0f;
-        box(pivotTop + leverDir * (leverLen * 0.5f), leverDir, le1, le2,
-            leverLen * 0.5f, 0.05f, 0.05f, kIron);
-        const glm::vec3 wc = pivotTop + leverDir * leverLen;
-        prism(wc - le1 * 0.18f, wc + le1 * 0.18f, 0.18f, 8, kIron);
+        if (ty == SwitchType::Manual) {
+            // Hand stand: a pivot pedestal and a weighted lever, out at right angles to
+            // the track (+S), near horizontal, swung fore/aft along the track to show
+            // the state (centred and drooping when broken).
+            box(L(0, 0, 0.5f), S, T, UP, 0.13f, 0.13f, 0.34f, kIron); // pivot pedestal
+            const float yaw = st == SwitchState::Straight    ? 0.32f
+                              : st == SwitchState::Diverging  ? -0.32f
+                                                              : 0.0f;      // radians about UP
+            const float ang = st == SwitchState::Broken ? 0.30f : 0.17f;   // droop when broken
+            const glm::vec3 leverHoriz = glm::normalize(S * std::cos(yaw) + T * std::sin(yaw));
+            const glm::vec3 leverDir =
+                glm::normalize(leverHoriz * std::cos(ang) - UP * std::sin(ang));
+            const glm::vec3 pivotTop = L(0, 0, 0.84f);
+            const glm::vec3 le1 = glm::normalize(glm::cross(leverDir, UP));
+            const glm::vec3 le2 = glm::cross(leverDir, le1);
+            const float leverLen = 1.0f;
+            box(pivotTop + leverDir * (leverLen * 0.5f), leverDir, le1, le2,
+                leverLen * 0.5f, 0.05f, 0.05f, kIron);                 // lever bar
+            const glm::vec3 wc = pivotTop + leverDir * leverLen;
+            prism(wc - le1 * 0.18f, wc + le1 * 0.18f, 0.18f, 8, kIron); // counterweight
+        } else {
+            // Motor (point machine): a low housing beside the points, no hand-lever or
+            // counterweight - it is thrown by the mechanism, not by hand.
+            box(L(0.0f, 0.0f, 0.28f), S, T, UP, 0.30f, 0.55f, 0.28f, kIron); // housing
+            box(L(0.0f, 0.0f, 0.57f), S, T, UP, 0.31f, 0.40f, 0.03f, kDark); // lid
+        }
 
         // --- Mechanical target plate ---
         // Thin along its normal `n`, broad faces ±n. Straight: n = S (edge-on to the
