@@ -248,6 +248,9 @@ int main(int argc, char** argv) {
     };
     buildPolys();
     for (const Section& s : tc.sections) nextSectionId = std::max(nextSectionId, s.id + 1);
+    // Resolve each motor switch's locking set now that polys + circuits exist (authored
+    // set, else the sections the switch sits within). Editable below in Switches mode.
+    applySwitchLocks(switchNet, loadSwitchTypes(datasetRoot), tc, polys);
 
     // Existing overlay lines, so a save can rewrite them (not just append). Any legacy
     // elevation override (no track id) whose point coincides with vertices from more
@@ -342,6 +345,29 @@ int main(int argc, char** argv) {
             // motor = cyan); the selected one is white and larger.
             const glm::dvec3 o = data.sceneOrigin();
             const auto& tos = switchNet.turnouts();
+            // The selected motor switch's locking circuits, drawn as red-orange ribbons
+            // (float above the rail) so the authored set is visible.
+            if (selTurnout >= 0 && switchNet.type(selTurnout) == SwitchType::Motor) {
+                auto scv = [&](glm::dvec3 w, float lift) {
+                    return glm::vec3(float(w.x - o.x), float(w.y - o.y), float(w.z - o.z) + lift);
+                };
+                const glm::vec3 lockCol(1.0f, 0.35f, 0.1f);
+                for (int id : switchNet.lock(selTurnout))
+                    for (const Section& s : tc.sections) {
+                        if (s.id != id) continue;
+                        for (const SectionInterval& iv : s.parts) {
+                            glm::dvec3 prev = fracToWorld(polys, iv.trackId, iv.from);
+                            if (prev.x == 0.0 && prev.y == 0.0) continue;
+                            for (int k = 1; k <= 24; ++k) {
+                                const double f = iv.from + (iv.to - iv.from) * k / 24.0;
+                                const glm::dvec3 cur = fracToWorld(polys, iv.trackId, f);
+                                lns.push_back({scv(prev, 1.4f), lockCol});
+                                lns.push_back({scv(cur, 1.4f), lockCol});
+                                prev = cur;
+                            }
+                        }
+                    }
+            }
             for (std::size_t i = 0; i < tos.size(); ++i) {
                 if (tos[i].mainPath < 0) continue; // inert crossing: no working switch
                 const bool selh = static_cast<int>(i) == selTurnout;
@@ -1028,7 +1054,9 @@ int main(int argc, char** argv) {
         glm::vec2 circPx(0.0f);
         int borderHover = -1;
         int sectionHover = -1; // section whose interval is under the cursor
-        if (mode == EdMode::Circuits && !g_mouseCaptured) {
+        // Circuits mode authors borders/sections; Switches mode reuses the same section
+        // pick to add/remove a circuit from the selected switch's locking set (L).
+        if ((mode == EdMode::Circuits || mode == EdMode::Switches) && !g_mouseCaptured) {
             double mx = 0.0, my = 0.0;
             glfwGetCursorPos(window, &mx, &my);
             int winw = fbw, winh = fbh;
@@ -1226,17 +1254,41 @@ int main(int argc, char** argv) {
             }
         } else { // --- Switches mode ---
             // M: toggle the selected switch between manual and motor-driven; the stand
-            // visual updates immediately and the change is staged for Ctrl+S.
+            // visual updates immediately and the change is staged for Ctrl+S. Becoming a
+            // motor seeds the default locking set (the circuits it sits within); reverting
+            // to manual clears it.
             if (kM && !prevM && selTurnout >= 0) {
                 const SwitchType cur = switchNet.type(selTurnout);
-                switchNet.setType(selTurnout, cur == SwitchType::Motor ? SwitchType::Manual
-                                                                       : SwitchType::Motor);
+                if (cur == SwitchType::Motor) {
+                    switchNet.setType(selTurnout, SwitchType::Manual);
+                    switchNet.setLock(selTurnout, {});
+                } else {
+                    switchNet.setType(selTurnout, SwitchType::Motor);
+                    switchNet.setLock(selTurnout, defaultLockSections(
+                        switchNet.turnouts()[selTurnout], tc, polys));
+                }
                 switchTypesDirty = true;
                 rebuildStructs();  // refresh the 3-D stand (light: no terrain recarve)
-                rebuildOverlay();  // refresh the type-coloured marker
+                rebuildOverlay();  // refresh the type-coloured marker + lock highlight
                 std::printf("[trackedit] switch %d -> %s (Ctrl+S to save)\n", selTurnout,
                             switchNet.type(selTurnout) == SwitchType::Motor ? "motor"
                                                                             : "manual");
+            }
+            // L: toggle the hovered circuit in/out of the selected motor switch's lock set.
+            if (kL && !prevL && selTurnout >= 0 &&
+                switchNet.type(selTurnout) == SwitchType::Motor && sectionHover >= 0) {
+                const int id = tc.sections[sectionHover].id;
+                std::vector<int> lk = switchNet.lock(selTurnout);
+                const auto it = std::find(lk.begin(), lk.end(), id);
+                const bool removed = it != lk.end();
+                if (removed) lk.erase(it);
+                else lk.push_back(id);
+                switchNet.setLock(selTurnout, std::move(lk));
+                switchTypesDirty = true;
+                rebuildOverlay();
+                std::printf("[trackedit] switch %d %s lock circuit %s (Ctrl+S to save)\n",
+                            selTurnout, removed ? "removed" : "added",
+                            tc.sections[sectionHover].name.c_str());
             }
         }
         // P: re-render the actual track + terrain (cuttings) + switch stands (both modes).
@@ -1469,11 +1521,25 @@ int main(int argc, char** argv) {
                        switchTypesDirty ? glm::vec3(1.0f, 0.6f, 0.3f)
                                         : glm::vec3(0.6f, 0.9f, 0.6f),
                        fbw, fbh);
+            // Locking circuits of the selected motor switch (red-orange ribbons in view).
+            if (selTurnout >= 0 && switchNet.type(selTurnout) == SwitchType::Motor) {
+                std::string names;
+                for (int id : switchNet.lock(selTurnout))
+                    for (const Section& s : tc.sections)
+                        if (s.id == id)
+                            names += (names.empty() ? "" : ", ") +
+                                     (s.name.empty() || s.name == "-" ? "S" + std::to_string(s.id)
+                                                                      : s.name);
+                std::snprintf(buf, sizeof(buf), "LOCK circuits: %s",
+                              names.empty() ? "(none - always movable)" : names.c_str());
+                appendText(tv, buf, x, 40.0f + 6 * lh, sc, glm::vec3(1.0f, 0.55f, 0.3f),
+                           fbw, fbh);
+            }
             appendText(tv,
                        g_mouseCaptured ? "SWITCHES: press Tab to free the cursor"
-                                       : "SWITCHES: click=select turnout  "
-                                         "M=manual/motor toggle  (amber=manual cyan=motor)",
-                       x, 40.0f + 6 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
+                                       : "SWITCHES: click=select  M=manual/motor  "
+                                         "hover circuit + L=add/remove lock",
+                       x, 40.0f + 7 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
           }
             // Crosshair: a '+' at screen centre (tinted when a dead-end is hovered).
             appendText(tv, "+", fbw * 0.5f - 4.0f * sc, fbh * 0.5f - 4.0f * sc, sc,

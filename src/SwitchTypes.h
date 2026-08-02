@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "SwitchNetwork.h"
+#include "TrackCircuits.h" // TrackCircuits, TrackPoly, fracToWorld (for lock resolution)
 
 // Per-switch type (manual vs motor-driven) authoring, kept as a drop-in overlay
 // separate from the geometry so a regenerated import doesn't lose it. Manual is the
@@ -28,13 +29,19 @@
 // world position (the same key SwitchNetwork uses to dedup turnouts), so it follows
 // small geometry changes and survives re-imports as long as the branch keeps its id.
 //
+// A motor switch may also carry a locking set: the track-circuit section ids that must
+// be clear for it to be thrown remotely. Absent (no `lock`) -> resolve to the sections
+// the switch sits within; present (even empty) -> use it verbatim.
+//
 // File `<datasetRoot>/overlay/switch-types.txt` (x/y are the anchor + a staleness hint):
-//   switch <sidingTrackHex> <x> <y> motor
+//   switch <sidingTrackHex> <x> <y> motor [lock <sectionId> <sectionId> ...]
 
 struct SwitchTypeOverride {
     std::uint32_t sidingTrack = 0; // diverging branch track id (Turnout::sidingTrack)
     glm::dvec2 world{0.0};         // switch world position (Turnout::world x,y)
     SwitchType type = SwitchType::Motor;
+    bool hasLock = false;          // true if a `lock` list was authored (else default)
+    std::vector<int> lock;         // authored locking section ids
 };
 
 // --- File IO (mirrors loadTrackCircuits/writeTrackCircuits) ---
@@ -47,5 +54,16 @@ bool writeSwitchTypes(const std::string& datasetRoot,
 // within a small tolerance). Turnouts with no override keep their default (Manual).
 void applySwitchTypes(SwitchNetwork& net,
                       const std::vector<SwitchTypeOverride>& overrides);
-// The non-default (motor) switches of a network, ready to write out.
+// The non-default (motor) switches of a network, ready to write out (with their locks).
 std::vector<SwitchTypeOverride> collectSwitchOverrides(const SwitchNetwork& net);
+
+// The section ids whose track passes within a few metres of the turnout - "the circuits
+// the switch is located within" (its default locking set).
+std::vector<int> defaultLockSections(const Turnout& t, const TrackCircuits& circuits,
+                                     const std::vector<TrackPoly>& polys);
+// Resolve each motor switch's locking set: the authored list if present, else the
+// default. Call after applySwitchTypes(), once circuits + polys are available.
+void applySwitchLocks(SwitchNetwork& net,
+                      const std::vector<SwitchTypeOverride>& overrides,
+                      const TrackCircuits& circuits,
+                      const std::vector<TrackPoly>& polys);

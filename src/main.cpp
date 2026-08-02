@@ -67,9 +67,11 @@ float g_mapZoom = 1.0f;     // map zoom: 1 = ~4 km tall, higher = zoomed in
 constexpr float kMapZoomMin = 0.5f;  // ~8 km tall (zoomed out)
 constexpr float kMapZoomMax = 40.0f; // ~100 m tall (zoomed in)
 glm::vec2 g_mapPan(0.0f);   // WASD pan offset from the default centre (scene metres)
+std::string g_mapMsg;       // transient map feedback (e.g. a blocked-throw reason)
+double g_mapMsgUntil = 0.0; // glfwGetTime() until which g_mapMsg is shown
 
 void cursorCallback(GLFWwindow*, double x, double y) {
-    if (g_menuOpen) return; // menu open: freeze mouselook
+    if (g_menuOpen || g_mapMode) return; // menu/map open: cursor is free, no mouselook
     if (!g_mouseCaptured) { g_firstMouse = true; return; }
     if (g_firstMouse) { g_lastX = x; g_lastY = y; g_firstMouse = false; return; }
     const float dx = static_cast<float>(x - g_lastX);
@@ -119,6 +121,11 @@ void keyCallback(GLFWwindow* win, int key, int, int action, int) {
         g_mapMode = !g_mapMode;
         g_mapDirty = g_mapMode;
         if (g_mapMode) g_mapPan = glm::vec2(0.0f); // start centred on the throat
+        // Free the cursor so switches can be clicked; restore mouselook on leaving.
+        glfwSetInputMode(win, GLFW_CURSOR,
+                         (g_mapMode || !g_mouseCaptured) ? GLFW_CURSOR_NORMAL
+                                                         : GLFW_CURSOR_DISABLED);
+        g_firstMouse = true;
     }
     // Z / X zoom the map in / out (keyboard alternative to the scroll wheel;
     // repeat-enabled so holding the key keeps zooming).
@@ -399,6 +406,10 @@ int main(int argc, char** argv) {
     }
     std::vector<char> secOccupied(circuits.sections.size(), 0);
 
+    // Resolve each motor switch's locking set now that circuits + polys exist (from the
+    // authored overlay, else the circuits the switch sits within). Gates remote throws.
+    applySwitchLocks(switchNet, loadSwitchTypes(datasetRoot), circuits, polys);
+
     // Squared planar distance from p to segment ab (for occupancy tests).
     auto pointSegDist2 = [](glm::vec2 p, glm::vec2 a, glm::vec2 b) {
         const glm::vec2 ab = b - a;
@@ -533,11 +544,19 @@ int main(int argc, char** argv) {
                        fbw, fbh);
             y += lh;
         }
-        char hint[96];
+        char hint[112];
         std::snprintf(hint, sizeof(hint),
-                      "O: cab  Esc: menu  scroll/Z-X: zoom  WASD: pan  (view %.1f km)",
-                      4.0f / g_mapZoom);
+                      "O: cab  Esc: menu  scroll/Z-X: zoom  WASD: pan  click motor switch to throw"
+                      "  (view %.1f km)", 4.0f / g_mapZoom);
         appendText(tv, hint, x, y, sc * 0.75f, glm::vec3(0.7f, 0.85f, 0.7f), fbw, fbh);
+        y += lh;
+        // Transient feedback from a switch click (thrown / blocked reason).
+        if (glfwGetTime() < g_mapMsgUntil && !g_mapMsg.empty()) {
+            const bool ok = g_mapMsg.rfind("Switch thrown", 0) == 0;
+            appendText(tv, g_mapMsg, x, y, sc,
+                       ok ? glm::vec3(0.5f, 1.0f, 0.6f) : glm::vec3(1.0f, 0.55f, 0.4f),
+                       fbw, fbh);
+        }
     };
 
     enum class Mode { Menu, Sim };
@@ -555,7 +574,61 @@ int main(int argc, char** argv) {
     bool prevRevF = false, prevRevN = false, prevRevR = false;
     bool prevMenuEnter = false, prevMenuUp = false, prevMenuDown = false;
     bool mapAttached = false; // whether the map overlay is currently attached
+    bool prevMapClick = false; // edge-trigger for the map left-click
     const std::vector<std::string> kMenuItems = {"Traffic manager", "Exit"};
+
+    // The traffic-manager ortho projection (scene-relative -> clip), reused for both the
+    // rendered map and click-picking. North up, ~4 km tall at zoom 1, centred on the
+    // throat + WASD pan; Y flipped for Vulkan, z mapped into [0,1] so nothing clips.
+    auto mapOrtho = [&](float aspect) {
+        const float halfH = 2000.0f / g_mapZoom, halfW = halfH * aspect;
+        const float zn = -2000.0f, zf = 3000.0f;
+        glm::mat4 proj(0.0f);
+        proj[0][0] = 1.0f / halfW;
+        proj[1][1] = -1.0f / halfH;
+        proj[2][2] = 1.0f / (zf - zn);
+        const glm::vec2 center = mapCenter + g_mapPan;
+        proj[3][0] = -center.x / halfW;
+        proj[3][1] = center.y / halfH;
+        proj[3][2] = -zn / (zf - zn);
+        proj[3][3] = 1.0f;
+        return proj;
+    };
+
+    // Attempt to throw switch `i` from the map: allowed only for a non-broken motor
+    // switch whose locking circuits are all clear. Sets the transient feedback message.
+    auto tryMapThrow = [&](int i) {
+        auto setMsg = [&](const std::string& m) {
+            g_mapMsg = m; g_mapMsgUntil = glfwGetTime() + 3.0;
+        };
+        if (switchNet.type(i) != SwitchType::Motor) {
+            setMsg("Manual switch - hand-thrown in the cab");
+            return;
+        }
+        if (switchNet.state(i) == SwitchState::Broken) {
+            setMsg("Switch BROKEN - cannot be worked");
+            return;
+        }
+        std::string occNames; // occupied locking circuits, if any
+        for (int id : switchNet.lock(i))
+            for (std::size_t si = 0; si < circuits.sections.size(); ++si)
+                if (circuits.sections[si].id == id && si < secOccupied.size() && secOccupied[si]) {
+                    const Section& s = circuits.sections[si];
+                    occNames += (occNames.empty() ? "" : ", ") +
+                                (s.name.empty() || s.name == "-" ? "S" + std::to_string(s.id)
+                                                                 : s.name);
+                }
+        if (!occNames.empty()) {
+            setMsg("BLOCKED: " + occNames + " occupied");
+            return;
+        }
+        switchNet.toggle(i);
+        switches.build(switchNet);
+        renderer.updateSwitches(switches.vertices(), switches.indices());
+        g_mapDirty = true;
+        setMsg(std::string("Switch thrown -> ") +
+               (switchNet.state(i) == SwitchState::Straight ? "straight" : "diverging"));
+    };
 
     // Open the audio device now that the heavy startup work is done, so the audio
     // thread isn't starved (which causes ALSA under-runs) during loading.
@@ -607,6 +680,38 @@ int main(int argc, char** argv) {
             }
         }
 
+        // Map click: throw the motor switch under the cursor if its locking circuits are
+        // clear and it isn't broken. Manual switches are hand-thrown in the cab only.
+        {
+            const bool mL = g_mapMode && !g_menuOpen &&
+                            glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+            if (mL && !prevMapClick) {
+                double mx = 0.0, my = 0.0;
+                glfwGetCursorPos(window, &mx, &my);
+                int winw = fbw, winh = fbh;
+                glfwGetWindowSize(window, &winw, &winh);
+                const glm::vec2 cur(static_cast<float>(mx) * fbw / std::max(winw, 1),
+                                    static_cast<float>(my) * fbh / std::max(winh, 1));
+                const glm::mat4 vp = mapOrtho(static_cast<float>(fbw) / fbh);
+                const glm::dvec3 org = switchNet.sceneOrigin();
+                const auto& tos = switchNet.turnouts();
+                int hit = -1;
+                float best = 20.0f; // px
+                for (std::size_t i = 0; i < tos.size(); ++i) {
+                    if (tos[i].mainPath < 0) continue; // inert crossing
+                    const glm::vec4 clip = vp * glm::vec4(float(tos[i].world.x - org.x),
+                                                          float(tos[i].world.y - org.y), 0.0f, 1.0f);
+                    if (clip.w <= 0.0f) continue;
+                    const glm::vec2 px((clip.x / clip.w * 0.5f + 0.5f) * fbw,
+                                       (clip.y / clip.w * 0.5f + 0.5f) * fbh);
+                    const float dpx = glm::length(px - cur);
+                    if (dpx < best) { best = dpx; hit = static_cast<int>(i); }
+                }
+                if (hit >= 0) tryMapThrow(hit);
+            }
+            prevMapClick = mL;
+        }
+
         if (g_menuOpen) {
             // --- Escape menu (pauses the sim) ---
             auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
@@ -621,6 +726,8 @@ int main(int argc, char** argv) {
                 else if (sel == "Traffic manager") {
                     g_mapMode = true; g_mapDirty = true; g_menuOpen = false;
                     g_mapPan = glm::vec2(0.0f); // start centred on the throat
+                    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL); // click switches
+                    g_firstMouse = true;
                 }
             }
             prevMenuUp = mU; prevMenuDown = mD; prevMenuEnter = mE;
@@ -941,22 +1048,7 @@ int main(int argc, char** argv) {
         const float aspect = static_cast<float>(fbw) / static_cast<float>(fbh);
         PushConstants pc{};
         if (g_mapMode) {
-            // Orthographic top-down over Bodo (scene origin), north up. ~4 km tall at
-            // zoom 1 (half = 2000 m), scaled by g_mapZoom, wider on wide screens.
-            // Column-major; row1 negated to flip Y for Vulkan clip space; z mapped into
-            // [0,1] so nothing is depth-clipped.
-            const float halfH = 2000.0f / g_mapZoom, halfW = halfH * aspect;
-            const float zn = -2000.0f, zf = 3000.0f;
-            glm::mat4 proj(0.0f);
-            proj[0][0] = 1.0f / halfW;
-            proj[1][1] = -1.0f / halfH;
-            proj[2][2] = 1.0f / (zf - zn);
-            const glm::vec2 center = mapCenter + g_mapPan; // default centre + WASD pan
-            proj[3][0] = -center.x / halfW;     // translate the map centre to the origin
-            proj[3][1] = center.y / halfH;      // (Y negated to match proj[1][1])
-            proj[3][2] = -zn / (zf - zn);
-            proj[3][3] = 1.0f;
-            pc.viewProj = proj;
+            pc.viewProj = mapOrtho(aspect); // top-down ortho, centred + zoomed + panned
         } else {
             pc.viewProj = g_camera.projMatrix(aspect) * g_camera.viewMatrix();
         }

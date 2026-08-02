@@ -232,6 +232,7 @@ void SwitchNetwork::build(const TerrainData& data,
 
     state_.assign(turnouts_.size(), SwitchState::Straight);
     type_.assign(turnouts_.size(), SwitchType::Manual);
+    lock_.assign(turnouts_.size(), {});
     std::printf("[SwitchNetwork] %zu turnouts (%d routed)\n", turnouts_.size(), resolved);
 }
 

@@ -16,6 +16,7 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 class TerrainData;
@@ -71,9 +72,16 @@ public:
     SwitchType type(int i) const { return type_[i]; }
     void setType(int i, SwitchType t) { type_[i] = t; }
 
+    // Locking set: the track-circuit section ids that must be clear for this (motor)
+    // switch to be thrown remotely. Empty on build(); resolved by applySwitchLocks()
+    // (SwitchTypes.h) to the authored set, or the sections the switch sits within.
+    const std::vector<int>& lock(int i) const { return lock_[i]; }
+    void setLock(int i, std::vector<int> ids) { lock_[i] = std::move(ids); }
+
 private:
     std::vector<Turnout> turnouts_;
     std::vector<SwitchState> state_;
     std::vector<SwitchType> type_;
+    std::vector<std::vector<int>> lock_; // locking section ids per switch
     glm::dvec3 origin_{0.0};
 };
