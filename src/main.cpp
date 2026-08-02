@@ -21,6 +21,7 @@
 #include "TerrainData.h"
 #include "TerrainMesh.h"
 #include "Textures.h"
+#include "TrackGraph.h"
 #include "TrackMesh.h"
 #include "TrackPath.h"
 #include "Audio.h"
@@ -58,6 +59,8 @@ Audio* g_audio = nullptr; // for the M mute toggle in the key callback
 bool g_throwSwitch = false; // T pressed: throw the switch under the crosshair
 bool g_menuOpen = false;    // Escape menu overlay (pauses the sim)
 int g_menuSel = 0;          // highlighted menu item
+bool g_mapMode = false;     // traffic-manager 2-D map view
+bool g_mapDirty = false;    // (re)build the map overlay this frame
 
 void cursorCallback(GLFWwindow*, double x, double y) {
     if (g_menuOpen) return; // menu open: freeze mouselook
@@ -98,6 +101,11 @@ void keyCallback(GLFWwindow* win, int key, int, int action, int) {
     if (key == GLFW_KEY_M && action == GLFW_PRESS && g_audio) g_audio->toggleMuted();
     // T throws the switch stand the crosshair is aimed at.
     if (key == GLFW_KEY_T && action == GLFW_PRESS) g_throwSwitch = true;
+    // O toggles the traffic-manager 2-D map (overview).
+    if (key == GLFW_KEY_O && action == GLFW_PRESS) {
+        g_mapMode = !g_mapMode;
+        g_mapDirty = g_mapMode;
+    }
 }
 
 VulkanRenderer* g_renderer = nullptr;
@@ -130,6 +138,7 @@ int main(int argc, char** argv) {
     SwitchMesh switches;
     SwitchNetwork switchNet;
     std::vector<TrackPath> paths;
+    TrackGraph graph; // raw track lines (scene-relative), for the 2-D traffic-manager map
     try {
         data.load(datasetRoot);
         paths = buildTrackPaths(data);
@@ -140,6 +149,7 @@ int main(int argc, char** argv) {
         platforms.build(data, paths);
         switchNet.build(data, paths);   // turnout detection + routing
         switches.build(switchNet);
+        graph = buildTrackGraph(data);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "Failed to load terrain: %s\n", e.what());
         return EXIT_FAILURE;
@@ -305,6 +315,33 @@ int main(int argc, char** argv) {
         (void)g;
     };
 
+    // Traffic-manager 2-D map overlay: the track network (coloured by type) plus a
+    // diamond at each working switch, coloured by its current position.
+    auto buildMapOverlay = [&]() {
+        std::vector<LineVertex> lines = graph.lines;
+        std::vector<LineVertex> points;
+        const glm::dvec3 org = switchNet.sceneOrigin();
+        const auto& tos = switchNet.turnouts();
+        for (std::size_t i = 0; i < tos.size(); ++i) {
+            if (tos[i].mainPath < 0) continue; // inert crossing: no working switch
+            const SwitchState st = switchNet.state(static_cast<int>(i));
+            const glm::vec3 col = st == SwitchState::Straight   ? glm::vec3(0.2f, 0.9f, 0.3f)
+                                  : st == SwitchState::Diverging ? glm::vec3(1.0f, 0.6f, 0.1f)
+                                                                 : glm::vec3(1.0f, 0.2f, 0.2f);
+            const glm::vec3 c(static_cast<float>(tos[i].world.x - org.x),
+                              static_cast<float>(tos[i].world.y - org.y),
+                              static_cast<float>(tos[i].world.z - org.z));
+            const float r = 18.0f; // m, diamond half-diagonal
+            const glm::vec3 n(0, r, 0), s(0, -r, 0), e(r, 0, 0), w(-r, 0, 0);
+            auto seg = [&](glm::vec3 a, glm::vec3 b) {
+                lines.push_back({c + a, col}); lines.push_back({c + b, col});
+            };
+            seg(n, e); seg(e, s); seg(s, w); seg(w, n); // diamond outline
+            points.push_back({c, col});
+        }
+        renderer.attachTrackGraph(lines, points);
+    };
+
     enum class Mode { Menu, Sim };
     Mode mode = Mode::Menu;
     int menuIndex = 0;
@@ -319,7 +356,8 @@ int main(int argc, char** argv) {
     bool prevSafety = false, prevEngine = false;
     bool prevRevF = false, prevRevN = false, prevRevR = false;
     bool prevMenuEnter = false, prevMenuUp = false, prevMenuDown = false;
-    const std::vector<std::string> kMenuItems = {"Exit"};
+    bool mapAttached = false; // whether the map overlay is currently attached
+    const std::vector<std::string> kMenuItems = {"Traffic manager", "Exit"};
 
     // Open the audio device now that the heavy startup work is done, so the audio
     // thread isn't starved (which causes ALSA under-runs) during loading.
@@ -336,6 +374,17 @@ int main(int argc, char** argv) {
         glfwGetFramebufferSize(window, &fbw, &fbh);
         if (fbw == 0 || fbh == 0) { continue; } // minimised
 
+        // Traffic-manager map overlay: attach on enter/refresh, clear on leave (so the
+        // track lines don't bleed into the 3-D view).
+        if (g_mapMode && (g_mapDirty || !mapAttached)) {
+            buildMapOverlay();
+            mapAttached = true;
+            g_mapDirty = false;
+        } else if (!g_mapMode && mapAttached) {
+            renderer.attachTrackGraph({}, {});
+            mapAttached = false;
+        }
+
         if (g_menuOpen) {
             // --- Escape menu (pauses the sim) ---
             auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
@@ -344,11 +393,31 @@ int main(int argc, char** argv) {
             const int n = static_cast<int>(kMenuItems.size());
             if (mU && !prevMenuUp) g_menuSel = (g_menuSel + n - 1) % n;
             if (mD && !prevMenuDown) g_menuSel = (g_menuSel + 1) % n;
-            if (mE && !prevMenuEnter && kMenuItems[g_menuSel] == "Exit")
-                glfwSetWindowShouldClose(window, GLFW_TRUE);
+            if (mE && !prevMenuEnter) {
+                const std::string& sel = kMenuItems[g_menuSel];
+                if (sel == "Exit") glfwSetWindowShouldClose(window, GLFW_TRUE);
+                else if (sel == "Traffic manager") {
+                    g_mapMode = true; g_mapDirty = true; g_menuOpen = false;
+                }
+            }
             prevMenuUp = mU; prevMenuDown = mD; prevMenuEnter = mE;
             std::vector<TextVertex> tv;
             appendMenu(tv, "MENU", kMenuItems, g_menuSel, fbw, fbh);
+            renderer.setOverlayText(tv);
+        } else if (g_mapMode) {
+            // --- Traffic-manager 2-D map (sim frozen); overlay attached above, drawn
+            // with the ortho pc.viewProj below. HUD: title + legend. ---
+            std::vector<TextVertex> tv;
+            const float sc = std::max(2.0f, static_cast<float>(fbh) / 240.0f);
+            const float x = 40.0f, lh = 12.0f * sc;
+            appendText(tv, "TRAFFIC MANAGER - BODO", x, 40.0f, sc,
+                       glm::vec3(1.0f, 0.95f, 0.5f), fbw, fbh);
+            appendText(tv, "main amber / siding cyan / yard magenta", x, 40.0f + lh,
+                       sc * 0.75f, glm::vec3(0.85f, 0.9f, 1.0f), fbw, fbh);
+            appendText(tv, "switch: straight green / diverging orange / broken red",
+                       x, 40.0f + 2 * lh, sc * 0.75f, glm::vec3(0.85f, 0.9f, 0.85f), fbw, fbh);
+            appendText(tv, "O: back to cab   Esc: menu   (view ~4 km)", x, 40.0f + 3 * lh,
+                       sc * 0.75f, glm::vec3(0.7f, 0.85f, 0.7f), fbw, fbh);
             renderer.setOverlayText(tv);
         } else if (mode == Mode::Menu) {
             // --- Start screen: pick a vehicle ---
@@ -637,7 +706,23 @@ int main(int argc, char** argv) {
 
         const float aspect = static_cast<float>(fbw) / static_cast<float>(fbh);
         PushConstants pc{};
-        pc.viewProj = g_camera.projMatrix(aspect) * g_camera.viewMatrix();
+        if (g_mapMode) {
+            // Orthographic top-down over Bodo (scene origin), north up. ~4 km tall (half
+            // = 2000 m), wider on wide screens. Column-major; row1 negated to flip Y for
+            // Vulkan clip space; z mapped into [0,1] so nothing is depth-clipped.
+            const float halfH = 2000.0f, halfW = halfH * aspect;
+            const float zn = -2000.0f, zf = 3000.0f;
+            glm::mat4 proj(0.0f);
+            proj[0][0] = 1.0f / halfW;
+            proj[1][1] = -1.0f / halfH;
+            proj[2][2] = 1.0f / (zf - zn);
+            proj[3][2] = -zn / (zf - zn);
+            proj[3][3] = 1.0f;
+            pc.viewProj = proj;
+        } else {
+            pc.viewProj = g_camera.projMatrix(aspect) * g_camera.viewMatrix();
+        }
+        renderer.setMapMode(g_mapMode);
         // .w channels carry the elevation range for the colour ramp.
         pc.sunDir = glm::vec4(sunDir, data.minElevation());
         pc.camPos = glm::vec4(g_camera.position(), data.maxElevation());

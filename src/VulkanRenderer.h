@@ -93,6 +93,11 @@ public:
     void attachTrackGraph(const std::vector<LineVertex>& lines,
                           const std::vector<LineVertex>& points);
 
+    // Traffic-manager 2-D map: when enabled, the frame clears to a dark panel and skips
+    // the 3-D meshes, drawing only the overlay lines/points + text (with an orthographic
+    // top-down pc.viewProj set by the caller).
+    void setMapMode(bool on) { mapMode_ = on; }
+
     void notifyResize() { framebufferResized_ = true; }
 
     // Requests that the next rendered frame be written to `path` (PPM).
@@ -281,6 +286,7 @@ private:
     std::vector<VkFence> inFlight_;
     uint32_t currentFrame_ = 0;
     bool framebufferResized_ = false;
+    bool mapMode_ = false; // traffic-manager 2-D map: dark clear, overlay-only
 
     PushConstants lastPush_{};
     bool validationEnabled_ = false;

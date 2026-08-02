@@ -1501,7 +1501,8 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageInde
     check(vkBeginCommandBuffer(cmd, &bi), "vkBeginCommandBuffer");
 
     std::array<VkClearValue, 2> clears{};
-    clears[0].color = {{0.55f, 0.70f, 0.85f, 1.0f}}; // sky
+    clears[0].color = mapMode_ ? VkClearColorValue{{0.06f, 0.07f, 0.09f, 1.0f}} // panel
+                               : VkClearColorValue{{0.55f, 0.70f, 0.85f, 1.0f}}; // sky
     clears[1].depthStencil = {1.0f, 0};
 
     VkRenderPassBeginInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
@@ -1529,6 +1530,10 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageInde
                        0, sizeof(PushConstants), &lastPush_);
 
     VkDeviceSize offset = 0;
+    // Traffic-manager map: skip all 3-D meshes, drawing only the overlay (below) over the
+    // dark clear. The push constants (ortho pc.viewProj), viewport and scissor above still
+    // apply to the overlay pipelines.
+    if (!mapMode_) {
     vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer_, &offset);
     vkCmdBindIndexBuffer(cmd, indexBuffer_, 0, VK_INDEX_TYPE_UINT32);
     vkCmdDrawIndexed(cmd, indexCount_, 1, 0, 0, 0);
@@ -1596,6 +1601,7 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageInde
         vkCmdDrawIndexed(cmd, vehicleIndexCount_ - vehicleGlassFirstIndex_, 1,
                          vehicleGlassFirstIndex_, 0, 0);
     }
+    } // end !mapMode_ (3-D meshes)
 
     // Editor track-graph overlay: link lines then round geo-point sprites, on top
     // of the scene (depth-tested against terrain, but not writing depth). Empty in
