@@ -64,6 +64,7 @@ bool g_mapDirty = false;    // (re)build the map overlay this frame
 float g_mapZoom = 1.0f;     // map zoom: 1 = ~4 km tall, higher = zoomed in
 constexpr float kMapZoomMin = 0.5f;  // ~8 km tall (zoomed out)
 constexpr float kMapZoomMax = 40.0f; // ~100 m tall (zoomed in)
+glm::vec2 g_mapPan(0.0f);   // WASD pan offset from the default centre (scene metres)
 
 void cursorCallback(GLFWwindow*, double x, double y) {
     if (g_menuOpen) return; // menu open: freeze mouselook
@@ -115,6 +116,7 @@ void keyCallback(GLFWwindow* win, int key, int, int action, int) {
     if (key == GLFW_KEY_O && action == GLFW_PRESS) {
         g_mapMode = !g_mapMode;
         g_mapDirty = g_mapMode;
+        if (g_mapMode) g_mapPan = glm::vec2(0.0f); // start centred on the throat
     }
     // Z / X zoom the map in / out (keyboard alternative to the scroll wheel;
     // repeat-enabled so holding the key keeps zooming).
@@ -351,6 +353,15 @@ int main(int argc, char** argv) {
         if (n > 0) mapCenter = glm::vec2(sum / static_cast<double>(n));
     }
 
+    // Bounds of the whole track network (scene-relative), used to clamp WASD panning
+    // so the view can follow the line out of the station but not drift into the void.
+    glm::vec2 mapMin(1e30f), mapMax(-1e30f);
+    for (const LineVertex& lv : graph.lines) {
+        mapMin = glm::min(mapMin, glm::vec2(lv.pos));
+        mapMax = glm::max(mapMax, glm::vec2(lv.pos));
+    }
+    if (graph.lines.empty()) { mapMin = mapMax = mapCenter; }
+
     // Traffic-manager 2-D map overlay: the track network (coloured by type) plus a
     // diamond at each working switch, coloured by its current position.
     auto buildMapOverlay = [&]() {
@@ -401,9 +412,9 @@ int main(int argc, char** argv) {
         appendText(tv, "switch: straight green / diverging orange / broken red",
                    x, y, sc * 0.75f, glm::vec3(0.85f, 0.9f, 0.85f), fbw, fbh);
         y += lh;
-        char hint[80];
+        char hint[96];
         std::snprintf(hint, sizeof(hint),
-                      "O: back to cab   Esc: menu   scroll or Z/X: zoom (view %.1f km)",
+                      "O: cab  Esc: menu  scroll/Z-X: zoom  WASD: pan  (view %.1f km)",
                       4.0f / g_mapZoom);
         appendText(tv, hint, x, y, sc * 0.75f, glm::vec3(0.7f, 0.85f, 0.7f), fbw, fbh);
     };
@@ -451,6 +462,22 @@ int main(int argc, char** argv) {
             mapAttached = false;
         }
 
+        // WASD pans the map. Speed scales with the view height so it feels the same on
+        // screen at any zoom; the centre is clamped to the network bounds.
+        if (g_mapMode && !g_menuOpen) {
+            auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
+            glm::vec2 d(0.0f);
+            if (down(GLFW_KEY_W)) d.y += 1.0f; // north (up)
+            if (down(GLFW_KEY_S)) d.y -= 1.0f; // south (down)
+            if (down(GLFW_KEY_D)) d.x += 1.0f; // east (right)
+            if (down(GLFW_KEY_A)) d.x -= 1.0f; // west (left)
+            if (d.x != 0.0f || d.y != 0.0f) {
+                const float halfH = 2000.0f / g_mapZoom;
+                g_mapPan += glm::normalize(d) * (halfH * 1.5f) * dt; // ~1.5 heights/s
+                g_mapPan = glm::clamp(mapCenter + g_mapPan, mapMin, mapMax) - mapCenter;
+            }
+        }
+
         if (g_menuOpen) {
             // --- Escape menu (pauses the sim) ---
             auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
@@ -464,6 +491,7 @@ int main(int argc, char** argv) {
                 if (sel == "Exit") glfwSetWindowShouldClose(window, GLFW_TRUE);
                 else if (sel == "Traffic manager") {
                     g_mapMode = true; g_mapDirty = true; g_menuOpen = false;
+                    g_mapPan = glm::vec2(0.0f); // start centred on the throat
                 }
             }
             prevMenuUp = mU; prevMenuDown = mD; prevMenuEnter = mE;
@@ -786,8 +814,9 @@ int main(int argc, char** argv) {
             proj[0][0] = 1.0f / halfW;
             proj[1][1] = -1.0f / halfH;
             proj[2][2] = 1.0f / (zf - zn);
-            proj[3][0] = -mapCenter.x / halfW;  // translate the map centre to the origin
-            proj[3][1] = mapCenter.y / halfH;   // (Y negated to match proj[1][1])
+            const glm::vec2 center = mapCenter + g_mapPan; // default centre + WASD pan
+            proj[3][0] = -center.x / halfW;     // translate the map centre to the origin
+            proj[3][1] = center.y / halfH;      // (Y negated to match proj[1][1])
             proj[3][2] = -zn / (zf - zn);
             proj[3][3] = 1.0f;
             pc.viewProj = proj;
