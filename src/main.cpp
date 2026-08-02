@@ -342,6 +342,33 @@ int main(int argc, char** argv) {
         renderer.attachTrackGraph(lines, points);
     };
 
+    // The map-mode HUD: title, colour legend, and controls. When a vehicle is given
+    // (the sim runs live under the map) its speed is shown so the motion is visible.
+    auto appendMapHud = [&](std::vector<TextVertex>& tv, int fbw, int fbh,
+                            const Vehicle* veh) {
+        const float sc = std::max(2.0f, static_cast<float>(fbh) / 240.0f);
+        const float x = 40.0f, lh = 12.0f * sc;
+        float y = 40.0f;
+        appendText(tv, "TRAFFIC MANAGER - BODO", x, y, sc,
+                   glm::vec3(1.0f, 0.95f, 0.5f), fbw, fbh);
+        y += lh;
+        if (veh) {
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "train %.0f km/h  (sim live)",
+                          veh->speed() * 3.6f);
+            appendText(tv, buf, x, y, sc * 0.75f, glm::vec3(0.7f, 1.0f, 0.75f), fbw, fbh);
+            y += lh;
+        }
+        appendText(tv, "main amber / siding cyan / yard magenta", x, y,
+                   sc * 0.75f, glm::vec3(0.85f, 0.9f, 1.0f), fbw, fbh);
+        y += lh;
+        appendText(tv, "switch: straight green / diverging orange / broken red",
+                   x, y, sc * 0.75f, glm::vec3(0.85f, 0.9f, 0.85f), fbw, fbh);
+        y += lh;
+        appendText(tv, "O: back to cab   Esc: menu   (view ~4 km)", x, y,
+                   sc * 0.75f, glm::vec3(0.7f, 0.85f, 0.7f), fbw, fbh);
+    };
+
     enum class Mode { Menu, Sim };
     Mode mode = Mode::Menu;
     int menuIndex = 0;
@@ -404,20 +431,12 @@ int main(int argc, char** argv) {
             std::vector<TextVertex> tv;
             appendMenu(tv, "MENU", kMenuItems, g_menuSel, fbw, fbh);
             renderer.setOverlayText(tv);
-        } else if (g_mapMode) {
-            // --- Traffic-manager 2-D map (sim frozen); overlay attached above, drawn
-            // with the ortho pc.viewProj below. HUD: title + legend. ---
+        } else if (g_mapMode && !vehicle) {
+            // --- Traffic-manager 2-D map with no vehicle spawned (entered from the
+            // start screen). Nothing to simulate; just draw the map + HUD. When a
+            // vehicle exists the sim runs live in the Sim branch below. ---
             std::vector<TextVertex> tv;
-            const float sc = std::max(2.0f, static_cast<float>(fbh) / 240.0f);
-            const float x = 40.0f, lh = 12.0f * sc;
-            appendText(tv, "TRAFFIC MANAGER - BODO", x, 40.0f, sc,
-                       glm::vec3(1.0f, 0.95f, 0.5f), fbw, fbh);
-            appendText(tv, "main amber / siding cyan / yard magenta", x, 40.0f + lh,
-                       sc * 0.75f, glm::vec3(0.85f, 0.9f, 1.0f), fbw, fbh);
-            appendText(tv, "switch: straight green / diverging orange / broken red",
-                       x, 40.0f + 2 * lh, sc * 0.75f, glm::vec3(0.85f, 0.9f, 0.85f), fbw, fbh);
-            appendText(tv, "O: back to cab   Esc: menu   (view ~4 km)", x, 40.0f + 3 * lh,
-                       sc * 0.75f, glm::vec3(0.7f, 0.85f, 0.7f), fbw, fbh);
+            appendMapHud(tv, fbw, fbh, nullptr);
             renderer.setOverlayText(tv);
         } else if (mode == Mode::Menu) {
             // --- Start screen: pick a vehicle ---
@@ -542,6 +561,7 @@ int main(int argc, char** argv) {
             if (vehicle->consumeSwitchChanged()) { // a switch was forced/broken
                 switches.build(switchNet);
                 renderer.updateSwitches(switches.vertices(), switches.indices());
+                g_mapDirty = true; // refresh the map marker if it's open
                 std::printf("[Switch] forced -> broken (neutral)\n");
             }
             if (vehicle->state() != prev) {
@@ -574,9 +594,10 @@ int main(int argc, char** argv) {
             renderer.updateVehicleVertices(vmesh.vertices());
 
             // Aim: the switch stand nearest the camera's forward ray (the crosshair),
-            // in front and within a small cone. T throws it.
+            // in front and within a small cone. T throws it. Only in the cab view -
+            // the map is display-only for switches.
             int aimedSwitch = -1;
-            {
+            if (!g_mapMode) {
                 const glm::vec3 cp = g_camera.position();
                 const glm::vec3 cd = glm::normalize(g_camera.forward());
                 const glm::dvec3 org = switchNet.sceneOrigin();
@@ -595,7 +616,7 @@ int main(int argc, char** argv) {
             }
             if (g_throwSwitch) {
                 g_throwSwitch = false;
-                if (aimedSwitch >= 0) {
+                if (!g_mapMode && aimedSwitch >= 0) {
                     switchNet.toggle(aimedSwitch);
                     switches.build(switchNet);
                     renderer.updateSwitches(switches.vertices(), switches.indices());
@@ -605,8 +626,13 @@ int main(int argc, char** argv) {
                 }
             }
 
-            // HUD: speed, reservoir/brake pressures and the brake notch.
-            {
+            // HUD: in map mode, the traffic-manager overlay (with live train speed);
+            // otherwise the cab HUD (speed, reservoir/brake pressures, brake notch).
+            if (g_mapMode) {
+                std::vector<TextVertex> tv;
+                appendMapHud(tv, fbw, fbh, &*vehicle);
+                renderer.setOverlayText(tv);
+            } else {
                 std::vector<TextVertex> tv;
                 const float sc = std::max(2.0f, static_cast<float>(fbh) / 240.0f);
                 const float lh = 12.0f * sc, x = 40.0f;
@@ -674,33 +700,37 @@ int main(int argc, char** argv) {
                 renderer.setOverlayText(tv);
             }
 
-            float fwd = 0.0f, right = 0.0f, up = 0.0f;
-            if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) fwd += 1.0f;
-            if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) fwd -= 1.0f;
-            if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) right += 1.0f;
-            if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) right -= 1.0f;
-            if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) up += 1.0f;
-            if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) up -= 1.0f;
-            const bool fast = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS;
-            glm::vec3 dEye, dFwd;
-            if (g_driverPos >= 0 && drivercam::eyePose(*vehicle, g_driverPos, dEye, dFwd)) {
-                // Seated at the driver's position; the mouse free-looks relative to
-                // the train's heading, so it doesn't drift on curves.
-                const float fYaw = std::atan2(dFwd.y, dFwd.x);
-                const float fPitch = std::asin(glm::clamp(dFwd.z, -1.0f, 1.0f));
-                g_camera.setPose(dEye, fYaw + g_driverYaw,
-                                 glm::clamp(fPitch + g_driverPitch, -1.4f, 1.4f));
-            } else if (g_chase) {
-                if (g_driverPos >= 0) g_driverPos = -1; // no cab here; fall back
-                const VehicleFrame vp = vehicle->frame();
-                const glm::vec3 axle = vp.pos + vp.up * wheelset::kAxleCentreAboveBed;
-                const glm::vec3 camPos = axle - vp.tangent * 8.0f + vp.up * 3.0f;
-                const glm::vec3 dir = glm::normalize(axle - camPos);
-                g_camera.setPose(camPos, std::atan2(dir.y, dir.x),
-                                 std::asin(glm::clamp(dir.z, -1.0f, 1.0f)));
-            } else {
-                if (g_driverPos >= 0) g_driverPos = -1; // no cab here; fall back
-                g_camera.move(fwd, right, up, dt, fast);
+            // Camera control only in the cab view; the map uses a fixed ortho
+            // projection, so the 3-D camera is left untouched while it's open.
+            if (!g_mapMode) {
+                float fwd = 0.0f, right = 0.0f, up = 0.0f;
+                if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) fwd += 1.0f;
+                if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) fwd -= 1.0f;
+                if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) right += 1.0f;
+                if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) right -= 1.0f;
+                if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) up += 1.0f;
+                if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) up -= 1.0f;
+                const bool fast = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS;
+                glm::vec3 dEye, dFwd;
+                if (g_driverPos >= 0 && drivercam::eyePose(*vehicle, g_driverPos, dEye, dFwd)) {
+                    // Seated at the driver's position; the mouse free-looks relative to
+                    // the train's heading, so it doesn't drift on curves.
+                    const float fYaw = std::atan2(dFwd.y, dFwd.x);
+                    const float fPitch = std::asin(glm::clamp(dFwd.z, -1.0f, 1.0f));
+                    g_camera.setPose(dEye, fYaw + g_driverYaw,
+                                     glm::clamp(fPitch + g_driverPitch, -1.4f, 1.4f));
+                } else if (g_chase) {
+                    if (g_driverPos >= 0) g_driverPos = -1; // no cab here; fall back
+                    const VehicleFrame vp = vehicle->frame();
+                    const glm::vec3 axle = vp.pos + vp.up * wheelset::kAxleCentreAboveBed;
+                    const glm::vec3 camPos = axle - vp.tangent * 8.0f + vp.up * 3.0f;
+                    const glm::vec3 dir = glm::normalize(axle - camPos);
+                    g_camera.setPose(camPos, std::atan2(dir.y, dir.x),
+                                     std::asin(glm::clamp(dir.z, -1.0f, 1.0f)));
+                } else {
+                    if (g_driverPos >= 0) g_driverPos = -1; // no cab here; fall back
+                    g_camera.move(fwd, right, up, dt, fast);
+                }
             }
         }
 
