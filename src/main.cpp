@@ -21,6 +21,7 @@
 #include "TerrainData.h"
 #include "TerrainMesh.h"
 #include "Textures.h"
+#include "TrackCircuits.h"
 #include "TrackGraph.h"
 #include "TrackMesh.h"
 #include "TrackPath.h"
@@ -362,11 +363,96 @@ int main(int argc, char** argv) {
     }
     if (graph.lines.empty()) { mapMin = mapMax = mapCenter; }
 
+    // --- Track circuits (sensing sections) + live occupancy -------------------------
+    // Sections are authored in the overlay file, anchored to track id + arc-length. We
+    // draw each on the map and light it red when a wheelset (axle) is inside it - the
+    // same thing that shunts a real track circuit. The section geometry is static, so
+    // sample it once into scene-relative polylines; occupancy is recomputed per frame.
+    const TrackCircuits circuits = loadTrackCircuits(datasetRoot);
+    std::vector<TrackPoly> polys;
+    for (std::size_t i = 0; i < graph.pointWorld.size(); ++i) {
+        if (polys.empty() || polys.back().id != graph.pointTrack[i])
+            polys.push_back({graph.pointTrack[i], {}});
+        polys.back().pts.push_back(graph.pointWorld[i]);
+    }
+    struct SecRun { int section; std::vector<glm::vec2> pts; }; // scene-relative xy run
+    std::vector<SecRun> secRuns;
+    {
+        const glm::dvec3 org = switchNet.sceneOrigin();
+        for (std::size_t si = 0; si < circuits.sections.size(); ++si) {
+            for (const SectionInterval& iv : circuits.sections[si].parts) {
+                const glm::dvec3 a = fracToWorld(polys, iv.trackId, iv.from);
+                if (a.x == 0.0 && a.y == 0.0) continue; // track gone (stale overlay)
+                SecRun run;
+                run.section = static_cast<int>(si);
+                constexpr int kSteps = 32;
+                for (int k = 0; k <= kSteps; ++k) {
+                    const double f = iv.from + (iv.to - iv.from) * k / kSteps;
+                    const glm::dvec3 w = fracToWorld(polys, iv.trackId, f);
+                    run.pts.push_back(glm::vec2(w.x - org.x, w.y - org.y));
+                }
+                if (run.pts.size() >= 2) secRuns.push_back(std::move(run));
+            }
+        }
+    }
+    std::vector<char> secOccupied(circuits.sections.size(), 0);
+
+    // Squared planar distance from p to segment ab (for occupancy tests).
+    auto pointSegDist2 = [](glm::vec2 p, glm::vec2 a, glm::vec2 b) {
+        const glm::vec2 ab = b - a;
+        const float L2 = glm::dot(ab, ab);
+        const float t = L2 > 1e-6f ? glm::clamp(glm::dot(p - a, ab) / L2, 0.0f, 1.0f) : 0.0f;
+        const glm::vec2 c = a + ab * t;
+        return glm::dot(p - c, p - c);
+    };
+    // Recompute which sections hold a wheelset. Tolerance keeps an axle on the right
+    // track without bleeding onto a parallel one (track centres are >4 m apart).
+    auto computeOccupancy = [&](std::vector<char>& occ) {
+        std::fill(occ.begin(), occ.end(), 0);
+        if (!vehicle) return;
+        const std::vector<VehicleFrame> axles = vehicle->axleFrames();
+        constexpr float kTol2 = 2.5f * 2.5f;
+        for (const SecRun& run : secRuns) {
+            if (occ[run.section]) continue;
+            bool hit = false;
+            for (std::size_t i = 1; i < run.pts.size() && !hit; ++i)
+                for (const VehicleFrame& ax : axles)
+                    if (pointSegDist2(glm::vec2(ax.pos), run.pts[i - 1], run.pts[i]) < kTol2) {
+                        hit = true;
+                        break;
+                    }
+            if (hit) occ[run.section] = 1;
+        }
+    };
+
     // Traffic-manager 2-D map overlay: the track network (coloured by type) plus a
     // diamond at each working switch, coloured by its current position.
     auto buildMapOverlay = [&]() {
         std::vector<LineVertex> lines = graph.lines;
         std::vector<LineVertex> points;
+
+        // Track-circuit sections, over the base graph: a 3 m band (two parallel rails)
+        // along each section. Each section gets its own hue so the blocks are legible;
+        // a section turns red the moment a wheelset is inside it.
+        static const glm::vec3 kSecPal[] = {
+            {0.40f, 0.70f, 1.00f}, {0.70f, 0.50f, 1.00f}, {0.30f, 0.90f, 0.75f},
+            {0.90f, 0.85f, 0.40f}, {0.55f, 0.80f, 0.95f}};
+        for (const SecRun& run : secRuns) {
+            const bool occ = !secOccupied.empty() && secOccupied[run.section];
+            const glm::vec3 col = occ ? glm::vec3(1.0f, 0.2f, 0.2f) // occupied: red
+                                      : kSecPal[run.section % 5];   // clear: block hue
+            for (std::size_t i = 1; i < run.pts.size(); ++i) {
+                const glm::vec2 a = run.pts[i - 1], b = run.pts[i];
+                const glm::vec2 d = b - a;
+                const float L = glm::length(d);
+                const glm::vec2 p = L > 1e-4f ? glm::vec2(-d.y, d.x) / L * 1.5f : glm::vec2(0.0f);
+                for (float s : {-1.0f, 1.0f}) {
+                    lines.push_back({glm::vec3(a + p * s, 2.0f), col});
+                    lines.push_back({glm::vec3(b + p * s, 2.0f), col});
+                }
+            }
+        }
+
         const glm::dvec3 org = switchNet.sceneOrigin();
         const auto& tos = switchNet.turnouts();
         for (std::size_t i = 0; i < tos.size(); ++i) {
@@ -412,6 +498,24 @@ int main(int argc, char** argv) {
         appendText(tv, "switch: straight green / diverging orange / broken red",
                    x, y, sc * 0.75f, glm::vec3(0.85f, 0.9f, 0.85f), fbw, fbh);
         y += lh;
+        // Track-circuit legend, and the names of any occupied sections (live).
+        if (!secRuns.empty()) {
+            std::string occLine = "circuit blocks coloured / occupied red";
+            std::string names;
+            for (std::size_t si = 0; si < circuits.sections.size(); ++si)
+                if (si < secOccupied.size() && secOccupied[si]) {
+                    const Section& s = circuits.sections[si];
+                    const std::string nm = s.name.empty() || s.name == "-"
+                                               ? "S" + std::to_string(s.id)
+                                               : s.name;
+                    names += (names.empty() ? "" : ", ") + nm;
+                }
+            if (!names.empty()) occLine += "   OCCUPIED: " + names;
+            appendText(tv, occLine, x, y, sc * 0.75f,
+                       names.empty() ? glm::vec3(0.6f, 0.8f, 0.95f) : glm::vec3(1.0f, 0.5f, 0.4f),
+                       fbw, fbh);
+            y += lh;
+        }
         char hint[96];
         std::snprintf(hint, sizeof(hint),
                       "O: cab  Esc: menu  scroll/Z-X: zoom  WASD: pan  (view %.1f km)",
@@ -450,6 +554,14 @@ int main(int argc, char** argv) {
         int fbw = 0, fbh = 0;
         glfwGetFramebufferSize(window, &fbw, &fbh);
         if (fbw == 0 || fbh == 0) { continue; } // minimised
+
+        // Live track-circuit occupancy: recompute each frame the map is open and rebuild
+        // the overlay only when it changes (a train entering/leaving a section).
+        if (g_mapMode) {
+            std::vector<char> occ(circuits.sections.size(), 0);
+            computeOccupancy(occ);
+            if (occ != secOccupied) { secOccupied = occ; g_mapDirty = true; }
+        }
 
         // Traffic-manager map overlay: attach on enter/refresh, clear on leave (so the
         // track lines don't bleed into the 3-D view).
