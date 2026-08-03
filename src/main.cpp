@@ -16,6 +16,8 @@
 #include "Font.h"
 #include "PlatformMesh.h"
 #include "RoadMesh.h"
+#include "SignalMesh.h"
+#include "SignalPaths.h"
 #include "SwitchMesh.h"
 #include "SwitchNetwork.h"
 #include "SwitchTypes.h"
@@ -264,6 +266,25 @@ int main(int argc, char** argv) {
                            platforms.vertices().end());
         structIndices.reserve(structIndices.size() + platforms.indices().size());
         for (std::uint32_t idx : platforms.indices())
+            structIndices.push_back(idx + vbase);
+    }
+    // Mini ground signals (dvergsignal) at the mini-signal-path starts. Static (Stop-only
+    // for now), so bake them into the static struct bucket like the platforms above.
+    {
+        std::vector<TrackPoly> sigPolys;
+        for (std::size_t i = 0; i < graph.pointWorld.size(); ++i) {
+            if (sigPolys.empty() || sigPolys.back().id != graph.pointTrack[i])
+                sigPolys.push_back({graph.pointTrack[i], {}});
+            sigPolys.back().pts.push_back(graph.pointWorld[i]);
+        }
+        SignalMesh signals;
+        signals.build(signalPlacements(loadSignalPaths(datasetRoot), sigPolys),
+                      data.sceneOrigin());
+        const std::uint32_t vbase = static_cast<std::uint32_t>(structVerts.size());
+        structVerts.insert(structVerts.end(), signals.vertices().begin(),
+                           signals.vertices().end());
+        structIndices.reserve(structIndices.size() + signals.indices().size());
+        for (std::uint32_t idx : signals.indices())
             structIndices.push_back(idx + vbase);
     }
     // Switch stands go in a dynamic buffer (rebuilt when a switch is thrown), not the

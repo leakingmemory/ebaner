@@ -26,6 +26,7 @@
 #include "RoadMesh.h"
 #include "SwitchMesh.h"
 #include "SwitchNetwork.h"
+#include "SignalMesh.h"
 #include "SignalPaths.h"
 #include "SwitchTypes.h"
 #include "TerrainData.h"
@@ -115,6 +116,7 @@ int main(int argc, char** argv) {
     BuildingMesh buildings;
     PlatformMesh platforms;
     SwitchMesh switches;
+    SignalMesh signals;
     SwitchNetwork switchNet;
     TrackGraph graph;
     std::vector<TrackPath> paths;
@@ -505,6 +507,8 @@ int main(int argc, char** argv) {
         };
         merge(platforms.vertices(), platforms.indices());
         merge(switches.vertices(), switches.indices());
+        signals.build(signalPlacements(signalPaths, polys), data.sceneOrigin());
+        merge(signals.vertices(), signals.indices());
         renderer.updateTerrain(mesh.vertices(), mesh.indices());
         renderer.updateTracks(tracks.vertices(), tracks.indices(),
                               tracks.alwaysIndexCount(), tracks.sleeperChunks());
@@ -512,11 +516,12 @@ int main(int argc, char** argv) {
         std::printf("[trackedit] render preview refreshed (%.0f ms)\n",
                     (glfwGetTime() - t0) * 1000.0);
     };
-    // Rebuild just the switch stands into the static struct buffer (buildings +
-    // platforms + switches) — the tail of rebuildRenderPreview without the terrain
-    // recarve — so a switch-type change updates its stand immediately and cheaply.
+    // Rebuild the switch stands + ground signals into the static struct buffer (buildings
+    // + platforms + switches + signals) — the tail of rebuildRenderPreview without the
+    // terrain recarve — so a switch-type change or a signal-path edit updates cheaply.
     auto rebuildStructs = [&]() {
         switches.build(switchNet);
+        signals.build(signalPlacements(signalPaths, polys), data.sceneOrigin());
         std::vector<TrackVertex> sv = buildings.vertices();
         std::vector<std::uint32_t> si = buildings.indices();
         auto merge = [&](const std::vector<TrackVertex>& v,
@@ -527,6 +532,7 @@ int main(int argc, char** argv) {
         };
         merge(platforms.vertices(), platforms.indices());
         merge(switches.vertices(), switches.indices());
+        merge(signals.vertices(), signals.indices());
         renderer.updateStructs(sv, si);
     };
     // Straighten the selected span's elevation onto an endpoint-anchored grade.
@@ -921,6 +927,7 @@ int main(int argc, char** argv) {
         }
     };
     rebuildOverlay();
+    rebuildStructs(); // bake the ground signals (at loaded signal-path starts) into view
 
     std::printf("\nControls: WASD move, Q/E down/up, mouse look, Shift boost, "
                 "Tab release cursor, Esc menu\n"
@@ -1411,6 +1418,7 @@ int main(int argc, char** argv) {
                     signalPaths.erase(signalPaths.begin() + selPath);
                     selPath = -1; pathsDirty = true;
                     std::printf("[trackedit] signal path removed (Ctrl+S to save)\n");
+                    rebuildStructs(); // a start may have lost its signal
                 }
                 rebuildOverlay();
             }
@@ -1549,6 +1557,7 @@ int main(int argc, char** argv) {
                         signalPaths.push_back(std::move(p));
                         selPath = static_cast<int>(signalPaths.size()) - 1;
                         pathStart = -1; pathsDirty = true;
+                        rebuildStructs(); // place a signal at the new path's start
                         std::printf("[trackedit] signal path %d: %zu interval(s) "
                                     "(Ctrl+S to save)\n", signalPaths[selPath].id,
                                     signalPaths[selPath].parts.size());

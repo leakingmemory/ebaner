@@ -13,10 +13,12 @@
 
 #include "SignalPaths.h"
 
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <unordered_set>
 
 namespace fs = std::filesystem;
 
@@ -84,4 +86,32 @@ bool writeSignalPaths(const std::string& datasetRoot,
         f << '\n';
     }
     return static_cast<bool>(f);
+}
+
+std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& paths,
+                                              const std::vector<TrackPoly>& polys) {
+    std::vector<SignalPlacement> out;
+    std::unordered_set<std::string> seen; // dedupe key: track + rounded frac + fwd sign
+    for (const SignalPath& p : paths) {
+        if (p.parts.empty()) continue;
+        const SectionInterval& iv0 = p.parts.front();
+        const glm::dvec3 a = fracToWorld(polys, iv0.trackId, iv0.from);
+        // A small step toward `to` gives the travel direction leaving the border.
+        const double f1 = iv0.from + (iv0.to - iv0.from) * 0.02;
+        const glm::dvec3 b = fracToWorld(polys, iv0.trackId, f1);
+        if (a.x == 0.0 && a.y == 0.0) continue; // stale/missing track
+        glm::dvec2 fwd(b.x - a.x, b.y - a.y);
+        const double L = glm::length(fwd);
+        if (L < 1e-6) continue;
+        fwd /= L;
+        // Dedupe: same start border (trackId + frac) and same rough direction -> one signal.
+        char key[64];
+        std::snprintf(key, sizeof(key), "%x:%d:%d:%d", p.start.trackId,
+                      static_cast<int>(std::lround(p.start.frac * 1000.0)),
+                      static_cast<int>(std::lround(fwd.x * 8.0)),
+                      static_cast<int>(std::lround(fwd.y * 8.0)));
+        if (!seen.insert(key).second) continue;
+        out.push_back({a, fwd});
+    }
+    return out;
 }

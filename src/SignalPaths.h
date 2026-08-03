@@ -41,3 +41,15 @@ struct SignalPath {
 std::vector<SignalPath> loadSignalPaths(const std::string& datasetRoot);
 bool writeSignalPaths(const std::string& datasetRoot,
                       const std::vector<SignalPath>& paths);
+
+// Where a ground signal sits: the on-track start point of a path and the path's initial
+// travel direction (a signal governs movements leaving that point in that direction).
+struct SignalPlacement {
+    glm::dvec3 world{0.0};   // start-border world position (on the track)
+    glm::dvec2 forward{0.0}; // unit travel direction leaving the border
+};
+
+// One placement per distinct (start border, travel direction) over all paths - so paths
+// sharing a start collapse to a single signal.
+std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& paths,
+                                              const std::vector<TrackPoly>& polys);
