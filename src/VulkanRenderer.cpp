@@ -1267,6 +1267,58 @@ void VulkanRenderer::updateSwitches(const std::vector<TrackVertex>& vertices,
     createSwitchBuffers(vertices, indices);
 }
 
+void VulkanRenderer::createSignalBuffers(
+    const std::vector<TrackVertex>& vertices,
+    const std::vector<std::uint32_t>& indices) {
+    // Idempotent: free any previous signal buffers first (aspect change = rebuild).
+    if (signalVertexBuffer_ != VK_NULL_HANDLE) {
+        vkDestroyBuffer(device_, signalIndexBuffer_, nullptr);
+        vkFreeMemory(device_, signalIndexMemory_, nullptr);
+        vkDestroyBuffer(device_, signalVertexBuffer_, nullptr);
+        vkFreeMemory(device_, signalVertexMemory_, nullptr);
+        signalVertexBuffer_ = signalIndexBuffer_ = VK_NULL_HANDLE;
+        signalVertexMemory_ = signalIndexMemory_ = VK_NULL_HANDLE;
+    }
+    signalIndexCount_ = static_cast<uint32_t>(indices.size());
+    if (indices.empty() || vertices.empty()) return;
+
+    auto upload = [&](const void* data, VkDeviceSize size, VkBufferUsageFlags usage,
+                      VkBuffer& buffer, VkDeviceMemory& memory) {
+        VkBuffer staging;
+        VkDeviceMemory stagingMem;
+        createBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                     staging, stagingMem);
+        void* mapped;
+        vkMapMemory(device_, stagingMem, 0, size, 0, &mapped);
+        std::memcpy(mapped, data, static_cast<std::size_t>(size));
+        vkUnmapMemory(device_, stagingMem);
+        createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage,
+                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, buffer, memory);
+        copyBuffer(staging, buffer, size);
+        vkDestroyBuffer(device_, staging, nullptr);
+        vkFreeMemory(device_, stagingMem, nullptr);
+    };
+    upload(vertices.data(), sizeof(TrackVertex) * vertices.size(),
+           VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, signalVertexBuffer_, signalVertexMemory_);
+    upload(indices.data(), sizeof(std::uint32_t) * indices.size(),
+           VK_BUFFER_USAGE_INDEX_BUFFER_BIT, signalIndexBuffer_, signalIndexMemory_);
+}
+
+void VulkanRenderer::attachSignals(const std::vector<TrackVertex>& vertices,
+                                   const std::vector<std::uint32_t>& indices) {
+    createSignalBuffers(vertices, indices);
+}
+
+void VulkanRenderer::updateSignals(const std::vector<TrackVertex>& vertices,
+                                   const std::vector<std::uint32_t>& indices) {
+    // Aspects change only when occupancy or a switch position does; the geometry is
+    // tiny, but the buffers are device-local, so idle first as the switch stands do.
+    vkDeviceWaitIdle(device_);
+    createSignalBuffers(vertices, indices);
+}
+
 // Editor render-preview: recreate the heavy static buffers to reflect pending edits.
 // Rare, user-triggered (the P key), so a full wait-idle + recreate is fine; the
 // per-frame command recording picks up the new buffers next frame.
@@ -1561,6 +1613,14 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageInde
         vkCmdBindVertexBuffers(cmd, 0, 1, &switchVertexBuffer_, &offset);
         vkCmdBindIndexBuffer(cmd, switchIndexBuffer_, 0, VK_INDEX_TYPE_UINT32);
         vkCmdDrawIndexed(cmd, switchIndexCount_, 1, 0, 0, 0);
+    }
+
+    // Ground signals — same track pipeline; dynamic (rebuilt when an aspect changes).
+    if (signalIndexCount_ > 0) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, trackPipeline_);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &signalVertexBuffer_, &offset);
+        vkCmdBindIndexBuffer(cmd, signalIndexBuffer_, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, signalIndexCount_, 1, 0, 0, 0);
     }
 
     // Rail vehicle (wheelset) — same track pipeline; per-frame dynamic buffer.
@@ -1876,6 +1936,12 @@ void VulkanRenderer::cleanup() {
         vkFreeMemory(device_, switchIndexMemory_, nullptr);
         vkDestroyBuffer(device_, switchVertexBuffer_, nullptr);
         vkFreeMemory(device_, switchVertexMemory_, nullptr);
+    }
+    if (signalVertexBuffer_ != VK_NULL_HANDLE) {
+        vkDestroyBuffer(device_, signalIndexBuffer_, nullptr);
+        vkFreeMemory(device_, signalIndexMemory_, nullptr);
+        vkDestroyBuffer(device_, signalVertexBuffer_, nullptr);
+        vkFreeMemory(device_, signalVertexMemory_, nullptr);
     }
 
     vkDestroySampler(device_, landSampler_, nullptr);

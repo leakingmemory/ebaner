@@ -70,6 +70,10 @@ double polyLength(const std::vector<glm::dvec3>& pts);
 // World position at `frac` along a track (interpolated). Returns {0} if id absent.
 glm::dvec3 fracToWorld(const std::vector<TrackPoly>& polys, std::uint32_t trackId,
                        double frac);
+// Nearest point on a track's polyline to the world (x,y) point `p`: fills its arc-length
+// fraction and planar distance. False if the track is absent (outputs untouched).
+bool projectOnTrack(const std::vector<TrackPoly>& polys, std::uint32_t trackId,
+                    glm::dvec2 p, double& frac, double& dist);
 
 // --- Section flood-fill ---
 // The connected block of track containing the seed, bounded by border points and real

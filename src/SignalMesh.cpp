@@ -93,9 +93,14 @@ void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 o
         const glm::vec3 a = R;
         const float d = 0.16f, r = 0.055f, lo = -0.10f;
         const glm::vec3 ref = face + a * (-d * 0.5f) + UP * lo;     // reference (lower-left)
-        disc(ref, n, a, UP, r, kLampOn);                            // always on
-        disc(ref + a * d, n, a, UP, r, kLampOn);                    // horizontal = STOP
-        disc(ref + (a + UP) * (d * 0.70711f), n, a, UP, r, kLampOff); // 45 deg (unlit)
-        disc(ref + UP * d, n, a, UP, r, kLampOff);                  // vertical (unlit)
+        // The arc lamp that is lit picks out the aspect; the other two stay dark.
+        const bool stop = s.aspect == SignalAspect::Stop;
+        const bool train = s.aspect == SignalAspect::TrainOnTrack;
+        const bool clear = s.aspect == SignalAspect::Clear;
+        disc(ref, n, a, UP, r, kLampOn);                            // reference: always on
+        disc(ref + a * d, n, a, UP, r, stop ? kLampOn : kLampOff);  // horizontal = stop
+        disc(ref + (a + UP) * (d * 0.70711f), n, a, UP, r,          // 45 deg = train ahead
+             train ? kLampOn : kLampOff);
+        disc(ref + UP * d, n, a, UP, r, clear ? kLampOn : kLampOff); // vertical = clear
     }
 }

@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "SwitchNetwork.h" // SwitchNetwork, SwitchState (path alignment)
 #include "TrackCircuits.h" // Border, SectionInterval
 
 // A mini signal path: a directional route from one track-circuit border to another,
@@ -42,14 +43,39 @@ std::vector<SignalPath> loadSignalPaths(const std::string& datasetRoot);
 bool writeSignalPaths(const std::string& datasetRoot,
                       const std::vector<SignalPath>& paths);
 
+// What a mini ground signal displays: the fixed reference lamp plus one lamp on the arc.
+// Stop = horizontal pair, TrainOnTrack = 45 deg (a train stands in the route's circuits),
+// Clear = vertical (route set and clear; not driven yet).
+enum class SignalAspect { Stop, TrainOnTrack, Clear };
+
 // Where a ground signal sits: the on-track start point of a path and the path's initial
 // travel direction (a signal governs movements leaving that point in that direction).
 struct SignalPlacement {
     glm::dvec3 world{0.0};   // start-border world position (on the track)
     glm::dvec2 forward{0.0}; // unit travel direction leaving the border
+    std::vector<int> paths;  // indices of the signal paths this signal governs
+    SignalAspect aspect = SignalAspect::Stop;
 };
 
 // One placement per distinct (start border, travel direction) over all paths - so paths
-// sharing a start collapse to a single signal.
+// sharing a start collapse to a single signal (governing all of them).
 std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& paths,
                                               const std::vector<TrackPoly>& polys);
+
+// True if every turnout the path traverses currently sits in the position that path
+// needs (straight where it runs through, diverging where it crosses to/from the branch).
+bool pathSwitchesAligned(const SignalPath& p, const SwitchNetwork& net,
+                         const std::vector<TrackPoly>& polys);
+
+// The ids of the track-circuit sections the path actually runs through (a shared end
+// point with a neighbouring section does not count as running through it).
+std::vector<int> pathSections(const SignalPath& p, const TrackCircuits& circuits);
+
+// Recompute each signal's aspect: TrainOnTrack when one of its paths has its switches
+// aligned and a train standing in that path's circuits, else Stop. `secOccupied` is
+// indexed like `circuits.sections`. Returns true if any aspect changed.
+bool updateSignalAspects(std::vector<SignalPlacement>& placements,
+                         const std::vector<SignalPath>& paths, const SwitchNetwork& net,
+                         const std::vector<TrackPoly>& polys,
+                         const TrackCircuits& circuits,
+                         const std::vector<char>& secOccupied);

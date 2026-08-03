@@ -268,27 +268,9 @@ int main(int argc, char** argv) {
         for (std::uint32_t idx : platforms.indices())
             structIndices.push_back(idx + vbase);
     }
-    // Mini ground signals (dvergsignal) at the mini-signal-path starts. Static (Stop-only
-    // for now), so bake them into the static struct bucket like the platforms above.
-    {
-        std::vector<TrackPoly> sigPolys;
-        for (std::size_t i = 0; i < graph.pointWorld.size(); ++i) {
-            if (sigPolys.empty() || sigPolys.back().id != graph.pointTrack[i])
-                sigPolys.push_back({graph.pointTrack[i], {}});
-            sigPolys.back().pts.push_back(graph.pointWorld[i]);
-        }
-        SignalMesh signals;
-        signals.build(signalPlacements(loadSignalPaths(datasetRoot), sigPolys),
-                      data.sceneOrigin());
-        const std::uint32_t vbase = static_cast<std::uint32_t>(structVerts.size());
-        structVerts.insert(structVerts.end(), signals.vertices().begin(),
-                           signals.vertices().end());
-        structIndices.reserve(structIndices.size() + signals.indices().size());
-        for (std::uint32_t idx : signals.indices())
-            structIndices.push_back(idx + vbase);
-    }
     // Switch stands go in a dynamic buffer (rebuilt when a switch is thrown), not the
-    // static struct bucket — attached just after renderer.init below.
+    // static struct bucket — attached just after renderer.init below. The ground signals
+    // are dynamic too (their lamps follow the aspect), attached once `polys` exists.
 
     // --- Renderer ---
     VulkanRenderer renderer;
@@ -405,6 +387,14 @@ int main(int argc, char** argv) {
             polys.push_back({graph.pointTrack[i], {}});
         polys.back().pts.push_back(graph.pointWorld[i]);
     }
+    // Mini ground signals (dvergsignal) at the signal-path starts. Their lamps follow the
+    // aspect, so they live in a dynamic buffer, rebuilt when an aspect changes.
+    const std::vector<SignalPath> signalPaths = loadSignalPaths(datasetRoot);
+    std::vector<SignalPlacement> sigPlacements = signalPlacements(signalPaths, polys);
+    SignalMesh signals;
+    signals.build(sigPlacements, data.sceneOrigin());
+    renderer.attachSignals(signals.vertices(), signals.indices());
+
     struct SecRun { int section; std::vector<glm::vec2> pts; }; // scene-relative xy run
     std::vector<SecRun> secRuns;
     {
@@ -595,6 +585,7 @@ int main(int argc, char** argv) {
     bool prevRevF = false, prevRevN = false, prevRevR = false;
     bool prevMenuEnter = false, prevMenuUp = false, prevMenuDown = false;
     bool mapAttached = false; // whether the map overlay is currently attached
+    bool switchesChanged = true; // a switch moved: re-evaluate the signal aspects
     bool prevMapClick = false; // edge-trigger for the map left-click
     const std::vector<std::string> kMenuItems = {"Traffic manager", "Exit"};
 
@@ -647,6 +638,7 @@ int main(int argc, char** argv) {
         switches.build(switchNet);
         renderer.updateSwitches(switches.vertices(), switches.indices());
         g_mapDirty = true;
+        switchesChanged = true;
         setMsg(std::string("Switch thrown -> ") +
                (switchNet.state(i) == SwitchState::Straight ? "straight" : "diverging"));
     };
@@ -666,12 +658,29 @@ int main(int argc, char** argv) {
         glfwGetFramebufferSize(window, &fbw, &fbh);
         if (fbw == 0 || fbh == 0) { continue; } // minimised
 
-        // Live track-circuit occupancy: recompute each frame the map is open and rebuild
-        // the overlay only when it changes (a train entering/leaving a section).
-        if (g_mapMode) {
+        // Live track-circuit occupancy: recomputed every frame (the ground signals read it
+        // in the cab view, not just the map). The overlay/aspects are rebuilt only when it
+        // changes - a train entering or leaving a section.
+        bool occupancyChanged = false;
+        {
             std::vector<char> occ(circuits.sections.size(), 0);
             computeOccupancy(occ);
-            if (occ != secOccupied) { secOccupied = occ; g_mapDirty = true; }
+            if (occ != secOccupied) {
+                secOccupied = occ;
+                occupancyChanged = true;
+                if (g_mapMode) g_mapDirty = true;
+            }
+        }
+        // Signal aspects: a signal shows "train on track" (45 deg) when one of the routes
+        // it governs has its switches set and a train standing in that route's circuits.
+        // Switch throws also change alignment, so re-evaluate on those too.
+        if (occupancyChanged || switchesChanged) {
+            switchesChanged = false;
+            if (updateSignalAspects(sigPlacements, signalPaths, switchNet, polys, circuits,
+                                    secOccupied)) {
+                signals.build(sigPlacements, data.sceneOrigin());
+                renderer.updateSignals(signals.vertices(), signals.indices());
+            }
         }
 
         // Traffic-manager map overlay: attach on enter/refresh, clear on leave (so the
@@ -886,6 +895,7 @@ int main(int argc, char** argv) {
                 switches.build(switchNet);
                 renderer.updateSwitches(switches.vertices(), switches.indices());
                 g_mapDirty = true; // refresh the map marker if it's open
+                switchesChanged = true;
                 std::printf("[Switch] forced -> broken (neutral)\n");
             }
             if (vehicle->state() != prev) {
@@ -947,6 +957,7 @@ int main(int argc, char** argv) {
                     switchNet.toggle(aimedSwitch);
                     switches.build(switchNet);
                     renderer.updateSwitches(switches.vertices(), switches.indices());
+                    switchesChanged = true;
                     std::printf("[Switch] %d -> %s\n", aimedSwitch,
                                 switchNet.state(aimedSwitch) == SwitchState::Straight
                                     ? "straight" : "diverging");

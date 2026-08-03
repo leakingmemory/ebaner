@@ -172,6 +172,14 @@ buildConns(const std::vector<TrackPoly>& polys) {
 }
 } // namespace
 
+bool projectOnTrack(const std::vector<TrackPoly>& polys, std::uint32_t trackId,
+                    glm::dvec2 p, double& frac, double& dist) {
+    const std::vector<glm::dvec3>* pts = findPoly(polys, trackId);
+    if (!pts || pts->size() < 2) return false;
+    projFrac(*pts, p, frac, dist);
+    return true;
+}
+
 SectionResult floodSection(const std::vector<TrackPoly>& polys,
                            const std::vector<Border>& borders,
                            std::uint32_t seedTrack, double seedFrac) {

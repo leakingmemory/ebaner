@@ -17,8 +17,9 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <algorithm>
 #include <sstream>
-#include <unordered_set>
+#include <unordered_map>
 
 namespace fs = std::filesystem;
 
@@ -91,8 +92,9 @@ bool writeSignalPaths(const std::string& datasetRoot,
 std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& paths,
                                               const std::vector<TrackPoly>& polys) {
     std::vector<SignalPlacement> out;
-    std::unordered_set<std::string> seen; // dedupe key: track + rounded frac + fwd sign
-    for (const SignalPath& p : paths) {
+    std::unordered_map<std::string, int> seen; // dedupe key -> placement index
+    for (std::size_t pi = 0; pi < paths.size(); ++pi) {
+        const SignalPath& p = paths[pi];
         if (p.parts.empty()) continue;
         const SectionInterval& iv0 = p.parts.front();
         const glm::dvec3 a = fracToWorld(polys, iv0.trackId, iv0.from);
@@ -110,8 +112,122 @@ std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& pat
                       static_cast<int>(std::lround(p.start.frac * 1000.0)),
                       static_cast<int>(std::lround(fwd.x * 8.0)),
                       static_cast<int>(std::lround(fwd.y * 8.0)));
-        if (!seen.insert(key).second) continue;
-        out.push_back({a, fwd});
+        // Paths sharing a start + direction share one signal, which governs them all.
+        const auto it = seen.find(key);
+        if (it != seen.end()) {
+            out[it->second].paths.push_back(static_cast<int>(pi));
+            continue;
+        }
+        seen.emplace(key, static_cast<int>(out.size()));
+        SignalPlacement sp;
+        sp.world = a;
+        sp.forward = fwd;
+        sp.paths.push_back(static_cast<int>(pi));
+        out.push_back(std::move(sp));
     }
     return out;
+}
+
+// ------------------------------------------------------------ aspect evaluation
+namespace {
+constexpr double kAtTurnout = 3.0; // m; how close a point must be to sit at a turnout
+constexpr double kEdgeSlack = 0.25; // m; rounding margin at an interval's own ends
+
+double planarDist(const glm::dvec3& a, const glm::dvec3& b) {
+    return std::hypot(a.x - b.x, a.y - b.y);
+}
+} // namespace
+
+bool pathSwitchesAligned(const SignalPath& p, const SwitchNetwork& net,
+                         const std::vector<TrackPoly>& polys) {
+    const std::vector<Turnout>& tos = net.turnouts();
+    for (std::size_t i = 0; i < tos.size(); ++i) {
+        if (tos[i].mainPath < 0) continue; // inert crossing: nothing to set
+        bool needSet = false;
+        SwitchState need = SwitchState::Straight;
+        // (a) The route crosses from one track to another at this turnout: diverging if
+        // either side is the branch, else it runs straight over a joint here.
+        for (std::size_t k = 0; k + 1 < p.parts.size(); ++k) {
+            const glm::dvec3 w = fracToWorld(polys, p.parts[k].trackId, p.parts[k].to);
+            if (w.x == 0.0 && w.y == 0.0) continue;
+            if (planarDist(w, tos[i].world) > kAtTurnout) continue;
+            need = (p.parts[k].trackId == tos[i].sidingTrack ||
+                    p.parts[k + 1].trackId == tos[i].sidingTrack)
+                       ? SwitchState::Diverging
+                       : SwitchState::Straight;
+            needSet = true;
+        }
+        // (b) Otherwise the route may run straight through the turnout inside one leg.
+        if (!needSet) {
+            for (const SectionInterval& iv : p.parts) {
+                double frac = 0.0, dist = 0.0;
+                if (!projectOnTrack(polys, iv.trackId,
+                                    glm::dvec2(tos[i].world.x, tos[i].world.y), frac, dist))
+                    continue;
+                if (dist > kAtTurnout) continue; // this leg doesn't reach the turnout
+                const double lo = std::min(iv.from, iv.to), hi = std::max(iv.from, iv.to);
+                // Only an interior crossing counts, so a route that merely ends at the
+                // turnout imposes no requirement. The margin has to stay well under a
+                // border-to-turnout spacing (which can be ~1 m), so it is only wide
+                // enough to absorb rounding, not to swallow a real crossing.
+                const std::vector<glm::dvec3>* pts = nullptr;
+                for (const TrackPoly& tp : polys)
+                    if (tp.id == iv.trackId) { pts = &tp.pts; break; }
+                const double len = pts ? polyLength(*pts) : 0.0;
+                const double eps = len > 1.0 ? kEdgeSlack / len : 1e-6;
+                if (frac > lo + eps && frac < hi - eps) {
+                    need = SwitchState::Straight;
+                    needSet = true;
+                    break;
+                }
+            }
+        }
+        if (needSet && net.state(static_cast<int>(i)) != need) return false;
+    }
+    return true;
+}
+
+std::vector<int> pathSections(const SignalPath& p, const TrackCircuits& circuits) {
+    std::vector<int> ids;
+    for (const Section& s : circuits.sections) {
+        bool hit = false;
+        for (const SectionInterval& si : s.parts) {
+            for (const SectionInterval& pi : p.parts) {
+                if (si.trackId != pi.trackId) continue;
+                const double plo = std::min(pi.from, pi.to), phi = std::max(pi.from, pi.to);
+                const double slo = std::min(si.from, si.to), shi = std::max(si.from, si.to);
+                // Positive overlap only: merely touching at a shared border (the section
+                // behind the signal) is not part of the route.
+                if (std::min(phi, shi) - std::max(plo, slo) > 1e-6) { hit = true; break; }
+            }
+            if (hit) break;
+        }
+        if (hit) ids.push_back(s.id);
+    }
+    return ids;
+}
+
+bool updateSignalAspects(std::vector<SignalPlacement>& placements,
+                         const std::vector<SignalPath>& paths, const SwitchNetwork& net,
+                         const std::vector<TrackPoly>& polys,
+                         const TrackCircuits& circuits,
+                         const std::vector<char>& secOccupied) {
+    bool changed = false;
+    for (SignalPlacement& sp : placements) {
+        SignalAspect want = SignalAspect::Stop;
+        for (int pi : sp.paths) {
+            if (pi < 0 || pi >= static_cast<int>(paths.size())) continue;
+            const SignalPath& p = paths[pi];
+            if (!pathSwitchesAligned(p, net, polys)) continue; // not this signal's route
+            bool occupied = false;
+            for (int id : pathSections(p, circuits))
+                for (std::size_t si = 0; si < circuits.sections.size(); ++si)
+                    if (circuits.sections[si].id == id && si < secOccupied.size() &&
+                        secOccupied[si])
+                        occupied = true;
+            if (occupied) { want = SignalAspect::TrainOnTrack; break; }
+        }
+        if (sp.aspect != want) { sp.aspect = want; changed = true; }
+    }
+    return changed;
 }

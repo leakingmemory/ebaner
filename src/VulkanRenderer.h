@@ -74,6 +74,13 @@ public:
                         const std::vector<std::uint32_t>& indices);
     void updateSwitches(const std::vector<TrackVertex>& vertices,
                         const std::vector<std::uint32_t>& indices);
+    // Attach the ground-signal geometry (solid-lit, track pipeline). Like the switch
+    // stands it is dynamic: the lamps change with the signal aspect, so `updateSignals`
+    // recreates the (small) device-local buffers.
+    void attachSignals(const std::vector<TrackVertex>& vertices,
+                       const std::vector<std::uint32_t>& indices);
+    void updateSignals(const std::vector<TrackVertex>& vertices,
+                       const std::vector<std::uint32_t>& indices);
     // Editor render-preview: recreate the terrain / track / struct (building) buffers
     // to reflect pending edits. Heavy and user-triggered; each waits for GPU idle.
     void updateTerrain(const std::vector<Vertex>& vertices,
@@ -132,6 +139,8 @@ private:
     void createBuildingBuffers(const std::vector<TrackVertex>& vertices,
                                const std::vector<std::uint32_t>& indices);
     void createSwitchBuffers(const std::vector<TrackVertex>& vertices,
+                             const std::vector<std::uint32_t>& indices);
+    void createSignalBuffers(const std::vector<TrackVertex>& vertices,
                              const std::vector<std::uint32_t>& indices);
     void createVehicleBuffers(const std::vector<TrackVertex>& vertices,
                               const std::vector<std::uint32_t>& indices,
@@ -250,6 +259,13 @@ private:
     VkBuffer switchIndexBuffer_ = VK_NULL_HANDLE;
     VkDeviceMemory switchIndexMemory_ = VK_NULL_HANDLE;
     uint32_t switchIndexCount_ = 0;
+
+    // Ground signals (dynamic: recreated when an aspect changes).
+    VkBuffer signalVertexBuffer_ = VK_NULL_HANDLE;
+    VkDeviceMemory signalVertexMemory_ = VK_NULL_HANDLE;
+    VkBuffer signalIndexBuffer_ = VK_NULL_HANDLE;
+    VkDeviceMemory signalIndexMemory_ = VK_NULL_HANDLE;
+    uint32_t signalIndexCount_ = 0;
 
     // Editor overlay: static line-list + point-list of the raw track graph.
     VkBuffer overlayLineVertexBuffer_ = VK_NULL_HANDLE;
