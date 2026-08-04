@@ -172,6 +172,62 @@ buildConns(const std::vector<TrackPoly>& polys) {
 }
 } // namespace
 
+double sameFracTol(const std::vector<TrackPoly>& polys, std::uint32_t trackId) {
+    // ~0.25 m expressed as a fraction: well below the spacing between distinct borders,
+    // and comfortably above the rounding of the overlay file's 6 significant digits.
+    constexpr double kNearM = 0.25;
+    const std::vector<glm::dvec3>* pts = findPoly(polys, trackId);
+    const double L = pts ? polyLength(*pts) : 0.0;
+    return L > 1.0 ? kNearM / L : 1e-6;
+}
+
+bool canMoveBorder(const TrackCircuits& tc, const std::vector<TrackPoly>& polys,
+                   int borderIdx, std::uint32_t newTrack, double newFrac, std::string& why) {
+    if (borderIdx < 0 || borderIdx >= static_cast<int>(tc.borders.size())) {
+        why = "no border selected";
+        return false;
+    }
+    const Border& b = tc.borders[borderIdx];
+    if (newTrack != b.trackId) {
+        why = "a border can only move along its own track";
+        return false;
+    }
+    const double tol = sameFracTol(polys, b.trackId);
+    if (std::abs(newFrac - b.frac) <= tol) {
+        why = "already there";
+        return false;
+    }
+    // The nearest other border on this track, on the side we are moving toward, bounds the
+    // move: crossing it would invert the section between them.
+    const bool up = newFrac > b.frac;
+    for (std::size_t i = 0; i < tc.borders.size(); ++i) {
+        if (static_cast<int>(i) == borderIdx || tc.borders[i].trackId != b.trackId) continue;
+        const double o = tc.borders[i].frac;
+        if (up ? (o > b.frac && newFrac >= o - tol) : (o < b.frac && newFrac <= o + tol)) {
+            why = "would cross the next border on this track";
+            return false;
+        }
+    }
+    return true;
+}
+
+int moveBorderFrac(TrackCircuits& tc, const std::vector<TrackPoly>& polys,
+                   std::uint32_t trackId, double oldFrac, double newFrac) {
+    const double tol = sameFracTol(polys, trackId);
+    auto at = [&](std::uint32_t t, double f) {
+        return t == trackId && std::abs(f - oldFrac) <= tol;
+    };
+    int n = 0;
+    for (Border& b : tc.borders)
+        if (at(b.trackId, b.frac)) { b.frac = newFrac; ++n; }
+    for (Section& s : tc.sections)
+        for (SectionInterval& iv : s.parts) {
+            if (at(iv.trackId, iv.from)) { iv.from = newFrac; ++n; }
+            if (at(iv.trackId, iv.to)) { iv.to = newFrac; ++n; }
+        }
+    return n;
+}
+
 bool projectOnTrack(const std::vector<TrackPoly>& polys, std::uint32_t trackId,
                     glm::dvec2 p, double& frac, double& dist) {
     const std::vector<glm::dvec3>* pts = findPoly(polys, trackId);

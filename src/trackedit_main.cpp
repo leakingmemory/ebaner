@@ -239,6 +239,7 @@ int main(int argc, char** argv) {
     TrackCircuits tc = loadTrackCircuits(datasetRoot); // borders + sections (own overlay)
     bool circuitsDirty = false;      // unsaved circuit changes
     int selBorder = -1;              // selected border (index into tc.borders)
+    bool moveArmed = false;          // M pressed: the next track click moves selBorder
     int selSection = -1;             // selected section (index into tc.sections)
     int namingSection = -1;          // section being renamed (index), -1 = none
     int nextSectionId = 1;           // auto-increment section id
@@ -928,7 +929,6 @@ int main(int argc, char** argv) {
     };
     rebuildOverlay();
     rebuildStructs(); // bake the ground signals (at loaded signal-path starts) into view
-
     std::printf("\nControls: WASD move, Q/E down/up, mouse look, Shift boost, "
                 "Tab release cursor, Esc menu\n"
                 "Select (cursor freed with Tab): click a geo-point, Ctrl+click for "
@@ -1357,10 +1357,23 @@ int main(int argc, char** argv) {
                 const int del = selBorder >= 0 ? selBorder : borderHover;
                 if (del >= 0 && del < static_cast<int>(tc.borders.size())) {
                     tc.borders.erase(tc.borders.begin() + del);
-                    selBorder = -1; circuitsDirty = true;
+                    selBorder = -1; moveArmed = false; circuitsDirty = true;
                     std::printf("[trackedit] border removed (Ctrl+S to save)\n");
                     rebuildOverlay();
                 }
+            }
+            // M: arm a move of the selected border - the next click on its track moves it,
+            // carrying the sections and signal paths anchored to it.
+            if (kM && !prevM) {
+                if (selBorder >= 0 && selBorder < static_cast<int>(tc.borders.size())) {
+                    moveArmed = !moveArmed;
+                    pathMsg = moveArmed ? "click the new spot on this track" : "move cancelled";
+                    pathMsgUntil = glfwGetTime() + 3.0;
+                } else {
+                    pathMsg = "select a border first (click it), then M to move";
+                    pathMsgUntil = glfwGetTime() + 3.0;
+                }
+                rebuildOverlay();
             }
             // F2: rename the selected (or hovered) section — start modal text entry.
             if (kF2 && !prevF2) {
@@ -1452,15 +1465,29 @@ int main(int argc, char** argv) {
         const std::size_t removals =
             static_cast<std::size_t>(std::count(removeExisting.begin(),
                                                 removeExisting.end(), char(1)));
-        if (kSave && !prevS && mode == EdMode::Circuits && circuitsDirty) {
-            // Circuits mode: save the sensing sections to their own overlay file.
-            if (writeTrackCircuits(datasetRoot, tc)) {
-                std::printf("[trackedit] saved %zu border(s), %zu section(s) -> "
-                            "%s/overlay/track-circuits.txt\n", tc.borders.size(),
-                            tc.sections.size(), datasetRoot.c_str());
-                circuitsDirty = false;
-            } else {
-                std::fprintf(stderr, "[trackedit] failed to write track-circuits file\n");
+        if (kSave && !prevS && mode == EdMode::Circuits && (circuitsDirty || pathsDirty)) {
+            // Circuits mode: save the sensing sections to their own overlay file. A border
+            // move also rewrites the signal paths anchored to it, so write those too -
+            // otherwise the two overlays would silently disagree on the next load.
+            if (circuitsDirty) {
+                if (writeTrackCircuits(datasetRoot, tc)) {
+                    std::printf("[trackedit] saved %zu border(s), %zu section(s) -> "
+                                "%s/overlay/track-circuits.txt\n", tc.borders.size(),
+                                tc.sections.size(), datasetRoot.c_str());
+                    circuitsDirty = false;
+                } else {
+                    std::fprintf(stderr, "[trackedit] failed to write track-circuits file\n");
+                }
+            }
+            if (pathsDirty) {
+                if (writeSignalPaths(datasetRoot, signalPaths)) {
+                    std::printf("[trackedit] saved %zu signal path(s) -> "
+                                "%s/overlay/signal-paths.txt\n", signalPaths.size(),
+                                datasetRoot.c_str());
+                    pathsDirty = false;
+                } else {
+                    std::fprintf(stderr, "[trackedit] failed to write signal-paths file\n");
+                }
             }
         } else if (kSave && !prevS && mode == EdMode::Geometry &&
                    (!pending.empty() || removals > 0)) {
@@ -1519,8 +1546,38 @@ int main(int argc, char** argv) {
             }
             rebuildOverlay();
         } else if (!g_mouseCaptured && mL && !prevML && mode == EdMode::Circuits) {
+            // A move is armed: this click relocates the selected border (and everything
+            // anchored to it) rather than dropping a new one.
+            if (moveArmed && selBorder >= 0 && selBorder < static_cast<int>(tc.borders.size())) {
+                std::string why;
+                if (!circHit) {
+                    moveArmed = false; // clicked off the track: cancel
+                    pathMsg = "move cancelled";
+                } else if (!canMoveBorder(tc, polys, selBorder, circTrack, circFrac, why) ||
+                           borderMoveBreaksPath(signalPaths, polys,
+                                                   tc.borders[selBorder].trackId,
+                                                   tc.borders[selBorder].frac, circFrac, why)) {
+                    pathMsg = "cannot move: " + why; // stay armed so the user can retry
+                } else {
+                    const std::uint32_t t = tc.borders[selBorder].trackId;
+                    const double oldF = tc.borders[selBorder].frac;
+                    const int nc = moveBorderFrac(tc, polys, t, oldF, circFrac);
+                    const int np = moveBorderFrac(signalPaths, polys, t, oldF, circFrac);
+                    circuitsDirty = true;
+                    if (np > 0) pathsDirty = true;
+                    moveArmed = false;
+                    rebuildStructs(); // the ground signals stand at path starts: re-place them
+                    pathMsg = "border moved (" + std::to_string(nc) + " circuit + " +
+                              std::to_string(np) + " path value(s))";
+                    std::printf("[trackedit] border moved on %#x %.6f -> %.6f "
+                                "(%d circuit, %d path value(s); Ctrl+S to save)\n",
+                                t, oldF, circFrac, nc, np);
+                }
+                pathMsgUntil = glfwGetTime() + 3.0;
+                rebuildOverlay();
+            }
             // Click a border to select it, else drop a new border on the nearest track.
-            if (borderHover >= 0) {
+            else if (borderHover >= 0) {
                 selBorder = borderHover;
             } else if (circHit) {
                 tc.borders.push_back({circTrack, circFrac});
@@ -1668,16 +1725,26 @@ int main(int argc, char** argv) {
             std::snprintf(buf, sizeof(buf), "BORDERS %zu  SECTIONS %zu%s",
                           tc.borders.size(), tc.sections.size(), selname);
             appendText(tv, buf, x, 40.0f + 4 * lh, sc, glm::vec3(0.9f, 0.85f, 0.7f), fbw, fbh);
-            std::snprintf(buf, sizeof(buf), "UNSAVED %s   %s",
-                          circuitsDirty ? "yes" : "no", circuitsDirty ? "Ctrl+S to save" : "");
+            const bool dirty = circuitsDirty || pathsDirty;
+            std::snprintf(buf, sizeof(buf), "UNSAVED %s   %s", dirty ? "yes" : "no",
+                          dirty ? "Ctrl+S to save" : "");
             appendText(tv, buf, x, 40.0f + 5 * lh, sc,
-                       circuitsDirty ? glm::vec3(1.0f, 0.6f, 0.3f) : glm::vec3(0.6f, 0.9f, 0.6f),
+                       dirty ? glm::vec3(1.0f, 0.6f, 0.3f) : glm::vec3(0.6f, 0.9f, 0.6f),
                        fbw, fbh);
+            // A move in progress, or the transient result of the last one.
+            if (moveArmed)
+                appendText(tv, "MOVE ARMED - click the new spot on this track (M cancels)",
+                           x, 40.0f + 6 * lh, sc, glm::vec3(1.0f, 0.9f, 0.4f), fbw, fbh);
+            else if (glfwGetTime() < pathMsgUntil && !pathMsg.empty())
+                appendText(tv, pathMsg, x, 40.0f + 6 * lh, sc,
+                           pathMsg.rfind("cannot", 0) == 0 ? glm::vec3(1.0f, 0.55f, 0.4f)
+                                                           : glm::vec3(0.7f, 1.0f, 0.75f),
+                           fbw, fbh);
             appendText(tv,
                        g_mouseCaptured ? "CIRCUITS: press Tab to free the cursor"
-                                       : "CIRCUITS: click=border  X=delete  Enter=section  "
-                                         "right-click=select section  F2=rename",
-                       x, 40.0f + 6 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
+                                       : "CIRCUITS: click=border  M=move  X=delete  "
+                                         "Enter=section  right-click=select  F2=rename",
+                       x, 40.0f + 7 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
             // Section name labels floating at each section's midpoint.
             for (const Section& s : tc.sections) {
                 if (s.parts.empty()) continue;
@@ -1794,14 +1861,16 @@ int main(int argc, char** argv) {
             // existing border it would select), so the click target is visible.
             if (mode == EdMode::Circuits && circHit) {
                 const bool onBorder = borderHover >= 0;
-                const glm::vec3 hc = onBorder ? glm::vec3(1.0f, 1.0f, 0.3f)
-                                              : glm::vec3(0.3f, 0.8f, 1.0f);
+                const glm::vec3 hc = moveArmed ? glm::vec3(1.0f, 0.9f, 0.4f)
+                                     : onBorder ? glm::vec3(1.0f, 1.0f, 0.3f)
+                                                : glm::vec3(0.3f, 0.8f, 1.0f);
                 const float R = 10.0f, T = 2.0f;
                 quad(circPx.x, circPx.y - R, R, T, hc);
                 quad(circPx.x, circPx.y + R, R, T, hc);
                 quad(circPx.x - R, circPx.y, T, R, hc);
                 quad(circPx.x + R, circPx.y, T, R, hc);
-                appendText(tv, onBorder ? "select border" : "add border",
+                appendText(tv, moveArmed ? "move here" : onBorder ? "select border"
+                                                                  : "add border",
                            circPx.x + 13.0f, circPx.y - 4.0f, sc * 0.7f, hc, fbw, fbh);
             }
             // Switches: a ring around the turnout under the cursor, labelled with its type.

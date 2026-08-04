@@ -38,6 +38,21 @@ struct SignalPath {
     std::vector<SectionInterval> parts; // ordered, directed route intervals
 };
 
+// --- Moving a border (see canMoveBorder/moveBorderFrac in TrackCircuits.h) ---
+// Would moving the border at (trackId, oldFrac) to `newFrac` break a route? A path may
+// legitimately end at a non-border point (a junction or a track end), which the
+// border-neighbour check knows nothing about, so this catches both a route interval
+// collapsing to nothing and one *reversing* - the latter happens when the border is
+// dragged past a junction the route uses, which would silently turn the route (and its
+// signal) around. `why` gets a human-readable reason.
+bool borderMoveBreaksPath(const std::vector<SignalPath>& paths,
+                          const std::vector<TrackPoly>& polys, std::uint32_t trackId,
+                          double oldFrac, double newFrac, std::string& why);
+// Rewrite every path endpoint and route-interval endpoint anchored to that border. Matches
+// on track id *and* fraction. Returns how many values changed.
+int moveBorderFrac(std::vector<SignalPath>& paths, const std::vector<TrackPoly>& polys,
+                   std::uint32_t trackId, double oldFrac, double newFrac);
+
 // --- File IO (mirrors loadTrackCircuits/writeTrackCircuits) ---
 std::vector<SignalPath> loadSignalPaths(const std::string& datasetRoot);
 bool writeSignalPaths(const std::string& datasetRoot,

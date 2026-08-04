@@ -38,6 +38,51 @@ bool parseBorder(const std::string& tok, Border& b) {
 }
 } // namespace
 
+bool borderMoveBreaksPath(const std::vector<SignalPath>& paths,
+                          const std::vector<TrackPoly>& polys, std::uint32_t trackId,
+                          double oldFrac, double newFrac, std::string& why) {
+    const double tol = sameFracTol(polys, trackId);
+    auto at = [&](std::uint32_t t, double f) {
+        return t == trackId && std::abs(f - oldFrac) <= tol;
+    };
+    for (const SignalPath& p : paths)
+        for (const SectionInterval& iv : p.parts) {
+            const double from = at(iv.trackId, iv.from) ? newFrac : iv.from;
+            const double to = at(iv.trackId, iv.to) ? newFrac : iv.to;
+            if (from == iv.from && to == iv.to) continue; // untouched by this move
+            const std::string nm = p.name.empty() ? "?" : p.name;
+            if (std::abs(to - from) <= tol) {
+                why = "would collapse route " + nm;
+                return true;
+            }
+            // Direction must survive: a flipped sign means the border was dragged past a
+            // junction this route uses, turning the route and its signal around.
+            if ((to - from) * (iv.to - iv.from) < 0.0) {
+                why = "would reverse route " + nm + " (past a junction it uses)";
+                return true;
+            }
+        }
+    return false;
+}
+
+int moveBorderFrac(std::vector<SignalPath>& paths, const std::vector<TrackPoly>& polys,
+                   std::uint32_t trackId, double oldFrac, double newFrac) {
+    const double tol = sameFracTol(polys, trackId);
+    auto at = [&](std::uint32_t t, double f) {
+        return t == trackId && std::abs(f - oldFrac) <= tol;
+    };
+    int n = 0;
+    for (SignalPath& p : paths) {
+        if (at(p.start.trackId, p.start.frac)) { p.start.frac = newFrac; ++n; }
+        if (at(p.end.trackId, p.end.frac)) { p.end.frac = newFrac; ++n; }
+        for (SectionInterval& iv : p.parts) {
+            if (at(iv.trackId, iv.from)) { iv.from = newFrac; ++n; }
+            if (at(iv.trackId, iv.to)) { iv.to = newFrac; ++n; }
+        }
+    }
+    return n;
+}
+
 std::vector<SignalPath> loadSignalPaths(const std::string& datasetRoot) {
     std::vector<SignalPath> out;
     std::ifstream f(pathsFile(datasetRoot));

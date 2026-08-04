@@ -74,6 +74,25 @@ glm::dvec3 fracToWorld(const std::vector<TrackPoly>& polys, std::uint32_t trackI
 // fraction and planar distance. False if the track is absent (outputs untouched).
 bool projectOnTrack(const std::vector<TrackPoly>& polys, std::uint32_t trackId,
                     glm::dvec2 p, double& frac, double& dist);
+// How close two fractions on `trackId` must be to count as the same point (a metric
+// tolerance expressed as a fraction, so it is independent of track length).
+double sameFracTol(const std::vector<TrackPoly>& polys, std::uint32_t trackId);
+
+// --- Moving a border ---
+// A border's fraction is copied into everything anchored to it (section intervals, and the
+// signal paths in SignalPaths.h), so a move has to rewrite them all together.
+//
+// Whether border `borderIdx` may move to (newTrack, newFrac): the target must be on the
+// border's own track, must not sit at or beyond the neighbouring border in either
+// direction (which would invert or collapse the section between them), and must actually
+// differ from where it already is. `why` gets a human-readable reason on refusal.
+bool canMoveBorder(const TrackCircuits& tc, const std::vector<TrackPoly>& polys,
+                   int borderIdx, std::uint32_t newTrack, double newFrac, std::string& why);
+// Rewrite the border itself plus every section-interval endpoint anchored to it. Matches on
+// track id *and* fraction, since not every fraction on a track is a border. Returns how
+// many values changed.
+int moveBorderFrac(TrackCircuits& tc, const std::vector<TrackPoly>& polys,
+                   std::uint32_t trackId, double oldFrac, double newFrac);
 
 // --- Section flood-fill ---
 // The connected block of track containing the seed, bounded by border points and real
