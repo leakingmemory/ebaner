@@ -395,6 +395,12 @@ int main(int argc, char** argv) {
     signals.build(sigPlacements, data.sceneOrigin());
     renderer.attachSignals(signals.vertices(), signals.indices());
 
+    // Route setting (traffic manager): a set route holds its switches and shows its signal
+    // clear. It drops as soon as a train enters its circuits (the lock lifts then too; the
+    // per-switch occupancy lock guards them from there).
+    std::vector<char> routeSet(signalPaths.size(), 0);
+    int routeArm = -1; // placement armed by a first click, awaiting its destination
+
     struct SecRun { int section; std::vector<glm::vec2> pts; }; // scene-relative xy run
     std::vector<SecRun> secRuns;
     {
@@ -451,6 +457,39 @@ int main(int argc, char** argv) {
 
     // Traffic-manager 2-D map overlay: the track network (coloured by type) plus a
     // diamond at each working switch, coloured by its current position.
+    // The traffic-manager ortho projection (scene-relative -> clip), reused for the
+    // rendered map, the HUD labels and click-picking. North up, ~4 km tall at zoom 1,
+    // centred on the throat + WASD pan; Y flipped for Vulkan, z mapped into [0,1].
+    auto mapOrtho = [&](float aspect) {
+        const float halfH = 2000.0f / g_mapZoom, halfW = halfH * aspect;
+        const float zn = -2000.0f, zf = 3000.0f;
+        glm::mat4 proj(0.0f);
+        proj[0][0] = 1.0f / halfW;
+        proj[1][1] = -1.0f / halfH;
+        proj[2][2] = 1.0f / (zf - zn);
+        const glm::vec2 center = mapCenter + g_mapPan;
+        proj[3][0] = -center.x / halfW;
+        proj[3][1] = center.y / halfH;
+        proj[3][2] = -zn / (zf - zn);
+        proj[3][3] = 1.0f;
+        return proj;
+    };
+
+    // Map markers are sized in scene metres but drawn at a roughly constant *screen* size,
+    // so they stay clickable whether the view is 8 km or 200 m across.
+    auto markerScale = [&]() { return 90.0f / std::max(g_mapZoom, 0.01f); };
+    // Where a signal's marker sits: offset to the right of its track so it doesn't sit on
+    // the rails. Drawing and picking both use this, so you click exactly what you see.
+    auto signalAnchor = [&](const SignalPlacement& sp) {
+        const glm::dvec3 o = switchNet.sceneOrigin();
+        const glm::vec2 f(float(sp.forward.x), float(sp.forward.y));
+        const glm::vec2 r(f.y, -f.x);
+        return glm::vec2(float(sp.world.x - o.x), float(sp.world.y - o.y)) +
+               r * (markerScale() * 0.42f);
+    };
+    // What the cursor is over in the map, so it can be highlighted before it is clicked.
+    int hoverSignal = -1, hoverDest = -1, hoverTurnout = -1;
+
     auto buildMapOverlay = [&]() {
         std::vector<LineVertex> lines = graph.lines;
         std::vector<LineVertex> points;
@@ -495,6 +534,18 @@ int main(int argc, char** argv) {
             };
             seg(n, e); seg(e, s); seg(s, w); seg(w, n); // diamond outline
             points.push_back({c, col});
+            if (static_cast<int>(i) == hoverTurnout) { // "you would throw this"
+                const glm::vec3 hc(1.0f, 1.0f, 1.0f);
+                const float hr = r * 1.7f;
+                lines.push_back({c + glm::vec3(0, hr, 0), hc});
+                lines.push_back({c + glm::vec3(hr, 0, 0), hc});
+                lines.push_back({c + glm::vec3(hr, 0, 0), hc});
+                lines.push_back({c + glm::vec3(0, -hr, 0), hc});
+                lines.push_back({c + glm::vec3(0, -hr, 0), hc});
+                lines.push_back({c + glm::vec3(-hr, 0, 0), hc});
+                lines.push_back({c + glm::vec3(-hr, 0, 0), hc});
+                lines.push_back({c + glm::vec3(0, hr, 0), hc});
+            }
             // Motor-driven switches get an outer ring so they read as remotely worked,
             // regardless of the state colour.
             if (switchNet.type(static_cast<int>(i)) == SwitchType::Motor) {
@@ -509,6 +560,89 @@ int main(int argc, char** argv) {
                     lines.push_back({cur, ringCol});
                     prev = cur;
                 }
+            }
+        }
+
+        // Set routes: a wide white band along the locked path, so the road that is set
+        // reads at a glance. White (not green) keeps it clear of the green "straight"
+        // switch diamonds; the band's width and continuity distinguish it from the
+        // narrower circuit ribbons underneath.
+        for (std::size_t pi = 0; pi < signalPaths.size(); ++pi) {
+            if (!routeSet[pi]) continue;
+            const glm::vec3 col(1.0f, 1.0f, 1.0f);
+            for (const SectionInterval& iv : signalPaths[pi].parts) {
+                glm::dvec3 prev = fracToWorld(polys, iv.trackId, iv.from);
+                if (prev.x == 0.0 && prev.y == 0.0) continue;
+                for (int k = 1; k <= 24; ++k) {
+                    const double f = iv.from + (iv.to - iv.from) * k / 24.0;
+                    const glm::dvec3 cur = fracToWorld(polys, iv.trackId, f);
+                    const glm::vec2 a(float(prev.x - org.x), float(prev.y - org.y));
+                    const glm::vec2 b(float(cur.x - org.x), float(cur.y - org.y));
+                    const glm::vec2 d = b - a;
+                    const float L = glm::length(d);
+                    const glm::vec2 p = L > 1e-4f ? glm::vec2(-d.y, d.x) / L * 4.0f
+                                                  : glm::vec2(0.0f);
+                    for (float s : {-1.0f, 1.0f}) {
+                        lines.push_back({glm::vec3(a + p * s, 3.0f), col});
+                        lines.push_back({glm::vec3(b + p * s, 3.0f), col});
+                    }
+                    prev = cur;
+                }
+            }
+        }
+
+        // A ring of `rad` around a scene-relative point (used for hover + destinations).
+        const float ms = markerScale();
+        auto ring = [&](glm::vec2 c, float rad, const glm::vec3& col) {
+            constexpr int kN = 14;
+            glm::vec3 prev(c + glm::vec2(rad, 0.0f), 3.5f);
+            for (int j = 1; j <= kN; ++j) {
+                const float a = 6.2831853f * j / kN;
+                const glm::vec3 cur(c + glm::vec2(std::cos(a), std::sin(a)) * rad, 3.5f);
+                lines.push_back({prev, col}); lines.push_back({cur, col});
+                prev = cur;
+            }
+        };
+
+        // Signals: a chevron pointing the way the signal faces, coloured by aspect, sitting
+        // just off its track. Sized in screen terms so it stays visible (and clickable) at
+        // any zoom; the armed one is yellow and its destinations are ringed and labelled.
+        for (std::size_t k = 0; k < sigPlacements.size(); ++k) {
+            const SignalPlacement& sp = sigPlacements[k];
+            const bool armed = static_cast<int>(k) == routeArm;
+            const bool hovered = static_cast<int>(k) == hoverSignal;
+            const glm::vec3 col =
+                armed ? glm::vec3(1.0f, 1.0f, 0.4f) // armed: yellow, like its destinations
+                      : sp.aspect == SignalAspect::Clear        ? glm::vec3(0.3f, 1.0f, 0.4f)
+                        : sp.aspect == SignalAspect::TrainOnTrack ? glm::vec3(1.0f, 0.75f, 0.15f)
+                                                                  : glm::vec3(1.0f, 0.25f, 0.2f);
+            const glm::vec2 f(float(sp.forward.x), float(sp.forward.y));
+            const glm::vec2 r(f.y, -f.x); // right of travel: the side the signal stands on
+            const glm::vec2 base = signalAnchor(sp);
+            const float L = ms * (armed ? 0.34f : 0.26f), W = ms * (armed ? 0.17f : 0.13f);
+            const glm::vec3 tip(base + f * L, 3.5f);
+            const glm::vec3 bl(base - f * (L * 0.4f) + r * W, 3.5f);
+            const glm::vec3 br(base - f * (L * 0.4f) - r * W, 3.5f);
+            lines.push_back({tip, col}); lines.push_back({bl, col});
+            lines.push_back({tip, col}); lines.push_back({br, col});
+            lines.push_back({bl, col});  lines.push_back({br, col});
+            points.push_back({glm::vec3(base, 3.5f), col});
+            // A stem back to the track, so it is obvious which line the signal belongs to.
+            lines.push_back({glm::vec3(base, 3.5f), col});
+            lines.push_back({glm::vec3(float(sp.world.x - org.x),
+                                       float(sp.world.y - org.y), 3.5f), col});
+            if (hovered) ring(base, ms * 0.34f, glm::vec3(1.0f)); // "you would click this"
+            if (!armed) continue;
+            for (int pi : sp.paths) { // ring each destination this signal can be set to
+                const Border& e = signalPaths[pi].end;
+                const glm::dvec3 w = fracToWorld(polys, e.trackId, e.frac);
+                if (w.x == 0.0 && w.y == 0.0) continue;
+                const glm::vec2 c(float(w.x - org.x), float(w.y - org.y));
+                const bool dh = pi == hoverDest;
+                const glm::vec3 rc = dh ? glm::vec3(1.0f) : glm::vec3(1.0f, 1.0f, 0.4f);
+                ring(c, ms * 0.30f, rc);
+                if (dh) ring(c, ms * 0.40f, rc);
+                points.push_back({glm::vec3(c, 3.5f), rc});
             }
         }
         renderer.attachTrackGraph(lines, points);
@@ -555,12 +689,51 @@ int main(int argc, char** argv) {
                        fbw, fbh);
             y += lh;
         }
-        char hint[112];
+        char hint[176];
         std::snprintf(hint, sizeof(hint),
-                      "O: cab  Esc: menu  scroll/Z-X: zoom  WASD: pan  click motor switch to throw"
-                      "  (view %.1f km)", 4.0f / g_mapZoom);
+                      "O: cab  Esc: menu  scroll/Z-X: zoom  WASD: pan  click switch to throw  "
+                      "click signal then destination to set a route  (view %.1f km)",
+                      4.0f / g_mapZoom);
         appendText(tv, hint, x, y, sc * 0.75f, glm::vec3(0.7f, 0.85f, 0.7f), fbw, fbh);
         y += lh;
+        // Name what the cursor is over, floating beside it, so the click target is obvious.
+        {
+            const glm::mat4 vp = mapOrtho(static_cast<float>(fbw) / fbh);
+            const glm::dvec3 o = switchNet.sceneOrigin();
+            auto label = [&](glm::vec2 scene, const std::string& s, const glm::vec3& col) {
+                const glm::vec4 clip = vp * glm::vec4(scene.x, scene.y, 0.0f, 1.0f);
+                if (clip.w <= 0.0f) return;
+                appendText(tv, s, (clip.x / clip.w * 0.5f + 0.5f) * fbw + 14.0f,
+                           (clip.y / clip.w * 0.5f + 0.5f) * fbh - 6.0f, sc * 0.7f, col,
+                           fbw, fbh);
+            };
+            if (hoverSignal >= 0 && hoverSignal < static_cast<int>(sigPlacements.size())) {
+                const SignalPlacement& sp = sigPlacements[hoverSignal];
+                int setHere = -1;
+                for (int pi : sp.paths) if (routeSet[pi]) setHere = pi;
+                label(signalAnchor(sp),
+                      setHere >= 0 ? "cancel route" : "signal - click to select route",
+                      glm::vec3(1.0f));
+            } else if (hoverDest >= 0 && hoverDest < static_cast<int>(signalPaths.size())) {
+                const Border& e = signalPaths[hoverDest].end;
+                const glm::dvec3 w = fracToWorld(polys, e.trackId, e.frac);
+                label(glm::vec2(float(w.x - o.x), float(w.y - o.y)),
+                      "set route " + signalPaths[hoverDest].name, glm::vec3(1.0f));
+            } else if (hoverTurnout >= 0) {
+                const Turnout& t = switchNet.turnouts()[hoverTurnout];
+                label(glm::vec2(float(t.world.x - o.x), float(t.world.y - o.y)),
+                      "switch - click to throw", glm::vec3(1.0f));
+            }
+            // Where the route is going, once a signal is armed.
+            if (routeArm >= 0 && routeArm < static_cast<int>(sigPlacements.size()))
+                for (int pi : sigPlacements[routeArm].paths) {
+                    if (pi == hoverDest) continue; // already labelled above
+                    const Border& e = signalPaths[pi].end;
+                    const glm::dvec3 w = fracToWorld(polys, e.trackId, e.frac);
+                    label(glm::vec2(float(w.x - o.x), float(w.y - o.y)),
+                          signalPaths[pi].name, glm::vec3(1.0f, 1.0f, 0.5f));
+                }
+        }
         // Transient feedback from a switch click (thrown / blocked reason).
         if (glfwGetTime() < g_mapMsgUntil && !g_mapMsg.empty()) {
             const bool ok = g_mapMsg.rfind("Switch thrown", 0) == 0;
@@ -589,30 +762,46 @@ int main(int argc, char** argv) {
     bool prevMapClick = false; // edge-trigger for the map left-click
     const std::vector<std::string> kMenuItems = {"Traffic manager", "Exit"};
 
-    // The traffic-manager ortho projection (scene-relative -> clip), reused for both the
-    // rendered map and click-picking. North up, ~4 km tall at zoom 1, centred on the
-    // throat + WASD pan; Y flipped for Vulkan, z mapped into [0,1] so nothing clips.
-    auto mapOrtho = [&](float aspect) {
-        const float halfH = 2000.0f / g_mapZoom, halfW = halfH * aspect;
-        const float zn = -2000.0f, zf = 3000.0f;
-        glm::mat4 proj(0.0f);
-        proj[0][0] = 1.0f / halfW;
-        proj[1][1] = -1.0f / halfH;
-        proj[2][2] = 1.0f / (zf - zn);
-        const glm::vec2 center = mapCenter + g_mapPan;
-        proj[3][0] = -center.x / halfW;
-        proj[3][1] = center.y / halfH;
-        proj[3][2] = -zn / (zf - zn);
-        proj[3][3] = 1.0f;
-        return proj;
+    auto setMapMsg = [&](const std::string& m) {
+        g_mapMsg = m; g_mapMsgUntil = glfwGetTime() + 3.0;
+    };
+    auto pathName = [&](int pi) {
+        return signalPaths[pi].name.empty() || signalPaths[pi].name == "-"
+                   ? "P" + std::to_string(signalPaths[pi].id)
+                   : signalPaths[pi].name;
+    };
+    // Names of a path's circuits that currently hold a train ("" when the road is clear).
+    auto occupiedIn = [&](int pi) {
+        std::string names;
+        for (int id : pathSections(signalPaths[pi], circuits))
+            for (std::size_t si = 0; si < circuits.sections.size(); ++si)
+                if (circuits.sections[si].id == id && si < secOccupied.size() &&
+                    secOccupied[si]) {
+                    const Section& s = circuits.sections[si];
+                    names += (names.empty() ? "" : ", ") +
+                             (s.name.empty() || s.name == "-" ? "S" + std::to_string(s.id)
+                                                              : s.name);
+                }
+        return names;
+    };
+    // Which set route (if any) holds turnout `t`.
+    auto routeHolding = [&](int t) {
+        for (std::size_t pi = 0; pi < signalPaths.size(); ++pi) {
+            if (!routeSet[pi]) continue;
+            for (const PathSwitch& ps : pathSwitchRequirements(signalPaths[pi], switchNet, polys))
+                if (ps.turnout == t) return static_cast<int>(pi);
+        }
+        return -1;
     };
 
     // Attempt to throw switch `i` from the map: allowed only for a non-broken motor
     // switch whose locking circuits are all clear. Sets the transient feedback message.
     auto tryMapThrow = [&](int i) {
-        auto setMsg = [&](const std::string& m) {
-            g_mapMsg = m; g_mapMsgUntil = glfwGetTime() + 3.0;
-        };
+        auto setMsg = setMapMsg;
+        if (const int held = routeHolding(i); held >= 0) {
+            setMsg("Locked by route " + pathName(held));
+            return;
+        }
         if (switchNet.type(i) != SwitchType::Motor) {
             setMsg("Manual switch - hand-thrown in the cab");
             return;
@@ -641,6 +830,61 @@ int main(int argc, char** argv) {
         switchesChanged = true;
         setMsg(std::string("Switch thrown -> ") +
                (switchNet.state(i) == SwitchState::Straight ? "straight" : "diverging"));
+    };
+
+    // Set a route: move its switches into position, lock the path and clear its signal.
+    // Everything is validated before anything moves, so a refused route changes nothing.
+    auto trySetRoute = [&](int pi) {
+        if (const std::string occ = occupiedIn(pi); !occ.empty()) {
+            setMapMsg("Route " + pathName(pi) + " occupied: " + occ);
+            return;
+        }
+        const std::vector<PathSwitch> reqs =
+            pathSwitchRequirements(signalPaths[pi], switchNet, polys);
+        std::vector<PathSwitch> toMove;
+        for (const PathSwitch& ps : reqs) {
+            if (switchNet.state(ps.turnout) == ps.need) continue; // already right
+            if (const int held = routeHolding(ps.turnout); held >= 0) {
+                setMapMsg("Switch held by route " + pathName(held));
+                return;
+            }
+            if (switchNet.type(ps.turnout) != SwitchType::Motor) {
+                setMapMsg("Route needs a manual switch thrown by hand");
+                return;
+            }
+            if (switchNet.state(ps.turnout) == SwitchState::Broken) {
+                setMapMsg("Route blocked: switch BROKEN");
+                return;
+            }
+            for (int id : switchNet.lock(ps.turnout))
+                for (std::size_t si = 0; si < circuits.sections.size(); ++si)
+                    if (circuits.sections[si].id == id && si < secOccupied.size() &&
+                        secOccupied[si]) {
+                        const Section& s = circuits.sections[si];
+                        setMapMsg("Switch locked: " +
+                                  (s.name.empty() || s.name == "-" ? "S" + std::to_string(s.id)
+                                                                   : s.name) +
+                                  " occupied");
+                        return;
+                    }
+            toMove.push_back(ps);
+        }
+        for (const PathSwitch& ps : toMove) switchNet.setState(ps.turnout, ps.need);
+        if (!toMove.empty()) {
+            switches.build(switchNet);
+            renderer.updateSwitches(switches.vertices(), switches.indices());
+        }
+        routeSet[pi] = 1;
+        switchesChanged = true;
+        g_mapDirty = true;
+        setMapMsg("Route " + pathName(pi) + " set" +
+                  (toMove.empty() ? "" : " (" + std::to_string(toMove.size()) + " switch(es) moved)"));
+    };
+    auto cancelRoute = [&](int pi) {
+        routeSet[pi] = 0;
+        switchesChanged = true;
+        g_mapDirty = true;
+        setMapMsg("Route " + pathName(pi) + " cancelled");
     };
 
     // Open the audio device now that the heavy startup work is done, so the audio
@@ -674,13 +918,84 @@ int main(int argc, char** argv) {
         // Signal aspects: a signal shows "train on track" (45 deg) when one of the routes
         // it governs has its switches set and a train standing in that route's circuits.
         // Switch throws also change alignment, so re-evaluate on those too.
+        // A set route drops as soon as a train enters its circuits: it stops showing clear
+        // and its switches are released (the per-switch occupancy lock guards them now).
+        if (occupancyChanged) {
+            for (std::size_t pi = 0; pi < signalPaths.size(); ++pi) {
+                if (!routeSet[pi] || occupiedIn(static_cast<int>(pi)).empty()) continue;
+                routeSet[pi] = 0;
+                switchesChanged = true;
+                g_mapDirty = true;
+                std::printf("[Route] %s released (train entered)\n",
+                            pathName(static_cast<int>(pi)).c_str());
+            }
+        }
         if (occupancyChanged || switchesChanged) {
             switchesChanged = false;
             if (updateSignalAspects(sigPlacements, signalPaths, switchNet, polys, circuits,
-                                    secOccupied)) {
+                                    secOccupied, routeSet)) {
                 signals.build(sigPlacements, data.sceneOrigin());
                 renderer.updateSignals(signals.vertices(), signals.indices());
             }
+        }
+
+        // What the cursor is over in the map, so the overlay can highlight it before it is
+        // clicked (and so a click acts on exactly what was highlighted). Signals first,
+        // then the armed signal's destinations, then switches.
+        if (g_mapMode && !g_menuOpen) {
+            double mx = 0.0, my = 0.0;
+            glfwGetCursorPos(window, &mx, &my);
+            int winw = fbw, winh = fbh;
+            glfwGetWindowSize(window, &winw, &winh);
+            const glm::vec2 cur(static_cast<float>(mx) * fbw / std::max(winw, 1),
+                                static_cast<float>(my) * fbh / std::max(winh, 1));
+            const glm::mat4 vp = mapOrtho(static_cast<float>(fbw) / fbh);
+            const glm::dvec3 o = switchNet.sceneOrigin();
+            auto px2 = [&](glm::vec2 scene, glm::vec2& px) {
+                const glm::vec4 clip = vp * glm::vec4(scene.x, scene.y, 0.0f, 1.0f);
+                if (clip.w <= 0.0f) return false;
+                px = glm::vec2((clip.x / clip.w * 0.5f + 0.5f) * fbw,
+                               (clip.y / clip.w * 0.5f + 0.5f) * fbh);
+                return true;
+            };
+            constexpr float kPick = 20.0f; // px
+            int hs = -1, hd = -1, ht = -1;
+            float best = kPick;
+            // Whatever is nearest the cursor wins, so the highlight always matches what the
+            // eye picks out. A destination gets a small edge while a signal is armed,
+            // because a route's destination often sits at the border where the *next*
+            // signal stands and finishing the route is the intent then.
+            if (routeArm >= 0)
+                for (int pi : sigPlacements[routeArm].paths) {
+                    const Border& e = signalPaths[pi].end;
+                    const glm::dvec3 w = fracToWorld(polys, e.trackId, e.frac);
+                    if (w.x == 0.0 && w.y == 0.0) continue;
+                    glm::vec2 px;
+                    if (!px2(glm::vec2(float(w.x - o.x), float(w.y - o.y)), px)) continue;
+                    const float d = glm::length(px - cur) - 8.0f; // preference
+                    if (d < best) { best = d; hd = pi; hs = ht = -1; }
+                }
+            for (std::size_t k = 0; k < sigPlacements.size(); ++k) {
+                glm::vec2 px;
+                if (!px2(signalAnchor(sigPlacements[k]), px)) continue;
+                const float d = glm::length(px - cur);
+                if (d < best) { best = d; hs = static_cast<int>(k); hd = ht = -1; }
+            }
+            const auto& tos = switchNet.turnouts();
+            for (std::size_t i = 0; i < tos.size(); ++i) {
+                if (tos[i].mainPath < 0) continue; // inert crossing
+                glm::vec2 px;
+                if (!px2(glm::vec2(float(tos[i].world.x - o.x),
+                                   float(tos[i].world.y - o.y)), px)) continue;
+                const float d = glm::length(px - cur);
+                if (d < best) { best = d; ht = static_cast<int>(i); hs = hd = -1; }
+            }
+            if (hs != hoverSignal || hd != hoverDest || ht != hoverTurnout) {
+                hoverSignal = hs; hoverDest = hd; hoverTurnout = ht;
+                g_mapDirty = true; // redraw with the new highlight
+            }
+        } else if (hoverSignal >= 0 || hoverDest >= 0 || hoverTurnout >= 0) {
+            hoverSignal = hoverDest = hoverTurnout = -1;
         }
 
         // Traffic-manager map overlay: attach on enter/refresh, clear on leave (so the
@@ -716,28 +1031,29 @@ int main(int argc, char** argv) {
             const bool mL = g_mapMode && !g_menuOpen &&
                             glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
             if (mL && !prevMapClick) {
-                double mx = 0.0, my = 0.0;
-                glfwGetCursorPos(window, &mx, &my);
-                int winw = fbw, winh = fbh;
-                glfwGetWindowSize(window, &winw, &winh);
-                const glm::vec2 cur(static_cast<float>(mx) * fbw / std::max(winw, 1),
-                                    static_cast<float>(my) * fbh / std::max(winh, 1));
-                const glm::mat4 vp = mapOrtho(static_cast<float>(fbw) / fbh);
-                const glm::dvec3 org = switchNet.sceneOrigin();
-                const auto& tos = switchNet.turnouts();
-                int hit = -1;
-                float best = 20.0f; // px
-                for (std::size_t i = 0; i < tos.size(); ++i) {
-                    if (tos[i].mainPath < 0) continue; // inert crossing
-                    const glm::vec4 clip = vp * glm::vec4(float(tos[i].world.x - org.x),
-                                                          float(tos[i].world.y - org.y), 0.0f, 1.0f);
-                    if (clip.w <= 0.0f) continue;
-                    const glm::vec2 px((clip.x / clip.w * 0.5f + 0.5f) * fbw,
-                                       (clip.y / clip.w * 0.5f + 0.5f) * fbh);
-                    const float dpx = glm::length(px - cur);
-                    if (dpx < best) { best = dpx; hit = static_cast<int>(i); }
+                // Act on whatever the overlay is highlighting, so a click always does what
+                // the cursor said it would.
+                if (hoverSignal >= 0) {
+                    // A signal: cancel the route it has set, else arm it for a destination.
+                    int setHere = -1;
+                    for (int pi : sigPlacements[hoverSignal].paths)
+                        if (routeSet[pi]) setHere = pi;
+                    if (setHere >= 0) { cancelRoute(setHere); routeArm = -1; }
+                    else if (routeArm == hoverSignal) { routeArm = -1; } // click again to disarm
+                    else {
+                        routeArm = hoverSignal;
+                        setMapMsg("Signal armed - click a ringed destination to set the route");
+                    }
+                    g_mapDirty = true;
+                } else if (hoverDest >= 0) {
+                    trySetRoute(hoverDest);
+                    routeArm = -1;
+                } else if (hoverTurnout >= 0) {
+                    tryMapThrow(hoverTurnout);
+                } else if (routeArm >= 0) {
+                    routeArm = -1; // clicked empty space: disarm
+                    g_mapDirty = true;
                 }
-                if (hit >= 0) tryMapThrow(hit);
             }
             prevMapClick = mL;
         }

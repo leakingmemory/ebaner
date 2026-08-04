@@ -62,8 +62,18 @@ struct SignalPlacement {
 std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& paths,
                                               const std::vector<TrackPoly>& polys);
 
-// True if every turnout the path traverses currently sits in the position that path
-// needs (straight where it runs through, diverging where it crosses to/from the branch).
+// A turnout the path traverses and the position it needs there: straight where the path
+// runs through the turnout, diverging where it crosses to or from the branch.
+struct PathSwitch {
+    int turnout = -1;
+    SwitchState need = SwitchState::Straight;
+};
+
+// Every turnout the path traverses, with the position that path needs.
+std::vector<PathSwitch> pathSwitchRequirements(const SignalPath& p, const SwitchNetwork& net,
+                                               const std::vector<TrackPoly>& polys);
+
+// True if every turnout the path traverses currently sits in the position that path needs.
 bool pathSwitchesAligned(const SignalPath& p, const SwitchNetwork& net,
                          const std::vector<TrackPoly>& polys);
 
@@ -71,11 +81,13 @@ bool pathSwitchesAligned(const SignalPath& p, const SwitchNetwork& net,
 // point with a neighbouring section does not count as running through it).
 std::vector<int> pathSections(const SignalPath& p, const TrackCircuits& circuits);
 
-// Recompute each signal's aspect: TrainOnTrack when one of its paths has its switches
-// aligned and a train standing in that path's circuits, else Stop. `secOccupied` is
-// indexed like `circuits.sections`. Returns true if any aspect changed.
+// Recompute each signal's aspect: Clear when one of its paths has a route set, else
+// TrainOnTrack when one of its paths has its switches aligned and a train standing in that
+// path's circuits, else Stop. `secOccupied` is indexed like `circuits.sections` and
+// `routeSet` like `paths`. Returns true if any aspect changed.
 bool updateSignalAspects(std::vector<SignalPlacement>& placements,
                          const std::vector<SignalPath>& paths, const SwitchNetwork& net,
                          const std::vector<TrackPoly>& polys,
                          const TrackCircuits& circuits,
-                         const std::vector<char>& secOccupied);
+                         const std::vector<char>& secOccupied,
+                         const std::vector<char>& routeSet);

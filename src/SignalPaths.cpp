@@ -138,8 +138,9 @@ double planarDist(const glm::dvec3& a, const glm::dvec3& b) {
 }
 } // namespace
 
-bool pathSwitchesAligned(const SignalPath& p, const SwitchNetwork& net,
-                         const std::vector<TrackPoly>& polys) {
+std::vector<PathSwitch> pathSwitchRequirements(const SignalPath& p, const SwitchNetwork& net,
+                                               const std::vector<TrackPoly>& polys) {
+    std::vector<PathSwitch> reqs;
     const std::vector<Turnout>& tos = net.turnouts();
     for (std::size_t i = 0; i < tos.size(); ++i) {
         if (tos[i].mainPath < 0) continue; // inert crossing: nothing to set
@@ -182,8 +183,15 @@ bool pathSwitchesAligned(const SignalPath& p, const SwitchNetwork& net,
                 }
             }
         }
-        if (needSet && net.state(static_cast<int>(i)) != need) return false;
+        if (needSet) reqs.push_back({static_cast<int>(i), need});
     }
+    return reqs;
+}
+
+bool pathSwitchesAligned(const SignalPath& p, const SwitchNetwork& net,
+                         const std::vector<TrackPoly>& polys) {
+    for (const PathSwitch& ps : pathSwitchRequirements(p, net, polys))
+        if (net.state(ps.turnout) != ps.need) return false;
     return true;
 }
 
@@ -211,12 +219,19 @@ bool updateSignalAspects(std::vector<SignalPlacement>& placements,
                          const std::vector<SignalPath>& paths, const SwitchNetwork& net,
                          const std::vector<TrackPoly>& polys,
                          const TrackCircuits& circuits,
-                         const std::vector<char>& secOccupied) {
+                         const std::vector<char>& secOccupied,
+                         const std::vector<char>& routeSet) {
     bool changed = false;
     for (SignalPlacement& sp : placements) {
         SignalAspect want = SignalAspect::Stop;
         for (int pi : sp.paths) {
             if (pi < 0 || pi >= static_cast<int>(paths.size())) continue;
+            // A route set from this signal shows clear (it is dropped the moment a train
+            // enters its circuits, so "set" already implies the road ahead is empty).
+            if (pi < static_cast<int>(routeSet.size()) && routeSet[pi]) {
+                want = SignalAspect::Clear;
+                break;
+            }
             const SignalPath& p = paths[pi];
             if (!pathSwitchesAligned(p, net, polys)) continue; // not this signal's route
             bool occupied = false;
@@ -225,7 +240,7 @@ bool updateSignalAspects(std::vector<SignalPlacement>& placements,
                     if (circuits.sections[si].id == id && si < secOccupied.size() &&
                         secOccupied[si])
                         occupied = true;
-            if (occupied) { want = SignalAspect::TrainOnTrack; break; }
+            if (occupied) want = SignalAspect::TrainOnTrack; // keep looking for a set route
         }
         if (sp.aspect != want) { sp.aspect = want; changed = true; }
     }
