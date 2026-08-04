@@ -321,9 +321,11 @@ struct RouteCtx {
     std::uint32_t endTrack;
     double endFrac;
     std::vector<std::vector<SectionInterval>>* results; // capped at 2
+    int cap = 2;   // routes to collect before de-duplication
     int budget; // node-expansion budget; guards against combinatorial blow-up
 };
 
+constexpr int kRouteRawCap = 16; // raw walks collected before de-duplication
 constexpr int kRouteMaxTracks = 8; // a "mini" path spans few tracks; bounds the search
 
 // Walk `track` from `entryFrac` toward `dir`; at each junction ahead either finish (if the
@@ -332,7 +334,7 @@ constexpr int kRouteMaxTracks = 8; // a "mini" path spans few tracks; bounds the
 void routeDFS(RouteCtx& ctx, std::uint32_t track, double entryFrac, int dir,
               std::vector<std::uint32_t>& visited, std::vector<SectionInterval>& route,
               int depth) {
-    if (ctx.results->size() >= 2 || depth > kRouteMaxTracks || --ctx.budget < 0) return;
+    if (ctx.results->size() >= (size_t)ctx.cap || depth > kRouteMaxTracks || --ctx.budget < 0) return;
     // Finish: destination on this track, ahead in the travel direction.
     if (track == ctx.endTrack && dir * (ctx.endFrac - entryFrac) > 1e-6) {
         route.push_back({track, entryFrac, ctx.endFrac});
@@ -360,7 +362,7 @@ void routeDFS(RouteCtx& ctx, std::uint32_t track, double entryFrac, int dir,
         routeDFS(ctx, c.other, c.there, ndir, visited, route, depth + 1);
         visited.pop_back();
         route.pop_back();
-        if (ctx.results->size() >= 2) return;
+        if (ctx.results->size() >= (size_t)ctx.cap) return;
     }
 }
 } // namespace
@@ -369,14 +371,39 @@ int findSignalRoute(const std::vector<TrackPoly>& polys, const Border& start,
                     const Border& end, std::vector<SectionInterval>& out) {
     out.clear();
     const auto conns = buildConns(polys);
-    std::vector<std::vector<SectionInterval>> results;
-    RouteCtx ctx{&polys, &conns, end.trackId, end.frac, &results, 500000};
+    // Collect the raw walks, then fold away the ones that are the same road. Where two
+    // track ends nearly coincide, buildConns records that single node twice (each end
+    // projected onto the other track), so the search can hop across at either record and
+    // report one physical road as several routes differing by a few metres of stub.
+    std::vector<std::vector<SectionInterval>> raw;
+    RouteCtx ctx{&polys, &conns, end.trackId, end.frac, &raw, kRouteRawCap, 500000};
     for (int dir = 1; dir >= -1; dir -= 2) { // leave the start border either way
         std::vector<std::uint32_t> visited{start.trackId};
         std::vector<SectionInterval> route;
         routeDFS(ctx, start.trackId, start.frac, dir, visited, route, 0);
-        if (results.size() >= 2) break;
+        if (static_cast<int>(raw.size()) >= kRouteRawCap) break;
     }
-    if (results.size() == 1) out = results[0];
-    return static_cast<int>(results.size());
+    // A route's identity is the tracks it actually runs along; intervals shorter than the
+    // join tolerance are those coincident-node stubs and say nothing about the road taken.
+    auto signature = [&](const std::vector<SectionInterval>& r) {
+        std::vector<std::uint32_t> sig;
+        for (const SectionInterval& iv : r) {
+            const std::vector<glm::dvec3>* pts = findPoly(polys, iv.trackId);
+            const double m = pts ? polyLength(*pts) * std::abs(iv.to - iv.from) : 0.0;
+            if (m > kJoinTol && (sig.empty() || sig.back() != iv.trackId))
+                sig.push_back(iv.trackId);
+        }
+        return sig;
+    };
+    std::vector<std::vector<std::uint32_t>> seen;
+    std::vector<std::vector<SectionInterval>> distinct;
+    for (const auto& r : raw) {
+        const std::vector<std::uint32_t> sig = signature(r);
+        if (std::find(seen.begin(), seen.end(), sig) != seen.end()) continue;
+        seen.push_back(sig);
+        distinct.push_back(r);
+    }
+    if (distinct.size() == 1) out = distinct[0];
+    return static_cast<int>(distinct.size());
 }
+
