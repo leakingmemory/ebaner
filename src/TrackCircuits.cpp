@@ -13,6 +13,8 @@
 
 #include "TrackCircuits.h"
 
+#include "TrackOverlay.h" // kRailIdBase (editor-added slip connectors)
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -149,6 +151,15 @@ void projFrac(const std::vector<glm::dvec3>& pts, glm::dvec2 p, double& frac, do
 // (a train can't transfer, so the circuits don't connect).
 struct Conn { double here; std::uint32_t other; double there; };
 
+// Unit direction leading away from one end of a track (into its own body).
+glm::dvec2 endDir(const TrackPoly& t, bool back) {
+    const glm::dvec3& tip = back ? t.pts.back() : t.pts.front();
+    const glm::dvec3& nb = back ? t.pts[t.pts.size() - 2] : t.pts[1];
+    const glm::dvec2 d(nb.x - tip.x, nb.y - tip.y);
+    const double L = glm::length(d);
+    return L > 1e-9 ? d / L : glm::dvec2(1.0, 0.0);
+}
+
 std::unordered_map<std::uint32_t, std::vector<Conn>>
 buildConns(const std::vector<TrackPoly>& polys) {
     std::unordered_map<std::uint32_t, std::vector<Conn>> conns;
@@ -157,14 +168,36 @@ buildConns(const std::vector<TrackPoly>& polys) {
         for (int endBit = 0; endBit < 2; ++endBit) {
             const glm::dvec3 e = endBit ? A.pts.back() : A.pts.front();
             const double aFrac = endBit ? 1.0 : 0.0;
+            // Does another track carry straight on from this end? Then A does not stop
+            // here: A and that track are one road, and anything else running through the
+            // point is *crossed* (a diamond), not joined. A train can only change roads
+            // there via a slip connector, so no junction is recorded onto the crossed
+            // track - otherwise routes could be built straight across the diamond.
+            const glm::dvec2 dirA = endDir(A, endBit != 0);
+            bool continues = false;
+            for (const TrackPoly& C : polys) {
+                if (C.id == A.id || C.pts.size() < 2) continue;
+                for (int cb = 0; cb < 2 && !continues; ++cb) {
+                    const glm::dvec3& ce = cb ? C.pts.back() : C.pts.front();
+                    if (std::hypot(ce.x - e.x, ce.y - e.y) > kJoinTol) continue;
+                    if (glm::dot(dirA, endDir(C, cb != 0)) < -0.95) continues = true;
+                }
+                if (continues) break;
+            }
             for (const TrackPoly& B : polys) {
                 if (B.id == A.id || B.pts.size() < 2) continue;
                 double bFrac, d;
                 projFrac(B.pts, glm::dvec2(e.x, e.y), bFrac, d);
-                if (d <= kJoinTol) {
-                    conns[A.id].push_back({aFrac, B.id, bFrac});
-                    conns[B.id].push_back({bFrac, A.id, aFrac});
+                if (d > kJoinTol) continue;
+                if (continues) {
+                    // Only the road A continues into may be joined here; a track merely
+                    // passing through is crossed.
+                    const double bTol = sameFracTol(polys, B.id);
+                    const bool bEndsHere = bFrac <= bTol || bFrac >= 1.0 - bTol;
+                    if (!bEndsHere) continue;
                 }
+                conns[A.id].push_back({aFrac, B.id, bFrac});
+                conns[B.id].push_back({bFrac, A.id, aFrac});
             }
         }
     }
@@ -383,11 +416,18 @@ int findSignalRoute(const std::vector<TrackPoly>& polys, const Border& start,
         routeDFS(ctx, start.trackId, start.frac, dir, visited, route, 0);
         if (static_cast<int>(raw.size()) >= kRouteRawCap) break;
     }
-    // A route's identity is the tracks it actually runs along; intervals shorter than the
-    // join tolerance are those coincident-node stubs and say nothing about the road taken.
+    // A route's identity is the *real* tracks it runs along, in order. Two things are
+    // deliberately not part of it:
+    //   - intervals shorter than the join tolerance: those are the coincident-node stubs
+    //     above, and say nothing about the road taken;
+    //   - editor-added slip connectors (id >= kRailIdBase): these are the short links that
+    //     let a train transfer through a diamond, not roads in their own right. The same
+    //     transfer can be walked either over the connector or across the direct junction
+    //     beside it, which is one road described two ways.
     auto signature = [&](const std::vector<SectionInterval>& r) {
         std::vector<std::uint32_t> sig;
         for (const SectionInterval& iv : r) {
+            if (iv.trackId >= kRailIdBase) continue; // a slip link, not a road
             const std::vector<glm::dvec3>* pts = findPoly(polys, iv.trackId);
             const double m = pts ? polyLength(*pts) * std::abs(iv.to - iv.from) : 0.0;
             if (m > kJoinTol && (sig.empty() || sig.back() != iv.trackId))

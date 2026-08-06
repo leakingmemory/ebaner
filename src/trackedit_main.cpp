@@ -1241,6 +1241,12 @@ int main(int argc, char** argv) {
                                 static_cast<float>(my) * fbh / std::max(winh, 1));
             const glm::dvec3 o = data.sceneOrigin();
             const auto& tos = switchNet.turnouts();
+            // Several switches can share one junction (each branch of a multi-way node
+            // has its own). Collect everything under the cursor, then prefer the one
+            // *after* the current selection, so clicking repeatedly cycles through them
+            // instead of always landing on the same one.
+            std::vector<std::pair<float, int>> under; // (pixel distance, turnout)
+            glm::vec2 bestPx(0.0f);
             float best = 18.0f; // px pick radius
             for (std::size_t i = 0; i < tos.size(); ++i) {
                 if (tos[i].mainPath < 0) continue; // inert crossing
@@ -1251,7 +1257,23 @@ int main(int argc, char** argv) {
                 const glm::vec2 px((clip.x / clip.w * 0.5f + 0.5f) * fbw,
                                    (clip.y / clip.w * 0.5f + 0.5f) * fbh);
                 const float d = glm::length(px - cur);
-                if (d < best) { best = d; turnoutHover = static_cast<int>(i); turnoutHoverPx = px; }
+                if (d < 18.0f) under.push_back({d, static_cast<int>(i)});
+                if (d < best) { best = d; turnoutHover = static_cast<int>(i); bestPx = px; }
+            }
+            turnoutHoverPx = bestPx;
+            if (!under.empty()) {
+                std::sort(under.begin(), under.end());
+                // Anything within a few pixels of the nearest is "at the same spot".
+                const float near = under.front().first + 6.0f;
+                std::vector<int> tied;
+                for (const auto& [d, i] : under)
+                    if (d <= near) tied.push_back(i);
+                if (tied.size() > 1) {
+                    const auto it = std::find(tied.begin(), tied.end(), selTurnout);
+                    turnoutHover = it != tied.end()
+                                       ? tied[(it - tied.begin() + 1) % tied.size()]
+                                       : tied.front();
+                }
             }
         }
 
@@ -1883,7 +1905,25 @@ int main(int argc, char** argv) {
                 quad(turnoutHoverPx.x, turnoutHoverPx.y + R, R, T, hc);
                 quad(turnoutHoverPx.x - R, turnoutHoverPx.y, T, R, hc);
                 quad(turnoutHoverPx.x + R, turnoutHoverPx.y, T, R, hc);
-                appendText(tv, motor ? "motor" : "manual", turnoutHoverPx.x + 14.0f,
+                // Say how many switches share this spot, so it is clear that clicking
+                // again picks the next one rather than re-picking the same.
+                int here = 0;
+                const glm::dvec3 oo = data.sceneOrigin();
+                const Turnout& ht = switchNet.turnouts()[turnoutHover];
+                for (std::size_t k = 0; k < switchNet.size(); ++k) {
+                    const Turnout& t = switchNet.turnouts()[k];
+                    if (t.mainPath >= 0 &&
+                        std::hypot(t.world.x - ht.world.x, t.world.y - ht.world.y) < 3.0)
+                        ++here;
+                }
+                (void)oo;
+                char lbl[64];
+                if (here > 1)
+                    std::snprintf(lbl, sizeof(lbl), "%s  (#%d of %d here - click to cycle)",
+                                  motor ? "motor" : "manual", turnoutHover, here);
+                else
+                    std::snprintf(lbl, sizeof(lbl), "%s", motor ? "motor" : "manual");
+                appendText(tv, lbl, turnoutHoverPx.x + 14.0f,
                            turnoutHoverPx.y - 4.0f, sc * 0.7f, hc, fbw, fbh);
             }
             // Signal paths: ring the border under the cursor (the click target).
