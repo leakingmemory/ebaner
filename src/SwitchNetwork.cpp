@@ -20,7 +20,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <unordered_set>
+#include <vector>
 
 namespace {
 // 2-D distance from p to segment a-b, plus the clamped parameter t along a->b.
@@ -99,6 +101,41 @@ void SwitchNetwork::build(const TerrainData& data,
                     }
                 }
             }
+            // A yard fan: several track ends meet here and none passes through as a
+            // single segment, so the search above finds nothing. buildTrackPaths chains
+            // the straightest opposing pair into one continuous route through the node,
+            // and this end is a branch off it - a real turnout. Find that pair.
+            bool fanNode = false;
+            if (!hitSeg) {
+                struct EndRef { const TrackSegment* seg; glm::dvec2 dir; double z; };
+                std::vector<EndRef> ends;
+                for (const TrackSegment* op : segs) {
+                    if (op == sp) continue;
+                    for (int w = 0; w < 2; ++w) {
+                        const glm::dvec3& tip = w ? op->pts.back() : op->pts.front();
+                        const glm::dvec3& nb2 = w ? op->pts[op->pts.size() - 2] : op->pts[1];
+                        if (std::hypot(e2.x - tip.x, e2.y - tip.y) > 3.0) continue;
+                        glm::dvec2 d(nb2.x - tip.x, nb2.y - tip.y);
+                        const double L = glm::length(d);
+                        if (L > 1e-9) ends.push_back({op, d / L, tip.z});
+                    }
+                }
+                double bestDot = -0.7; // <= this is straight enough to be the through route
+                int ia = -1, ib = -1;
+                for (std::size_t x = 0; x < ends.size(); ++x)
+                    for (std::size_t y = x + 1; y < ends.size(); ++y) {
+                        const double dt = glm::dot(ends[x].dir, ends[y].dir);
+                        if (dt < bestDot) { bestDot = dt; ia = static_cast<int>(x);
+                                            ib = static_cast<int>(y); }
+                    }
+                if (ia >= 0) {
+                    (void)ib;
+                    hitX = glm::dvec3(e2.x, e2.y, ends[ia].z);
+                    hitThru = ends[ia].dir;
+                    hitSeg = ends[ia].seg;
+                    fanNode = true;
+                }
+            }
             if (!hitSeg) continue;
             const double tl = glm::length(hitThru);
             const glm::dvec2 dv(nb.x - end.x, nb.y - end.y);
@@ -123,7 +160,10 @@ void SwitchNetwork::build(const TerrainData& data,
             // keep rejecting collinear stitches and too-steep crossings.
             const bool isConnector = sp->trackId >= kRailIdBase;
             if (!isConnector) {
-                if (endDist < kEndMargin && angDeg < kMinDivergeDeg) continue;
+                // The stitch test only makes sense where exactly two ends meet; at a fan
+                // node the through route is already established, so a shallow branch off
+                // it is a genuine (long, shallow) yard turnout.
+                if (!fanNode && endDist < kEndMargin && angDeg < kMinDivergeDeg) continue;
                 // Too steep to be a switch: the branch would have to turn sharply, so this
                 // is a crossing (diamond), not a turnout — a train just runs straight past.
                 if (angDeg > kMaxDivergeDeg) continue;

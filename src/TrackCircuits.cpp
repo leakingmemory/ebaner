@@ -29,6 +29,10 @@ namespace fs = std::filesystem;
 
 namespace {
 constexpr double kJoinTol = 3.0; // m; track ends this close share a node (see buildTrackPaths)
+// How much further than the nearest track an endpoint may be and still count as touching
+// it. Small: where lines converge, a second track can pass ~1.5 m from a junction without
+// meeting it there.
+constexpr double kTouchMargin = 0.5; // m
 
 std::string circuitsFile(const std::string& root) {
     return root + "/overlay/track-circuits.txt";
@@ -184,6 +188,15 @@ buildConns(const std::vector<TrackPoly>& polys) {
                 }
                 if (continues) break;
             }
+            // Which tracks does this end actually touch? Several may lie within the
+            // join tolerance where lines converge, but a slip connector's end sits *on*
+            // one track and merely passes close to its neighbour a metre or two away.
+            // Joining both would invent a junction where there is no switch, so keep
+            // only the nearest - plus anything essentially as close, since at a genuine
+            // multi-way node every track meets at the same point.
+            struct Cand { double d, frac; std::uint32_t id; };
+            std::vector<Cand> cand;
+            double nearest = 1e30;
             for (const TrackPoly& B : polys) {
                 if (B.id == A.id || B.pts.size() < 2) continue;
                 double bFrac, d;
@@ -196,8 +209,13 @@ buildConns(const std::vector<TrackPoly>& polys) {
                     const bool bEndsHere = bFrac <= bTol || bFrac >= 1.0 - bTol;
                     if (!bEndsHere) continue;
                 }
-                conns[A.id].push_back({aFrac, B.id, bFrac});
-                conns[B.id].push_back({bFrac, A.id, aFrac});
+                cand.push_back({d, bFrac, B.id});
+                nearest = std::min(nearest, d);
+            }
+            for (const Cand& c : cand) {
+                if (c.d > nearest + kTouchMargin) continue; // merely nearby, not touching
+                conns[A.id].push_back({aFrac, c.id, c.frac});
+                conns[c.id].push_back({c.frac, A.id, aFrac});
             }
         }
     }
