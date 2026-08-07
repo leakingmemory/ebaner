@@ -120,15 +120,20 @@ void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 o
             const glm::vec3 n = -F;
             const glm::vec3 face = C - F * (hd + 0.04f);
             const float r = 0.13f, sp = 0.40f; // lens radius, vertical lamp spacing
+            // Norwegian main-signal aspects: red alone is stop; the upper green alone is
+            // proceed over a deviation (C2); both greens is proceed, no restriction (C1).
             const bool danger = s.aspect == SignalAspect::Stop;
-            const bool proceed = !danger && s.aspect == SignalAspect::Clear;
-            // Only the lit lens is emissive; a dark lens is ordinary shaded geometry, so
-            // it fades out with the head instead of blooming into a dark blob at range.
+            const bool proceed = s.aspect == SignalAspect::Clear ||
+                                 s.aspect == SignalAspect::ClearReduced;
+            const bool noRestriction = s.aspect == SignalAspect::Clear;
+            // Only a lit lens is emissive; a dark lens is ordinary shaded geometry, so it
+            // fades out with the head instead of blooming into a dark blob at range.
             if (proceed) lamp(face + UP * sp, R, UP, r, kGreenOn);   // top: green
             else disc(face + UP * sp, n, R, UP, r, kGreenOff);
             if (danger) lamp(face, R, UP, r, kRedOn);                // middle: red
             else disc(face, n, R, UP, r, kRedOff);
-            disc(face - UP * sp, n, R, UP, r, kGreenOff);            // bottom: green
+            if (noRestriction) lamp(face - UP * sp, R, UP, r, kGreenOn); // bottom: green
+            else disc(face - UP * sp, n, R, UP, r, kGreenOff);
         }
 
         if (drawDwarf) {

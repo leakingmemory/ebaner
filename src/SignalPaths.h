@@ -85,10 +85,12 @@ std::vector<SignalPath> loadExitRoutes(const std::string& datasetRoot);
 bool writeExitRoutes(const std::string& datasetRoot,
                      const std::vector<SignalPath>& routes);
 
-// What a mini ground signal displays: the fixed reference lamp plus one lamp on the arc.
+// What a signal displays. A dwarf uses the fixed reference lamp plus one lamp on the arc:
 // Stop = horizontal pair, TrainOnTrack = 45 deg (a train stands in the route's circuits),
-// Clear = vertical (route set and clear; not driven yet).
-enum class SignalAspect { Stop, TrainOnTrack, Clear };
+// Clear = vertical. A main signal reads the same values as its Norwegian aspects: Stop is
+// the red, Clear is C1 (two greens, no restriction) and ClearReduced is C2 (one green, over
+// a deviation). A dwarf never shows ClearReduced.
+enum class SignalAspect { Stop, TrainOnTrack, Clear, ClearReduced };
 
 // Which signal stands at a placement: the low dwarf (dvergsignal) that governs shunting
 // moves, or the tall exit signal (a main signal) protecting a route out.
@@ -161,13 +163,29 @@ RouteType defaultRouteType(const SignalPath& route, const SignalPath& exit,
 // point with a neighbouring section does not count as running through it).
 std::vector<int> pathSections(const SignalPath& p, const TrackCircuits& circuits);
 
+// An exit route and the exit signal's own onward route are two halves of one movement.
+// Joining them into a single SignalPath lets pathSections and pathSwitchRequirements
+// describe the whole departure - which is what has to be clear, locked and aligned.
+// Intervals that meet at the signal's border on one track are merged.
+SignalPath departureRoute(const SignalPath& exitRoute, const SignalPath& exitSignal);
+
+// True if `part` runs entirely inside `whole`, in the same direction: which dwarf paths lie
+// along a departure and so should be opened with it. Compares anchors only.
+bool routeContains(const SignalPath& whole, const SignalPath& part);
+
 // Recompute each signal's aspect: Clear when one of its paths has a route set, else
 // TrainOnTrack when one of its paths has its switches aligned and a train standing in that
 // path's circuits, else Stop. `secOccupied` is indexed like `circuits.sections` and
 // `routeSet` like `paths`. Returns true if any aspect changed.
+//
+// `exitAspects` (indexed like `placements`, empty = every main signal at danger) says what
+// each exit signal should display. That is a question about which routes are locked, which
+// only the interlocking knows, so it is passed in rather than decided here; the dwarf rule
+// above stays owned by this function.
 bool updateSignalAspects(std::vector<SignalPlacement>& placements,
                          const std::vector<SignalPath>& paths, const SwitchNetwork& net,
                          const std::vector<TrackPoly>& polys,
                          const TrackCircuits& circuits,
                          const std::vector<char>& secOccupied,
-                         const std::vector<char>& routeSet);
+                         const std::vector<char>& routeSet,
+                         const std::vector<SignalAspect>& exitAspects = {});

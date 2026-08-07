@@ -65,6 +65,8 @@ bool g_menuOpen = false;    // Escape menu overlay (pauses the sim)
 int g_menuSel = 0;          // highlighted menu item
 bool g_mapMode = false;     // traffic-manager 2-D map view
 bool g_mapDirty = false;    // (re)build the map overlay this frame
+bool g_routePick = false;   // traffic manager: the exit-route picker is open
+int g_routePickSel = 0;     // highlighted route in that picker
 float g_mapZoom = 1.0f;     // map zoom: 1 = ~4 km tall, higher = zoomed in
 constexpr float kMapZoomMin = 0.5f;  // ~8 km tall (zoomed out)
 constexpr float kMapZoomMax = 40.0f; // ~100 m tall (zoomed in)
@@ -96,8 +98,12 @@ void scrollCallback(GLFWwindow*, double, double yoff) {
 }
 
 void keyCallback(GLFWwindow* win, int key, int, int action, int) {
-    // Escape toggles the menu overlay; while it is open the other hotkeys are inert.
-    if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) g_menuOpen = !g_menuOpen;
+    // Escape closes the route picker if it is open, else toggles the menu overlay; while
+    // the menu is open the other hotkeys are inert.
+    if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
+        if (g_routePick) g_routePick = false;
+        else g_menuOpen = !g_menuOpen;
+    }
     if (g_menuOpen) return;
     // Tab toggles mouse capture (handy for debugging).
     if (key == GLFW_KEY_TAB && action == GLFW_PRESS) {
@@ -128,6 +134,12 @@ void keyCallback(GLFWwindow* win, int key, int, int action, int) {
                          (g_mapMode || !g_mouseCaptured) ? GLFW_CURSOR_NORMAL
                                                          : GLFW_CURSOR_DISABLED);
         g_firstMouse = true;
+    }
+    // R offers the exit routes of the nearest station, to set a main-signal route. Only in
+    // the map: R is the cab reverser, which means nothing from a dispatcher's view.
+    if (g_mapMode && key == GLFW_KEY_R && action == GLFW_PRESS) {
+        g_routePick = !g_routePick;
+        g_routePickSel = 0;
     }
     // Z / X zoom the map in / out (keyboard alternative to the scroll wheel;
     // repeat-enabled so holding the key keeps zooming).
@@ -419,6 +431,88 @@ int main(int argc, char** argv) {
     std::vector<char> routeSet(signalPaths.size(), 0);
     int routeArm = -1; // placement armed by a first click, awaiting its destination
 
+    // --- Main-signal (exit) routes -------------------------------------------------------
+    // The authority to depart: an exit route from a platform road up to its exit signal,
+    // plus that signal's own route beyond. Setting one locks the whole departure's circuits.
+    const std::vector<SignalPath> exitRoutes = loadExitRoutes(datasetRoot);
+    // Which exit signal each route leads to (index into exitSignals), and the placement -
+    // the mast - that signal stands at. Resolved once: neither can change at runtime.
+    std::vector<int> routeExit(exitRoutes.size(), -1);
+    std::vector<int> routePlacement(exitRoutes.size(), -1);
+    for (std::size_t ri = 0; ri < exitRoutes.size(); ++ri) {
+        for (std::size_t e = 0; e < exitSignals.size(); ++e) {
+            if (exitSignals[e].id != exitRoutes[ri].exitId) continue;
+            routeExit[ri] = static_cast<int>(e);
+            for (std::size_t k = 0; k < sigPlacements.size(); ++k) {
+                if (sigPlacements[k].kind != SignalKind::Exit) continue;
+                const std::vector<int>& ps = sigPlacements[k].paths;
+                if (std::find(ps.begin(), ps.end(), static_cast<int>(e)) != ps.end())
+                    routePlacement[ri] = static_cast<int>(k);
+            }
+            break;
+        }
+        if (routeExit[ri] < 0)
+            std::fprintf(stderr, "[Route] exit route %d names no exit signal (%d)\n",
+                         exitRoutes[ri].id, exitRoutes[ri].exitId);
+    }
+    // Stations: exit signals standing within kStationSpan of one another work one place, so
+    // the traffic manager can offer just that place's routes. Single-link clustering over
+    // the signal positions - Bodo is one cluster, and a second station needs no new data.
+    std::vector<int> exitStation(exitSignals.size(), -1); // signal -> station index
+    std::vector<glm::vec2> stationAt;                     // station -> scene-relative centre
+    {
+        constexpr double kStationSpan = 800.0; // m
+        const glm::dvec3 org = switchNet.sceneOrigin();
+        std::vector<glm::dvec3> at(exitSignals.size());
+        std::vector<char> have(exitSignals.size(), 0);
+        for (std::size_t e = 0; e < exitSignals.size(); ++e) {
+            glm::dvec2 fwd(0.0);
+            have[e] = routeStartPose(exitSignals[e], polys, at[e], fwd) ? 1 : 0;
+        }
+        for (std::size_t e = 0; e < exitSignals.size(); ++e) {
+            if (!have[e] || exitStation[e] >= 0) continue;
+            const int st = static_cast<int>(stationAt.size());
+            std::vector<std::size_t> queue{e};
+            exitStation[e] = st;
+            glm::dvec2 sum(0.0);
+            int n = 0;
+            while (!queue.empty()) { // single link: pull in everything within reach
+                const std::size_t c = queue.back();
+                queue.pop_back();
+                sum += glm::dvec2(at[c].x - org.x, at[c].y - org.y);
+                ++n;
+                for (std::size_t o = 0; o < exitSignals.size(); ++o) {
+                    if (!have[o] || exitStation[o] >= 0) continue;
+                    if (std::hypot(at[o].x - at[c].x, at[o].y - at[c].y) > kStationSpan)
+                        continue;
+                    exitStation[o] = st;
+                    queue.push_back(o);
+                }
+            }
+            stationAt.push_back(glm::vec2(sum / static_cast<double>(std::max(n, 1))));
+        }
+        std::printf("[Route] %zu exit route(s), %zu exit signal(s) in %zu station(s)\n",
+                    exitRoutes.size(), exitSignals.size(), stationAt.size());
+    }
+    // A departure the interlocking is holding. Its circuits are locked so no other main
+    // route can take them; each is released as a train enters it, so the route unwinds
+    // behind the train.
+    //
+    // Only the circuits *beyond* the signal put it back to danger. The approach circuits
+    // between the platform and the mast are the dwarfs' business: the train being
+    // dispatched runs over them to reach the signal, and dropping it then would take the
+    // authority away just as the driver was about to accept it. Past the signal the rule is
+    // absolute - any occupancy there, by any train, and the aspect goes.
+    struct MainRoute {
+        int route = -1;          // index into exitRoutes
+        int placement = -1;      // the mast to light
+        SignalPath departure;    // exit route + the signal's own route beyond
+        std::vector<int> locked; // section ids still held (approach and beyond alike)
+        std::vector<int> beyond; // of those, the ones past the signal
+        bool signalClear = true; // false once a circuit beyond the signal was entered
+    };
+    std::vector<MainRoute> mainRoutes;
+
     struct SecRun { int section; std::vector<glm::vec2> pts; }; // scene-relative xy run
     std::vector<SecRun> secRuns;
     {
@@ -535,6 +629,32 @@ int main(int argc, char** argv) {
         }
 
         const glm::dvec3 org = switchNet.sceneOrigin();
+        // Main signals: a square at the mast, coloured by aspect. Informational - a main
+        // route is set from the R list, not by clicking, so these are not pick targets.
+        for (const SignalPlacement& sp : sigPlacements) {
+            if (sp.kind != SignalKind::Exit) continue;
+            const glm::vec2 f(float(sp.forward.x), float(sp.forward.y));
+            const glm::vec2 r(f.y, -f.x); // right of travel: the side it stands on
+            const glm::vec2 b(float(sp.world.x - org.x) + r.x * 8.0f,
+                              float(sp.world.y - org.y) + r.y * 8.0f);
+            const glm::vec3 col =
+                sp.aspect == SignalAspect::Clear          ? glm::vec3(0.2f, 1.0f, 0.3f)
+                : sp.aspect == SignalAspect::ClearReduced ? glm::vec3(0.6f, 1.0f, 0.2f)
+                                                          : glm::vec3(1.0f, 0.2f, 0.15f);
+            const float h = 6.0f;
+            const glm::vec2 c[4] = {b + glm::vec2(-h, -h), b + glm::vec2(h, -h),
+                                    b + glm::vec2(h, h), b + glm::vec2(-h, h)};
+            for (int i = 0; i < 4; ++i) {
+                lines.push_back({glm::vec3(c[i], 3.5f), col});
+                lines.push_back({glm::vec3(c[(i + 1) % 4], 3.5f), col});
+            }
+            // A stem back to the track, so it is obvious which line it belongs to.
+            lines.push_back({glm::vec3(b, 3.5f), col});
+            lines.push_back({glm::vec3(float(sp.world.x - org.x),
+                                       float(sp.world.y - org.y), 3.5f), col});
+            points.push_back({glm::vec3(b, 3.5f), col});
+        }
+
         const auto& tos = switchNet.turnouts();
         for (std::size_t i = 0; i < tos.size(); ++i) {
             if (tos[i].mainPath < 0) continue; // inert crossing: no working switch
@@ -709,10 +829,11 @@ int main(int argc, char** argv) {
                        fbw, fbh);
             y += lh;
         }
-        char hint[176];
+        char hint[224];
         std::snprintf(hint, sizeof(hint),
                       "O: cab  Esc: menu  scroll/Z-X: zoom  WASD: pan  click switch to throw  "
-                      "click signal then destination to set a route  (view %.1f km)",
+                      "click signal then destination to set a route  R: exit routes  "
+                      "(view %.1f km)",
                       4.0f / g_mapZoom);
         appendText(tv, hint, x, y, sc * 0.75f, glm::vec3(0.7f, 0.85f, 0.7f), fbw, fbh);
         y += lh;
@@ -780,6 +901,7 @@ int main(int argc, char** argv) {
     bool mapAttached = false; // whether the map overlay is currently attached
     bool switchesChanged = true; // a switch moved: re-evaluate the signal aspects
     bool prevMapClick = false; // edge-trigger for the map left-click
+    bool prevPickUp = false, prevPickDown = false, prevPickEnter = false;
     const std::vector<std::string> kMenuItems = {"Traffic manager", "Exit"};
 
     auto setMapMsg = [&](const std::string& m) {
@@ -804,6 +926,23 @@ int main(int argc, char** argv) {
                 }
         return names;
     };
+    auto secName = [&](int id) {
+        for (const Section& s : circuits.sections)
+            if (s.id == id)
+                return s.name.empty() || s.name == "-" ? "S" + std::to_string(s.id) : s.name;
+        return "S" + std::to_string(id);
+    };
+    auto secOccupiedById = [&](int id) {
+        for (std::size_t si = 0; si < circuits.sections.size(); ++si)
+            if (circuits.sections[si].id == id)
+                return si < secOccupied.size() && secOccupied[si] != 0;
+        return false;
+    };
+    auto exitRouteName = [&](int ri) {
+        return exitRoutes[ri].name.empty() || exitRoutes[ri].name == "-"
+                   ? "R" + std::to_string(exitRoutes[ri].id)
+                   : exitRoutes[ri].name;
+    };
     // Which set route (if any) holds turnout `t`.
     auto routeHolding = [&](int t) {
         for (std::size_t pi = 0; pi < signalPaths.size(); ++pi) {
@@ -813,11 +952,23 @@ int main(int argc, char** argv) {
         }
         return -1;
     };
+    // Which set *main* route (if any) holds turnout `t`, by name. A departure keeps its
+    // turnouts for as long as it exists, not only while its first circuit is held.
+    auto mainRouteHolding = [&](int t) -> std::string {
+        for (const MainRoute& mr : mainRoutes)
+            for (const PathSwitch& ps : pathSwitchRequirements(mr.departure, switchNet, polys))
+                if (ps.turnout == t) return exitRouteName(mr.route);
+        return {};
+    };
 
     // Attempt to throw switch `i` from the map: allowed only for a non-broken motor
     // switch whose locking circuits are all clear. Sets the transient feedback message.
     auto tryMapThrow = [&](int i) {
         auto setMsg = setMapMsg;
+        if (const std::string mr = mainRouteHolding(i); !mr.empty()) {
+            setMsg("Locked by main route " + mr);
+            return;
+        }
         if (const int held = routeHolding(i); held >= 0) {
             setMsg("Locked by route " + pathName(held));
             return;
@@ -864,6 +1015,10 @@ int main(int argc, char** argv) {
         std::vector<PathSwitch> toMove;
         for (const PathSwitch& ps : reqs) {
             if (switchNet.state(ps.turnout) == ps.need) continue; // already right
+            if (const std::string mr = mainRouteHolding(ps.turnout); !mr.empty()) {
+                setMapMsg("Switch held by main route " + mr);
+                return;
+            }
             if (const int held = routeHolding(ps.turnout); held >= 0) {
                 setMapMsg("Switch held by route " + pathName(held));
                 return;
@@ -905,6 +1060,153 @@ int main(int argc, char** argv) {
         switchesChanged = true;
         g_mapDirty = true;
         setMapMsg("Route " + pathName(pi) + " cancelled");
+    };
+
+    // --- Setting a main-signal route ------------------------------------------------------
+    auto mainRouteFor = [&](int ri) -> MainRoute* {
+        for (MainRoute& mr : mainRoutes)
+            if (mr.route == ri) return &mr;
+        return nullptr;
+    };
+    // Why exit route `ri` cannot be set right now - `full` empty when it can. `brief` is a
+    // word or two for the picker, which has a hard width budget; the full reason goes to the
+    // message line when the operator actually tries it.
+    struct RouteBlock { std::string brief, full; };
+    auto exitRouteBlocked = [&](int ri) -> RouteBlock {
+        if (routeExit[ri] < 0) return {"no signal", "no exit signal"};
+        const SignalPath dep = departureRoute(exitRoutes[ri], exitSignals[routeExit[ri]]);
+        std::string occ;
+        for (int id : pathSections(dep, circuits))
+            if (secOccupiedById(id)) occ += (occ.empty() ? "" : ", ") + secName(id);
+        if (!occ.empty()) return {"occupied", "occupied: " + occ};
+        // A circuit already held by another departure is the conflicting-route case: two
+        // main signals must never both authorise a movement over the same track.
+        for (const MainRoute& mr : mainRoutes) {
+            if (mr.route == ri) continue;
+            for (int id : pathSections(dep, circuits))
+                if (std::find(mr.locked.begin(), mr.locked.end(), id) != mr.locked.end())
+                    return {"conflict", "conflicts with " + exitRouteName(mr.route)};
+        }
+        for (const PathSwitch& ps : pathSwitchRequirements(dep, switchNet, polys)) {
+            if (switchNet.state(ps.turnout) == ps.need) continue; // already right
+            if (const std::string mr = mainRouteHolding(ps.turnout); !mr.empty())
+                return {"switch held", "switch held by " + mr};
+            if (const int held = routeHolding(ps.turnout); held >= 0)
+                return {"switch held", "switch held by " + pathName(held)};
+            if (switchNet.type(ps.turnout) != SwitchType::Motor)
+                return {"hand switch", "needs a hand-thrown switch"};
+            if (switchNet.state(ps.turnout) == SwitchState::Broken)
+                return {"BROKEN", "switch BROKEN"};
+            for (int id : switchNet.lock(ps.turnout))
+                if (secOccupiedById(id))
+                    return {"switch locked", "switch locked: " + secName(id) + " occupied"};
+        }
+        return {};
+    };
+    // Set a departure: move its turnouts, open the dwarf paths lying along it, lock every
+    // circuit it runs through and clear its signal. Validated in full before anything moves,
+    // so a refused route changes nothing.
+    auto trySetExitRoute = [&](int ri) {
+        if (const RouteBlock why = exitRouteBlocked(ri); !why.full.empty()) {
+            setMapMsg("Route " + exitRouteName(ri) + ": " + why.full);
+            return;
+        }
+        const SignalPath dep = departureRoute(exitRoutes[ri], exitSignals[routeExit[ri]]);
+        std::vector<PathSwitch> toMove;
+        for (const PathSwitch& ps : pathSwitchRequirements(dep, switchNet, polys))
+            if (switchNet.state(ps.turnout) != ps.need) toMove.push_back(ps);
+        for (const PathSwitch& ps : toMove) switchNet.setState(ps.turnout, ps.need);
+        if (!toMove.empty()) {
+            switches.build(switchNet);
+            renderer.updateSwitches(switches.vertices(), switches.indices());
+        }
+        // The dwarfs along the way are opened too, and keep their own release logic - a
+        // shunting signal standing at danger under a cleared main signal reads as a fault.
+        int dwarfs = 0;
+        for (std::size_t pi = 0; pi < signalPaths.size(); ++pi) {
+            if (routeSet[pi] || !routeContains(dep, signalPaths[pi])) continue;
+            routeSet[pi] = 1;
+            ++dwarfs;
+        }
+        MainRoute mr;
+        mr.route = ri;
+        mr.placement = routePlacement[ri];
+        mr.departure = dep;
+        mr.locked = pathSections(dep, circuits);
+        // The signal's own route starts at its border, so its circuits are exactly the ones
+        // past the mast - and a circuit cannot straddle a border, so the two sets are
+        // disjoint rather than merely different.
+        mr.beyond = pathSections(exitSignals[routeExit[ri]], circuits);
+        mainRoutes.push_back(std::move(mr));
+        switchesChanged = true;
+        g_mapDirty = true;
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), " set (%zu switch(es), %d dwarf(s), %zu circuit(s))",
+                      toMove.size(), dwarfs, mainRoutes.back().locked.size());
+        setMapMsg("Route " + exitRouteName(ri) + buf);
+        std::printf("[Main] %s set: %s\n", exitRouteName(ri).c_str(), buf + 1);
+    };
+    auto cancelExitRoute = [&](int ri) {
+        const MainRoute* mr = mainRouteFor(ri);
+        if (!mr) return;
+        for (std::size_t pi = 0; pi < signalPaths.size(); ++pi)
+            if (routeSet[pi] && routeContains(mr->departure, signalPaths[pi])) routeSet[pi] = 0;
+        mainRoutes.erase(mainRoutes.begin() + (mr - mainRoutes.data()));
+        switchesChanged = true;
+        g_mapDirty = true;
+        setMapMsg("Route " + exitRouteName(ri) + " cancelled");
+        std::printf("[Main] %s cancelled\n", exitRouteName(ri).c_str());
+    };
+
+    // The exit routes on offer: those of the station nearest what the map is looking at,
+    // so a dispatcher panning to a place gets that place's routes.
+    auto stationRoutes = [&]() {
+        std::vector<int> out;
+        if (stationAt.empty()) return out;
+        const glm::vec2 at = mapCenter + g_mapPan;
+        int best = 0;
+        float bestD = std::numeric_limits<float>::max();
+        for (std::size_t i = 0; i < stationAt.size(); ++i) {
+            const float d = glm::length(stationAt[i] - at);
+            if (d < bestD) { bestD = d; best = static_cast<int>(i); }
+        }
+        for (std::size_t ri = 0; ri < exitRoutes.size(); ++ri)
+            if (routeExit[ri] >= 0 && exitStation[routeExit[ri]] == best)
+                out.push_back(static_cast<int>(ri));
+        return out;
+    };
+    // One picker line per route: its name, the authority it grants, and either that it is
+    // already set or why it cannot be, so the choice is informed before it is committed.
+    auto routePickItems = [&](const std::vector<int>& rs) {
+        // The panel is sized from its widest line, so the columns are capped: a long route
+        // name must not push it off the screen. The full reason is on the message line.
+        constexpr std::size_t kName = 26, kTag = 14;
+        auto fit = [](std::string t, std::size_t n) {
+            if (t.size() > n) t = t.substr(0, n - 1) + "~";
+            t.resize(n, ' ');
+            return t;
+        };
+        std::vector<std::string> items;
+        items.reserve(rs.size());
+        for (int ri : rs) {
+            std::string tag = mainRouteFor(ri) ? "SET - cancel"
+                                               : exitRouteBlocked(ri).brief;
+            items.push_back(fit(exitRouteName(ri), kName) +
+                            (exitRoutes[ri].type == RouteType::C2 ? "  C2  " : "  C1  ") +
+                            fit(tag, kTag));
+        }
+        if (items.empty()) items.push_back("(no exit routes here)");
+        return items;
+    };
+    // The picker panel, drawn after the map HUD so it sits over the map.
+    auto appendRoutePicker = [&](std::vector<TextVertex>& tv, int fbw, int fbh) {
+        if (!g_routePick) return;
+        const std::vector<int> rs = stationRoutes();
+        appendMenu(tv, "SET ROUTE  (Up/Down, Enter, Esc)", routePickItems(rs),
+                   rs.empty() ? 0
+                              : std::clamp(g_routePickSel, 0,
+                                           static_cast<int>(rs.size()) - 1),
+                   fbw, fbh);
     };
 
     // Open the audio device now that the heavy startup work is done, so the audio
@@ -950,10 +1252,59 @@ int main(int argc, char** argv) {
                             pathName(static_cast<int>(pi)).c_str());
             }
         }
+        // Main routes unwind circuit by circuit. Two different rules, deliberately:
+        // every circuit's lock is released as that circuit is itself entered, so the route
+        // gives up the road behind the train rather than all at once; but only a circuit
+        // *beyond* the signal puts it back to danger - whichever one it is and whoever
+        // entered it, which is the safety part. Running up to the signal must not cancel
+        // the authority the driver is about to act on.
+        if (occupancyChanged) {
+            for (std::size_t mi = 0; mi < mainRoutes.size();) {
+                MainRoute& mr = mainRoutes[mi];
+                bool passedSignal = false;
+                std::vector<int> still;
+                for (int id : mr.locked) {
+                    if (secOccupiedById(id)) {
+                        if (std::find(mr.beyond.begin(), mr.beyond.end(), id) != mr.beyond.end())
+                            passedSignal = true;
+                        std::printf("[Main] %s released %s (train entered)\n",
+                                    exitRouteName(mr.route).c_str(), secName(id).c_str());
+                    } else {
+                        still.push_back(id);
+                    }
+                }
+                if (passedSignal && mr.signalClear) {
+                    mr.signalClear = false;
+                    std::printf("[Main] %s -> DANGER (a circuit beyond the signal entered)\n",
+                                exitRouteName(mr.route).c_str());
+                }
+                if (still.size() != mr.locked.size()) {
+                    mr.locked = std::move(still);
+                    switchesChanged = true;
+                    g_mapDirty = true;
+                }
+                if (mr.locked.empty()) {
+                    std::printf("[Main] %s complete (last circuit entered)\n",
+                                exitRouteName(mr.route).c_str());
+                    mainRoutes.erase(mainRoutes.begin() + mi);
+                } else {
+                    ++mi;
+                }
+            }
+        }
         if (occupancyChanged || switchesChanged) {
             switchesChanged = false;
+            // What each main signal shows: danger unless a route it governs is set and has
+            // not yet been entered, then C1 (two greens) or C2 (one green) per its type.
+            std::vector<SignalAspect> exitAspects(sigPlacements.size(), SignalAspect::Stop);
+            for (const MainRoute& mr : mainRoutes) {
+                if (!mr.signalClear || mr.placement < 0) continue;
+                exitAspects[mr.placement] = exitRoutes[mr.route].type == RouteType::C2
+                                                ? SignalAspect::ClearReduced
+                                                : SignalAspect::Clear;
+            }
             if (updateSignalAspects(sigPlacements, signalPaths, switchNet, polys, circuits,
-                                    secOccupied, routeSet)) {
+                                    secOccupied, routeSet, exitAspects)) {
                 signals.build(sigPlacements, data.sceneOrigin());
                 renderer.updateSignals(signals.vertices(), signals.indices());
             }
@@ -1079,6 +1430,29 @@ int main(int argc, char** argv) {
             prevMapClick = mL;
         }
 
+        // Route picker: Up/Down move, Enter sets (or cancels a set route), Esc closes. The
+        // sim keeps running underneath - this is not the Escape menu and must not pause it.
+        if (g_mapMode && !g_menuOpen && g_routePick) {
+            auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
+            const bool pU = down(GLFW_KEY_UP), pD = down(GLFW_KEY_DOWN),
+                       pE = down(GLFW_KEY_ENTER);
+            const std::vector<int> rs = stationRoutes();
+            const int n = static_cast<int>(rs.size());
+            if (n > 0) {
+                if (pU && !prevPickUp) g_routePickSel = (g_routePickSel + n - 1) % n;
+                if (pD && !prevPickDown) g_routePickSel = (g_routePickSel + 1) % n;
+                g_routePickSel = std::clamp(g_routePickSel, 0, n - 1);
+                if (pE && !prevPickEnter) {
+                    const int ri = rs[g_routePickSel];
+                    if (mainRouteFor(ri)) cancelExitRoute(ri);
+                    else trySetExitRoute(ri);
+                }
+            }
+            prevPickUp = pU; prevPickDown = pD; prevPickEnter = pE;
+        } else {
+            prevPickUp = prevPickDown = prevPickEnter = false;
+        }
+
         if (g_menuOpen) {
             // --- Escape menu (pauses the sim) ---
             auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
@@ -1107,6 +1481,7 @@ int main(int argc, char** argv) {
             // vehicle exists the sim runs live in the Sim branch below. ---
             std::vector<TextVertex> tv;
             appendMapHud(tv, fbw, fbh, nullptr);
+            appendRoutePicker(tv, fbw, fbh);
             renderer.setOverlayText(tv);
         } else if (mode == Mode::Menu) {
             // --- Start screen: pick a vehicle ---
@@ -1167,9 +1542,12 @@ int main(int argc, char** argv) {
             }
         } else if (vehicle) {
             // --- Sim: hand push + physics + camera ---
+            // Up/Down hand-push the vehicle, except while the picker has those keys.
             float pushInput = 0.0f;
-            if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) pushInput += 1.0f;
-            if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) pushInput -= 1.0f;
+            if (!g_routePick) {
+                if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) pushInput += 1.0f;
+                if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) pushInput -= 1.0f;
+            }
 
             // Combined power/brake lever: ',' steps toward power (N -> P1..P5), '.'
             // toward brake (N -> B1..B4 -> Emergency), Space slams to emergency
@@ -1200,8 +1578,10 @@ int main(int argc, char** argv) {
             // Reverser handle for the same cab: F = Forward, N = Neutral, R =
             // Reverse (edge-triggered). No traction yet, but the R/N/F interlock
             // gates the brakes across both cabs (see Vehicle::effectiveNotch).
-            const bool rF = down(GLFW_KEY_F), rN = down(GLFW_KEY_N),
-                       rR = down(GLFW_KEY_R);
+            // The reverser is a cab control: in the map R offers the exit routes instead.
+            const bool rF = !g_mapMode && down(GLFW_KEY_F),
+                       rN = !g_mapMode && down(GLFW_KEY_N),
+                       rR = !g_mapMode && down(GLFW_KEY_R);
             const int prevRev = vehicle->reverser(cab);
             if (rF && !prevRevF) vehicle->setReverser(cab, 1);
             if (rN && !prevRevN) vehicle->setReverser(cab, 0);
@@ -1306,6 +1686,7 @@ int main(int argc, char** argv) {
             if (g_mapMode) {
                 std::vector<TextVertex> tv;
                 appendMapHud(tv, fbw, fbh, &*vehicle);
+                appendRoutePicker(tv, fbw, fbh);
                 renderer.setOverlayText(tv);
             } else {
                 std::vector<TextVertex> tv;

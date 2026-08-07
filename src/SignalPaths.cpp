@@ -391,6 +391,48 @@ bool pathSwitchesAligned(const SignalPath& p, const SwitchNetwork& net,
     return true;
 }
 
+SignalPath departureRoute(const SignalPath& exitRoute, const SignalPath& exitSignal) {
+    SignalPath d;
+    d.id = exitRoute.id;
+    d.name = exitRoute.name;
+    d.start = exitRoute.start;
+    d.end = exitSignal.end;
+    d.exitId = exitRoute.exitId;
+    d.type = exitRoute.type;
+    d.parts = exitRoute.parts;
+    for (const SectionInterval& iv : exitSignal.parts) {
+        // The two halves meet at the signal's border: where that join runs on through one
+        // track in one direction it is a single interval, not two that happen to touch.
+        if (!d.parts.empty()) {
+            SectionInterval& last = d.parts.back();
+            if (last.trackId == iv.trackId && last.to == iv.from &&
+                (last.to - last.from) * (iv.to - iv.from) > 0.0) {
+                last.to = iv.to;
+                continue;
+            }
+        }
+        d.parts.push_back(iv);
+    }
+    return d;
+}
+
+bool routeContains(const SignalPath& whole, const SignalPath& part) {
+    if (part.parts.empty()) return false;
+    for (const SectionInterval& p : part.parts) {
+        const double lo = std::min(p.from, p.to), hi = std::max(p.from, p.to);
+        bool inside = false;
+        for (const SectionInterval& w : whole.parts) {
+            if (w.trackId != p.trackId) continue;
+            if ((w.to - w.from) * (p.to - p.from) <= 0.0) continue; // runs the other way
+            const double wlo = std::min(w.from, w.to), whi = std::max(w.from, w.to);
+            const double tol = 1e-9;
+            if (lo >= wlo - tol && hi <= whi + tol) { inside = true; break; }
+        }
+        if (!inside) return false;
+    }
+    return true;
+}
+
 RouteType defaultRouteType(const SignalPath& route, const SignalPath& exit,
                            const SwitchNetwork& net, const std::vector<TrackPoly>& polys) {
     auto diverges = [&](const SignalPath& p) {
@@ -426,7 +468,8 @@ bool updateSignalAspects(std::vector<SignalPlacement>& placements,
                          const std::vector<TrackPoly>& polys,
                          const TrackCircuits& circuits,
                          const std::vector<char>& secOccupied,
-                         const std::vector<char>& routeSet) {
+                         const std::vector<char>& routeSet,
+                         const std::vector<SignalAspect>& exitAspects) {
     // What a dwarf governing `governed` should display.
     auto dwarfAspectFor = [&](const std::vector<int>& governed) {
         SignalAspect want = SignalAspect::Stop;
@@ -448,14 +491,17 @@ bool updateSignalAspects(std::vector<SignalPlacement>& placements,
         return want;
     };
     bool changed = false;
-    for (SignalPlacement& sp : placements) {
+    for (std::size_t k = 0; k < placements.size(); ++k) {
+        SignalPlacement& sp = placements[k];
         if (sp.kind == SignalKind::Exit) {
-            // The exit head only ever shows danger for now; its route-clearing rule comes
-            // later. A dwarf sharing the pole keeps its own indication.
-            if (sp.aspect != SignalAspect::Stop) { sp.aspect = SignalAspect::Stop; changed = true; }
+            // What the main head shows is decided by the interlocking, not here: danger
+            // unless a locked route says otherwise. A dwarf sharing the pole keeps its own
+            // indication, which is still this function's business.
+            const SignalAspect w = k < exitAspects.size() ? exitAspects[k] : SignalAspect::Stop;
+            if (sp.aspect != w) { sp.aspect = w; changed = true; }
             if (sp.withDwarf) {
-                const SignalAspect w = dwarfAspectFor(sp.dwarfPaths);
-                if (sp.dwarfAspect != w) { sp.dwarfAspect = w; changed = true; }
+                const SignalAspect d = dwarfAspectFor(sp.dwarfPaths);
+                if (sp.dwarfAspect != d) { sp.dwarfAspect = d; changed = true; }
             }
             continue;
         }
