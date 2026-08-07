@@ -73,6 +73,36 @@ glm::dvec3 fracToWorld(const std::vector<TrackPoly>& polys, std::uint32_t trackI
 }
 
 // --------------------------------------------------------------------------- IO
+bool readName(std::istream& is, std::string& out) {
+    std::string tok;
+    if (!(is >> tok)) return false;
+    if (tok.empty() || tok.front() != '"') { // bare token: a file written before quoting
+        out = tok;
+        return true;
+    }
+    out = tok.substr(1);
+    if (out.size() >= 1 && out.back() == '"' && tok.size() > 1) { // "one" - closes already
+        out.pop_back();
+        return true;
+    }
+    // Spans several whitespace-separated tokens: gather until the closing quote.
+    std::string more;
+    while (is >> more) {
+        out += ' ';
+        if (!more.empty() && more.back() == '"') {
+            out += more.substr(0, more.size() - 1);
+            break;
+        }
+        out += more;
+    }
+    return true;
+}
+
+std::string quoteName(const std::string& name) {
+    // The name is filtered on entry, so it never holds a quote of its own.
+    return '"' + (name.empty() ? std::string("-") : name) + '"';
+}
+
 TrackCircuits loadTrackCircuits(const std::string& datasetRoot) {
     TrackCircuits tc;
     std::ifstream f(circuitsFile(datasetRoot));
@@ -92,7 +122,8 @@ TrackCircuits loadTrackCircuits(const std::string& datasetRoot) {
             tc.borders.push_back(b);
         } else if (kind == "section") {
             Section s;
-            is >> s.id >> s.name;
+            is >> s.id;
+            readName(is, s.name);
             std::string tok;
             while (is >> tok) {
                 // trackIdHex:from:to
@@ -119,11 +150,11 @@ bool writeTrackCircuits(const std::string& datasetRoot, const TrackCircuits& tc)
     if (!f) return false;
     f << "# ebaner track-circuit sections (train-present sensing).\n"
          "# border  <trackIdHex> <frac> <x> <y>\n"
-         "# section <id> <name> <trackIdHex>:<from>:<to> ...\n";
+         "# section <id> \"<name>\" <trackIdHex>:<from>:<to> ...\n";
     for (const Border& b : tc.borders)
         f << "border " << std::hex << b.trackId << std::dec << ' ' << b.frac << " 0 0\n";
     for (const Section& s : tc.sections) {
-        f << "section " << s.id << ' ' << (s.name.empty() ? "-" : s.name);
+        f << "section " << s.id << ' ' << quoteName(s.name);
         for (const SectionInterval& iv : s.parts)
             f << ' ' << std::hex << iv.trackId << std::dec << ':' << iv.from << ':' << iv.to;
         f << '\n';

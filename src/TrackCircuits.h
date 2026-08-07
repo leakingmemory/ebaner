@@ -16,6 +16,7 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
+#include <istream>
 #include <string>
 #include <vector>
 
@@ -59,6 +60,15 @@ struct TrackPoly {
     std::uint32_t id = 0;
     std::vector<glm::dvec3> pts;
 };
+
+// --- Shared overlay name tokens ---
+// Names are authored by hand and read back by people, so they may hold spaces - which the
+// whitespace-delimited overlay grammars cannot express on their own. Every overlay file
+// therefore writes a name quoted and reads either form: a `"quoted name"` when the next
+// token opens with a quote, else a single bare token. The bare fallback is what keeps files
+// written before quoting was introduced loading unchanged.
+bool readName(std::istream& is, std::string& out);
+std::string quoteName(const std::string& name);
 
 // --- File IO (mirrors loadTrackOverlay/writeTrackOverlay) ---
 TrackCircuits loadTrackCircuits(const std::string& datasetRoot);

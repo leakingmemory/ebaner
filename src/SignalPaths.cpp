@@ -32,6 +32,10 @@ std::string pathsFile(const std::string& root) {
     return root + "/overlay/signal-paths.txt";
 }
 
+std::string exitRoutesFile(const std::string& root) {
+    return root + "/overlay/exit-routes.txt";
+}
+
 // Parse a `<trackHex>:<frac>` border token.
 bool parseBorder(const std::string& tok, Border& b) {
     const auto c = tok.find(':');
@@ -98,18 +102,32 @@ std::vector<SignalPath> loadRoutes(const std::string& file, const char* keyword)
     while (std::getline(f, line)) {
         if (line.empty() || line[0] == '#') continue;
         std::istringstream is(line);
-        std::string kind, name, startTok, endTok;
+        std::string kind, startTok, endTok;
         SignalPath p;
-        is >> kind >> p.id >> name >> startTok >> endTok;
-        if (kind != keyword || startTok.empty() || endTok.empty()) continue;
-        p.name = name;
+        is >> kind >> p.id;
+        if (kind != keyword) continue;
+        readName(is, p.name);
+        is >> startTok >> endTok;
+        if (startTok.empty() || endTok.empty()) continue;
         if (!parseBorder(startTok, p.start) || !parseBorder(endTok, p.end)) continue;
-        std::string tok; // optional `via <border>` entries, then trackHex:from:to intervals
+        // Optional keyword entries (`via`, `signal`, `type`), then the trackHex:from:to
+        // intervals. Each keyword was added after the fact and is skipped harmlessly by a
+        // reader that predates it, since neither it nor its argument parses as an interval.
+        std::string tok;
         while (is >> tok) {
             if (tok == "via") {
                 std::string vt;
                 Border vb;
                 if ((is >> vt) && parseBorder(vt, vb)) p.vias.push_back(vb);
+                continue;
+            }
+            if (tok == "signal") { // exit routes: the exit signal this route leads to
+                is >> p.exitId;
+                continue;
+            }
+            if (tok == "type") { // exit routes: the authority a set route grants
+                std::string tt;
+                if (is >> tt) p.type = tt == "C2" ? RouteType::C2 : RouteType::C1;
                 continue;
             }
             const auto c1 = tok.find(':');
@@ -135,12 +153,18 @@ bool writeRoutes(const std::string& datasetRoot, const std::string& file,
     std::ofstream f(file, std::ios::trunc);
     if (!f) return false;
     f << header << "# " << keyword
-      << " <id> <name> <startTrackHex>:<frac> <endTrackHex>:<frac> "
-         "[via <trackHex>:<frac>]... <trackHex>:<from>:<to> ...\n";
+      << " <id> \"<name>\" <startTrackHex>:<frac> <endTrackHex>:<frac> "
+         "[signal <exitId> type <C1|C2>] [via <trackHex>:<frac>]... "
+         "<trackHex>:<from>:<to> ...\n";
     for (const SignalPath& p : routes) {
-        f << keyword << ' ' << p.id << ' ' << (p.name.empty() ? "-" : p.name) << ' '
+        f << keyword << ' ' << p.id << ' ' << quoteName(p.name) << ' '
           << std::hex << p.start.trackId << std::dec << ':' << p.start.frac << ' '
           << std::hex << p.end.trackId << std::dec << ':' << p.end.frac;
+        // Only an exit route carries these; writing them always for one keeps the file
+        // self-documenting rather than leaning on the C1 default.
+        if (p.exitId != 0)
+            f << " signal " << p.exitId << " type "
+              << (p.type == RouteType::C2 ? "C2" : "C1");
         for (const Border& v : p.vias)
             f << " via " << std::hex << v.trackId << std::dec << ':' << v.frac;
         for (const SectionInterval& iv : p.parts)
@@ -162,6 +186,18 @@ bool writeSignalPaths(const std::string& datasetRoot,
                        paths);
 }
 
+std::vector<SignalPath> loadExitRoutes(const std::string& datasetRoot) {
+    return loadRoutes(exitRoutesFile(datasetRoot), "route");
+}
+
+bool writeExitRoutes(const std::string& datasetRoot,
+                     const std::vector<SignalPath>& routes) {
+    return writeRoutes(datasetRoot, exitRoutesFile(datasetRoot), "route",
+                       "# ebaner exit routes: the authority to move from a border inside the\n"
+                       "# station up to an exit signal, which the signal then displays.\n",
+                       routes);
+}
+
 std::vector<SignalPath> loadExitSignals(const std::string& datasetRoot) {
     return loadRoutes(exitsFile(datasetRoot), "exit");
 }
@@ -174,23 +210,71 @@ bool writeExitSignals(const std::string& datasetRoot,
                        exits);
 }
 
+bool routeStartPose(const SignalPath& p, const std::vector<TrackPoly>& polys,
+                    glm::dvec3& world, glm::dvec2& fwd) {
+    if (p.parts.empty()) return false;
+    const SectionInterval& iv0 = p.parts.front();
+    const glm::dvec3 a = fracToWorld(polys, iv0.trackId, iv0.from);
+    if (a.x == 0.0 && a.y == 0.0) return false; // stale/missing track
+    // A small step toward `to` gives the travel direction leaving the border.
+    const double f1 = iv0.from + (iv0.to - iv0.from) * 0.02;
+    const glm::dvec3 b = fracToWorld(polys, iv0.trackId, f1);
+    glm::dvec2 d(b.x - a.x, b.y - a.y);
+    const double L = glm::length(d);
+    if (L < 1e-6) return false;
+    world = a;
+    fwd = d / L;
+    return true;
+}
+
+// Where a route *ends* and the direction it is travelling as it arrives there - the mirror
+// of routeStartPose, taken from the last interval's `to`.
+namespace {
+bool routeEndPose(const SignalPath& p, const std::vector<TrackPoly>& polys,
+                  glm::dvec3& world, glm::dvec2& fwd) {
+    if (p.parts.empty()) return false;
+    const SectionInterval& ivN = p.parts.back();
+    const glm::dvec3 a = fracToWorld(polys, ivN.trackId, ivN.to);
+    if (a.x == 0.0 && a.y == 0.0) return false;
+    const double f1 = ivN.to + (ivN.from - ivN.to) * 0.02; // a bit upstream
+    const glm::dvec3 b = fracToWorld(polys, ivN.trackId, f1);
+    glm::dvec2 d(a.x - b.x, a.y - b.y); // upstream -> end = the arrival direction
+    const double L = glm::length(d);
+    if (L < 1e-6) return false;
+    world = a;
+    fwd = d / L;
+    return true;
+}
+} // namespace
+
+int exitRouteTarget(const SignalPath& route, const std::vector<SignalPath>& exits,
+                    const std::vector<TrackPoly>& polys) {
+    glm::dvec3 endW(0.0);
+    glm::dvec2 arrive(0.0);
+    if (!routeEndPose(route, polys, endW, arrive)) return -1;
+    for (std::size_t i = 0; i < exits.size(); ++i) {
+        const SignalPath& e = exits[i];
+        if (e.start.trackId != route.end.trackId) continue;
+        if (std::abs(e.start.frac - route.end.frac) > sameFracTol(polys, e.start.trackId))
+            continue;
+        glm::dvec3 sigW(0.0);
+        glm::dvec2 face(0.0);
+        if (!routeStartPose(e, polys, sigW, face)) continue;
+        if (glm::dot(arrive, face) <= 0.0) continue; // would arrive behind the signal
+        return static_cast<int>(i);
+    }
+    return -1;
+}
+
 std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& paths,
                                               const std::vector<TrackPoly>& polys) {
     std::vector<SignalPlacement> out;
     std::unordered_map<std::string, int> seen; // dedupe key -> placement index
     for (std::size_t pi = 0; pi < paths.size(); ++pi) {
         const SignalPath& p = paths[pi];
-        if (p.parts.empty()) continue;
-        const SectionInterval& iv0 = p.parts.front();
-        const glm::dvec3 a = fracToWorld(polys, iv0.trackId, iv0.from);
-        // A small step toward `to` gives the travel direction leaving the border.
-        const double f1 = iv0.from + (iv0.to - iv0.from) * 0.02;
-        const glm::dvec3 b = fracToWorld(polys, iv0.trackId, f1);
-        if (a.x == 0.0 && a.y == 0.0) continue; // stale/missing track
-        glm::dvec2 fwd(b.x - a.x, b.y - a.y);
-        const double L = glm::length(fwd);
-        if (L < 1e-6) continue;
-        fwd /= L;
+        glm::dvec3 a(0.0);
+        glm::dvec2 fwd(0.0);
+        if (!routeStartPose(p, polys, a, fwd)) continue;
         // Dedupe: same start border (trackId + frac) and same rough direction -> one signal.
         char key[64];
         std::snprintf(key, sizeof(key), "%x:%d:%d:%d", p.start.trackId,
@@ -305,6 +389,16 @@ bool pathSwitchesAligned(const SignalPath& p, const SwitchNetwork& net,
     for (const PathSwitch& ps : pathSwitchRequirements(p, net, polys))
         if (net.state(ps.turnout) != ps.need) return false;
     return true;
+}
+
+RouteType defaultRouteType(const SignalPath& route, const SignalPath& exit,
+                           const SwitchNetwork& net, const std::vector<TrackPoly>& polys) {
+    auto diverges = [&](const SignalPath& p) {
+        for (const PathSwitch& ps : pathSwitchRequirements(p, net, polys))
+            if (ps.need == SwitchState::Diverging) return true;
+        return false;
+    };
+    return (diverges(route) || diverges(exit)) ? RouteType::C2 : RouteType::C1;
 }
 
 std::vector<int> pathSections(const SignalPath& p, const TrackCircuits& circuits) {

@@ -32,6 +32,10 @@
 // The `via` entries are optional and come before the intervals. A reader that predates
 // them skips both tokens (neither parses as an interval), so the file stays loadable.
 
+// What a set route authorises, which is what the signal governing it then displays. In
+// Norway an unrestricted proceed is two greens and a proceed over a deviation is one.
+enum class RouteType { C1, C2 };
+
 struct SignalPath {
     int id = 0;
     std::string name;
@@ -41,6 +45,9 @@ struct SignalPath {
     // connect the same two borders; empty when the route is unambiguous on its own.
     std::vector<Border> vias;
     std::vector<SectionInterval> parts; // ordered, directed route intervals
+    // --- exit routes only (left at these defaults by mini paths and exit signals) ---
+    int exitId = 0;                  // >0: the exit signal this route leads up to
+    RouteType type = RouteType::C1;  // the authority it grants
 };
 
 // --- Moving a border (see canMoveBorder/moveBorderFrac in TrackCircuits.h) ---
@@ -69,6 +76,15 @@ std::vector<SignalPath> loadExitSignals(const std::string& datasetRoot);
 bool writeExitSignals(const std::string& datasetRoot,
                       const std::vector<SignalPath>& exits);
 
+// Exit routes: the authority to move from a border inside the station up to an exit signal
+// (`start` -> `end`, where `end` is that signal's own border and `exitId` names it). A main
+// signal's authority begins back at the platform road, not at the signal, and one signal
+// commonly serves several roads - so these are many-to-one onto an exit signal.
+// Stored in `overlay/exit-routes.txt`.
+std::vector<SignalPath> loadExitRoutes(const std::string& datasetRoot);
+bool writeExitRoutes(const std::string& datasetRoot,
+                     const std::vector<SignalPath>& routes);
+
 // What a mini ground signal displays: the fixed reference lamp plus one lamp on the arc.
 // Stop = horizontal pair, TrainOnTrack = 45 deg (a train stands in the route's circuits),
 // Clear = vertical (route set and clear; not driven yet).
@@ -94,10 +110,24 @@ struct SignalPlacement {
     std::vector<int> dwarfPaths; // the mini paths of the dwarf sharing this pole
 };
 
+// Where a route begins and which way it sets off: the world point of its first interval's
+// `from` and the unit direction leaving it. False if the track is missing or degenerate.
+bool routeStartPose(const SignalPath& p, const std::vector<TrackPoly>& polys,
+                    glm::dvec3& world, glm::dvec2& fwd);
+
 // One placement per distinct (start border, travel direction) over all paths - so paths
 // sharing a start collapse to a single signal (governing all of them).
+// Only give this exit *signals*, never exit routes: it puts a signal at every route start,
+// so exit routes would sprout masts on the platform roads.
 std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& paths,
                                               const std::vector<TrackPoly>& polys);
+
+// Which exit signal a candidate exit route may attach to (index into `exits`, else -1). The
+// route must end on that signal's own border *and* arrive facing the way the signal faces:
+// findSignalRoute only knows the route reached the border, not which side of the signal it
+// came from, and arriving from behind is not authority to pass it.
+int exitRouteTarget(const SignalPath& route, const std::vector<SignalPath>& exits,
+                    const std::vector<TrackPoly>& polys);
 
 // One list holding both kinds. Where an exit signal and a dwarf stand at the same border
 // facing the same way they are folded into a single placement (`kind = Exit`,
@@ -119,6 +149,13 @@ std::vector<PathSwitch> pathSwitchRequirements(const SignalPath& p, const Switch
 // True if every turnout the path traverses currently sits in the position that path needs.
 bool pathSwitchesAligned(const SignalPath& p, const SwitchNetwork& net,
                          const std::vector<TrackPoly>& polys);
+
+// The type a new exit route should start out as: C2 if any turnout on the departure needs
+// its diverging leg, else C1. Both the route up to the signal *and* the signal's own route
+// beyond it count - the driver is being told about the whole departure, and the merge onto
+// the line commonly sits past the signal. A default only; the editor can override it.
+RouteType defaultRouteType(const SignalPath& route, const SignalPath& exit,
+                           const SwitchNetwork& net, const std::vector<TrackPoly>& polys);
 
 // The ids of the track-circuit sections the path actually runs through (a shared end
 // point with a neighbouring section does not count as running through it).
