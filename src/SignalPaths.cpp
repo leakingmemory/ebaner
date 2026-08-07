@@ -97,8 +97,14 @@ std::vector<SignalPath> loadSignalPaths(const std::string& datasetRoot) {
         if (kind != "path" || startTok.empty() || endTok.empty()) continue;
         p.name = name;
         if (!parseBorder(startTok, p.start) || !parseBorder(endTok, p.end)) continue;
-        std::string tok; // remaining trackHex:from:to interval tokens
+        std::string tok; // optional `via <border>` entries, then trackHex:from:to intervals
         while (is >> tok) {
+            if (tok == "via") {
+                std::string vt;
+                Border vb;
+                if ((is >> vt) && parseBorder(vt, vb)) p.vias.push_back(vb);
+                continue;
+            }
             const auto c1 = tok.find(':');
             const auto c2 = tok.rfind(':');
             if (c1 == std::string::npos || c2 == c1) continue;
@@ -122,11 +128,13 @@ bool writeSignalPaths(const std::string& datasetRoot,
     if (!f) return false;
     f << "# ebaner mini signal paths (directional routes, border -> border).\n"
          "# path <id> <name> <startTrackHex>:<frac> <endTrackHex>:<frac> "
-         "<trackHex>:<from>:<to> ...\n";
+         "[via <trackHex>:<frac>]... <trackHex>:<from>:<to> ...\n";
     for (const SignalPath& p : paths) {
         f << "path " << p.id << ' ' << (p.name.empty() ? "-" : p.name) << ' ' << std::hex
           << p.start.trackId << std::dec << ':' << p.start.frac << ' ' << std::hex
           << p.end.trackId << std::dec << ':' << p.end.frac;
+        for (const Border& v : p.vias)
+            f << " via " << std::hex << v.trackId << std::dec << ':' << v.frac;
         for (const SectionInterval& iv : p.parts)
             f << ' ' << std::hex << iv.trackId << std::dec << ':' << iv.from << ':' << iv.to;
         f << '\n';

@@ -117,5 +117,9 @@ SectionResult floodSection(const std::vector<TrackPoly>& polys,
 // single road is not reported several times. Returns the number of distinct routes; when
 // exactly one exists, fills `out` with its ordered directed intervals (from -> to is the
 // travel direction, so `from` may exceed `to`). 0 = no route, >=2 = ambiguous.
+// `vias` (optional) are borders the route must pass through, in that order and in the
+// direction of travel. They only filter the roads the search would already accept, so a
+// via can never enable a move that is otherwise illegal - it just picks between roads.
 int findSignalRoute(const std::vector<TrackPoly>& polys, const Border& start,
-                    const Border& end, std::vector<SectionInterval>& out);
+                    const Border& end, std::vector<SectionInterval>& out,
+                    const std::vector<Border>& vias = {});

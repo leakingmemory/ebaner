@@ -230,6 +230,7 @@ int main(int argc, char** argv) {
     std::vector<SignalPath> signalPaths = loadSignalPaths(datasetRoot);
     bool pathsDirty = false;         // unsaved signal-path changes
     int pathStart = -1;              // in-progress path's start border (index into tc.borders)
+    std::vector<Border> pendingVias; // borders the in-progress path must pass through
     int selPath = -1;                // selected signal path (index into signalPaths)
     int namingPath = -1;             // signal path being renamed (index), -1 = none
     int nextPathId = 1;              // auto-increment path id
@@ -447,6 +448,27 @@ int main(int argc, char** argv) {
                     lns.push_back({tc3, col}); lns.push_back({l3, col});
                     lns.push_back({tc3, col}); lns.push_back({r3, col});
                 }
+            }
+            // Via points: the pending ones while authoring, and the selected path's
+            // stored ones, so it is visible which road was picked and why.
+            {
+                auto drawVia = [&](const Border& v, const glm::vec3& col) {
+                    const glm::dvec3 w = fracToWorld(polys, v.trackId, v.frac);
+                    if (w.x == 0.0 && w.y == 0.0) return;
+                    lns.push_back({scv(w, 0.3f), col});
+                    lns.push_back({scv(w, 5.5f), col});
+                    pts.push_back({scv(w, 5.5f), col});
+                    // a small cross, so a via reads differently from a plain border
+                    for (int a2 = 0; a2 < 2; ++a2) {
+                        const glm::dvec3 d = a2 ? glm::dvec3(0, 3.0, 0) : glm::dvec3(3.0, 0, 0);
+                        lns.push_back({scv(w - d, 5.5f), col});
+                        lns.push_back({scv(w + d, 5.5f), col});
+                    }
+                };
+                for (const Border& v : pendingVias) drawVia(v, glm::vec3(1.0f, 0.6f, 0.0f));
+                if (selPath >= 0 && selPath < static_cast<int>(signalPaths.size()))
+                    for (const Border& v : signalPaths[selPath].vias)
+                        drawVia(v, glm::vec3(1.0f, 0.85f, 0.3f));
             }
             // In-progress start border, highlighted.
             if (pathStart >= 0 && pathStart < static_cast<int>(tc.borders.size())) {
@@ -957,7 +979,8 @@ int main(int argc, char** argv) {
     bool prevEnter = false, prevL = false, prevX = false, prevML = false,
          prevG = false, prevS = false, prevUp = false, prevDown = false,
          prevJ = false, prevN = false, prevR = false, prevK = false, prevC = false,
-         prevP = false, prevF2 = false, prevMR = false, prevM = false;
+         prevP = false, prevF2 = false, prevMR = false, prevM = false,
+         prevV = false;
     bool prevNameEnter = false, prevNameEsc = false, prevNameBs = false;
     bool prevMenuEnter = false, prevMenuUp = false, prevMenuDown = false;
     const std::vector<std::string> kMenuItems = {"Geometry edit", "Track circuits",
@@ -994,7 +1017,7 @@ int main(int argc, char** argv) {
                                                     : EdMode::Geometry;
                     selected.clear(); selA = selB = -1; selBorder = -1;
                     selTurnout = -1;
-                    pathStart = -1; selPath = -1;
+                    pathStart = -1; selPath = -1; pendingVias.clear();
                     showPending = false;
                     rebuildOverlay();
                     g_menuOpen = false;
@@ -1321,6 +1344,7 @@ int main(int argc, char** argv) {
         const bool kP = glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS;
         const bool kF2 = glfwGetKey(window, GLFW_KEY_F2) == GLFW_PRESS;
         const bool kM = glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS;
+        const bool kV = glfwGetKey(window, GLFW_KEY_V) == GLFW_PRESS;
         // Save is Ctrl+S (plain S is the backward-movement key).
         const bool kSave = ctrl && glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS;
         if (mode == EdMode::Geometry) {
@@ -1445,10 +1469,30 @@ int main(int argc, char** argv) {
                             tc.sections[sectionHover].name.c_str());
             }
         } else { // --- Signal-paths mode ---
+            // V: pin the hovered border as a via the route must pass through, so an
+            // otherwise ambiguous destination can be narrowed to one road.
+            if (kV && !prevV) {
+                if (pathStart < 0) {
+                    pathMsg = "click a start border first, then V to add a via";
+                } else if (borderHover < 0) {
+                    pathMsg = "hover a border to add it as a via";
+                } else if (borderHover == pathStart) {
+                    pathMsg = "that is the start border";
+                } else if (!pendingVias.empty() &&
+                           pendingVias.back().trackId == tc.borders[borderHover].trackId &&
+                           pendingVias.back().frac == tc.borders[borderHover].frac) {
+                    pathMsg = "already the last via";
+                } else {
+                    pendingVias.push_back(tc.borders[borderHover]);
+                    pathMsg = "via added (" + std::to_string(pendingVias.size()) + ")";
+                }
+                pathMsgUntil = glfwGetTime() + 3.0;
+                rebuildOverlay();
+            }
             // X: cancel an in-progress path, else delete the selected one.
             if (kX && !prevX) {
                 if (pathStart >= 0) {
-                    pathStart = -1;
+                    pathStart = -1; pendingVias.clear();
                 } else if (selPath >= 0 && selPath < static_cast<int>(signalPaths.size())) {
                     signalPaths.erase(signalPaths.begin() + selPath);
                     selPath = -1; pathsDirty = true;
@@ -1550,7 +1594,7 @@ int main(int argc, char** argv) {
         }
         prevEnter = kEnter; prevL = kL; prevX = kX; prevG = kG; prevS = kSave;
         prevJ = kJ; prevN = kN; prevR = kR; prevK = kK; prevC = kC; prevP = kP;
-        prevF2 = kF2; prevM = kM;
+        prevF2 = kF2; prevM = kM; prevV = kV;
 
         // Click to select (cursor freed only). Ctrl+click toggles for multi-select;
         // plain click selects one; clicking empty space clears.
@@ -1621,35 +1665,38 @@ int main(int argc, char** argv) {
                     pathStart = borderHover;
                 } else if (borderHover == pathStart) {
                     // clicked the same border again: cancel
-                    pathStart = -1;
+                    pathStart = -1; pendingVias.clear();
                 } else {
                     std::vector<SectionInterval> route;
                     const int n = findSignalRoute(polys, tc.borders[pathStart],
-                                                  tc.borders[borderHover], route);
+                                                  tc.borders[borderHover], route,
+                                                  pendingVias);
                     if (n == 1) {
                         SignalPath p;
                         p.id = nextPathId++;
                         p.name = "P" + std::to_string(p.id);
                         p.start = tc.borders[pathStart];
                         p.end = tc.borders[borderHover];
+                        p.vias = pendingVias;
                         p.parts = std::move(route);
                         signalPaths.push_back(std::move(p));
                         selPath = static_cast<int>(signalPaths.size()) - 1;
-                        pathStart = -1; pathsDirty = true;
+                        pathStart = -1; pendingVias.clear(); pathsDirty = true;
                         rebuildStructs(); // place a signal at the new path's start
-                        std::printf("[trackedit] signal path %d: %zu interval(s) "
+                        std::printf("[trackedit] signal path %d: %zu interval(s), %zu via(s) "
                                     "(Ctrl+S to save)\n", signalPaths[selPath].id,
-                                    signalPaths[selPath].parts.size());
+                                    signalPaths[selPath].parts.size(),
+                                    signalPaths[selPath].vias.size());
                     } else {
-                        pathMsg = n == 0 ? "no route between those borders"
-                                         : "ambiguous - pick a more specific end border";
+                        pathMsg = n == 0 ? "no route (V on a border adds a via)"
+                                         : "ambiguous - add a via (V) to pick the road";
                         pathMsgUntil = now + 3.0;
                         std::printf("[trackedit] signal path %s\n", pathMsg.c_str());
-                        // keep pathStart so the user can pick a different end border
+                        // keep pathStart and the vias so another can be added
                     }
                 }
             } else {
-                pathStart = -1; // clicked empty space: cancel in-progress
+                pathStart = -1; pendingVias.clear(); // clicked empty space: cancel
             }
             rebuildOverlay();
         }
@@ -1826,7 +1873,14 @@ int main(int argc, char** argv) {
             char selnm[48] = "";
             if (selPath >= 0 && selPath < static_cast<int>(signalPaths.size()))
                 std::snprintf(selnm, sizeof(selnm), "  sel: %s", signalPaths[selPath].name.c_str());
-            std::snprintf(buf, sizeof(buf), "PATHS %zu%s", signalPaths.size(), selnm);
+            char vtxt[40] = "";
+            if (!pendingVias.empty())
+                std::snprintf(vtxt, sizeof(vtxt), "  vias: %zu", pendingVias.size());
+            else if (selPath >= 0 && selPath < static_cast<int>(signalPaths.size()) &&
+                     !signalPaths[selPath].vias.empty())
+                std::snprintf(vtxt, sizeof(vtxt), "  vias: %zu",
+                              signalPaths[selPath].vias.size());
+            std::snprintf(buf, sizeof(buf), "PATHS %zu%s%s", signalPaths.size(), selnm, vtxt);
             appendText(tv, buf, x, 40.0f + 4 * lh, sc,
                        selPath >= 0 ? glm::vec3(1.0f, 0.9f, 0.3f) : glm::vec3(0.9f, 0.85f, 0.7f),
                        fbw, fbh);
@@ -1845,7 +1899,8 @@ int main(int argc, char** argv) {
             appendText(tv,
                        g_mouseCaptured ? "SIGNAL PATHS: press Tab to free the cursor"
                                        : "SIGNAL PATHS: click start then end border  "
-                                         "right-click=select  F2=rename  X=cancel/delete",
+                                         "V=add via  right-click=select  F2=rename  "
+                                         "X=cancel/delete",
                        x, 40.0f + 7 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
             // Path-name labels at each path's midpoint interval.
             for (const SignalPath& p : signalPaths) {

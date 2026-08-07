@@ -28,13 +28,18 @@
 //
 // File `<datasetRoot>/overlay/signal-paths.txt`:
 //   path <id> <name> <startTrackHex>:<startFrac> <endTrackHex>:<endFrac> \
-//        <trackHex>:<from>:<to> <trackHex>:<from>:<to> ...
+//        [via <trackHex>:<frac>]... <trackHex>:<from>:<to> <trackHex>:<from>:<to> ...
+// The `via` entries are optional and come before the intervals. A reader that predates
+// them skips both tokens (neither parses as an interval), so the file stays loadable.
 
 struct SignalPath {
     int id = 0;
     std::string name;
     Border start;
     Border end;
+    // Borders the route must pass through, in order. Used to pick one road where several
+    // connect the same two borders; empty when the route is unambiguous on its own.
+    std::vector<Border> vias;
     std::vector<SectionInterval> parts; // ordered, directed route intervals
 };
 
