@@ -50,6 +50,13 @@ void main() {
         base = vColor;
     }
 
+    // A lit signal lamp is its own light source: no sun term and no haze, so it keeps
+    // its full colour however far away and whatever the sun is doing.
+    if (vTexLayer < -2.5) {
+        outColor = vec4(base, pc.params.x);
+        return;
+    }
+
     // Simple sun lighting, matching the terrain's ambient/diffuse balance.
     float ndl = max(dot(normalize(vNormal), normalize(pc.sunDir.xyz)), 0.0);
     vec3 color = base * (0.35 + 0.65 * ndl);
@@ -60,6 +67,6 @@ void main() {
 
     // Glazing (vehicle windows/windscreen) is tagged with a texLayer sentinel and
     // drawn translucent; everything else is opaque.
-    float alpha = (vTexLayer < -1.5) ? 0.30 : 1.0;
+    float alpha = (vTexLayer < -1.5 && vTexLayer > -2.5) ? 0.30 : 1.0;
     outColor = vec4(color, alpha * pc.params.x);
 }

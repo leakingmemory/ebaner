@@ -390,7 +390,25 @@ int main(int argc, char** argv) {
     // Mini ground signals (dvergsignal) at the signal-path starts. Their lamps follow the
     // aspect, so they live in a dynamic buffer, rebuilt when an aspect changes.
     const std::vector<SignalPath> signalPaths = loadSignalPaths(datasetRoot);
-    std::vector<SignalPlacement> sigPlacements = signalPlacements(signalPaths, polys);
+    // Exit (main) signals stand on a border too and protect the route to their destination.
+    // They live in one placement list with the dwarfs, so a pair at the same border shares
+    // a pole; for now they only ever show danger.
+    const std::vector<SignalPath> exitSignals = loadExitSignals(datasetRoot);
+    std::vector<SignalPlacement> sigPlacements =
+        mergeSignals(signalPlacements(signalPaths, polys),
+                     signalPlacements(exitSignals, polys));
+    // The map is a shunting view: it shows the dwarfs and the mini routes they set. An exit
+    // signal sharing a dwarf's pole appears as that dwarf; one standing alone has nothing to
+    // set there, so the map skips it. These pick the dwarf half of a shared placement.
+    auto isMini = [](const SignalPlacement& sp) {
+        return sp.kind == SignalKind::Dwarf || sp.withDwarf;
+    };
+    auto miniPaths = [](const SignalPlacement& sp) -> const std::vector<int>& {
+        return sp.kind == SignalKind::Exit ? sp.dwarfPaths : sp.paths;
+    };
+    auto miniAspect = [](const SignalPlacement& sp) {
+        return sp.kind == SignalKind::Exit ? sp.dwarfAspect : sp.aspect;
+    };
     SignalMesh signals;
     signals.build(sigPlacements, data.sceneOrigin());
     renderer.attachSignals(signals.vertices(), signals.indices());
@@ -609,13 +627,15 @@ int main(int argc, char** argv) {
         // any zoom; the armed one is yellow and its destinations are ringed and labelled.
         for (std::size_t k = 0; k < sigPlacements.size(); ++k) {
             const SignalPlacement& sp = sigPlacements[k];
+            if (!isMini(sp)) continue; // exit signal on its own: not a map object yet
+            const SignalAspect asp = miniAspect(sp);
             const bool armed = static_cast<int>(k) == routeArm;
             const bool hovered = static_cast<int>(k) == hoverSignal;
             const glm::vec3 col =
                 armed ? glm::vec3(1.0f, 1.0f, 0.4f) // armed: yellow, like its destinations
-                      : sp.aspect == SignalAspect::Clear        ? glm::vec3(0.3f, 1.0f, 0.4f)
-                        : sp.aspect == SignalAspect::TrainOnTrack ? glm::vec3(1.0f, 0.75f, 0.15f)
-                                                                  : glm::vec3(1.0f, 0.25f, 0.2f);
+                      : asp == SignalAspect::Clear        ? glm::vec3(0.3f, 1.0f, 0.4f)
+                        : asp == SignalAspect::TrainOnTrack ? glm::vec3(1.0f, 0.75f, 0.15f)
+                                                            : glm::vec3(1.0f, 0.25f, 0.2f);
             const glm::vec2 f(float(sp.forward.x), float(sp.forward.y));
             const glm::vec2 r(f.y, -f.x); // right of travel: the side the signal stands on
             const glm::vec2 base = signalAnchor(sp);
@@ -633,7 +653,7 @@ int main(int argc, char** argv) {
                                        float(sp.world.y - org.y), 3.5f), col});
             if (hovered) ring(base, ms * 0.34f, glm::vec3(1.0f)); // "you would click this"
             if (!armed) continue;
-            for (int pi : sp.paths) { // ring each destination this signal can be set to
+            for (int pi : miniPaths(sp)) { // ring each destination it can be set to
                 const Border& e = signalPaths[pi].end;
                 const glm::dvec3 w = fracToWorld(polys, e.trackId, e.frac);
                 if (w.x == 0.0 && w.y == 0.0) continue;
@@ -710,7 +730,7 @@ int main(int argc, char** argv) {
             if (hoverSignal >= 0 && hoverSignal < static_cast<int>(sigPlacements.size())) {
                 const SignalPlacement& sp = sigPlacements[hoverSignal];
                 int setHere = -1;
-                for (int pi : sp.paths) if (routeSet[pi]) setHere = pi;
+                for (int pi : miniPaths(sp)) if (routeSet[pi]) setHere = pi;
                 label(signalAnchor(sp),
                       setHere >= 0 ? "cancel route" : "signal - click to select route",
                       glm::vec3(1.0f));
@@ -726,7 +746,7 @@ int main(int argc, char** argv) {
             }
             // Where the route is going, once a signal is armed.
             if (routeArm >= 0 && routeArm < static_cast<int>(sigPlacements.size()))
-                for (int pi : sigPlacements[routeArm].paths) {
+                for (int pi : miniPaths(sigPlacements[routeArm])) {
                     if (pi == hoverDest) continue; // already labelled above
                     const Border& e = signalPaths[pi].end;
                     const glm::dvec3 w = fracToWorld(polys, e.trackId, e.frac);
@@ -966,7 +986,7 @@ int main(int argc, char** argv) {
             // because a route's destination often sits at the border where the *next*
             // signal stands and finishing the route is the intent then.
             if (routeArm >= 0)
-                for (int pi : sigPlacements[routeArm].paths) {
+                for (int pi : miniPaths(sigPlacements[routeArm])) {
                     const Border& e = signalPaths[pi].end;
                     const glm::dvec3 w = fracToWorld(polys, e.trackId, e.frac);
                     if (w.x == 0.0 && w.y == 0.0) continue;
@@ -976,6 +996,7 @@ int main(int argc, char** argv) {
                     if (d < best) { best = d; hd = pi; hs = ht = -1; }
                 }
             for (std::size_t k = 0; k < sigPlacements.size(); ++k) {
+                if (!isMini(sigPlacements[k])) continue;
                 glm::vec2 px;
                 if (!px2(signalAnchor(sigPlacements[k]), px)) continue;
                 const float d = glm::length(px - cur);
@@ -1036,7 +1057,7 @@ int main(int argc, char** argv) {
                 if (hoverSignal >= 0) {
                     // A signal: cancel the route it has set, else arm it for a destination.
                     int setHere = -1;
-                    for (int pi : sigPlacements[hoverSignal].paths)
+                    for (int pi : miniPaths(sigPlacements[hoverSignal]))
                         if (routeSet[pi]) setHere = pi;
                     if (setHere >= 0) { cancelRoute(setHere); routeArm = -1; }
                     else if (routeArm == hoverSignal) { routeArm = -1; } // click again to disarm

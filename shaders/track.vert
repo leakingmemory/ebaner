@@ -31,11 +31,26 @@ layout(location = 2) out vec3 vColor;
 layout(location = 3) out vec2 vUv;
 layout(location = 4) flat out float vTexLayer;
 
+// A lit signal lamp is tagged with a texLayer sentinel. It is emissive, so its normal
+// slot is free and instead carries the lamp's own centre - which lets the lens be blown
+// up about that centre so it never falls below a minimum apparent size. A real signal
+// lamp is still picked out at a range where its head has long since become too small to
+// make out; a scale-accurate 0.13 m lens would be a fraction of a pixel there.
+const float kLampMinAngle = 0.0024; // minimum apparent radius, radians
+
 void main() {
-    vWorldPos = inPos;
+    vec3 pos = inPos;
+    if (inTexLayer < -2.5) {
+        const vec3 c = inNormal; // lamp centre
+        vec3 off = inPos - c;
+        const float r = length(off);
+        const float minR = distance(c, pc.camPos.xyz) * kLampMinAngle;
+        if (r > 1e-6 && r < minR) pos = c + off * (minR / r);
+    }
+    vWorldPos = pos;
     vNormal = inNormal;
     vColor = inColor;
     vUv = inUv;
     vTexLayer = inTexLayer;
-    gl_Position = pc.viewProj * vec4(inPos, 1.0);
+    gl_Position = pc.viewProj * vec4(pos, 1.0);
 }

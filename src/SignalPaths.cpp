@@ -24,6 +24,10 @@
 namespace fs = std::filesystem;
 
 namespace {
+std::string exitsFile(const std::string& root) {
+    return root + "/overlay/exit-signals.txt";
+}
+
 std::string pathsFile(const std::string& root) {
     return root + "/overlay/signal-paths.txt";
 }
@@ -83,9 +87,12 @@ int moveBorderFrac(std::vector<SignalPath>& paths, const std::vector<TrackPoly>&
     return n;
 }
 
-std::vector<SignalPath> loadSignalPaths(const std::string& datasetRoot) {
+namespace {
+// Mini signal paths and exit signals hold the same thing - a directional route between two
+// borders - so they share one grammar, differing only in file name and record keyword.
+std::vector<SignalPath> loadRoutes(const std::string& file, const char* keyword) {
     std::vector<SignalPath> out;
-    std::ifstream f(pathsFile(datasetRoot));
+    std::ifstream f(file);
     if (!f) return out;
     std::string line;
     while (std::getline(f, line)) {
@@ -94,7 +101,7 @@ std::vector<SignalPath> loadSignalPaths(const std::string& datasetRoot) {
         std::string kind, name, startTok, endTok;
         SignalPath p;
         is >> kind >> p.id >> name >> startTok >> endTok;
-        if (kind != "path" || startTok.empty() || endTok.empty()) continue;
+        if (kind != keyword || startTok.empty() || endTok.empty()) continue;
         p.name = name;
         if (!parseBorder(startTok, p.start) || !parseBorder(endTok, p.end)) continue;
         std::string tok; // optional `via <border>` entries, then trackHex:from:to intervals
@@ -120,19 +127,20 @@ std::vector<SignalPath> loadSignalPaths(const std::string& datasetRoot) {
     return out;
 }
 
-bool writeSignalPaths(const std::string& datasetRoot,
-                      const std::vector<SignalPath>& paths) {
+bool writeRoutes(const std::string& datasetRoot, const std::string& file,
+                 const char* keyword, const char* header,
+                 const std::vector<SignalPath>& routes) {
     std::error_code ec;
     fs::create_directories(datasetRoot + "/overlay", ec);
-    std::ofstream f(pathsFile(datasetRoot), std::ios::trunc);
+    std::ofstream f(file, std::ios::trunc);
     if (!f) return false;
-    f << "# ebaner mini signal paths (directional routes, border -> border).\n"
-         "# path <id> <name> <startTrackHex>:<frac> <endTrackHex>:<frac> "
+    f << header << "# " << keyword
+      << " <id> <name> <startTrackHex>:<frac> <endTrackHex>:<frac> "
          "[via <trackHex>:<frac>]... <trackHex>:<from>:<to> ...\n";
-    for (const SignalPath& p : paths) {
-        f << "path " << p.id << ' ' << (p.name.empty() ? "-" : p.name) << ' ' << std::hex
-          << p.start.trackId << std::dec << ':' << p.start.frac << ' ' << std::hex
-          << p.end.trackId << std::dec << ':' << p.end.frac;
+    for (const SignalPath& p : routes) {
+        f << keyword << ' ' << p.id << ' ' << (p.name.empty() ? "-" : p.name) << ' '
+          << std::hex << p.start.trackId << std::dec << ':' << p.start.frac << ' '
+          << std::hex << p.end.trackId << std::dec << ':' << p.end.frac;
         for (const Border& v : p.vias)
             f << " via " << std::hex << v.trackId << std::dec << ':' << v.frac;
         for (const SectionInterval& iv : p.parts)
@@ -140,6 +148,30 @@ bool writeSignalPaths(const std::string& datasetRoot,
         f << '\n';
     }
     return static_cast<bool>(f);
+}
+} // namespace
+
+std::vector<SignalPath> loadSignalPaths(const std::string& datasetRoot) {
+    return loadRoutes(pathsFile(datasetRoot), "path");
+}
+
+bool writeSignalPaths(const std::string& datasetRoot,
+                      const std::vector<SignalPath>& paths) {
+    return writeRoutes(datasetRoot, pathsFile(datasetRoot), "path",
+                       "# ebaner mini signal paths (directional routes, border -> border).\n",
+                       paths);
+}
+
+std::vector<SignalPath> loadExitSignals(const std::string& datasetRoot) {
+    return loadRoutes(exitsFile(datasetRoot), "exit");
+}
+
+bool writeExitSignals(const std::string& datasetRoot,
+                      const std::vector<SignalPath>& exits) {
+    return writeRoutes(datasetRoot, exitsFile(datasetRoot), "exit",
+                       "# ebaner exit signals (main signals). The signal stands on the start\n"
+                       "# border and protects the route to the destination border.\n",
+                       exits);
 }
 
 std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& paths,
@@ -178,6 +210,33 @@ std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& pat
         sp.paths.push_back(static_cast<int>(pi));
         out.push_back(std::move(sp));
     }
+    return out;
+}
+
+std::vector<SignalPlacement> mergeSignals(const std::vector<SignalPlacement>& dwarfs,
+                                          const std::vector<SignalPlacement>& exits) {
+    constexpr double kSamePlace = 1.0; // m
+    std::vector<SignalPlacement> out;
+    std::vector<char> used(dwarfs.size(), 0);
+    for (const SignalPlacement& e : exits) {
+        SignalPlacement p = e;
+        p.kind = SignalKind::Exit;
+        p.aspect = SignalAspect::Stop; // exit signals only show danger for now
+        for (std::size_t i = 0; i < dwarfs.size(); ++i) {
+            if (used[i]) continue;
+            const SignalPlacement& d = dwarfs[i];
+            if (std::hypot(d.world.x - e.world.x, d.world.y - e.world.y) > kSamePlace) continue;
+            if (glm::dot(d.forward, e.forward) < 0.9) continue; // faces the other way
+            used[i] = 1;
+            p.withDwarf = true;
+            p.dwarfAspect = d.aspect;
+            p.dwarfPaths = d.paths;
+            break;
+        }
+        out.push_back(std::move(p));
+    }
+    for (std::size_t i = 0; i < dwarfs.size(); ++i)
+        if (!used[i]) out.push_back(dwarfs[i]); // a dwarf on its own post
     return out;
 }
 
@@ -274,17 +333,14 @@ bool updateSignalAspects(std::vector<SignalPlacement>& placements,
                          const TrackCircuits& circuits,
                          const std::vector<char>& secOccupied,
                          const std::vector<char>& routeSet) {
-    bool changed = false;
-    for (SignalPlacement& sp : placements) {
+    // What a dwarf governing `governed` should display.
+    auto dwarfAspectFor = [&](const std::vector<int>& governed) {
         SignalAspect want = SignalAspect::Stop;
-        for (int pi : sp.paths) {
+        for (int pi : governed) {
             if (pi < 0 || pi >= static_cast<int>(paths.size())) continue;
             // A route set from this signal shows clear (it is dropped the moment a train
             // enters its circuits, so "set" already implies the road ahead is empty).
-            if (pi < static_cast<int>(routeSet.size()) && routeSet[pi]) {
-                want = SignalAspect::Clear;
-                break;
-            }
+            if (pi < static_cast<int>(routeSet.size()) && routeSet[pi]) return SignalAspect::Clear;
             const SignalPath& p = paths[pi];
             if (!pathSwitchesAligned(p, net, polys)) continue; // not this signal's route
             bool occupied = false;
@@ -295,6 +351,21 @@ bool updateSignalAspects(std::vector<SignalPlacement>& placements,
                         occupied = true;
             if (occupied) want = SignalAspect::TrainOnTrack; // keep looking for a set route
         }
+        return want;
+    };
+    bool changed = false;
+    for (SignalPlacement& sp : placements) {
+        if (sp.kind == SignalKind::Exit) {
+            // The exit head only ever shows danger for now; its route-clearing rule comes
+            // later. A dwarf sharing the pole keeps its own indication.
+            if (sp.aspect != SignalAspect::Stop) { sp.aspect = SignalAspect::Stop; changed = true; }
+            if (sp.withDwarf) {
+                const SignalAspect w = dwarfAspectFor(sp.dwarfPaths);
+                if (sp.dwarfAspect != w) { sp.dwarfAspect = w; changed = true; }
+            }
+            continue;
+        }
+        const SignalAspect want = dwarfAspectFor(sp.paths);
         if (sp.aspect != want) { sp.aspect = want; changed = true; }
     }
     return changed;

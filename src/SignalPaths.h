@@ -63,24 +63,47 @@ std::vector<SignalPath> loadSignalPaths(const std::string& datasetRoot);
 bool writeSignalPaths(const std::string& datasetRoot,
                       const std::vector<SignalPath>& paths);
 
+// Exit signals (main signals) share the SignalPath shape: the signal stands on `start`
+// and protects the route to `end`. Stored separately in `overlay/exit-signals.txt`.
+std::vector<SignalPath> loadExitSignals(const std::string& datasetRoot);
+bool writeExitSignals(const std::string& datasetRoot,
+                      const std::vector<SignalPath>& exits);
+
 // What a mini ground signal displays: the fixed reference lamp plus one lamp on the arc.
 // Stop = horizontal pair, TrainOnTrack = 45 deg (a train stands in the route's circuits),
 // Clear = vertical (route set and clear; not driven yet).
 enum class SignalAspect { Stop, TrainOnTrack, Clear };
 
-// Where a ground signal sits: the on-track start point of a path and the path's initial
-// travel direction (a signal governs movements leaving that point in that direction).
+// Which signal stands at a placement: the low dwarf (dvergsignal) that governs shunting
+// moves, or the tall exit signal (a main signal) protecting a route out.
+enum class SignalKind { Dwarf, Exit };
+
+// Where a signal sits: the on-track start point of a route and its initial travel
+// direction (a signal governs movements leaving that point in that direction).
 struct SignalPlacement {
     glm::dvec3 world{0.0};   // start-border world position (on the track)
     glm::dvec2 forward{0.0}; // unit travel direction leaving the border
-    std::vector<int> paths;  // indices of the signal paths this signal governs
+    std::vector<int> paths;  // indices of the routes this signal governs
     SignalAspect aspect = SignalAspect::Stop;
+    SignalKind kind = SignalKind::Dwarf;
+    // An exit signal placed where a dwarf also stands shares its pole, the dwarf lower to
+    // the ground. `dwarfAspect` is that dwarf's own indication, kept separate so each head
+    // still shows what it means.
+    bool withDwarf = false;
+    SignalAspect dwarfAspect = SignalAspect::Stop;
+    std::vector<int> dwarfPaths; // the mini paths of the dwarf sharing this pole
 };
 
 // One placement per distinct (start border, travel direction) over all paths - so paths
 // sharing a start collapse to a single signal (governing all of them).
 std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& paths,
                                               const std::vector<TrackPoly>& polys);
+
+// One list holding both kinds. Where an exit signal and a dwarf stand at the same border
+// facing the same way they are folded into a single placement (`kind = Exit`,
+// `withDwarf = true`) so the two heads share one pole.
+std::vector<SignalPlacement> mergeSignals(const std::vector<SignalPlacement>& dwarfs,
+                                          const std::vector<SignalPlacement>& exits);
 
 // A turnout the path traverses and the position it needs there: straight where the path
 // runs through the turnout, diverging where it crosses to or from the branch.
