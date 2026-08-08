@@ -24,10 +24,11 @@ class TerrainData;
 struct TrackPose {
     glm::vec3 pos;     // scene-relative metres (z up)
     glm::vec3 tangent; // unit, direction of travel
-    glm::vec3 right;   // unit cross-track right (banked by cant)
+    glm::vec3 right;   // unit cross-track (banked by cant); points *left* of travel - see poseAt
     glm::vec3 up;      // unit cross-track up (banked by cant)
     float curvature;   // signed horizontal 1/R (m^-1); sign = curving left/right
-    float cant;        // superelevation roll about the tangent (radians)
+    float cant;        // superelevation roll about the tangent (radians), signed like
+                       // `curvature`: the track always banks into the curve, never adversely
 };
 
 // A smooth, arc-length-parameterised centreline for one track, interpolating the

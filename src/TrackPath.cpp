@@ -203,7 +203,11 @@ TrackPose TrackPath::poseAt(float s) const {
     const float thl = glm::length(th);
     const glm::vec2 r =
         (thl > 1e-8f) ? glm::vec2(-th.y, th.x) / thl : glm::vec2(0.0f, 1.0f);
-    const glm::vec3 r0(r.x, r.y, 0.0f); // horizontal cross-track right
+    // Cross-track, and *left* of travel despite the name the frame carries: rotating the
+    // tangent a quarter turn this way is counter-clockwise, and with z up that is the left
+    // hand. Everything downstream is symmetric about it, so the naming costs nothing there -
+    // but the roll below is not symmetric, and has to be applied knowing which side this is.
+    const glm::vec3 r0(r.x, r.y, 0.0f);
 
     // Track-normal up (perpendicular to tangent and right), oriented +z.
     glm::vec3 u0 = glm::cross(r0, pose.tangent);
@@ -211,11 +215,13 @@ TrackPose TrackPath::poseAt(float s) const {
     u0 = glm::normalize(u0);
     if (u0.z < 0.0f) u0 = -u0;
 
-    // Roll the cross-track frame about the tangent by the cant angle (banks into
-    // the curve: outer rail rises).
+    // Roll the cross-track frame about the tangent by the cant angle, so that the track
+    // banks *into* the curve: the outer rail rises. Cant carries the sign of the curvature
+    // it was derived from - positive curving left - and on a left-hand curve r0 is the inner
+    // side, so a positive cant has to take r0 down rather than up.
     const float c = std::cos(cant), sn = std::sin(cant);
-    pose.right = c * r0 + sn * u0;
-    pose.up = -sn * r0 + c * u0;
+    pose.right = c * r0 - sn * u0;
+    pose.up = sn * r0 + c * u0;
     pose.cant = cant;
 
     // Horizontal signed curvature (x'y'' - y'x'') / |xy'|^3.

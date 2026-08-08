@@ -741,7 +741,11 @@ TippingLimit Vehicle::tippingLimit(float curvature, float cant) const {
     //   a = g (b cosθ + h sinθ) / (h cosθ − b sinθ)
     const float b = 0.5f * kGauge;
     const float h = comHeight();
-    const float ct = std::cos(cant), st = std::sin(cant);
+    // theta is the cant into the curve. TrackPose::cant carries the sign of the curvature
+    // instead, so that a left-hand and a right-hand curve of the same radius describe the
+    // same track; take the magnitude, or half the curves would come out adversely canted.
+    const float theta = std::abs(cant);
+    const float ct = std::cos(theta), st = std::sin(theta);
     const float denom = h * ct - b * st;
     const float inf = std::numeric_limits<float>::infinity();
     const float aLim = (denom > 1e-4f) ? kG * (b * ct + h * st) / denom : inf;
