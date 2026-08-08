@@ -44,8 +44,11 @@ void main() {
     // A flashing lamp keeps its apparent size only while it is lit. Blown up in its dark
     // phase it would paint a fat dark disc where the lens should have shrunk away with the
     // head - the very thing an unlit lens avoids by not being tagged at all.
+    // Bounded, not open-ended: the band below the lamps is tunnel rock, whose normal is a
+    // normal and not a lamp centre to be blown up about.
+    const bool isLamp = inTexLayer < -2.5 && inTexLayer > -4.5;
     const bool lampLit = inTexLayer > -3.5 || pc.params.y > 0.5;
-    if (inTexLayer < -2.5 && lampLit) {
+    if (isLamp && lampLit) {
         const vec3 c = inNormal; // lamp centre
         vec3 off = inPos - c;
         const float r = length(off);

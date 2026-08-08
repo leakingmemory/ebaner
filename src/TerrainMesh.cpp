@@ -13,6 +13,8 @@
 
 #include "TerrainMesh.h"
 
+#include "TunnelMesh.h"
+
 #include "TerrainData.h"
 
 #include <algorithm>
@@ -37,12 +39,71 @@ inline std::uint64_t keyOf(int lod, int col, int row) {
 }
 } // namespace
 
-void TerrainMesh::build(const TerrainData& data) {
+void TerrainMesh::build(const TerrainData& data, const TunnelMesh* bores) {
     // Reset accumulators so build() is idempotent (the editor rebuilds to re-preview).
     vertices_.clear();
     indices_.clear();
     const glm::dvec3 origin = data.sceneOrigin();
     const auto& tiles = data.tiles();
+    // Every triangle goes through here so the tunnel test is applied in one place: a
+    // triangle whose centre stands inside a bore is what would otherwise seal the mouth.
+    std::size_t dropped = 0;
+    // A terrain cell is 10 m and a bore is 7 m across, so dropping whole triangles would take
+    // away far more hillside than the mouth and leave a gap nothing can plausibly fill. The
+    // few triangles that actually stand at a portal are subdivided first, and only the parts
+    // inside the bore are dropped - which cuts the opening to the shape of the tunnel.
+    constexpr int kSub = 8;
+    auto emitTri = [&](std::uint32_t i0, std::uint32_t i1, std::uint32_t i2) {
+        auto keep = [&](std::uint32_t a, std::uint32_t b, std::uint32_t c) {
+            indices_.push_back(a);
+            indices_.push_back(b);
+            indices_.push_back(c);
+        };
+        if (!bores || !bores->nearBore(vertices_[i0].pos, vertices_[i1].pos,
+                                       vertices_[i2].pos)) {
+            keep(i0, i1, i2);
+            return;
+        }
+        const Vertex v0 = vertices_[i0], v1 = vertices_[i1], v2 = vertices_[i2];
+        auto lerp3 = [&](float u, float v) { // barycentric (u along v0->v1, v along v0->v2)
+            const float w = 1.0f - u - v;
+            Vertex r;
+            r.pos = v0.pos * w + v1.pos * u + v2.pos * v;
+            r.normal = glm::normalize(v0.normal * w + v1.normal * u + v2.normal * v);
+            r.elevation = v0.elevation * w + v1.elevation * u + v2.elevation * v;
+            r.landcover = v0.landcover; // a class, not a quantity: nearest is the only sense
+            return r;
+        };
+        // Barycentric grid of (kSub+1)(kSub+2)/2 points, rows u+v <= 1.
+        std::vector<std::uint32_t> gi;
+        gi.reserve((kSub + 1) * (kSub + 2) / 2);
+        for (int r = 0; r <= kSub; ++r)
+            for (int q = 0; q + r <= kSub; ++q) {
+                gi.push_back(static_cast<std::uint32_t>(vertices_.size()));
+                vertices_.push_back(lerp3(static_cast<float>(q) / kSub,
+                                          static_cast<float>(r) / kSub));
+            }
+        auto at = [&](int q, int r) { // index into the triangular grid
+            const int off = r * (kSub + 1) - (r * (r - 1)) / 2;
+            return gi[off + q];
+        };
+        for (int r = 0; r < kSub; ++r)
+            for (int q = 0; q + r < kSub; ++q) {
+                const std::uint32_t a = at(q, r), b = at(q + 1, r), c = at(q, r + 1);
+                if (bores->insideBore((vertices_[a].pos + vertices_[b].pos +
+                                       vertices_[c].pos) / 3.0f))
+                    ++dropped;
+                else
+                    keep(a, b, c);
+                if (q + r + 1 >= kSub) continue;
+                const std::uint32_t d = at(q + 1, r + 1);
+                if (bores->insideBore((vertices_[b].pos + vertices_[d].pos +
+                                       vertices_[c].pos) / 3.0f))
+                    ++dropped;
+                else
+                    keep(b, d, c);
+            }
+    };
 
     // --- Tile index + per-tile vertex base ---
     std::unordered_map<std::uint64_t, const Tile*> byKey;
@@ -150,12 +211,8 @@ void TerrainMesh::build(const TerrainData& data) {
                 const std::uint32_t v01 = v00 + 1;
                 const std::uint32_t v10 = v00 + P;
                 const std::uint32_t v11 = v10 + 1;
-                indices_.push_back(v00);
-                indices_.push_back(v10);
-                indices_.push_back(v01);
-                indices_.push_back(v01);
-                indices_.push_back(v10);
-                indices_.push_back(v11);
+                emitTri(v00, v10, v01);
+                emitTri(v01, v10, v11);
             }
         }
     }
@@ -266,12 +323,8 @@ void TerrainMesh::build(const TerrainData& data) {
                 const std::uint32_t A0 = aIdx[i], A1 = aIdx[i + 1];
                 const std::uint32_t O0 = static_cast<std::uint32_t>(outIdx[i]);
                 const std::uint32_t O1 = static_cast<std::uint32_t>(outIdx[i + 1]);
-                indices_.push_back(A0);
-                indices_.push_back(A1);
-                indices_.push_back(O1);
-                indices_.push_back(A0);
-                indices_.push_back(O1);
-                indices_.push_back(O0);
+                emitTri(A0, A1, O1);
+                emitTri(A0, O1, O0);
             }
         }
     }
@@ -332,9 +385,9 @@ void TerrainMesh::build(const TerrainData& data) {
                 // Fan around the corner (CCW: SW,SE,NE,NW), skipping missing ones.
                 auto tri = [&](int i, int j, int k) {
                     if (idx[i] < 0 || idx[j] < 0 || idx[k] < 0) return;
-                    indices_.push_back(static_cast<std::uint32_t>(idx[i]));
-                    indices_.push_back(static_cast<std::uint32_t>(idx[j]));
-                    indices_.push_back(static_cast<std::uint32_t>(idx[k]));
+                    emitTri(static_cast<std::uint32_t>(idx[i]),
+                            static_cast<std::uint32_t>(idx[j]),
+                            static_cast<std::uint32_t>(idx[k]));
                 };
                 tri(0, 1, 2);
                 tri(0, 2, 3);
@@ -344,7 +397,8 @@ void TerrainMesh::build(const TerrainData& data) {
 
     const std::size_t stitchIdx = indices_.size() - interiorIdx;
     std::printf("[TerrainMesh] %zu vertices, %zu indices "
-                "(%zu interior + %zu stitch triangles)\n",
+                "(%zu interior + %zu stitch triangles); %zu sub-triangles cut for "
+                "tunnel mouths\n",
                 vertices_.size(), indices_.size(), interiorIdx / 3,
-                stitchIdx / 3);
+                stitchIdx / 3, dropped);
 }

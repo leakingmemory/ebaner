@@ -54,9 +54,16 @@ void main() {
     // full colour however far away and whatever the sun is doing. An entry signal's danger
     // lamp flashes: on the dark beat it reads as an unlit lens rather than vanishing, which
     // is what the lens looks like between flashes.
-    if (vTexLayer < -2.5) {
+    if (vTexLayer < -2.5 && vTexLayer > -4.5) {
         const bool dark = vTexLayer < -3.5 && pc.params.y < 0.5;
         outColor = vec4(dark ? base * 0.16 : base, pc.params.x);
+        return;
+    }
+
+    // Rock inside a tunnel bore: ambient only. With the sun term applied the sun shines
+    // through the mountain and lights whichever wall happens to face it.
+    if (vTexLayer < -4.5) {
+        outColor = vec4(base * 0.35, pc.params.x);
         return;
     }
 

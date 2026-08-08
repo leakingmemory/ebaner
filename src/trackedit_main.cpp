@@ -30,6 +30,7 @@
 #include "SignalPaths.h"
 #include "SpeedLimits.h"
 #include "SpeedSignMesh.h"
+#include "TunnelMesh.h"
 #include "SwitchTypes.h"
 #include "TerrainData.h"
 #include "TerrainMesh.h"
@@ -116,6 +117,7 @@ int main(int argc, char** argv) {
     // --- Load terrain data and build the scene meshes (same as the viewer) ---
     TerrainData data;
     TerrainMesh mesh;
+    TunnelMesh tunnels;
     TrackMesh tracks;
     RoadMesh roads;
     BuildingMesh buildings;
@@ -129,7 +131,10 @@ int main(int argc, char** argv) {
     try {
         data.load(datasetRoot);
         paths = buildTrackPaths(data);
-        mesh.build(data);
+        // The bores first: the terrain needs them to know which of its triangles stand in
+        // a tunnel mouth. A geometry edit can move a portal, so both are rebuilt together.
+        tunnels.build(data);
+        mesh.build(data, &tunnels);
         tracks.build(paths);
         roads.build(data);
         buildings.build(data);
@@ -756,7 +761,10 @@ int main(int argc, char** argv) {
         data.recarve();                       // re-cut terrain from pristine + edited track
         paths = buildTrackPaths(data);
         tracks.build(paths);
-        mesh.build(data);
+        // The bores first: the terrain needs them to know which of its triangles stand in
+        // a tunnel mouth. A geometry edit can move a portal, so both are rebuilt together.
+        tunnels.build(data);
+        mesh.build(data, &tunnels);
         switchNet.build(data, paths);
         switches.build(switchNet);
         std::vector<TrackVertex> sv = buildings.vertices();
@@ -772,6 +780,7 @@ int main(int argc, char** argv) {
         // rather than once at startup.
         speedSignMesh.build(speedSigns(paths));
         merge(speedSignMesh.vertices(), speedSignMesh.indices());
+        merge(tunnels.vertices(), tunnels.indices());
         merge(switches.vertices(), switches.indices());
         signals.build(allPlacements(), data.sceneOrigin());
         merge(signals.vertices(), signals.indices());
@@ -801,6 +810,7 @@ int main(int argc, char** argv) {
         // rather than once at startup.
         speedSignMesh.build(speedSigns(paths));
         merge(speedSignMesh.vertices(), speedSignMesh.indices());
+        merge(tunnels.vertices(), tunnels.indices());
         merge(switches.vertices(), switches.indices());
         merge(signals.vertices(), signals.indices());
         renderer.updateStructs(sv, si);

@@ -30,6 +30,7 @@
 #include "SpeedLimits.h"
 #include "SpeedSignMesh.h"
 #include "TrackPath.h"
+#include "TunnelMesh.h"
 #include "Audio.h"
 #include "Vehicle.h"
 #include "VehicleMesh.h"
@@ -45,6 +46,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <unordered_set>
 #include <cstdlib>
 #include <exception>
 #include <optional>
@@ -176,6 +178,7 @@ int main(int argc, char** argv) {
     // --- Load terrain data ---
     TerrainData data;
     TerrainMesh mesh;
+    TunnelMesh tunnels;
     TrackMesh tracks;
     RoadMesh roads;
     BuildingMesh buildings;
@@ -187,7 +190,12 @@ int main(int argc, char** argv) {
     try {
         data.load(datasetRoot);
         paths = buildTrackPaths(data);
-        mesh.build(data);
+        // The bores first: the terrain needs them to know which of its triangles are
+        // standing in a tunnel mouth.
+        tunnels.build(data);
+        std::printf("[TunnelMesh] %zu bore(s), %.0f m, %zu vertices\n", tunnels.boreCount(),
+                    tunnels.totalLength(), tunnels.vertices().size());
+        mesh.build(data, &tunnels);
         tracks.build(paths);
         roads.build(data);
         buildings.build(data);
@@ -295,6 +303,14 @@ int main(int argc, char** argv) {
         for (std::uint32_t idx : speedSignMesh.indices()) structIndices.push_back(idx + vbase);
         std::printf("[SpeedSigns] %zu sign(s), %zu vertices\n", sg.size(),
                     speedSignMesh.vertices().size());
+    }
+    // The tunnel bores are static rock, so they belong in the same bucket.
+    {
+        const std::uint32_t vbase = static_cast<std::uint32_t>(structVerts.size());
+        structVerts.insert(structVerts.end(), tunnels.vertices().begin(),
+                           tunnels.vertices().end());
+        structIndices.reserve(structIndices.size() + tunnels.indices().size());
+        for (std::uint32_t idx : tunnels.indices()) structIndices.push_back(idx + vbase);
     }
     // Switch stands go in a dynamic buffer (rebuilt when a switch is thrown), not the
     // static struct bucket — attached just after renderer.init below. The ground signals

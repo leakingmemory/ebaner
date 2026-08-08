@@ -18,6 +18,7 @@
 #include <vector>
 
 class TerrainData;
+class TunnelMesh;
 
 // Interleaved vertex used by the terrain pipeline.
 struct Vertex {
@@ -28,9 +29,14 @@ struct Vertex {
 };
 
 // Builds a single indexed triangle mesh from all loaded tiles.
+//
+// `bores` (optional) is the tunnels: a heightfield cannot have a hole in it, so without this
+// the surface seals every tunnel mouth. Triangles standing inside a bore are dropped, which
+// is what opens the hole in the rock face - see TunnelMesh::insideBore for why that lands at
+// the portals and nowhere else.
 class TerrainMesh {
 public:
-    void build(const TerrainData& data);
+    void build(const TerrainData& data, const TunnelMesh* bores = nullptr);
 
     const std::vector<Vertex>& vertices() const { return vertices_; }
     const std::vector<std::uint32_t>& indices() const { return indices_; }
