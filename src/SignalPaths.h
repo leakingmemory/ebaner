@@ -76,6 +76,14 @@ std::vector<SignalPath> loadExitSignals(const std::string& datasetRoot);
 bool writeExitSignals(const std::string& datasetRoot,
                       const std::vector<SignalPath>& exits);
 
+// Entry signals: the signal stands on `start` and the record is the whole route into the
+// station, ending at `end`. Unlike an exit signal the authority begins at the mast, so there
+// is no separate approach record - several entries sharing a start border are one signal.
+// Stored in `overlay/entry-signals.txt`.
+std::vector<SignalPath> loadEntrySignals(const std::string& datasetRoot);
+bool writeEntrySignals(const std::string& datasetRoot,
+                       const std::vector<SignalPath>& entries);
+
 // Exit routes: the authority to move from a border inside the station up to an exit signal
 // (`start` -> `end`, where `end` is that signal's own border and `exitId` names it). A main
 // signal's authority begins back at the platform road, not at the signal, and one signal
@@ -93,15 +101,20 @@ bool writeExitRoutes(const std::string& datasetRoot,
 enum class SignalAspect { Stop, TrainOnTrack, Clear, ClearReduced };
 
 // Which signal stands at a placement: the low dwarf (dvergsignal) that governs shunting
-// moves, or the tall exit signal (a main signal) protecting a route out.
-enum class SignalKind { Dwarf, Exit };
+// moves, or one of the two tall main signals - the exit protecting a route out of the
+// station, the entry authorising one in. Both mains carry the same three-lamp head; only
+// the entry's danger aspect flashes.
+enum class SignalKind { Dwarf, Exit, Entry };
 
 // Where a signal sits: the on-track start point of a route and its initial travel
 // direction (a signal governs movements leaving that point in that direction).
 struct SignalPlacement {
     glm::dvec3 world{0.0};   // start-border world position (on the track)
     glm::dvec2 forward{0.0}; // unit travel direction leaving the border
-    std::vector<int> paths;  // indices of the routes this signal governs
+    // Indices of the routes this signal governs, into the collection matching `kind`:
+    // mini paths for a Dwarf, exit signals for an Exit, entry signals for an Entry. Reading
+    // them against the wrong collection is the mistake `kind` exists to prevent.
+    std::vector<int> paths;
     SignalAspect aspect = SignalAspect::Stop;
     SignalKind kind = SignalKind::Dwarf;
     // An exit signal placed where a dwarf also stands shares its pole, the dwarf lower to
@@ -118,11 +131,13 @@ bool routeStartPose(const SignalPath& p, const std::vector<TrackPoly>& polys,
                     glm::dvec3& world, glm::dvec2& fwd);
 
 // One placement per distinct (start border, travel direction) over all paths - so paths
-// sharing a start collapse to a single signal (governing all of them).
+// sharing a start collapse to a single signal governing all of them. That is what makes a
+// station's several entry routes one mast, exactly as several mini paths make one dwarf.
 // Only give this exit *signals*, never exit routes: it puts a signal at every route start,
 // so exit routes would sprout masts on the platform roads.
 std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& paths,
-                                              const std::vector<TrackPoly>& polys);
+                                              const std::vector<TrackPoly>& polys,
+                                              SignalKind kind = SignalKind::Dwarf);
 
 // Which exit signal a candidate exit route may attach to (index into `exits`, else -1). The
 // route must end on that signal's own border *and* arrive facing the way the signal faces:
@@ -131,11 +146,11 @@ std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& pat
 int exitRouteTarget(const SignalPath& route, const std::vector<SignalPath>& exits,
                     const std::vector<TrackPoly>& polys);
 
-// One list holding both kinds. Where an exit signal and a dwarf stand at the same border
-// facing the same way they are folded into a single placement (`kind = Exit`,
-// `withDwarf = true`) so the two heads share one pole.
+// One list holding dwarfs and main signals. Where a main signal and a dwarf stand at the
+// same border facing the same way they are folded into a single placement (`withDwarf`), so
+// the two heads share one pole. `mains` is the already-tagged exit and entry placements.
 std::vector<SignalPlacement> mergeSignals(const std::vector<SignalPlacement>& dwarfs,
-                                          const std::vector<SignalPlacement>& exits);
+                                          const std::vector<SignalPlacement>& mains);
 
 // A turnout the path traverses and the position it needs there: straight where the path
 // runs through the turnout, diverging where it crosses to or from the branch.
@@ -158,6 +173,10 @@ bool pathSwitchesAligned(const SignalPath& p, const SwitchNetwork& net,
 // the line commonly sits past the signal. A default only; the editor can override it.
 RouteType defaultRouteType(const SignalPath& route, const SignalPath& exit,
                            const SwitchNetwork& net, const std::vector<TrackPoly>& polys);
+// The same for a route that is the whole movement on its own - an entry signal's authority
+// starts at the mast, so there is no onward leg to take into account.
+RouteType defaultRouteType(const SignalPath& route, const SwitchNetwork& net,
+                           const std::vector<TrackPoly>& polys);
 
 // The ids of the track-circuit sections the path actually runs through (a shared end
 // point with a neighbouring section does not count as running through it).

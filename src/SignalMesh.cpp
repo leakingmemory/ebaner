@@ -73,8 +73,10 @@ void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 o
     // shader can hold it to a minimum apparent size, which is what keeps a signal
     // readable from far down the line.
     auto lamp = [&](const glm::vec3& c, const glm::vec3& w, const glm::vec3& up, float rad,
-                    const glm::vec3& col) {
-        constexpr float kLampLayer = -3.0f;
+                    const glm::vec3& col, bool flashing = false) {
+        // -3 steady, -4 flashing: the shader blinks the latter and, crucially, leaves it at
+        // true scale while dark so it does not bloom into a blob at range.
+        const float kLampLayer = flashing ? -4.0f : -3.0f;
         constexpr int N = 12;
         for (int i = 0; i < N; ++i) {
             const float a0 = 6.2831853f * i / N, a1 = 6.2831853f * (i + 1) / N;
@@ -102,8 +104,8 @@ void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 o
                           static_cast<float>(s.world.z - origin.z));
 
         // How high the dwarf box sits: on its own short post normally, or low on the
-        // exit signal's mast when the two share a pole.
-        const bool isExit = s.kind == SignalKind::Exit;
+        // main signal's mast when the two share a pole.
+        const bool isExit = s.kind != SignalKind::Dwarf; // exit or entry: same head
         const bool drawDwarf = !isExit || s.withDwarf;
         const float dwarfH = 1.0f;
 
@@ -130,7 +132,9 @@ void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 o
             // fades out with the head instead of blooming into a dark blob at range.
             if (proceed) lamp(face + UP * sp, R, UP, r, kGreenOn);   // top: green
             else disc(face + UP * sp, n, R, UP, r, kGreenOff);
-            if (danger) lamp(face, R, UP, r, kRedOn);                // middle: red
+            // An entry signal shows its danger as a flashing red; every other lamp on the
+            // head, and every lamp on an exit signal, is steady.
+            if (danger) lamp(face, R, UP, r, kRedOn, s.kind == SignalKind::Entry);
             else disc(face, n, R, UP, r, kRedOff);
             if (noRestriction) lamp(face - UP * sp, R, UP, r, kGreenOn); // bottom: green
             else disc(face - UP * sp, n, R, UP, r, kGreenOff);

@@ -226,7 +226,7 @@ int main(int argc, char** argv) {
     // --- Modes: geometry editing (default), track-circuit (sensing-section) authoring,
     // switch (turnout) properties, mini signal paths and exit (main) signals, switched
     // from the Escape menu. ---
-    enum class EdMode { Geometry, Circuits, Switches, SignalPaths, ExitSignals };
+    enum class EdMode { Geometry, Circuits, Switches, SignalPaths, ExitSignals, EntrySignals };
     EdMode mode = EdMode::Geometry;
     int selTurnout = -1;             // selected turnout (index into switchNet.turnouts())
     bool switchTypesDirty = false;   // unsaved switch-type changes
@@ -257,6 +257,14 @@ int main(int argc, char** argv) {
     int armedExit = -1;              // B pressed: the exit signal a new route is drawn to
     int nextExitRouteId = 1;         // auto-increment exit-route id
     for (const SignalPath& r : exitRoutes) nextExitRouteId = std::max(nextExitRouteId, r.id + 1);
+    // Entry signals: the mast stands on the start border and the record is the whole route
+    // into the station, so unlike an exit there is no separate approach to author. Several
+    // sharing a start border become one signal governing them all.
+    std::vector<SignalPath> entrySignals = loadEntrySignals(datasetRoot);
+    bool entryDirty = false;         // unsaved entry-signal changes
+    int selEntry = -1;               // selected entry route (index into entrySignals)
+    int nextEntryId = 1;             // auto-increment entry-signal id
+    for (const SignalPath& e : entrySignals) nextEntryId = std::max(nextEntryId, e.id + 1);
     TrackCircuits tc = loadTrackCircuits(datasetRoot); // borders + sections (own overlay)
     bool circuitsDirty = false;      // unsaved circuit changes
     int selBorder = -1;              // selected border (index into tc.borders)
@@ -265,7 +273,7 @@ int main(int argc, char** argv) {
     // What the shared rename modal is editing. Every route carries a real name - they are
     // what the operator will pick from when setting a route - so creating one opens this
     // straight away, pre-filled with the auto default.
-    enum class NameTarget { None, Section, Path, Exit, ExitRoute };
+    enum class NameTarget { None, Section, Path, Exit, ExitRoute, Entry };
     NameTarget namingWhat = NameTarget::None;
     int namingIdx = -1;              // index into whichever collection that names
     int nextSectionId = 1;           // auto-increment section id
@@ -281,6 +289,7 @@ int main(int argc, char** argv) {
         case NameTarget::Path: return &signalPaths;
         case NameTarget::Exit: return &exitSignals;
         case NameTarget::ExitRoute: return &exitRoutes;
+        case NameTarget::Entry: return &entrySignals;
         default: return nullptr;
         }
     };
@@ -315,6 +324,16 @@ int main(int argc, char** argv) {
     // Resolve each motor switch's locking set now that polys + circuits exist (authored
     // set, else the sections the switch sits within). Editable below in Switches mode.
     applySwitchLocks(switchNet, loadSwitchTypes(datasetRoot), tc, polys);
+    // The exit and entry masts as one list, the shape mergeSignals wants. Rebuilt on demand
+    // because either collection can change while editing.
+    auto mainPlacements = [&]() {
+        std::vector<SignalPlacement> out =
+            signalPlacements(exitSignals, polys, SignalKind::Exit);
+        const std::vector<SignalPlacement> entries =
+            signalPlacements(entrySignals, polys, SignalKind::Entry);
+        out.insert(out.end(), entries.begin(), entries.end());
+        return out;
+    };
 
     // Existing overlay lines, so a save can rewrite them (not just append). Any legacy
     // elevation override (no track id) whose point coincides with vertices from more
@@ -450,12 +469,16 @@ int main(int argc, char** argv) {
                 seg(n, e); seg(e, s); seg(s, w); seg(w, n); // diamond outline
                 pts.push_back({c, col});
             }
-        } else if (mode == EdMode::SignalPaths || mode == EdMode::ExitSignals) {
-            // Both modes draw the same thing: the routes, their vias and the in-progress
+        } else if (mode == EdMode::SignalPaths || mode == EdMode::ExitSignals ||
+                   mode == EdMode::EntrySignals) {
+            // All three draw the same thing: the routes, their vias and the in-progress
             // start; only the collection and the hue differ.
             const bool exitMode = mode == EdMode::ExitSignals;
-            const std::vector<SignalPath>& routes = exitMode ? exitSignals : signalPaths;
-            const int selRoute = exitMode ? selExit : selPath;
+            const bool entryMode = mode == EdMode::EntrySignals;
+            const std::vector<SignalPath>& routes = exitMode    ? exitSignals
+                                                    : entryMode ? entrySignals
+                                                                : signalPaths;
+            const int selRoute = exitMode ? selExit : entryMode ? selEntry : selPath;
             const glm::dvec3 o = data.sceneOrigin();
             auto scv = [&](glm::dvec3 w, float lift) {
                 return glm::vec3(float(w.x - o.x), float(w.y - o.y), float(w.z - o.z) + lift);
@@ -519,12 +542,19 @@ int main(int argc, char** argv) {
                     lns.push_back({tc3, col}); lns.push_back({r3, col});
                 }
             };
+            // An entry signal's own palette, cool and distinct from both the exit's warm
+            // hues and the shunting greens.
+            const glm::vec3 entryPal[] = {{0.45f, 1.0f, 1.0f}, {0.3f, 0.9f, 0.8f},
+                                          {0.6f, 1.0f, 0.9f}, {0.35f, 0.75f, 0.9f},
+                                          {0.5f, 0.95f, 0.75f}};
             for (std::size_t pi = 0; pi < routes.size(); ++pi)
                 drawRoute(routes[pi],
                           static_cast<int>(pi) == selRoute
                               ? glm::vec3(1.0f, 1.0f, 1.0f)
-                              : (exitMode ? exitPal : pathPal)[((routes[pi].id - 1) % 5 + 5) % 5],
-                          exitMode);
+                              : (exitMode    ? exitPal
+                                 : entryMode ? entryPal
+                                             : pathPal)[((routes[pi].id - 1) % 5 + 5) % 5],
+                          exitMode || entryMode); // a mast marker at the signal's border
             if (exitMode) {
                 for (std::size_t ri = 0; ri < exitRoutes.size(); ++ri) {
                     const SignalPath& r = exitRoutes[ri];
@@ -643,8 +673,7 @@ int main(int argc, char** argv) {
         };
         merge(platforms.vertices(), platforms.indices());
         merge(switches.vertices(), switches.indices());
-        signals.build(mergeSignals(signalPlacements(signalPaths, polys),
-                                   signalPlacements(exitSignals, polys)),
+        signals.build(mergeSignals(signalPlacements(signalPaths, polys), mainPlacements()),
                       data.sceneOrigin());
         merge(signals.vertices(), signals.indices());
         renderer.updateTerrain(mesh.vertices(), mesh.indices());
@@ -659,8 +688,7 @@ int main(int argc, char** argv) {
     // terrain recarve — so a switch-type change or a signal-path edit updates cheaply.
     auto rebuildStructs = [&]() {
         switches.build(switchNet);
-        signals.build(mergeSignals(signalPlacements(signalPaths, polys),
-                                   signalPlacements(exitSignals, polys)),
+        signals.build(mergeSignals(signalPlacements(signalPaths, polys), mainPlacements()),
                       data.sceneOrigin());
         std::vector<TrackVertex> sv = buildings.vertices();
         std::vector<std::uint32_t> si = buildings.indices();
@@ -1150,7 +1178,14 @@ int main(int argc, char** argv) {
     bool prevMenuEnter = false, prevMenuUp = false, prevMenuDown = false;
     const std::vector<std::string> kMenuItems = {"Geometry edit", "Track circuits",
                                                  "Switches", "Signal paths",
-                                                 "Exit signals", "Exit"};
+                                                 "Exit signals", "Entry signals", "Exit"};
+    // Flashing lamps (an entry signal's danger) blink from the push constant rather than by
+    // rebuilding the signal mesh - here those vertices share the struct buffer with 32k
+    // buildings, so a rebuild twice a second is out of the question.
+    auto blinkLit = [] {
+        constexpr double kBlinkPeriod = 1.0; // s, half lit
+        return std::fmod(glfwGetTime(), kBlinkPeriod) < kBlinkPeriod * 0.5 ? 1.0f : 0.0f;
+    };
     float elevRepeat = 0.0f; // auto-repeat throttle for Up/Down raise/lower
     double lastTime = glfwGetTime();
 
@@ -1181,11 +1216,12 @@ int main(int argc, char** argv) {
                            : sel == "Switches"      ? EdMode::Switches
                            : sel == "Signal paths"  ? EdMode::SignalPaths
                            : sel == "Exit signals"  ? EdMode::ExitSignals
+                           : sel == "Entry signals" ? EdMode::EntrySignals
                                                     : EdMode::Geometry;
                     selected.clear(); selA = selB = -1; selBorder = -1;
                     selTurnout = -1;
                     pathStart = -1; selPath = -1; selExit = -1; pendingVias.clear();
-                    selExitRoute = -1; armedExit = -1;
+                    selExitRoute = -1; armedExit = -1; selEntry = -1;
                     showPending = false;
                     rebuildOverlay();
                     g_menuOpen = false;
@@ -1202,7 +1238,7 @@ int main(int argc, char** argv) {
             pc.viewProj = g_camera.projMatrix(aspect) * g_camera.viewMatrix();
             pc.sunDir = glm::vec4(sunDir, data.minElevation());
             pc.camPos = glm::vec4(g_camera.position(), data.maxElevation());
-            pc.params = glm::vec4(0.5f, 0.0f, 0.0f, 0.0f);
+            pc.params = glm::vec4(0.5f, blinkLit(), 0.0f, 0.0f);
             if (shotPath) {
                 if (frame == 20) renderer.requestCapture(shotPath);
                 if (frame == 24) glfwSetWindowShouldClose(window, GLFW_TRUE);
@@ -1223,10 +1259,12 @@ int main(int argc, char** argv) {
                                : namingWhat == NameTarget::Path       ? "signal path"
                                : namingWhat == NameTarget::Exit       ? "exit signal"
                                : namingWhat == NameTarget::ExitRoute  ? "exit route"
+                               : namingWhat == NameTarget::Entry      ? "entry signal"
                                                                       : "";
             const char* pfx = namingWhat == NameTarget::Section      ? "S"
                               : namingWhat == NameTarget::Path       ? "P"
                               : namingWhat == NameTarget::Exit       ? "E"
+                              : namingWhat == NameTarget::Entry      ? "N"
                                                                      : "R";
             if (e && !prevNameEnter) {
                 std::vector<SignalPath>* nr = namedRoutes(namingWhat);
@@ -1243,6 +1281,7 @@ int main(int argc, char** argv) {
                     p.name = g_nameBuf.empty() ? (pfx + std::to_string(p.id)) : g_nameBuf;
                     (namingWhat == NameTarget::Path        ? pathsDirty
                      : namingWhat == NameTarget::Exit      ? exitDirty
+                     : namingWhat == NameTarget::Entry     ? entryDirty
                                                            : exitRoutesDirty) = true;
                     std::printf("[trackedit] %s %d named \"%s\" (Ctrl+S to save)\n", what,
                                 p.id, p.name.c_str());
@@ -1283,7 +1322,7 @@ int main(int argc, char** argv) {
             pc.viewProj = g_camera.projMatrix(aspect) * g_camera.viewMatrix();
             pc.sunDir = glm::vec4(sunDir, data.minElevation());
             pc.camPos = glm::vec4(g_camera.position(), data.maxElevation());
-            pc.params = glm::vec4(0.5f, 0.0f, 0.0f, 0.0f);
+            pc.params = glm::vec4(0.5f, blinkLit(), 0.0f, 0.0f);
             if (shotPath) {
                 if (frame == 20) renderer.requestCapture(shotPath);
                 if (frame == 24) glfwSetWindowShouldClose(window, GLFW_TRUE);
@@ -1356,9 +1395,12 @@ int main(int argc, char** argv) {
         int borderHover = -1;
         int sectionHover = -1; // section whose interval is under the cursor
         // Circuits mode authors borders/sections; Switches mode reuses the same section
-        // pick to add/remove a circuit from the selected switch's locking set (L).
+        // pick to add/remove a circuit from the selected switch's locking set (L). Every
+        // route mode needs it too: a border is the only thing they let you click, and the
+        // ring drawn around the hovered one is the sole cue for where that is.
         if ((mode == EdMode::Circuits || mode == EdMode::Switches ||
-             mode == EdMode::SignalPaths || mode == EdMode::ExitSignals) &&
+             mode == EdMode::SignalPaths || mode == EdMode::ExitSignals ||
+             mode == EdMode::EntrySignals) &&
             !g_mouseCaptured) {
             double mx = 0.0, my = 0.0;
             glfwGetCursorPos(window, &mx, &my);
@@ -1495,11 +1537,14 @@ int main(int argc, char** argv) {
         // vias, a destination), so the handlers below work on whichever collection the
         // current mode edits.
         const bool exitMode = mode == EdMode::ExitSignals;
-        const bool routeMode = exitMode || mode == EdMode::SignalPaths;
-        std::vector<SignalPath>& routes = exitMode ? exitSignals : signalPaths;
-        bool& routesDirty = exitMode ? exitDirty : pathsDirty;
-        int& selRoute = exitMode ? selExit : selPath;
-        int& nextRouteId = exitMode ? nextExitId : nextPathId;
+        const bool entryMode = mode == EdMode::EntrySignals;
+        const bool routeMode = exitMode || entryMode || mode == EdMode::SignalPaths;
+        std::vector<SignalPath>& routes = exitMode    ? exitSignals
+                                          : entryMode ? entrySignals
+                                                      : signalPaths;
+        bool& routesDirty = exitMode ? exitDirty : entryMode ? entryDirty : pathsDirty;
+        int& selRoute = exitMode ? selExit : entryMode ? selEntry : selPath;
+        int& nextRouteId = exitMode ? nextExitId : entryMode ? nextEntryId : nextPathId;
         // Exit signals mode carries a second collection: the routes leading up to those
         // signals. Exactly one of a signal and a route is ever selected, and while armed
         // a left-click means "the start of a route to that signal", not "a new signal".
@@ -1741,17 +1786,25 @@ int main(int argc, char** argv) {
             }
             // T: what the selected route authorises - C1 clear (two greens) or C2 clear over
             // a deviation (one green). The create-time guess is only a starting point.
-            if (kT && !prevT && exitMode) {
-                if (selExitRoute >= 0 && selExitRoute < static_cast<int>(exitRoutes.size())) {
-                    SignalPath& r = exitRoutes[selExitRoute];
+            if (kT && !prevT && (exitMode || entryMode)) {
+                // In entry mode the selected route is the signal's own record; in exit mode
+                // it is the approach route, since an exit signal's type lives there.
+                const bool haveEntry = entryMode && selEntry >= 0 &&
+                                       selEntry < static_cast<int>(entrySignals.size());
+                if (haveEntry || (exitMode && selExitRoute >= 0 &&
+                                  selExitRoute < static_cast<int>(exitRoutes.size()))) {
+                    SignalPath& r = haveEntry ? entrySignals[selEntry]
+                                              : exitRoutes[selExitRoute];
                     r.type = r.type == RouteType::C1 ? RouteType::C2 : RouteType::C1;
-                    exitRoutesDirty = true;
+                    (haveEntry ? entryDirty : exitRoutesDirty) = true;
                     pathMsg = std::string("type ") +
                               (r.type == RouteType::C2 ? "C2 (deviation)" : "C1 (no restriction)");
-                    std::printf("[trackedit] exit route %d -> %s (Ctrl+S to save)\n", r.id,
+                    std::printf("[trackedit] %s %d -> %s (Ctrl+S to save)\n",
+                                haveEntry ? "entry signal" : "exit route", r.id,
                                 r.type == RouteType::C2 ? "C2" : "C1");
                 } else {
-                    pathMsg = "right-click an exit route first, then T";
+                    pathMsg = entryMode ? "right-click an entry route first, then T"
+                                        : "right-click an exit route first, then T";
                 }
                 pathMsgUntil = glfwGetTime() + 3.0;
                 rebuildOverlay();
@@ -1784,7 +1837,9 @@ int main(int argc, char** argv) {
                         gone > 0 ? " with " + std::to_string(gone) + " route(s) that led to it"
                                  : std::string();
                     std::printf("[trackedit] %s removed%s (Ctrl+S to save)\n",
-                                exitMode ? "exit signal" : "signal path", also.c_str());
+                                exitMode ? "exit signal"
+                                : entryMode ? "entry signal" : "signal path",
+                                also.c_str());
                     rebuildStructs(); // a start may have lost its signal
                 }
                 rebuildOverlay();
@@ -1794,7 +1849,10 @@ int main(int argc, char** argv) {
                 if (exitMode && selExitRoute >= 0)
                     beginNaming(NameTarget::ExitRoute, selExitRoute);
                 else if (selRoute >= 0)
-                    beginNaming(exitMode ? NameTarget::Exit : NameTarget::Path, selRoute);
+                    beginNaming(exitMode    ? NameTarget::Exit
+                                : entryMode ? NameTarget::Entry
+                                            : NameTarget::Path,
+                                selRoute);
             }
         }
         // P: re-render the actual track + terrain (cuttings) + switch stands (both modes).
@@ -1820,7 +1878,7 @@ int main(int argc, char** argv) {
             static_cast<std::size_t>(std::count(removeExisting.begin(),
                                                 removeExisting.end(), char(1)));
         if (kSave && !prevS && mode == EdMode::Circuits &&
-            (circuitsDirty || pathsDirty || exitDirty || exitRoutesDirty)) {
+            (circuitsDirty || pathsDirty || exitDirty || exitRoutesDirty || entryDirty)) {
             // Circuits mode: save the sensing sections to their own overlay file. A border
             // move also rewrites every route anchored to it, so write those too - otherwise
             // the overlays would silently disagree on the next load, and there would be no
@@ -1863,6 +1921,16 @@ int main(int argc, char** argv) {
                     exitRoutesDirty = false;
                 } else {
                     std::fprintf(stderr, "[trackedit] failed to write exit routes\n");
+                }
+            }
+            if (entryDirty) {
+                if (writeEntrySignals(datasetRoot, entrySignals)) {
+                    std::printf("[trackedit] saved %zu entry signal(s) -> "
+                                "%s/overlay/entry-signals.txt\n", entrySignals.size(),
+                                datasetRoot.c_str());
+                    entryDirty = false;
+                } else {
+                    std::fprintf(stderr, "[trackedit] failed to write entry signals\n");
                 }
             }
         } else if (kSave && !prevS && mode == EdMode::Geometry &&
@@ -1914,6 +1982,15 @@ int main(int argc, char** argv) {
                     std::fprintf(stderr, "[trackedit] failed to write exit routes\n");
                 }
             }
+        } else if (kSave && !prevS && mode == EdMode::EntrySignals && entryDirty) {
+            if (writeEntrySignals(datasetRoot, entrySignals)) {
+                std::printf("[trackedit] saved %zu entry signal(s) to "
+                            "%s/overlay/entry-signals.txt\n", entrySignals.size(),
+                            datasetRoot.c_str());
+                entryDirty = false;
+            } else {
+                std::fprintf(stderr, "[trackedit] failed to write entry signals\n");
+            }
         } else if (kSave && !prevS && mode == EdMode::SignalPaths && pathsDirty) {
             // Signal-paths mode: save the mini signal paths to their own overlay file.
             if (writeSignalPaths(datasetRoot, signalPaths)) {
@@ -1961,6 +2038,8 @@ int main(int argc, char** argv) {
                            borderMoveBreaksPath(exitSignals, polys, b.trackId, b.frac,
                                                 circFrac, why) ||
                            borderMoveBreaksPath(exitRoutes, polys, b.trackId, b.frac,
+                                                circFrac, why) ||
+                           borderMoveBreaksPath(entrySignals, polys, b.trackId, b.frac,
                                                 circFrac, why)) {
                     pathMsg = "cannot move: " + why; // stay armed so the user can retry
                 } else {
@@ -1973,17 +2052,20 @@ int main(int argc, char** argv) {
                     const int np = moveBorderFrac(signalPaths, polys, t, oldF, circFrac);
                     const int ne = moveBorderFrac(exitSignals, polys, t, oldF, circFrac);
                     const int nr = moveBorderFrac(exitRoutes, polys, t, oldF, circFrac);
+                    const int ny = moveBorderFrac(entrySignals, polys, t, oldF, circFrac);
                     circuitsDirty = true;
                     if (np > 0) pathsDirty = true;
                     if (ne > 0) exitDirty = true;
                     if (nr > 0) exitRoutesDirty = true;
+                    if (ny > 0) entryDirty = true;
                     moveArmed = false;
                     rebuildStructs(); // signals stand at route starts: re-place them
                     pathMsg = "border moved (" + std::to_string(nc) + " circuit + " +
-                              std::to_string(np + ne + nr) + " route value(s))";
-                    std::printf("[trackedit] border moved on %#x %.6f -> %.6f (%d circuit, "
-                                "%d path, %d exit, %d exit-route value(s); Ctrl+S to save)\n",
-                                t, oldF, circFrac, nc, np, ne, nr);
+                              std::to_string(np + ne + nr + ny) + " route value(s))";
+                    std::printf("[trackedit] border moved on %#x %.6f -> %.6f (%d circuit, %d "
+                                "path, %d exit, %d exit-route, %d entry value(s); "
+                                "Ctrl+S to save)\n",
+                                t, oldF, circFrac, nc, np, ne, nr, ny);
                 }
                 pathMsgUntil = glfwGetTime() + 3.0;
                 rebuildOverlay();
@@ -2031,29 +2113,38 @@ int main(int argc, char** argv) {
                     if (n == 1) {
                         SignalPath p;
                         p.id = nextRouteId++;
-                        p.name = (exitMode ? "E" : "P") + std::to_string(p.id);
+                        p.name = std::string(exitMode ? "E" : entryMode ? "N" : "P") +
+                                 std::to_string(p.id);
                         p.start = tc.borders[pathStart];
                         p.end = tc.borders[borderHover];
                         p.vias = pendingVias;
                         p.parts = std::move(route);
+                        // An entry signal's record is the whole movement, so its authority
+                        // follows from the turnouts it takes; T overrides afterwards.
+                        if (entryMode) p.type = defaultRouteType(p, switchNet, polys);
                         routes.push_back(std::move(p));
                         selRoute = static_cast<int>(routes.size()) - 1;
                         pathStart = -1; pendingVias.clear(); routesDirty = true;
                         rebuildStructs(); // place the signal at the new route's start
                         std::printf("[trackedit] %s %d: %zu interval(s), %zu via(s) "
                                     "(Ctrl+S to save)\n",
-                                    exitMode ? "exit signal" : "signal path",
+                                    exitMode ? "exit signal"
+                                    : entryMode ? "entry signal" : "signal path",
                                     routes[selRoute].id, routes[selRoute].parts.size(),
                                     routes[selRoute].vias.size());
                         // Prompt for a name at once: these label the routes an operator
                         // will pick from, so none should be left as just "P7".
-                        beginNaming(exitMode ? NameTarget::Exit : NameTarget::Path, selRoute);
+                        beginNaming(exitMode    ? NameTarget::Exit
+                                    : entryMode ? NameTarget::Entry
+                                                : NameTarget::Path,
+                                    selRoute);
                     } else {
                         pathMsg = n == 0 ? "no route (V on a border adds a via)"
                                          : "ambiguous - add a via (V) to pick the road";
                         pathMsgUntil = now + 3.0;
                         std::printf("[trackedit] %s: %s\n",
-                                    exitMode ? "exit signal" : "signal path",
+                                    exitMode ? "exit signal"
+                                    : entryMode ? "entry signal" : "signal path",
                                     pathMsg.c_str());
                         // keep pathStart and the vias so another can be added
                     }
@@ -2094,9 +2185,10 @@ int main(int argc, char** argv) {
                 const float x1 =
                     std::min(static_cast<float>(fbw) - 20.0f, 40.0f + 76.0f * 8.0f * sc);
                 const float y1 =
-                    40.0f + (mode == EdMode::ExitSignals  ? 10.0f
+                    40.0f + (mode == EdMode::ExitSignals   ? 10.0f
                              : mode == EdMode::SignalPaths ? 9.0f
-                                                           : 8.0f) * lh;
+                             : mode == EdMode::EntrySignals ? 10.0f
+                                                            : 8.0f) * lh;
                 const glm::vec3 bg(0.04f, 0.05f, 0.09f);
                 const glm::vec2 a = ndc(20.0f, 20.0f), b = ndc(x1, 20.0f),
                                 c = ndc(x1, y1), d = ndc(20.0f, y1);
@@ -2235,10 +2327,13 @@ int main(int argc, char** argv) {
                                          "hover circuit + L=add/remove lock",
                        x, 40.0f + 7 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
           } else { // --- Signal-paths / exit-signals mode HUD ---
-            appendText(tv, exitMode ? "MODE: EXIT SIGNALS (Esc menu to switch)"
-                                    : "MODE: SIGNAL PATHS (Esc menu to switch)",
+            appendText(tv, exitMode    ? "MODE: EXIT SIGNALS (Esc menu to switch)"
+                           : entryMode ? "MODE: ENTRY SIGNALS (Esc menu to switch)"
+                                       : "MODE: SIGNAL PATHS (Esc menu to switch)",
                        x, 40.0f + 3 * lh, sc,
-                       exitMode ? glm::vec3(1.0f, 0.6f, 0.45f) : glm::vec3(0.5f, 1.0f, 0.7f),
+                       exitMode    ? glm::vec3(1.0f, 0.6f, 0.45f)
+                       : entryMode ? glm::vec3(0.45f, 1.0f, 1.0f)
+                                   : glm::vec3(0.5f, 1.0f, 0.7f),
                        fbw, fbh);
             // Whichever of the two collections this mode edits is selected. Exactly one is.
             const SignalPath* selR =
@@ -2259,7 +2354,9 @@ int main(int argc, char** argv) {
                 std::snprintf(buf, sizeof(buf), "EXITS %zu  ROUTES %zu%s%s", routes.size(),
                               exitRoutes.size(), selnm, vtxt);
             else
-                std::snprintf(buf, sizeof(buf), "PATHS %zu%s%s", routes.size(), selnm, vtxt);
+                std::snprintf(buf, sizeof(buf), "%s %zu%s%s",
+                              entryMode ? "ENTRY ROUTES" : "PATHS", routes.size(), selnm,
+                              vtxt);
             appendText(tv, buf, x, 40.0f + 4 * lh, sc,
                        selR ? glm::vec3(1.0f, 0.9f, 0.3f) : glm::vec3(0.9f, 0.85f, 0.7f),
                        fbw, fbh);
@@ -2288,8 +2385,22 @@ int main(int argc, char** argv) {
                 appendText(tv, buf, x, 40.0f + 5 * lh, sc, glm::vec3(0.8f, 0.9f, 1.0f),
                            fbw, fbh);
             }
+            // An entry route says what it authorises and how far, the way an exit route
+            // does - it is the same question, just answered by one record instead of two.
+            if (entryMode) {
+                if (selR)
+                    std::snprintf(buf, sizeof(buf), "ROUTE   type %s   %zu circuit(s)",
+                                  selR->type == RouteType::C2 ? "C2 (deviation)"
+                                                              : "C1 (no restriction)",
+                                  pathSections(*selR, tc).size());
+                else
+                    std::snprintf(buf, sizeof(buf),
+                                  "several routes from one border are one signal");
+                appendText(tv, buf, x, 40.0f + 5 * lh, sc, glm::vec3(0.8f, 0.9f, 1.0f),
+                           fbw, fbh);
+            }
             const bool anyDirty = routesDirty || (exitMode && exitRoutesDirty);
-            const float dl = exitMode ? 6.0f : 5.0f; // dirty line
+            const float dl = (exitMode || entryMode) ? 6.0f : 5.0f; // dirty line
             const float fl = dl + 1.0f;              // feedback line
             const float hl = fl + 1.0f;              // hint line
             std::snprintf(buf, sizeof(buf), "UNSAVED %s   %s", anyDirty ? "yes" : "no",
@@ -2314,14 +2425,20 @@ int main(int argc, char** argv) {
             // that matter were. The second line says what to do next given the selection.
             const glm::vec3 hintCol(0.85f, 0.85f, 0.7f);
             if (g_mouseCaptured) {
-                appendText(tv, exitMode ? "EXIT SIGNALS: press Tab to free the cursor"
-                                        : "SIGNAL PATHS: press Tab to free the cursor",
+                appendText(tv, exitMode    ? "EXIT SIGNALS: press Tab to free the cursor"
+                               : entryMode ? "ENTRY SIGNALS: press Tab to free the cursor"
+                                           : "SIGNAL PATHS: press Tab to free the cursor",
                            x, 40.0f + hl * lh, sc, hintCol, fbw, fbh);
             } else if (armed()) {
                 // The feedback line above already names the signal and the gesture, so
                 // this only has to carry the keys.
                 appendText(tv, "V=add via (retries)   X or B=cancel",
                            x, 40.0f + hl * lh, sc, glm::vec3(1.0f, 0.9f, 0.5f), fbw, fbh);
+            } else if (entryMode) {
+                appendText(tv, "ENTRY SIGNALS: click the signal border, then the",
+                           x, 40.0f + hl * lh, sc, hintCol, fbw, fbh);
+                appendText(tv, "destination   T=C1/C2  V=via  F2=rename  X=cancel/del",
+                           x, 40.0f + (hl + 1) * lh, sc, hintCol, fbw, fbh);
             } else if (!exitMode) {
                 appendText(tv, "SIGNAL PATHS: click the start border, then the end",
                            x, 40.0f + hl * lh, sc, hintCol, fbw, fbh);
@@ -2354,8 +2471,11 @@ int main(int argc, char** argv) {
                            (clip.y / clip.w * 0.5f + 0.5f) * fbh, sc * 0.8f, col, fbw, fbh);
             };
             for (const SignalPath& p : routes)
-                label(p, exitMode ? glm::vec3(1.0f, 0.8f, 0.7f) : glm::vec3(0.7f, 1.0f, 0.8f),
-                      false);
+                label(p,
+                      exitMode    ? glm::vec3(1.0f, 0.8f, 0.7f)
+                      : entryMode ? glm::vec3(0.7f, 1.0f, 1.0f)
+                                  : glm::vec3(0.7f, 1.0f, 0.8f),
+                      entryMode); // an entry route states its own authority
             if (exitMode)
                 for (const SignalPath& r : exitRoutes)
                     label(r, glm::vec3(0.7f, 0.9f, 1.0f), true); // the authority it grants
@@ -2443,7 +2563,7 @@ int main(int argc, char** argv) {
                     quad(bpx.x + R, bpx.y, T, R, hc);
                     appendText(tv,
                                armed()        ? "route start"
-                               : pathStart < 0 ? (exitMode ? "signal" : "start")
+                               : pathStart < 0 ? ((exitMode || entryMode) ? "signal" : "start")
                                                : "end",
                                bpx.x + 13.0f,
                                bpx.y - 4.0f, sc * 0.7f, hc, fbw, fbh);
@@ -2457,7 +2577,7 @@ int main(int argc, char** argv) {
         pc.sunDir = glm::vec4(sunDir, data.minElevation());
         pc.camPos = glm::vec4(g_camera.position(), data.maxElevation());
         // Ghost the terrain/rails so the raw geo-point network reads clearly on top.
-        pc.params = glm::vec4(0.5f, 0.0f, 0.0f, 0.0f);
+        pc.params = glm::vec4(0.5f, blinkLit(), 0.0f, 0.0f);
 
         if (shotPath) {
             if (frame == 20) renderer.requestCapture(shotPath);

@@ -23,6 +23,7 @@ layout(push_constant) uniform PushConstants {
     mat4 viewProj;
     vec4 sunDir;   // xyz = direction to sun; w = min elevation
     vec4 camPos;   // xyz = camera position (scene-relative); w = max elevation
+    vec4 params;   // x = scene alpha; y = flashing-lamp blink state (1 = lit)
 } pc;
 
 layout(location = 0) out vec3 vWorldPos;
@@ -40,7 +41,11 @@ const float kLampMinAngle = 0.0024; // minimum apparent radius, radians
 
 void main() {
     vec3 pos = inPos;
-    if (inTexLayer < -2.5) {
+    // A flashing lamp keeps its apparent size only while it is lit. Blown up in its dark
+    // phase it would paint a fat dark disc where the lens should have shrunk away with the
+    // head - the very thing an unlit lens avoids by not being tagged at all.
+    const bool lampLit = inTexLayer > -3.5 || pc.params.y > 0.5;
+    if (inTexLayer < -2.5 && lampLit) {
         const vec3 c = inNormal; // lamp centre
         vec3 off = inPos - c;
         const float r = length(off);

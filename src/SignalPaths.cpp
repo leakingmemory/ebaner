@@ -36,6 +36,10 @@ std::string exitRoutesFile(const std::string& root) {
     return root + "/overlay/exit-routes.txt";
 }
 
+std::string entriesFile(const std::string& root) {
+    return root + "/overlay/entry-signals.txt";
+}
+
 // Parse a `<trackHex>:<frac>` border token.
 bool parseBorder(const std::string& tok, Border& b) {
     const auto c = tok.find(':');
@@ -145,9 +149,11 @@ std::vector<SignalPath> loadRoutes(const std::string& file, const char* keyword)
     return out;
 }
 
+// `withType` writes the C1/C2 token: a main-signal route always carries one, while a mini
+// path has no such thing to say.
 bool writeRoutes(const std::string& datasetRoot, const std::string& file,
                  const char* keyword, const char* header,
-                 const std::vector<SignalPath>& routes) {
+                 const std::vector<SignalPath>& routes, bool withType = false) {
     std::error_code ec;
     fs::create_directories(datasetRoot + "/overlay", ec);
     std::ofstream f(file, std::ios::trunc);
@@ -160,11 +166,11 @@ bool writeRoutes(const std::string& datasetRoot, const std::string& file,
         f << keyword << ' ' << p.id << ' ' << quoteName(p.name) << ' '
           << std::hex << p.start.trackId << std::dec << ':' << p.start.frac << ' '
           << std::hex << p.end.trackId << std::dec << ':' << p.end.frac;
-        // Only an exit route carries these; writing them always for one keeps the file
-        // self-documenting rather than leaning on the C1 default.
-        if (p.exitId != 0)
-            f << " signal " << p.exitId << " type "
-              << (p.type == RouteType::C2 ? "C2" : "C1");
+        // An exit route names the signal it leads to; every main-signal route states its
+        // type outright, so the file stays self-documenting rather than leaning on the
+        // C1 default.
+        if (p.exitId != 0) f << " signal " << p.exitId;
+        if (withType) f << " type " << (p.type == RouteType::C2 ? "C2" : "C1");
         for (const Border& v : p.vias)
             f << " via " << std::hex << v.trackId << std::dec << ':' << v.frac;
         for (const SectionInterval& iv : p.parts)
@@ -195,7 +201,20 @@ bool writeExitRoutes(const std::string& datasetRoot,
     return writeRoutes(datasetRoot, exitRoutesFile(datasetRoot), "route",
                        "# ebaner exit routes: the authority to move from a border inside the\n"
                        "# station up to an exit signal, which the signal then displays.\n",
-                       routes);
+                       routes, true);
+}
+
+std::vector<SignalPath> loadEntrySignals(const std::string& datasetRoot) {
+    return loadRoutes(entriesFile(datasetRoot), "entry");
+}
+
+bool writeEntrySignals(const std::string& datasetRoot,
+                       const std::vector<SignalPath>& entries) {
+    return writeRoutes(datasetRoot, entriesFile(datasetRoot), "entry",
+                       "# ebaner entry signals (main signals). The signal stands on the start\n"
+                       "# border and the record is the whole route into the station; several\n"
+                       "# sharing a start border are one signal governing them all.\n",
+                       entries, true);
 }
 
 std::vector<SignalPath> loadExitSignals(const std::string& datasetRoot) {
@@ -267,7 +286,8 @@ int exitRouteTarget(const SignalPath& route, const std::vector<SignalPath>& exit
 }
 
 std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& paths,
-                                              const std::vector<TrackPoly>& polys) {
+                                              const std::vector<TrackPoly>& polys,
+                                              SignalKind kind) {
     std::vector<SignalPlacement> out;
     std::unordered_map<std::string, int> seen; // dedupe key -> placement index
     for (std::size_t pi = 0; pi < paths.size(); ++pi) {
@@ -289,6 +309,7 @@ std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& pat
         }
         seen.emplace(key, static_cast<int>(out.size()));
         SignalPlacement sp;
+        sp.kind = kind;
         sp.world = a;
         sp.forward = fwd;
         sp.paths.push_back(static_cast<int>(pi));
@@ -298,14 +319,12 @@ std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& pat
 }
 
 std::vector<SignalPlacement> mergeSignals(const std::vector<SignalPlacement>& dwarfs,
-                                          const std::vector<SignalPlacement>& exits) {
+                                          const std::vector<SignalPlacement>& mains) {
     constexpr double kSamePlace = 1.0; // m
     std::vector<SignalPlacement> out;
     std::vector<char> used(dwarfs.size(), 0);
-    for (const SignalPlacement& e : exits) {
-        SignalPlacement p = e;
-        p.kind = SignalKind::Exit;
-        p.aspect = SignalAspect::Stop; // exit signals only show danger for now
+    for (const SignalPlacement& e : mains) {
+        SignalPlacement p = e; // already tagged Exit or Entry by signalPlacements
         for (std::size_t i = 0; i < dwarfs.size(); ++i) {
             if (used[i]) continue;
             const SignalPlacement& d = dwarfs[i];
@@ -433,14 +452,25 @@ bool routeContains(const SignalPath& whole, const SignalPath& part) {
     return true;
 }
 
+namespace {
+bool routeDiverges(const SignalPath& p, const SwitchNetwork& net,
+                   const std::vector<TrackPoly>& polys) {
+    for (const PathSwitch& ps : pathSwitchRequirements(p, net, polys))
+        if (ps.need == SwitchState::Diverging) return true;
+    return false;
+}
+} // namespace
+
 RouteType defaultRouteType(const SignalPath& route, const SignalPath& exit,
                            const SwitchNetwork& net, const std::vector<TrackPoly>& polys) {
-    auto diverges = [&](const SignalPath& p) {
-        for (const PathSwitch& ps : pathSwitchRequirements(p, net, polys))
-            if (ps.need == SwitchState::Diverging) return true;
-        return false;
-    };
-    return (diverges(route) || diverges(exit)) ? RouteType::C2 : RouteType::C1;
+    return (routeDiverges(route, net, polys) || routeDiverges(exit, net, polys))
+               ? RouteType::C2
+               : RouteType::C1;
+}
+
+RouteType defaultRouteType(const SignalPath& route, const SwitchNetwork& net,
+                           const std::vector<TrackPoly>& polys) {
+    return routeDiverges(route, net, polys) ? RouteType::C2 : RouteType::C1;
 }
 
 std::vector<int> pathSections(const SignalPath& p, const TrackCircuits& circuits) {
@@ -493,7 +523,7 @@ bool updateSignalAspects(std::vector<SignalPlacement>& placements,
     bool changed = false;
     for (std::size_t k = 0; k < placements.size(); ++k) {
         SignalPlacement& sp = placements[k];
-        if (sp.kind == SignalKind::Exit) {
+        if (sp.kind != SignalKind::Dwarf) {
             // What the main head shows is decided by the interlocking, not here: danger
             // unless a locked route says otherwise. A dwarf sharing the pole keeps its own
             // indication, which is still this function's business.

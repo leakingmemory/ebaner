@@ -402,13 +402,22 @@ int main(int argc, char** argv) {
     // Mini ground signals (dvergsignal) at the signal-path starts. Their lamps follow the
     // aspect, so they live in a dynamic buffer, rebuilt when an aspect changes.
     const std::vector<SignalPath> signalPaths = loadSignalPaths(datasetRoot);
-    // Exit (main) signals stand on a border too and protect the route to their destination.
-    // They live in one placement list with the dwarfs, so a pair at the same border shares
-    // a pole; for now they only ever show danger.
+    // Main signals stand on a border too: an exit protecting the route out of the station,
+    // an entry authorising one in. They live in one placement list with the dwarfs, so a
+    // pair at the same border shares a pole.
     const std::vector<SignalPath> exitSignals = loadExitSignals(datasetRoot);
+    const std::vector<SignalPath> entrySignals = loadEntrySignals(datasetRoot);
+    std::vector<SignalPlacement> mainPlacements =
+        signalPlacements(exitSignals, polys, SignalKind::Exit);
+    {
+        // Several entry routes leaving one border are one mast, which signalPlacements
+        // already does; they simply join the exit masts in the same list.
+        const std::vector<SignalPlacement> entries =
+            signalPlacements(entrySignals, polys, SignalKind::Entry);
+        mainPlacements.insert(mainPlacements.end(), entries.begin(), entries.end());
+    }
     std::vector<SignalPlacement> sigPlacements =
-        mergeSignals(signalPlacements(signalPaths, polys),
-                     signalPlacements(exitSignals, polys));
+        mergeSignals(signalPlacements(signalPaths, polys), mainPlacements);
     // The map is a shunting view: it shows the dwarfs and the mini routes they set. An exit
     // signal sharing a dwarf's pole appears as that dwarf; one standing alone has nothing to
     // set there, so the map skips it. These pick the dwarf half of a shared placement.
@@ -416,10 +425,10 @@ int main(int argc, char** argv) {
         return sp.kind == SignalKind::Dwarf || sp.withDwarf;
     };
     auto miniPaths = [](const SignalPlacement& sp) -> const std::vector<int>& {
-        return sp.kind == SignalKind::Exit ? sp.dwarfPaths : sp.paths;
+        return sp.kind == SignalKind::Dwarf ? sp.paths : sp.dwarfPaths;
     };
     auto miniAspect = [](const SignalPlacement& sp) {
-        return sp.kind == SignalKind::Exit ? sp.dwarfAspect : sp.aspect;
+        return sp.kind == SignalKind::Dwarf ? sp.aspect : sp.dwarfAspect;
     };
     SignalMesh signals;
     signals.build(sigPlacements, data.sceneOrigin());
@@ -431,68 +440,110 @@ int main(int argc, char** argv) {
     std::vector<char> routeSet(signalPaths.size(), 0);
     int routeArm = -1; // placement armed by a first click, awaiting its destination
 
-    // --- Main-signal (exit) routes -------------------------------------------------------
-    // The authority to depart: an exit route from a platform road up to its exit signal,
-    // plus that signal's own route beyond. Setting one locks the whole departure's circuits.
+    // --- Main-signal routes ---------------------------------------------------------------
+    // Everything a main signal can be asked to authorise, exit or entry alike, resolved once
+    // into one list so the interlocking never has to ask which kind it is holding.
+    //
+    // An exit signal's authority begins back at the platform, so its movement is the exit
+    // route joined to the signal's own route beyond. An entry signal's begins at the mast,
+    // so its record is already the whole movement - and every one of its circuits is past
+    // the signal.
     const std::vector<SignalPath> exitRoutes = loadExitRoutes(datasetRoot);
-    // Which exit signal each route leads to (index into exitSignals), and the placement -
-    // the mast - that signal stands at. Resolved once: neither can change at runtime.
-    std::vector<int> routeExit(exitRoutes.size(), -1);
-    std::vector<int> routePlacement(exitRoutes.size(), -1);
-    for (std::size_t ri = 0; ri < exitRoutes.size(); ++ri) {
-        for (std::size_t e = 0; e < exitSignals.size(); ++e) {
-            if (exitSignals[e].id != exitRoutes[ri].exitId) continue;
-            routeExit[ri] = static_cast<int>(e);
+    struct MainCandidate {
+        std::string name;
+        RouteType type = RouteType::C1;
+        int placement = -1;      // the mast to light
+        int station = -1;
+        glm::vec2 anchor{0.0f};  // its in-station end, which is what groups it by station
+        SignalPath departure;    // the whole movement
+        std::vector<int> beyond; // circuits past the signal
+    };
+    std::vector<MainCandidate> mainCandidates;
+    {
+        const glm::dvec3 org = switchNet.sceneOrigin();
+        // The mast a route's signal stands at: the placement of that kind whose paths list
+        // the signal. `paths` means different things per kind, which is why kind is checked.
+        auto mastOf = [&](SignalKind kind, int idx) {
             for (std::size_t k = 0; k < sigPlacements.size(); ++k) {
-                if (sigPlacements[k].kind != SignalKind::Exit) continue;
+                if (sigPlacements[k].kind != kind) continue;
                 const std::vector<int>& ps = sigPlacements[k].paths;
-                if (std::find(ps.begin(), ps.end(), static_cast<int>(e)) != ps.end())
-                    routePlacement[ri] = static_cast<int>(k);
+                if (std::find(ps.begin(), ps.end(), idx) != ps.end())
+                    return static_cast<int>(k);
             }
-            break;
+            return -1;
+        };
+        auto sceneAt = [&](const Border& b) {
+            const glm::dvec3 w = fracToWorld(polys, b.trackId, b.frac);
+            return glm::vec2(w.x - org.x, w.y - org.y);
+        };
+        auto named = [](const SignalPath& p, const char* pfx) {
+            return p.name.empty() || p.name == "-" ? pfx + std::to_string(p.id) : p.name;
+        };
+        for (std::size_t ri = 0; ri < exitRoutes.size(); ++ri) {
+            int e = -1;
+            for (std::size_t k = 0; k < exitSignals.size(); ++k)
+                if (exitSignals[k].id == exitRoutes[ri].exitId) e = static_cast<int>(k);
+            if (e < 0) {
+                std::fprintf(stderr, "[Route] exit route %d names no exit signal (%d)\n",
+                             exitRoutes[ri].id, exitRoutes[ri].exitId);
+                continue;
+            }
+            MainCandidate c;
+            c.name = named(exitRoutes[ri], "R");
+            c.type = exitRoutes[ri].type;
+            c.placement = mastOf(SignalKind::Exit, e);
+            c.departure = departureRoute(exitRoutes[ri], exitSignals[e]);
+            // The signal's own route starts at its border, so its circuits are exactly the
+            // ones past the mast - and a circuit cannot straddle a border, so the sets are
+            // disjoint rather than merely different.
+            c.beyond = pathSections(exitSignals[e], circuits);
+            c.anchor = sceneAt(c.departure.start); // the platform end
+            mainCandidates.push_back(std::move(c));
         }
-        if (routeExit[ri] < 0)
-            std::fprintf(stderr, "[Route] exit route %d names no exit signal (%d)\n",
-                         exitRoutes[ri].id, exitRoutes[ri].exitId);
+        for (std::size_t ei = 0; ei < entrySignals.size(); ++ei) {
+            MainCandidate c;
+            c.name = named(entrySignals[ei], "E");
+            c.type = entrySignals[ei].type;
+            c.placement = mastOf(SignalKind::Entry, static_cast<int>(ei));
+            c.departure = entrySignals[ei];
+            c.beyond = pathSections(c.departure, circuits); // all of it is past the signal
+            c.anchor = sceneAt(c.departure.end);            // the platform end
+            mainCandidates.push_back(std::move(c));
+        }
     }
-    // Stations: exit signals standing within kStationSpan of one another work one place, so
-    // the traffic manager can offer just that place's routes. Single-link clustering over
-    // the signal positions - Bodo is one cluster, and a second station needs no new data.
-    std::vector<int> exitStation(exitSignals.size(), -1); // signal -> station index
-    std::vector<glm::vec2> stationAt;                     // station -> scene-relative centre
+    // Stations: routes whose in-station ends lie within kStationSpan of one another work one
+    // place, so the traffic manager can offer just that place's routes. Anchoring on the
+    // platform end rather than on the mast matters - an entry signal can stand a kilometre
+    // outside the station it serves, and would otherwise cluster as a station of its own.
+    std::vector<glm::vec2> stationAt; // station -> scene-relative centre
     {
         constexpr double kStationSpan = 800.0; // m
-        const glm::dvec3 org = switchNet.sceneOrigin();
-        std::vector<glm::dvec3> at(exitSignals.size());
-        std::vector<char> have(exitSignals.size(), 0);
-        for (std::size_t e = 0; e < exitSignals.size(); ++e) {
-            glm::dvec2 fwd(0.0);
-            have[e] = routeStartPose(exitSignals[e], polys, at[e], fwd) ? 1 : 0;
-        }
-        for (std::size_t e = 0; e < exitSignals.size(); ++e) {
-            if (!have[e] || exitStation[e] >= 0) continue;
+        for (std::size_t a = 0; a < mainCandidates.size(); ++a) {
+            if (mainCandidates[a].station >= 0) continue;
             const int st = static_cast<int>(stationAt.size());
-            std::vector<std::size_t> queue{e};
-            exitStation[e] = st;
-            glm::dvec2 sum(0.0);
+            std::vector<std::size_t> queue{a};
+            mainCandidates[a].station = st;
+            glm::vec2 sum(0.0f);
             int n = 0;
             while (!queue.empty()) { // single link: pull in everything within reach
                 const std::size_t c = queue.back();
                 queue.pop_back();
-                sum += glm::dvec2(at[c].x - org.x, at[c].y - org.y);
+                sum += mainCandidates[c].anchor;
                 ++n;
-                for (std::size_t o = 0; o < exitSignals.size(); ++o) {
-                    if (!have[o] || exitStation[o] >= 0) continue;
-                    if (std::hypot(at[o].x - at[c].x, at[o].y - at[c].y) > kStationSpan)
+                for (std::size_t o = 0; o < mainCandidates.size(); ++o) {
+                    if (mainCandidates[o].station >= 0) continue;
+                    if (glm::length(mainCandidates[o].anchor - mainCandidates[c].anchor) >
+                        kStationSpan)
                         continue;
-                    exitStation[o] = st;
+                    mainCandidates[o].station = st;
                     queue.push_back(o);
                 }
             }
-            stationAt.push_back(glm::vec2(sum / static_cast<double>(std::max(n, 1))));
+            stationAt.push_back(sum / static_cast<float>(std::max(n, 1)));
         }
-        std::printf("[Route] %zu exit route(s), %zu exit signal(s) in %zu station(s)\n",
-                    exitRoutes.size(), exitSignals.size(), stationAt.size());
+        std::printf("[Route] %zu exit route(s), %zu entry route(s) -> %zu main route(s) "
+                    "in %zu station(s)\n", exitRoutes.size(), entrySignals.size(),
+                    mainCandidates.size(), stationAt.size());
     }
     // A departure the interlocking is holding. Its circuits are locked so no other main
     // route can take them; each is released as a train enters it, so the route unwinds
@@ -504,7 +555,7 @@ int main(int argc, char** argv) {
     // authority away just as the driver was about to accept it. Past the signal the rule is
     // absolute - any occupancy there, by any train, and the aspect goes.
     struct MainRoute {
-        int route = -1;          // index into exitRoutes
+        int route = -1;          // index into mainCandidates
         int placement = -1;      // the mast to light
         SignalPath departure;    // exit route + the signal's own route beyond
         std::vector<int> locked; // section ids still held (approach and beyond alike)
@@ -632,7 +683,7 @@ int main(int argc, char** argv) {
         // Main signals: a square at the mast, coloured by aspect. Informational - a main
         // route is set from the R list, not by clicking, so these are not pick targets.
         for (const SignalPlacement& sp : sigPlacements) {
-            if (sp.kind != SignalKind::Exit) continue;
+            if (sp.kind == SignalKind::Dwarf) continue; // main signals only
             const glm::vec2 f(float(sp.forward.x), float(sp.forward.y));
             const glm::vec2 r(f.y, -f.x); // right of travel: the side it stands on
             const glm::vec2 b(float(sp.world.x - org.x) + r.x * 8.0f,
@@ -938,11 +989,7 @@ int main(int argc, char** argv) {
                 return si < secOccupied.size() && secOccupied[si] != 0;
         return false;
     };
-    auto exitRouteName = [&](int ri) {
-        return exitRoutes[ri].name.empty() || exitRoutes[ri].name == "-"
-                   ? "R" + std::to_string(exitRoutes[ri].id)
-                   : exitRoutes[ri].name;
-    };
+    auto exitRouteName = [&](int ri) { return mainCandidates[ri].name; };
     // Which set route (if any) holds turnout `t`.
     auto routeHolding = [&](int t) {
         for (std::size_t pi = 0; pi < signalPaths.size(); ++pi) {
@@ -1073,8 +1120,8 @@ int main(int argc, char** argv) {
     // message line when the operator actually tries it.
     struct RouteBlock { std::string brief, full; };
     auto exitRouteBlocked = [&](int ri) -> RouteBlock {
-        if (routeExit[ri] < 0) return {"no signal", "no exit signal"};
-        const SignalPath dep = departureRoute(exitRoutes[ri], exitSignals[routeExit[ri]]);
+        if (mainCandidates[ri].placement < 0) return {"no signal", "no signal stands there"};
+        const SignalPath& dep = mainCandidates[ri].departure;
         std::string occ;
         for (int id : pathSections(dep, circuits))
             if (secOccupiedById(id)) occ += (occ.empty() ? "" : ", ") + secName(id);
@@ -1111,7 +1158,7 @@ int main(int argc, char** argv) {
             setMapMsg("Route " + exitRouteName(ri) + ": " + why.full);
             return;
         }
-        const SignalPath dep = departureRoute(exitRoutes[ri], exitSignals[routeExit[ri]]);
+        const SignalPath& dep = mainCandidates[ri].departure;
         std::vector<PathSwitch> toMove;
         for (const PathSwitch& ps : pathSwitchRequirements(dep, switchNet, polys))
             if (switchNet.state(ps.turnout) != ps.need) toMove.push_back(ps);
@@ -1130,13 +1177,10 @@ int main(int argc, char** argv) {
         }
         MainRoute mr;
         mr.route = ri;
-        mr.placement = routePlacement[ri];
+        mr.placement = mainCandidates[ri].placement;
         mr.departure = dep;
         mr.locked = pathSections(dep, circuits);
-        // The signal's own route starts at its border, so its circuits are exactly the ones
-        // past the mast - and a circuit cannot straddle a border, so the two sets are
-        // disjoint rather than merely different.
-        mr.beyond = pathSections(exitSignals[routeExit[ri]], circuits);
+        mr.beyond = mainCandidates[ri].beyond;
         mainRoutes.push_back(std::move(mr));
         switchesChanged = true;
         g_mapDirty = true;
@@ -1170,9 +1214,8 @@ int main(int argc, char** argv) {
             const float d = glm::length(stationAt[i] - at);
             if (d < bestD) { bestD = d; best = static_cast<int>(i); }
         }
-        for (std::size_t ri = 0; ri < exitRoutes.size(); ++ri)
-            if (routeExit[ri] >= 0 && exitStation[routeExit[ri]] == best)
-                out.push_back(static_cast<int>(ri));
+        for (std::size_t ri = 0; ri < mainCandidates.size(); ++ri)
+            if (mainCandidates[ri].station == best) out.push_back(static_cast<int>(ri));
         return out;
     };
     // One picker line per route: its name, the authority it grants, and either that it is
@@ -1192,7 +1235,7 @@ int main(int argc, char** argv) {
             std::string tag = mainRouteFor(ri) ? "SET - cancel"
                                                : exitRouteBlocked(ri).brief;
             items.push_back(fit(exitRouteName(ri), kName) +
-                            (exitRoutes[ri].type == RouteType::C2 ? "  C2  " : "  C1  ") +
+                            (mainCandidates[ri].type == RouteType::C2 ? "  C2  " : "  C1  ") +
                             fit(tag, kTag));
         }
         if (items.empty()) items.push_back("(no exit routes here)");
@@ -1299,7 +1342,7 @@ int main(int argc, char** argv) {
             std::vector<SignalAspect> exitAspects(sigPlacements.size(), SignalAspect::Stop);
             for (const MainRoute& mr : mainRoutes) {
                 if (!mr.signalClear || mr.placement < 0) continue;
-                exitAspects[mr.placement] = exitRoutes[mr.route].type == RouteType::C2
+                exitAspects[mr.placement] = mainCandidates[mr.route].type == RouteType::C2
                                                 ? SignalAspect::ClearReduced
                                                 : SignalAspect::Clear;
             }
@@ -1796,7 +1839,12 @@ int main(int argc, char** argv) {
         }
 
         const float aspect = static_cast<float>(fbw) / static_cast<float>(fbh);
+        // Flashing lamps (an entry signal's danger) blink from the push constant rather
+        // than by rebuilding the signal mesh: in the editor those vertices share a buffer
+        // with 32k buildings, so a rebuild twice a second is out of the question there.
+        constexpr double kBlinkPeriod = 1.0; // s, half lit
         PushConstants pc{};
+        pc.params.y = std::fmod(now, kBlinkPeriod) < kBlinkPeriod * 0.5 ? 1.0f : 0.0f;
         if (g_mapMode) {
             pc.viewProj = mapOrtho(aspect); // top-down ortho, centred + zoomed + panned
         } else {
