@@ -120,7 +120,7 @@ int main(int argc, char** argv) {
     RoadMesh roads;
     BuildingMesh buildings;
     PlatformMesh platforms;
-    SpeedSignMesh speedSigns;
+    SpeedSignMesh speedSignMesh;
     SwitchMesh switches;
     SignalMesh signals;
     SwitchNetwork switchNet;
@@ -770,8 +770,8 @@ int main(int argc, char** argv) {
         merge(platforms.vertices(), platforms.indices());
         // Derived from the line speeds, so a geometry edit can move them: rebuilt here
         // rather than once at startup.
-        speedSigns.build(speedIncreaseSigns(paths));
-        merge(speedSigns.vertices(), speedSigns.indices());
+        speedSignMesh.build(speedSigns(paths));
+        merge(speedSignMesh.vertices(), speedSignMesh.indices());
         merge(switches.vertices(), switches.indices());
         signals.build(allPlacements(), data.sceneOrigin());
         merge(signals.vertices(), signals.indices());
@@ -799,8 +799,8 @@ int main(int argc, char** argv) {
         merge(platforms.vertices(), platforms.indices());
         // Derived from the line speeds, so a geometry edit can move them: rebuilt here
         // rather than once at startup.
-        speedSigns.build(speedIncreaseSigns(paths));
-        merge(speedSigns.vertices(), speedSigns.indices());
+        speedSignMesh.build(speedSigns(paths));
+        merge(speedSignMesh.vertices(), speedSignMesh.indices());
         merge(switches.vertices(), switches.indices());
         merge(signals.vertices(), signals.indices());
         renderer.updateStructs(sv, si);

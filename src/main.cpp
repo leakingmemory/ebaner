@@ -284,17 +284,17 @@ int main(int argc, char** argv) {
     }
     // Speed-increase signs are derived from the line speeds rather than authored, and never
     // change, so they join the static bucket too.
-    SpeedSignMesh speedSigns;
+    SpeedSignMesh speedSignMesh;
     {
-        const std::vector<SpeedSign> sg = speedIncreaseSigns(paths);
-        speedSigns.build(sg);
+        const std::vector<SpeedSign> sg = speedSigns(paths);
+        speedSignMesh.build(sg);
         const std::uint32_t vbase = static_cast<std::uint32_t>(structVerts.size());
-        structVerts.insert(structVerts.end(), speedSigns.vertices().begin(),
-                           speedSigns.vertices().end());
-        structIndices.reserve(structIndices.size() + speedSigns.indices().size());
-        for (std::uint32_t idx : speedSigns.indices()) structIndices.push_back(idx + vbase);
-        std::printf("[SpeedSigns] %zu increase sign(s), %zu vertices\n", sg.size(),
-                    speedSigns.vertices().size());
+        structVerts.insert(structVerts.end(), speedSignMesh.vertices().begin(),
+                           speedSignMesh.vertices().end());
+        structIndices.reserve(structIndices.size() + speedSignMesh.indices().size());
+        for (std::uint32_t idx : speedSignMesh.indices()) structIndices.push_back(idx + vbase);
+        std::printf("[SpeedSigns] %zu sign(s), %zu vertices\n", sg.size(),
+                    speedSignMesh.vertices().size());
     }
     // Switch stands go in a dynamic buffer (rebuilt when a switch is thrown), not the
     // static struct bucket — attached just after renderer.init below. The ground signals

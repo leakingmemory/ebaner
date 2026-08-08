@@ -44,17 +44,42 @@ struct SpeedStretch {
 // back in travel order, the first one starting where the path does in that direction.
 std::vector<SpeedStretch> resolveSpeeds(const TrackPath& p, int dir);
 
-// A sign standing where the limit goes up. `tangent` is the direction it faces (the direction
-// of travel it applies to) and `right` that direction's cross-track right, which is the side
-// it stands on.
+// A rise is signed once, where it happens. A drop takes two signs: a small marker at the
+// point itself, and a larger warning carrying the new limit a braking distance before it.
+enum class SpeedSignKind {
+    Increase,         // large triangle, apex up, numeral: the limit rises here
+    ReductionMarker,  // small triangle, apex down, no numeral: the limit drops here
+    ReductionWarning, // large triangle, apex down, numeral: a drop is coming
+};
+
+// A lineside speed sign. `tangent` is the direction it faces (the direction of travel it
+// applies to) and `right` that direction's cross-track right, which is the side it stands on.
 struct SpeedSign {
     glm::vec3 pos{0.0f};
     glm::vec3 tangent{1.0f, 0.0f, 0.0f};
     glm::vec3 right{0.0f, 1.0f, 0.0f};
-    int kmh = 0;
+    int kmh = 0; // the limit the sign announces; unused by a marker, which carries no numeral
+    SpeedSignKind kind = SpeedSignKind::Increase;
+    // An Increase carrying the opposing direction's reduction marker on its back plate. The
+    // marker is then not a sign in its own right - it is the other face of this one.
+    bool backMarker = false;
 };
 
-// Every increase over every path, in both directions. The first stretch of a path is never an
-// increase: nothing preceded it to rise from, and a path boundary is an artefact of how the
-// import was chained rather than a place a driver would expect a sign.
-std::vector<SpeedSign> speedIncreaseSigns(const std::vector<TrackPath>& paths);
+// --- How far before the drop its warning stands ---
+// Enough room to lose the speed, rather than a fixed distance: a small drop needs less than a
+// large one. Real signage then uses a handful of standard distances rather than whatever the
+// arithmetic says, so the need is snapped up to one of them. All three knobs live together
+// because they are the guess, and retuning it should be one edit.
+inline constexpr float kSightingM = 150.0f;   // seeing the sign and acting on it
+inline constexpr float kServiceDecel = 0.35f; // m/s^2; service braking, conservative
+inline constexpr float kWarnBands[] = {300.0f, 500.0f, 800.0f, 1000.0f, 1200.0f};
+float warningDistance(int fromKmh, int toKmh);
+
+// Every speed sign over every path, in both directions: increases, reduction markers and
+// their warnings. Where a marker and an opposing increase fall at the same point they are
+// folded onto one post, the marker becoming that sign's back face.
+//
+// The first stretch of a path is never a change: nothing preceded it to rise from or drop to,
+// and a path boundary is an artefact of how the import was chained rather than a place a
+// driver would expect a sign.
+std::vector<SpeedSign> speedSigns(const std::vector<TrackPath>& paths);
