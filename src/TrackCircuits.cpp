@@ -180,12 +180,6 @@ void projFrac(const std::vector<glm::dvec3>& pts, glm::dvec2 p, double& frac, do
     }
 }
 
-// A connection on a track: at `here` (frac) it joins `other` at that track's `there`
-// frac. Junctions are where a track *endpoint* meets another track (its endpoint, or
-// its interior = a turnout); a plain crossing (interior x interior) is NOT a junction
-// (a train can't transfer, so the circuits don't connect).
-struct Conn { double here; std::uint32_t other; double there; };
-
 // Unit direction leading away from one end of a track (into its own body).
 glm::dvec2 endDir(const TrackPoly& t, bool back) {
     const glm::dvec3& tip = back ? t.pts.back() : t.pts.front();
@@ -195,9 +189,10 @@ glm::dvec2 endDir(const TrackPoly& t, bool back) {
     return L > 1e-9 ? d / L : glm::dvec2(1.0, 0.0);
 }
 
-std::unordered_map<std::uint32_t, std::vector<Conn>>
-buildConns(const std::vector<TrackPoly>& polys) {
-    std::unordered_map<std::uint32_t, std::vector<Conn>> conns;
+} // namespace
+
+TrackJunctions trackJunctions(const std::vector<TrackPoly>& polys) {
+    TrackJunctions conns;
     for (const TrackPoly& A : polys) {
         if (A.pts.size() < 2) continue;
         for (int endBit = 0; endBit < 2; ++endBit) {
@@ -252,7 +247,6 @@ buildConns(const std::vector<TrackPoly>& polys) {
     }
     return conns;
 }
-} // namespace
 
 double sameFracTol(const std::vector<TrackPoly>& polys, std::uint32_t trackId) {
     // ~0.25 m expressed as a fraction: well below the spacing between distinct borders,
@@ -329,7 +323,7 @@ SectionResult floodSection(const std::vector<TrackPoly>& polys,
     std::unordered_map<std::uint32_t, std::vector<double>> bfr; // sorted border fracs
     for (const Border& b : borders) bfr[b.trackId].push_back(b.frac);
     for (auto& kv : bfr) std::sort(kv.second.begin(), kv.second.end());
-    const auto conns = buildConns(polys);
+    const auto conns = trackJunctions(polys);
 
     // The border-bounded interval [lo,hi] of `track` containing `frac`.
     auto intervalAt = [&](std::uint32_t track, double frac,
@@ -361,7 +355,7 @@ SectionResult floodSection(const std::vector<TrackPoly>& polys,
         bool loJoin = false, hiJoin = false;
         auto ci = conns.find(track);
         if (ci != conns.end())
-            for (const Conn& c : ci->second) {
+            for (const TrackJunction& c : ci->second) {
                 if (c.here < lo - 1e-6 || c.here > hi + 1e-6) continue;
                 if (std::abs(c.here - lo) < 1e-6) loJoin = true;
                 if (std::abs(c.here - hi) < 1e-6) hiJoin = true;
@@ -384,22 +378,21 @@ SectionResult floodSection(const std::vector<TrackPoly>& polys,
 }
 
 // ------------------------------------------------------------- signal routing
-namespace {
-// World unit tangent at `frac` along `track`, pointing toward +frac when dir=+1.
-glm::dvec2 tangentAt(const std::vector<TrackPoly>& polys, std::uint32_t track,
-                     double frac, int dir) {
+glm::dvec2 trackTangent(const std::vector<TrackPoly>& polys, std::uint32_t trackId,
+                        double frac, int dir) {
     constexpr double e = 1e-3;
-    const glm::dvec3 a = fracToWorld(polys, track, std::clamp(frac - e, 0.0, 1.0));
-    const glm::dvec3 b = fracToWorld(polys, track, std::clamp(frac + e, 0.0, 1.0));
+    const glm::dvec3 a = fracToWorld(polys, trackId, std::clamp(frac - e, 0.0, 1.0));
+    const glm::dvec3 b = fracToWorld(polys, trackId, std::clamp(frac + e, 0.0, 1.0));
     glm::dvec2 t(b.x - a.x, b.y - a.y);
     const double L = glm::length(t);
     t = L > 1e-9 ? t / L : glm::dvec2(1.0, 0.0);
     return t * static_cast<double>(dir);
 }
 
+namespace {
 struct RouteCtx {
     const std::vector<TrackPoly>* polys;
-    const std::unordered_map<std::uint32_t, std::vector<Conn>>* conns;
+    const TrackJunctions* conns;
     std::uint32_t endTrack;
     double endFrac;
     std::vector<std::vector<SectionInterval>>* results; // capped at 2
@@ -452,7 +445,7 @@ void routeDFS(RouteCtx& ctx, std::uint32_t track, double entryFrac, int dir,
     }
     const auto it = ctx.conns->find(track);
     if (it == ctx.conns->end()) return;
-    for (const Conn& c : it->second) {
+    for (const TrackJunction& c : it->second) {
         if (dir * (c.here - entryFrac) <= 1e-6) continue; // not ahead of where we are
         if (track == ctx.endTrack && dir * (c.here - ctx.endFrac) > 1e-6)
             continue; // past the destination border on the end track
@@ -460,10 +453,10 @@ void routeDFS(RouteCtx& ctx, std::uint32_t track, double entryFrac, int dir,
             continue; // simple path (no track revisit)
         // Forward continuation onto `other` at `there`: pick the direction aligned with our
         // heading at the junction; reject if it would reverse (illegal turn at a turnout).
-        const glm::dvec2 headIn = tangentAt(*ctx.polys, track, c.here, dir);
-        const glm::dvec2 tPlus = tangentAt(*ctx.polys, c.other, c.there, +1);
+        const glm::dvec2 headIn = trackTangent(*ctx.polys, track, c.here, dir);
+        const glm::dvec2 tPlus = trackTangent(*ctx.polys, c.other, c.there, +1);
         const int ndir = glm::dot(tPlus, headIn) >= 0.0 ? +1 : -1;
-        const glm::dvec2 headOut = tangentAt(*ctx.polys, c.other, c.there, ndir);
+        const glm::dvec2 headOut = trackTangent(*ctx.polys, c.other, c.there, ndir);
         if (glm::dot(headOut, headIn) <= 0.0) continue; // reversing -> not a valid move
         route.push_back({track, entryFrac, c.here});
         visited.push_back(c.other);
@@ -481,9 +474,9 @@ int findSignalRoute(const std::vector<TrackPoly>& polys, const Border& start,
                     const Border& end, std::vector<SectionInterval>& out,
                     const std::vector<Border>& vias) {
     out.clear();
-    const auto conns = buildConns(polys);
+    const auto conns = trackJunctions(polys);
     // Collect the raw walks, then fold away the ones that are the same road. Where two
-    // track ends nearly coincide, buildConns records that single node twice (each end
+    // track ends nearly coincide, trackJunctions records that single node twice (each end
     // projected onto the other track), so the search can hop across at either record and
     // report one physical road as several routes differing by a few metres of stub.
     std::vector<std::vector<SectionInterval>> raw;

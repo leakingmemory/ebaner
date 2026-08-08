@@ -40,6 +40,10 @@ std::string entriesFile(const std::string& root) {
     return root + "/overlay/entry-signals.txt";
 }
 
+std::string distantsFile(const std::string& root) {
+    return root + "/overlay/distant-signals.txt";
+}
+
 // Parse a `<trackHex>:<frac>` border token.
 bool parseBorder(const std::string& tok, Border& b) {
     const auto c = tok.find(':');
@@ -285,6 +289,45 @@ int exitRouteTarget(const SignalPath& route, const std::vector<SignalPath>& exit
     return -1;
 }
 
+std::vector<DistantSignal> loadDistantSignals(const std::string& datasetRoot) {
+    std::vector<DistantSignal> out;
+    std::ifstream f(distantsFile(datasetRoot));
+    if (!f) return out;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        std::istringstream is(line);
+        std::string kind, atTok, dirTok;
+        DistantSignal d;
+        is >> kind >> d.id;
+        if (kind != "distant") continue;
+        readName(is, d.name);
+        is >> atTok >> dirTok;
+        Border b;
+        if (atTok.empty() || !parseBorder(atTok, b)) continue;
+        d.trackId = b.trackId;
+        d.frac = b.frac;
+        d.dir = dirTok == "-" ? -1 : 1;
+        out.push_back(std::move(d));
+    }
+    return out;
+}
+
+bool writeDistantSignals(const std::string& datasetRoot,
+                         const std::vector<DistantSignal>& ds) {
+    std::error_code ec;
+    fs::create_directories(datasetRoot + "/overlay", ec);
+    std::ofstream f(distantsFile(datasetRoot), std::ios::trunc);
+    if (!f) return false;
+    f << "# ebaner distant signals (forsignal). Each stands at a plain point along a track,\n"
+         "# not on a border, and repeats what the first main signal ahead is showing.\n"
+         "# distant <id> \"<name>\" <trackHex>:<frac> <+|->   (+ reads toward increasing frac)\n";
+    for (const DistantSignal& d : ds)
+        f << "distant " << d.id << ' ' << quoteName(d.name) << ' ' << std::hex << d.trackId
+          << std::dec << ':' << d.frac << ' ' << (d.dir < 0 ? '-' : '+') << '\n';
+    return static_cast<bool>(f);
+}
+
 std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& paths,
                                               const std::vector<TrackPoly>& polys,
                                               SignalKind kind) {
@@ -312,6 +355,7 @@ std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& pat
         sp.kind = kind;
         sp.world = a;
         sp.forward = fwd;
+        sp.at = p.start;
         sp.paths.push_back(static_cast<int>(pi));
         out.push_back(std::move(sp));
     }
@@ -471,6 +515,159 @@ RouteType defaultRouteType(const SignalPath& route, const SignalPath& exit,
 RouteType defaultRouteType(const SignalPath& route, const SwitchNetwork& net,
                            const std::vector<TrackPoly>& polys) {
     return routeDiverges(route, net, polys) ? RouteType::C2 : RouteType::C1;
+}
+
+// ------------------------------------------------------- what a distant can see
+namespace {
+// The turnout standing at a world point, or -1. Same tolerance the route requirements use.
+int turnoutAt(const SwitchNetwork& net, const glm::dvec3& w) {
+    const std::vector<Turnout>& tos = net.turnouts();
+    for (std::size_t i = 0; i < tos.size(); ++i) {
+        if (tos[i].mainPath < 0) continue; // inert crossing: nothing is set here
+        if (planarDist(w, tos[i].world) <= kAtTurnout) return static_cast<int>(i);
+    }
+    return -1;
+}
+} // namespace
+
+int firstMainSignalAhead(const std::vector<TrackPoly>& polys, const TrackJunctions& junctions,
+                         const SwitchNetwork& net,
+                         const std::vector<SignalPlacement>& placements,
+                         std::uint32_t trackId, double frac, int dir, double maxM,
+                         std::vector<SectionInterval>* walked) {
+    if (walked) walked->clear();
+    // The first main signal standing on span [from -> to] of `track`, facing the way we are
+    // going. A signal facing the other way protects opposing moves: we step over its back.
+    auto signalOn = [&](std::uint32_t track, double from, double to, int d) {
+        int best = -1;
+        double bestAt = 0.0;
+        for (std::size_t k = 0; k < placements.size(); ++k) {
+            const SignalPlacement& sp = placements[k];
+            if (sp.kind == SignalKind::Dwarf || sp.kind == SignalKind::Distant) continue;
+            if (sp.at.trackId != track) continue;
+            const double f = sp.at.frac;
+            if (d * (f - from) <= 1e-9 || d * (to - f) < -1e-9) continue; // not on this span
+            if (glm::dot(sp.forward, trackTangent(polys, track, f, d)) <= 0.0) continue;
+            if (best < 0 || d * (f - bestAt) < 0.0) { best = static_cast<int>(k); bestAt = f; }
+        }
+        return best;
+    };
+    double gone = 0.0;
+    std::uint32_t track = trackId;
+    double at = frac;
+    int d = dir;
+    // Simple path: a road that returns to a track it has already used is a loop, and a
+    // distant reading round one would repeat a signal the driver has already passed.
+    std::vector<std::uint32_t> visited{track};
+    for (int step = 0; step < 256; ++step) {
+        double lenM = 0.0;
+        for (const TrackPoly& tp : polys)
+            if (tp.id == track) lenM = polyLength(tp.pts);
+        if (lenM <= 0.0) return -1;
+        // The nearest junction ahead on this track bounds the span we can see along it.
+        double stopFrac = d > 0 ? 1.0 : 0.0;
+        const auto ji = junctions.find(track);
+        if (ji != junctions.end())
+            for (const TrackJunction& c : ji->second) {
+                if (d * (c.here - at) <= 1e-9) continue;      // behind us
+                if (d * (c.here - stopFrac) < 0.0) stopFrac = c.here;
+            }
+        // Would the span run past the reach? Then look only as far as the reach allows.
+        const double spanM = lenM * std::abs(stopFrac - at);
+        double limit = stopFrac;
+        bool ranOut = false;
+        if (gone + spanM > maxM) {
+            limit = at + d * (maxM - gone) / std::max(lenM, 1e-9);
+            ranOut = true;
+        }
+        if (const int hit = signalOn(track, at, limit, d); hit >= 0) {
+            if (walked) walked->push_back({track, at, placements[hit].at.frac});
+            return hit;
+        }
+        if (walked) walked->push_back({track, at, limit});
+        if (ranOut) return -1; // nothing within the reach
+        gone += spanM;
+        // At the junction: every continuation that does not reverse is a candidate. Running
+        // straight on along this same track is one of them - at a turnout that is the
+        // through leg, and leaving it out would silently divert the walk onto the branch.
+        struct Next { std::uint32_t track; double frac; int dir; };
+        std::vector<Next> cand;
+        const glm::dvec2 headIn = trackTangent(polys, track, stopFrac, d);
+        if (d > 0 ? stopFrac < 1.0 - 1e-9 : stopFrac > 1e-9)
+            cand.push_back({track, stopFrac, d});
+        if (ji != junctions.end())
+            for (const TrackJunction& c : ji->second) {
+                if (std::abs(c.here - stopFrac) > 1e-9) continue; // a different junction
+                const glm::dvec2 tPlus = trackTangent(polys, c.other, c.there, +1);
+                const int nd = glm::dot(tPlus, headIn) >= 0.0 ? +1 : -1;
+                if (glm::dot(trackTangent(polys, c.other, c.there, nd), headIn) <= 0.0)
+                    continue; // reversing: not a move a train can make
+                cand.push_back({c.other, c.there, nd});
+            }
+        if (cand.empty()) return -1; // a dead end, or nothing legal to take
+        std::size_t take = 0;
+        if (cand.size() > 1) {
+            // A turnout: follow the leg it is set to. Anything the switches cannot resolve
+            // - an unregistered fan, a broken point - ends the walk.
+            const int t = turnoutAt(net, fracToWorld(polys, track, stopFrac));
+            if (t < 0 || net.state(t) == SwitchState::Broken) return -1;
+            const std::uint32_t siding = net.turnouts()[t].sidingTrack;
+            int pick = -1;
+            if (net.state(t) == SwitchState::Diverging) {
+                // Set to the branch: only the branch will do. If it is not among the roads
+                // out of here, this turnout is set away from us and there is nowhere to go.
+                for (std::size_t i = 0; i < cand.size(); ++i)
+                    if (cand[i].track == siding) pick = static_cast<int>(i);
+            } else {
+                // Set straight: the through leg. Carrying on along the track we are already
+                // on is that leg wherever the turnout sits on it - which is the usual case,
+                // and the one that matters where a slip connector branches off the main.
+                // Approaching from the branch instead, the through leg is the one road out
+                // that is not the branch.
+                for (std::size_t i = 0; i < cand.size(); ++i)
+                    if (cand[i].track == track) pick = static_cast<int>(i);
+                if (pick < 0)
+                    for (std::size_t i = 0; i < cand.size(); ++i)
+                        if (cand[i].track != siding) {
+                            if (pick >= 0) { pick = -1; break; } // several: do not guess
+                            pick = static_cast<int>(i);
+                        }
+            }
+            if (pick < 0) return -1;
+            take = static_cast<std::size_t>(pick);
+        }
+        // Carrying on along the same track is not a revisit; coming back to it by another
+        // road is, and a distant reading round a loop would repeat a signal already passed.
+        if (cand[take].track != track) {
+            if (std::find(visited.begin(), visited.end(), cand[take].track) != visited.end())
+                return -1;
+            visited.push_back(cand[take].track);
+        }
+        track = cand[take].track;
+        at = cand[take].frac;
+        d = cand[take].dir;
+    }
+    return -1;
+}
+
+bool updateDistantAspects(std::vector<SignalPlacement>& placements,
+                          const std::vector<TrackPoly>& polys,
+                          const TrackJunctions& junctions, const SwitchNetwork& net,
+                          double maxM) {
+    bool changed = false;
+    for (SignalPlacement& sp : placements) {
+        if (sp.kind != SignalKind::Distant) continue;
+        const int dir = glm::dot(sp.forward, trackTangent(polys, sp.at.trackId, sp.at.frac, +1))
+                                >= 0.0
+                            ? +1
+                            : -1;
+        const int hit = firstMainSignalAhead(polys, junctions, net, placements, sp.at.trackId,
+                                             sp.at.frac, dir, maxM);
+        // Nothing reachable warns exactly as a signal at danger does.
+        const SignalAspect want = hit < 0 ? SignalAspect::Stop : placements[hit].aspect;
+        if (sp.aspect != want) { sp.aspect = want; changed = true; }
+    }
+    return changed;
 }
 
 std::vector<int> pathSections(const SignalPath& p, const TrackCircuits& circuits) {

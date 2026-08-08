@@ -23,6 +23,8 @@ const glm::vec3 kRedOn{1.0f, 0.14f, 0.10f};    // main signal: danger
 const glm::vec3 kRedOff{0.24f, 0.10f, 0.10f};
 const glm::vec3 kGreenOn{0.15f, 1.0f, 0.35f};  // main signal: proceed
 const glm::vec3 kGreenOff{0.10f, 0.22f, 0.13f};
+const glm::vec3 kAmberOn{1.0f, 0.62f, 0.05f};  // distant signal: expect stop
+const glm::vec3 kAmberOff{0.26f, 0.17f, 0.06f};
 } // namespace
 
 void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 origin) {
@@ -102,6 +104,32 @@ void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 o
         const glm::vec3 B(static_cast<float>(s.world.x - origin.x) + R.x * 3.5f,
                           static_cast<float>(s.world.y - origin.y) + R.y * 3.5f,
                           static_cast<float>(s.world.z - origin.z));
+
+        // A distant signal is its own thing: a mast with two lamps, amber over green, both
+        // flashing, and no red - it warns, it never commands a stop. Its aspect values are
+        // the main's read as "expect that".
+        if (s.kind == SignalKind::Distant) {
+            const float mastH = 3.5f;
+            box(B + UP * (mastH * 0.5f), R, F, UP, 0.06f, 0.06f, mastH * 0.5f, kBody);
+            const float hw = 0.26f, hd = 0.14f, hh = 0.48f; // head half extents
+            const glm::vec3 C = B + UP * (mastH + hh);
+            box(C, R, F, UP, hw, hd, hh, kBody);
+            box(C - F * (hd + 0.01f), R, F, UP, hw * 1.25f, 0.02f, hh * 1.1f, kBody);
+            const glm::vec3 n = -F;
+            const glm::vec3 face = C - F * (hd + 0.04f);
+            const float r = 0.13f, sp = 0.22f; // lens radius, half the lamp spacing
+            // Expect stop (or nothing reachable) is amber; expect C1 is green; expect a
+            // clear that is not C1 is both.
+            const bool amber = s.aspect == SignalAspect::Stop ||
+                               s.aspect == SignalAspect::ClearReduced;
+            const bool green = s.aspect == SignalAspect::Clear ||
+                               s.aspect == SignalAspect::ClearReduced;
+            if (amber) lamp(face + UP * sp, R, UP, r, kAmberOn, true); // top: amber
+            else disc(face + UP * sp, n, R, UP, r, kAmberOff);
+            if (green) lamp(face - UP * sp, R, UP, r, kGreenOn, true); // bottom: green
+            else disc(face - UP * sp, n, R, UP, r, kGreenOff);
+            continue;
+        }
 
         // How high the dwarf box sits: on its own short post normally, or low on the
         // main signal's mast when the two share a pole.

@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <istream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 // Track-circuit (train-present sensing) authoring data, kept as a drop-in overlay
@@ -118,6 +119,25 @@ struct SectionResult {
 SectionResult floodSection(const std::vector<TrackPoly>& polys,
                            const std::vector<Border>& borders,
                            std::uint32_t seedTrack, double seedFrac);
+
+// --- The junction graph ---
+// A junction seen from one track: at `here` along it, `other` joins at that track's `there`.
+// Junctions are where a track *endpoint* meets another track (its endpoint, or its interior =
+// a turnout); a plain crossing (interior x interior) is not one, since a train cannot
+// transfer there. This is the adjacency the route finder walks, published because anything
+// that has to follow the rails needs it - and because building it is not cheap, so a caller
+// that walks repeatedly should build it once and keep it.
+struct TrackJunction {
+    double here;         // fraction along the track being looked at
+    std::uint32_t other; // the track that joins it
+    double there;        // fraction along `other` where they meet
+};
+using TrackJunctions = std::unordered_map<std::uint32_t, std::vector<TrackJunction>>;
+TrackJunctions trackJunctions(const std::vector<TrackPoly>& polys);
+
+// Unit heading along a track at `frac`, walking with dir = +1 (increasing frac) or -1.
+glm::dvec2 trackTangent(const std::vector<TrackPoly>& polys, std::uint32_t trackId,
+                        double frac, int dir);
 
 // --- Directed route finder (for mini signal paths) ---
 // Enumerate directed routes from `start` to `end` (both trackId + arc-length anchors)

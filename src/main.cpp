@@ -418,6 +418,24 @@ int main(int argc, char** argv) {
     }
     std::vector<SignalPlacement> sigPlacements =
         mergeSignals(signalPlacements(signalPaths, polys), mainPlacements);
+    // Distant signals stand at a plain point rather than on a route, so they are placed
+    // directly and appended after the merge - one must never fold onto a dwarf's pole.
+    const std::vector<DistantSignal> distantSignals = loadDistantSignals(datasetRoot);
+    for (std::size_t i = 0; i < distantSignals.size(); ++i) {
+        const DistantSignal& d = distantSignals[i];
+        const glm::dvec3 w = fracToWorld(polys, d.trackId, d.frac);
+        if (w.x == 0.0 && w.y == 0.0) continue; // stale/missing track
+        SignalPlacement sp;
+        sp.kind = SignalKind::Distant;
+        sp.world = w;
+        sp.forward = trackTangent(polys, d.trackId, d.frac, d.dir);
+        sp.at = {d.trackId, d.frac};
+        sp.paths.push_back(static_cast<int>(i));
+        sigPlacements.push_back(std::move(sp));
+    }
+    // The junction graph is geometry, so it cannot change while the viewer runs: build it
+    // once here rather than on every distant-signal read.
+    const TrackJunctions junctions = trackJunctions(polys);
     // The map is a shunting view: it shows the dwarfs and the mini routes they set. An exit
     // signal sharing a dwarf's pole appears as that dwarf; one standing alone has nothing to
     // set there, so the map skips it. These pick the dwarf half of a shared placement.
@@ -683,16 +701,22 @@ int main(int argc, char** argv) {
         // Main signals: a square at the mast, coloured by aspect. Informational - a main
         // route is set from the R list, not by clicking, so these are not pick targets.
         for (const SignalPlacement& sp : sigPlacements) {
-            if (sp.kind == SignalKind::Dwarf) continue; // main signals only
+            if (sp.kind == SignalKind::Dwarf) continue; // main and distant signals
             const glm::vec2 f(float(sp.forward.x), float(sp.forward.y));
             const glm::vec2 r(f.y, -f.x); // right of travel: the side it stands on
             const glm::vec2 b(float(sp.world.x - org.x) + r.x * 8.0f,
                               float(sp.world.y - org.y) + r.y * 8.0f);
+            const bool distant = sp.kind == SignalKind::Distant;
             const glm::vec3 col =
-                sp.aspect == SignalAspect::Clear          ? glm::vec3(0.2f, 1.0f, 0.3f)
+                distant ? (sp.aspect == SignalAspect::Clear ? glm::vec3(0.2f, 1.0f, 0.3f)
+                           : sp.aspect == SignalAspect::ClearReduced
+                               ? glm::vec3(0.9f, 0.9f, 0.2f)
+                               : glm::vec3(1.0f, 0.7f, 0.1f)) // expect stop: amber
+                : sp.aspect == SignalAspect::Clear        ? glm::vec3(0.2f, 1.0f, 0.3f)
                 : sp.aspect == SignalAspect::ClearReduced ? glm::vec3(0.6f, 1.0f, 0.2f)
                                                           : glm::vec3(1.0f, 0.2f, 0.15f);
-            const float h = 6.0f;
+            // A distant is drawn smaller: it is a repeater, not a thing you can set.
+            const float h = distant ? 4.0f : 6.0f;
             const glm::vec2 c[4] = {b + glm::vec2(-h, -h), b + glm::vec2(h, -h),
                                     b + glm::vec2(h, h), b + glm::vec2(-h, h)};
             for (int i = 0; i < 4; ++i) {
@@ -1346,8 +1370,15 @@ int main(int argc, char** argv) {
                                                 ? SignalAspect::ClearReduced
                                                 : SignalAspect::Clear;
             }
-            if (updateSignalAspects(sigPlacements, signalPaths, switchNet, polys, circuits,
-                                    secOccupied, routeSet, exitAspects)) {
+            bool aspectsMoved = updateSignalAspects(sigPlacements, signalPaths, switchNet,
+                                                    polys, circuits, secOccupied, routeSet,
+                                                    exitAspects);
+            // After the mains have settled, since a distant only repeats what they show.
+            // A switch throw reaches here too, and can change what a distant reads without
+            // any route having moved.
+            if (updateDistantAspects(sigPlacements, polys, junctions, switchNet))
+                aspectsMoved = true;
+            if (aspectsMoved) {
                 signals.build(sigPlacements, data.sceneOrigin());
                 renderer.updateSignals(signals.vertices(), signals.indices());
             }

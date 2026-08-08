@@ -93,18 +93,36 @@ std::vector<SignalPath> loadExitRoutes(const std::string& datasetRoot);
 bool writeExitRoutes(const std::string& datasetRoot,
                      const std::vector<SignalPath>& routes);
 
+// A distant signal: a point anywhere along a track, facing one way, that shows what the
+// first main signal ahead is displaying. It sits on no border, belongs to no route and is
+// not interlocked - it only looks. Stored in `overlay/distant-signals.txt`:
+//   distant <id> "<name>" <trackHex>:<frac> <+|->
+struct DistantSignal {
+    int id = 0;
+    std::string name;
+    std::uint32_t trackId = 0;
+    double frac = 0.0;
+    int dir = 1; // +1 reads toward increasing frac along the track, -1 the other way
+};
+std::vector<DistantSignal> loadDistantSignals(const std::string& datasetRoot);
+bool writeDistantSignals(const std::string& datasetRoot,
+                         const std::vector<DistantSignal>& ds);
+
 // What a signal displays. A dwarf uses the fixed reference lamp plus one lamp on the arc:
 // Stop = horizontal pair, TrainOnTrack = 45 deg (a train stands in the route's circuits),
 // Clear = vertical. A main signal reads the same values as its Norwegian aspects: Stop is
 // the red, Clear is C1 (two greens, no restriction) and ClearReduced is C2 (one green, over
-// a deviation). A dwarf never shows ClearReduced.
+// a deviation). A dwarf never shows ClearReduced. A distant carries the same three values
+// meaning *expect* that - there is nothing it can say that a main cannot, so a parallel
+// enum would only be one more thing to keep in step.
 enum class SignalAspect { Stop, TrainOnTrack, Clear, ClearReduced };
 
 // Which signal stands at a placement: the low dwarf (dvergsignal) that governs shunting
-// moves, or one of the two tall main signals - the exit protecting a route out of the
-// station, the entry authorising one in. Both mains carry the same three-lamp head; only
-// the entry's danger aspect flashes.
-enum class SignalKind { Dwarf, Exit, Entry };
+// moves, one of the two tall main signals - the exit protecting a route out of the station,
+// the entry authorising one in - or the distant that repeats, from braking distance, what
+// the first main signal ahead is showing. Both mains carry the same three-lamp head; only
+// the entry's danger aspect flashes, while every distant lamp does.
+enum class SignalKind { Dwarf, Exit, Entry, Distant };
 
 // Where a signal sits: the on-track start point of a route and its initial travel
 // direction (a signal governs movements leaving that point in that direction).
@@ -115,6 +133,10 @@ struct SignalPlacement {
     // mini paths for a Dwarf, exit signals for an Exit, entry signals for an Entry. Reading
     // them against the wrong collection is the mistake `kind` exists to prevent.
     std::vector<int> paths;
+    // Where the signal stands. For a main or a dwarf this is its routes' shared start
+    // border; for a distant, the point it was placed at. What lets a forward walk say "this
+    // signal is on the road ahead" exactly, rather than by hunting for it in world space.
+    Border at;
     SignalAspect aspect = SignalAspect::Stop;
     SignalKind kind = SignalKind::Dwarf;
     // An exit signal placed where a dwarf also stands shares its pole, the dwarf lower to
@@ -177,6 +199,30 @@ RouteType defaultRouteType(const SignalPath& route, const SignalPath& exit,
 // starts at the mast, so there is no onward leg to take into account.
 RouteType defaultRouteType(const SignalPath& route, const SwitchNetwork& net,
                            const std::vector<TrackPoly>& polys);
+
+// --- What a distant signal can see ---
+// How far a distant looks. Well past any braking distance, so the search ends by finding a
+// signal rather than by running out of range.
+inline constexpr double kDistantReach = 4000.0; // m
+
+// Walk forward from a point, taking each turnout the way it is *currently* set, and report
+// the first main signal facing the same way within `maxM` (an index into `placements`, else
+// -1). Junctions where the switches cannot say which way the road lies end the walk: if the
+// interlocking does not know, a distant promising a clear ahead would be lying.
+// `walked` optionally collects the road taken, so the editor can draw what a signal sees.
+int firstMainSignalAhead(const std::vector<TrackPoly>& polys, const TrackJunctions& junctions,
+                         const SwitchNetwork& net,
+                         const std::vector<SignalPlacement>& placements,
+                         std::uint32_t trackId, double frac, int dir, double maxM,
+                         std::vector<SectionInterval>* walked = nullptr);
+
+// Point every distant placement at what it can see. Nothing reachable reads as Stop - the
+// same warning as a main at danger, which is the whole point of the rule. Returns true if
+// any aspect changed. Call it after the main aspects have settled.
+bool updateDistantAspects(std::vector<SignalPlacement>& placements,
+                          const std::vector<TrackPoly>& polys,
+                          const TrackJunctions& junctions, const SwitchNetwork& net,
+                          double maxM = kDistantReach);
 
 // The ids of the track-circuit sections the path actually runs through (a shared end
 // point with a neighbouring section does not count as running through it).
