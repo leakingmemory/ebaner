@@ -22,7 +22,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <unordered_map>
 
 namespace {
@@ -52,7 +51,9 @@ void TerrainMesh::build(const TerrainData& data, const TunnelMesh* bores) {
     // away far more hillside than the mouth and leave a gap nothing can plausibly fill. The
     // few triangles that actually stand at a portal are subdivided first, and only the parts
     // inside the bore are dropped - which cuts the opening to the shape of the tunnel.
-    constexpr int kSub = 8;
+    // Sub-triangles of about a metre, whatever the cell size: the edge of the opening is
+    // only ever as smooth as this, and a portal is worth a metre.
+    constexpr float kSubTargetM = 1.0f;
     auto emitTri = [&](std::uint32_t i0, std::uint32_t i1, std::uint32_t i2) {
         auto keep = [&](std::uint32_t a, std::uint32_t b, std::uint32_t c) {
             indices_.push_back(a);
@@ -65,13 +66,22 @@ void TerrainMesh::build(const TerrainData& data, const TunnelMesh* bores) {
             return;
         }
         const Vertex v0 = vertices_[i0], v1 = vertices_[i1], v2 = vertices_[i2];
+        const float edge = std::max({glm::distance(v0.pos, v1.pos),
+                                     glm::distance(v1.pos, v2.pos),
+                                     glm::distance(v2.pos, v0.pos)});
+        const int kSub = std::clamp(static_cast<int>(edge / kSubTargetM), 8, 24);
         auto lerp3 = [&](float u, float v) { // barycentric (u along v0->v1, v along v0->v2)
             const float w = 1.0f - u - v;
             Vertex r;
             r.pos = v0.pos * w + v1.pos * u + v2.pos * v;
             r.normal = glm::normalize(v0.normal * w + v1.normal * u + v2.normal * v);
             r.elevation = v0.elevation * w + v1.elevation * u + v2.elevation * v;
-            r.landcover = v0.landcover; // a class, not a quantity: nearest is the only sense
+            // Not interpolated: the terrain shader takes landcover flat, from the
+            // provoking vertex, so the whole original triangle draws as one class. Giving
+            // every sub-vertex that same class is what makes a subdivided triangle shade
+            // identically to the one it replaced - blending it here would hand the pieces
+            // classes of their own and fringe the mouth with whatever they landed on.
+            r.landcover = v0.landcover;
             return r;
         };
         // Barycentric grid of (kSub+1)(kSub+2)/2 points, rows u+v <= 1.
@@ -87,21 +97,24 @@ void TerrainMesh::build(const TerrainData& data, const TunnelMesh* bores) {
             const int off = r * (kSub + 1) - (r * (r - 1)) / 2;
             return gi[off + q];
         };
+        // All three corners, not the centre. A sub-triangle is still a metre across, and one
+        // whose centre is just inside the bore reaches a good part of that metre outside it -
+        // dropping it takes away terrain the tube does not reach, and daylight comes through
+        // the seam. Requiring the whole piece to be inside leaves the rock overlapping the
+        // wall by up to a sub-triangle instead, which is invisible.
+        auto allIn = [&](std::uint32_t a, std::uint32_t b, std::uint32_t c) {
+            return bores->insideBore(vertices_[a].pos) && bores->insideBore(vertices_[b].pos) &&
+                   bores->insideBore(vertices_[c].pos);
+        };
         for (int r = 0; r < kSub; ++r)
             for (int q = 0; q + r < kSub; ++q) {
                 const std::uint32_t a = at(q, r), b = at(q + 1, r), c = at(q, r + 1);
-                if (bores->insideBore((vertices_[a].pos + vertices_[b].pos +
-                                       vertices_[c].pos) / 3.0f))
-                    ++dropped;
-                else
-                    keep(a, b, c);
+                if (allIn(a, b, c)) ++dropped;
+                else keep(a, b, c);
                 if (q + r + 1 >= kSub) continue;
                 const std::uint32_t d = at(q + 1, r + 1);
-                if (bores->insideBore((vertices_[b].pos + vertices_[d].pos +
-                                       vertices_[c].pos) / 3.0f))
-                    ++dropped;
-                else
-                    keep(b, d, c);
+                if (allIn(b, d, c)) ++dropped;
+                else keep(b, d, c);
             }
     };
 
