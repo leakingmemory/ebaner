@@ -28,6 +28,8 @@
 #include "SwitchNetwork.h"
 #include "SignalMesh.h"
 #include "SignalPaths.h"
+#include "SpeedLimits.h"
+#include "SpeedSignMesh.h"
 #include "SwitchTypes.h"
 #include "TerrainData.h"
 #include "TerrainMesh.h"
@@ -118,6 +120,7 @@ int main(int argc, char** argv) {
     RoadMesh roads;
     BuildingMesh buildings;
     PlatformMesh platforms;
+    SpeedSignMesh speedSigns;
     SwitchMesh switches;
     SignalMesh signals;
     SwitchNetwork switchNet;
@@ -765,6 +768,10 @@ int main(int argc, char** argv) {
             for (std::uint32_t k : idx) si.push_back(k + base);
         };
         merge(platforms.vertices(), platforms.indices());
+        // Derived from the line speeds, so a geometry edit can move them: rebuilt here
+        // rather than once at startup.
+        speedSigns.build(speedIncreaseSigns(paths));
+        merge(speedSigns.vertices(), speedSigns.indices());
         merge(switches.vertices(), switches.indices());
         signals.build(allPlacements(), data.sceneOrigin());
         merge(signals.vertices(), signals.indices());
@@ -790,6 +797,10 @@ int main(int argc, char** argv) {
             for (std::uint32_t k : idx) si.push_back(k + base);
         };
         merge(platforms.vertices(), platforms.indices());
+        // Derived from the line speeds, so a geometry edit can move them: rebuilt here
+        // rather than once at startup.
+        speedSigns.build(speedIncreaseSigns(paths));
+        merge(speedSigns.vertices(), speedSigns.indices());
         merge(switches.vertices(), switches.indices());
         merge(signals.vertices(), signals.indices());
         renderer.updateStructs(sv, si);

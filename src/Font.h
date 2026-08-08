@@ -32,6 +32,11 @@ struct TextVertex {
 void appendText(std::vector<TextVertex>& out, const std::string& text, float xPx,
                 float yPx, float pxScale, const glm::vec3& color, int fbW, int fbH);
 
+// The 8x8 glyph bitmap for `ch` (row-major, bit i of each byte = column i, LSB leftmost),
+// or nullptr outside ASCII. Exposed so a sign standing in the world can carry the same
+// numerals the HUD draws, rather than needing an asset of its own.
+const unsigned char* fontGlyph(char ch);
+
 // Append a centred modal menu: a dark panel carrying `title` and the `items` list,
 // with the item at `selected` highlighted (marked and brighter). Drawn opaque over
 // the scene with the same text overlay, `fbW`/`fbH` being the framebuffer size.

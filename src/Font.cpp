@@ -154,6 +154,11 @@ const unsigned char kFont[128][8] = {
 
 } // namespace
 
+const unsigned char* fontGlyph(char ch) {
+    const unsigned char c = static_cast<unsigned char>(ch);
+    return c < 128 ? kFont[c] : nullptr;
+}
+
 void appendText(std::vector<TextVertex>& out, const std::string& text, float xPx,
                 float yPx, float pxScale, const glm::vec3& color, int fbW, int fbH) {
     if (fbW <= 0 || fbH <= 0) return;

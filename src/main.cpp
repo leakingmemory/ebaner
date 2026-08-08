@@ -27,6 +27,8 @@
 #include "TrackCircuits.h"
 #include "TrackGraph.h"
 #include "TrackMesh.h"
+#include "SpeedLimits.h"
+#include "SpeedSignMesh.h"
 #include "TrackPath.h"
 #include "Audio.h"
 #include "Vehicle.h"
@@ -279,6 +281,20 @@ int main(int argc, char** argv) {
         structIndices.reserve(structIndices.size() + platforms.indices().size());
         for (std::uint32_t idx : platforms.indices())
             structIndices.push_back(idx + vbase);
+    }
+    // Speed-increase signs are derived from the line speeds rather than authored, and never
+    // change, so they join the static bucket too.
+    SpeedSignMesh speedSigns;
+    {
+        const std::vector<SpeedSign> sg = speedIncreaseSigns(paths);
+        speedSigns.build(sg);
+        const std::uint32_t vbase = static_cast<std::uint32_t>(structVerts.size());
+        structVerts.insert(structVerts.end(), speedSigns.vertices().begin(),
+                           speedSigns.vertices().end());
+        structIndices.reserve(structIndices.size() + speedSigns.indices().size());
+        for (std::uint32_t idx : speedSigns.indices()) structIndices.push_back(idx + vbase);
+        std::printf("[SpeedSigns] %zu increase sign(s), %zu vertices\n", sg.size(),
+                    speedSigns.vertices().size());
     }
     // Switch stands go in a dynamic buffer (rebuilt when a switch is thrown), not the
     // static struct bucket — attached just after renderer.init below. The ground signals

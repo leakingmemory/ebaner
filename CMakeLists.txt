@@ -86,6 +86,8 @@ add_library(ebaner_engine STATIC
     src/TrackCircuits.cpp
     src/SignalPaths.cpp
     src/SignalMesh.cpp
+    src/SpeedLimits.cpp
+    src/SpeedSignMesh.cpp
     src/RoadMesh.cpp
     src/BuildingMesh.cpp
     src/PlatformMesh.cpp

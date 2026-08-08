@@ -225,6 +225,26 @@ TrackPose TrackPath::poseAt(float s) const {
     return pose;
 }
 
+std::vector<TrackPath::SpeedPoint> TrackPath::speedPoints() const {
+    std::vector<SpeedPoint> out;
+    const int numSpans = static_cast<int>(ctrl_.size()) - 3;
+    if (speed_.empty() || numSpans < 1 || table_.size() < 2) return out;
+    // Surveyed point i is the start of span i, so it sits at global parameter g = i. The
+    // arc-length table runs the other way (s -> g), so walk it once and read off the s
+    // where g crosses each whole number.
+    out.reserve(speed_.size());
+    std::size_t t = 1;
+    for (std::size_t i = 0; i < speed_.size(); ++i) {
+        const float g = static_cast<float>(i);
+        while (t + 1 < table_.size() && table_[t].g < g) ++t;
+        const Sample& a = table_[t - 1];
+        const Sample& b = table_[t];
+        const float frac = (b.g > a.g) ? (g - a.g) / (b.g - a.g) : 0.0f;
+        out.push_back({std::clamp(a.s + frac * (b.s - a.s), 0.0f, length_), speed_[i]});
+    }
+    return out;
+}
+
 float TrackPath::speedLimitAt(float s) const {
     if (speed_.empty()) return 0.0f;
     int span;

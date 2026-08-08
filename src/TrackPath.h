@@ -43,6 +43,16 @@ public:
     TrackPose poseAt(float s) const;       // s clamped to [0, length]
     float speedLimitAt(float s) const;     // km/h at s (0 = unknown)
 
+    // The surveyed limits as imported, in order along the path: km/h with 0 meaning
+    // unknown, paired with where each takes effect. Raw on purpose - speedLimitAt() hides
+    // an unknown point behind its neighbour's value, which is exactly the gap anything
+    // filling gaps by rule has to be able to see.
+    struct SpeedPoint {
+        float s = 0.0f;
+        std::uint16_t kmh = 0;
+    };
+    std::vector<SpeedPoint> speedPoints() const;
+
     std::uint32_t trackId() const { return trackId_; }
     std::uint8_t trackType() const { return trackType_; }
 
