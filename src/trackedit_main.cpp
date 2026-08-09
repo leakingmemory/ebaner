@@ -24,6 +24,7 @@
 #include "Font.h"
 #include "PlatformMesh.h"
 #include "RoadMesh.h"
+#include "Stations.h"
 #include "SwitchMesh.h"
 #include "SwitchNetwork.h"
 #include "SignalMesh.h"
@@ -114,6 +115,14 @@ void resizeCallback(GLFWwindow*, int, int) {
 int main(int argc, char** argv) {
     const std::string datasetRoot = (argc > 1) ? argv[1] : "../norway-rails";
 
+    // Which station to open at. Authoring is a deliberate act, so this is the argument
+    // and nothing else - unlike the viewer, there is no start screen to choose on.
+    const std::vector<Station> stations = loadStations(datasetRoot);
+    const Station* start = pickStation(stations, (argc > 2) ? argv[2] : "");
+    if (!start) return EXIT_FAILURE;
+    std::printf("[trackedit] opening at %s (%s)\n", start->name.c_str(),
+                start->line.c_str());
+
     // --- Load terrain data and build the scene meshes (same as the viewer) ---
     TerrainData data;
     TerrainMesh mesh;
@@ -129,7 +138,7 @@ int main(int argc, char** argv) {
     TrackGraph graph;
     std::vector<TrackPath> paths;
     try {
-        data.load(datasetRoot);
+        data.load(datasetRoot, start->world);
         paths = buildTrackPaths(data);
         // The bores first: the terrain needs them to know which of its triangles stand in
         // a tunnel mouth. A geometry edit can move a portal, so both are rebuilt together.
@@ -158,7 +167,7 @@ int main(int argc, char** argv) {
     }
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     GLFWwindow* window =
-        glfwCreateWindow(1280, 720, "ebaner-trackedit - Bodo track network",
+        glfwCreateWindow(1280, 720, ("ebaner-trackedit - " + start->name).c_str(),
                          nullptr, nullptr);
     if (!window) {
         std::fprintf(stderr, "window creation failed (is Vulkan/WSI available?)\n");

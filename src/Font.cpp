@@ -152,7 +152,56 @@ const unsigned char kFont[128][8] = {
     { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}    // U+007F
 };
 
+// The Norwegian letters, at their Latin-1 code points. Station names are the reason:
+// Bodø, Oteråga and Mørkved are not spellable in the 7-bit table above, and drawing them
+// with holes in is not much of a railway. Only these six are filled in - the rest of the
+// upper half stays blank, since nothing here speaks any other language.
+struct ExtGlyph {
+    unsigned char code;
+    unsigned char rows[8];
+};
+const ExtGlyph kExt[] = {
+    {0xC5, {0x0C, 0x00, 0x0C, 0x1E, 0x33, 0x3F, 0x33, 0x00}}, // Å
+    {0xC6, {0x7C, 0x1E, 0x1B, 0x7F, 0x1B, 0x1B, 0x7B, 0x00}}, // Æ
+    {0xD8, {0x1C, 0x36, 0x73, 0x6B, 0x67, 0x36, 0x1C, 0x00}}, // Ø
+    {0xE5, {0x0C, 0x00, 0x1E, 0x30, 0x3E, 0x33, 0x6E, 0x00}}, // å
+    {0xE6, {0x00, 0x00, 0x3E, 0x6C, 0x7F, 0x1B, 0x76, 0x00}}, // æ
+    {0xF8, {0x00, 0x00, 0x3E, 0x33, 0x3B, 0x37, 0x1E, 0x00}}, // ø
+};
+
+// The bitmap for a Latin-1 code point, or nullptr if there is none.
+const unsigned char* extGlyph(unsigned int cp) {
+    for (const ExtGlyph& g : kExt)
+        if (g.code == cp) return g.rows;
+    return nullptr;
+}
+
+// Decode one character starting at `i`, advancing it past the bytes consumed, and return
+// the code point. Only the two-byte forms matter here (U+0080..U+07FF); anything longer
+// is skipped whole so a stray sequence cannot desynchronise the rest of the string.
+unsigned int nextCodePoint(const std::string& s, std::size_t& i) {
+    const unsigned char c = static_cast<unsigned char>(s[i]);
+    if (c < 0x80) { ++i; return c; }
+    if ((c & 0xE0) == 0xC0 && i + 1 < s.size()) {
+        const unsigned char d = static_cast<unsigned char>(s[i + 1]);
+        i += 2;
+        return ((c & 0x1Fu) << 6) | (d & 0x3Fu);
+    }
+    int len = (c & 0xF0) == 0xE0 ? 3 : (c & 0xF8) == 0xF0 ? 4 : 1;
+    i += static_cast<std::size_t>(len);
+    return 0xFFFD; // not representable in an 8x8 table anyway
+}
+
 } // namespace
+
+std::size_t textChars(const std::string& text) {
+    std::size_t n = 0;
+    for (std::size_t i = 0; i < text.size();) {
+        nextCodePoint(text, i);
+        ++n;
+    }
+    return n;
+}
 
 const unsigned char* fontGlyph(char ch) {
     const unsigned char c = static_cast<unsigned char>(ch);
@@ -167,9 +216,10 @@ void appendText(std::vector<TextVertex>& out, const std::string& text, float xPx
                          py / static_cast<float>(fbH) * 2.0f - 1.0f);
     };
     float penX = xPx;
-    for (unsigned char ch : text) {
-        if (ch < 128) {
-            const unsigned char* g = kFont[ch];
+    for (std::size_t i = 0; i < text.size();) {
+        const unsigned int cp = nextCodePoint(text, i);
+        const unsigned char* g = cp < 128 ? kFont[cp] : extGlyph(cp);
+        if (g) {
             for (int row = 0; row < 8; ++row)
                 for (int col = 0; col < 8; ++col) {
                     if (!((g[row] >> col) & 1)) continue;
@@ -199,8 +249,10 @@ void appendMenu(std::vector<TextVertex>& out, const std::string& title,
     const float lh = 12.0f * sc;   // line height
     const float pad = 16.0f * sc;
 
-    std::size_t maxChars = title.size();
-    for (const std::string& it : items) maxChars = std::max(maxChars, it.size() + 2);
+    // Character count, not byte count: a name like Bodø is one byte longer than it looks
+    // and the panel would be sized around the wrong width.
+    std::size_t maxChars = textChars(title);
+    for (const std::string& it : items) maxChars = std::max(maxChars, textChars(it) + 2);
 
     const float contentW = static_cast<float>(maxChars) * charW;
     const float contentH = 1.5f * lh + static_cast<float>(items.size()) * lh; // title + gap + items

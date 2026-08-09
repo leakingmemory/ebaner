@@ -29,6 +29,7 @@
 #include "TrackMesh.h"
 #include "SpeedLimits.h"
 #include "SpeedSignMesh.h"
+#include "Stations.h"
 #include "Streaming.h"
 #include "TrackPath.h"
 #include "TunnelMesh.h"
@@ -176,6 +177,55 @@ int main(int argc, char** argv) {
         return EXIT_SUCCESS;
     }
 
+    // Which station to start at. The dataset carries them - name, position, and
+    // whether it is a station or a stop - so this is a lookup, not a table of ours.
+    const std::vector<Station> stations = loadStations(datasetRoot);
+    const Station* start = pickStation(stations, (argc > 2) ? argv[2] : "");
+    if (!start) return EXIT_FAILURE;
+
+    // --- Window ---
+    if (!glfwInit()) {
+        std::fprintf(stderr, "glfwInit failed\n");
+        return EXIT_FAILURE;
+    }
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    GLFWwindow* window =
+        glfwCreateWindow(1280, 720, "ebaner - Bodo terrain", nullptr, nullptr);
+    if (!window) {
+        std::fprintf(stderr, "window creation failed (is Vulkan/WSI available?)\n");
+        glfwTerminate();
+        return EXIT_FAILURE;
+    }
+
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    glfwSetCursorPosCallback(window, cursorCallback);
+    glfwSetKeyCallback(window, keyCallback);
+    glfwSetScrollCallback(window, scrollCallback);
+    glfwSetFramebufferSizeCallback(window, resizeCallback);
+
+    // --- Land-cover textures ---
+    std::vector<std::uint8_t> texPixels = landtex::generate();
+    LandTextureData texData;
+    texData.pixels = texPixels.data();
+    texData.size = landtex::SIZE;
+    texData.layers = landtex::LAYERS;
+    texData.byteSize = texPixels.size();
+
+    // --- Renderer -----------------------------------------------------------
+    // Brought up on an empty world, before a single tile is read. That is what lets
+    // the station be chosen on screen: the terrain window is centred on whichever
+    // one is picked, so nothing can be read until it is.
+    VulkanRenderer renderer;
+    g_renderer = &renderer;
+    try {
+        renderer.init(window, {}, {}, texData, {}, {}, 0, {}, {}, {}, {}, {});
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "Vulkan init failed: %s\n", e.what());
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return EXIT_FAILURE;
+    }
+
     // --- Load terrain data ---
     TerrainData data;
     TerrainMesh mesh;
@@ -188,8 +238,81 @@ int main(int argc, char** argv) {
     SwitchNetwork switchNet;
     std::vector<TrackPath> paths;
     TrackGraph graph; // raw track lines (scene-relative), for the 2-D traffic-manager map
+
+    // --- Start screen, part one: where ---------------------------------------
+    // Reading the world takes long enough that it cannot be done speculatively, so the
+    // station is settled here and the loading follows. EBANER_STATION skips the screen,
+    // as EBANER_VEHICLE does for the second half of it.
+    if (std::getenv("EBANER_STATION")) {
+        if (const Station* s = findStation(stations, std::getenv("EBANER_STATION")))
+            start = s;
+    } else if (std::getenv("EBANER_SCREENSHOT") == nullptr) {
+        int pick = 0;
+        for (std::size_t i = 0; i < stations.size(); ++i)
+            if (&stations[i] == start) pick = static_cast<int>(i);
+        std::vector<std::string> names;
+        names.reserve(stations.size());
+        for (const Station& st : stations)
+            names.push_back(st.name + (st.isStop() ? "  (stop)" : "") + "  " + st.line);
+
+        bool pUp = false, pDn = false, pPgU = false, pPgD = false, pEnter = false;
+        while (!glfwWindowShouldClose(window)) {
+            glfwPollEvents();
+            int fw = 0, fh = 0;
+            glfwGetFramebufferSize(window, &fw, &fh);
+            if (fw == 0 || fh == 0) continue;
+            auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
+            const bool u = down(GLFW_KEY_UP), d = down(GLFW_KEY_DOWN);
+            const bool pu = down(GLFW_KEY_PAGE_UP), pd = down(GLFW_KEY_PAGE_DOWN);
+            const bool en = down(GLFW_KEY_ENTER);
+            const int n = static_cast<int>(names.size());
+            if (u && !pUp) pick = (pick + n - 1) % n;
+            if (d && !pDn) pick = (pick + 1) % n;
+            if (pu && !pPgU) pick = (pick + n - 10) % n;
+            if (pd && !pPgD) pick = (pick + 10) % n;
+            if (down(GLFW_KEY_ESCAPE)) { glfwSetWindowShouldClose(window, GLFW_TRUE); }
+            if (en && !pEnter) { start = &stations[pick]; break; }
+            pUp = u; pDn = d; pPgU = pu; pPgD = pd; pEnter = en;
+
+            // A window over the list: 720 stations will not fit on a screen.
+            constexpr int kShown = 15;
+            const int first = std::clamp(pick - kShown / 2, 0,
+                                         std::max(0, n - kShown));
+            std::vector<std::string> page(names.begin() + first,
+                                          names.begin() + std::min(n, first + kShown));
+            std::vector<TextVertex> tv;
+            appendMenu(tv, "START AT  (arrows, PgUp/PgDn, Enter)", page, pick - first,
+                       fw, fh);
+            renderer.setOverlayText(tv);
+            PushConstants pc{};
+            pc.viewProj = glm::mat4(1.0f);
+            renderer.drawFrame(pc);
+        }
+        if (glfwWindowShouldClose(window)) {
+            renderer.cleanup();
+            glfwDestroyWindow(window);
+            glfwTerminate();
+            return EXIT_SUCCESS;
+        }
+    }
+    glfwSetWindowTitle(window, ("ebaner - " + start->name).c_str());
+    std::printf("[main] starting at %s (%s)\n", start->name.c_str(),
+                start->line.c_str());
+    {
+        // One frame saying so, because reading and building the world blocks for a good
+        // few seconds and an unpainted window looks like a hang.
+        int fw = 0, fh = 0;
+        glfwGetFramebufferSize(window, &fw, &fh);
+        std::vector<TextVertex> tv;
+        appendMenu(tv, "LOADING", {start->name, start->line}, -1, fw, fh);
+        renderer.setOverlayText(tv);
+        PushConstants pc{};
+        pc.viewProj = glm::mat4(1.0f);
+        renderer.drawFrame(pc);
+    }
+
     try {
-        data.load(datasetRoot);
+        data.load(datasetRoot, start->world);
        
         paths = buildTrackPaths(data);
        
@@ -211,19 +334,25 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
-
     // --- First rail vehicle: a wheelset on the main line near the start ---
     const TrackPath* vpath = nullptr;
     float vs = 0.0f;
     {
+        // The start point is on a main line by construction, so the one we want runs
+        // within metres of the origin. Reject on the bounding box first: walking every
+        // path in the country at 5 m steps is the better part of a million samples.
         float best = 1e30f;
-        for (const TrackPath& p : paths) {
-            if (p.trackType() != 0) continue; // main line only
-            for (float s = 0.0f; s <= p.length(); s += 5.0f) {
-                const glm::vec3 q = p.poseAt(s).pos; // nearest point to scene origin
-                const float d2 = q.x * q.x + q.y * q.y;
-                if (d2 < best) { best = d2; vpath = &p; vs = s; }
+        for (float reach : {2000.0f, -1.0f}) { // then unbounded, if the line is odd here
+            for (const TrackPath& p : paths) {
+                if (p.trackType() != 0) continue; // main line only
+                if (reach > 0.0f && !p.nearXY(glm::vec2(0.0f), reach)) continue;
+                for (float s = 0.0f; s <= p.length(); s += 5.0f) {
+                    const glm::vec3 q = p.poseAt(s).pos; // nearest point to scene origin
+                    const float d2 = q.x * q.x + q.y * q.y;
+                    if (d2 < best) { best = d2; vpath = &p; vs = s; }
+                }
             }
+            if (vpath) break;
         }
         if (!vpath && !paths.empty()) vpath = &paths[0];
     }
@@ -234,19 +363,6 @@ int main(int argc, char** argv) {
     Audio audio;
     g_audio = &audio; // init() is deferred until just before the render loop
 
-    // --- Window ---
-    if (!glfwInit()) {
-        std::fprintf(stderr, "glfwInit failed\n");
-        return EXIT_FAILURE;
-    }
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    GLFWwindow* window =
-        glfwCreateWindow(1280, 720, "ebaner - Bodo terrain", nullptr, nullptr);
-    if (!window) {
-        std::fprintf(stderr, "window creation failed (is Vulkan/WSI available?)\n");
-        glfwTerminate();
-        return EXIT_FAILURE;
-    }
 
     // Start camera at the track-1 terminus, a few metres up, looking down the line.
     glm::vec3 startPos = data.startPos() + glm::vec3(0.0f, 0.0f, 5.0f);
@@ -263,20 +379,6 @@ int main(int argc, char** argv) {
                         "yaw=%.1f pitch=%.1f\n", x, y, z, yaw, pitch);
         }
     }
-
-    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-    glfwSetCursorPosCallback(window, cursorCallback);
-    glfwSetKeyCallback(window, keyCallback);
-    glfwSetScrollCallback(window, scrollCallback);
-    glfwSetFramebufferSizeCallback(window, resizeCallback);
-
-    // --- Land-cover textures ---
-    std::vector<std::uint8_t> texPixels = landtex::generate();
-    LandTextureData texData;
-    texData.pixels = texPixels.data();
-    texData.size = landtex::SIZE;
-    texData.layers = landtex::LAYERS;
-    texData.byteSize = texPixels.size();
 
     // Platforms are the same solid-lit static geometry as buildings and draw
     // identically, so merge them into the building buffers (offsetting the
@@ -318,24 +420,9 @@ int main(int argc, char** argv) {
     // static struct bucket — attached just after renderer.init below. The ground signals
     // are dynamic too (their lamps follow the aspect), attached once `polys` exists.
 
-    // --- Renderer ---
-    VulkanRenderer renderer;
-    g_renderer = &renderer;
-    try {
-        // The ground is uploaded per tile, just below and just as the streamer does it,
-        // so there is one path for it and no whole-world copy to drop afterwards.
-        renderer.init(window, {}, {}, texData,
-                      tracks.vertices(), tracks.indices(),
-                      tracks.alwaysIndexCount(), tracks.sleeperChunks(),
-                      roads.vertices(), roads.indices(),
-                      structVerts, structIndices);
-       
-    } catch (const std::exception& e) {
-        std::fprintf(stderr, "Vulkan init failed: %s\n", e.what());
-        glfwDestroyWindow(window);
-        glfwTerminate();
-        return EXIT_FAILURE;
-    }
+    // --- Hand the built world to the renderer --------------------------------
+    // What renderer.init used to do, now that it comes up empty and the world arrives
+    // afterwards. The ground goes in per tile, exactly as the streamer will replace it.
     {
         TerrainMesh chunk;
         std::size_t verts = 0;
@@ -347,6 +434,10 @@ int main(int argc, char** argv) {
         std::printf("[TerrainMesh] %zu chunk(s), %zu vertices\n",
                     renderer.terrainChunkCount(), verts);
     }
+    renderer.updateTracks(tracks.vertices(), tracks.indices(),
+                          tracks.alwaysIndexCount(), tracks.sleeperChunks());
+    renderer.updateRoads(roads.vertices(), roads.indices());
+    renderer.updateStructs(structVerts, structIndices);
 
     renderer.attachSwitches(switches.vertices(), switches.indices());
 

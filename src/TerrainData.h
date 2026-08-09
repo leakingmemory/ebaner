@@ -91,8 +91,14 @@ public:
     static constexpr int PIXELS = 256;
     static constexpr float NODATA = -9999.0f;
 
-    // Loads tiles within `halfWindowMetres` of the Bodo track-1 terminus.
+    // Loads tiles within `halfWindowMetres` of where the railway passes `startSeed` -
+    // a station node, from Stations.h. The scene origin becomes that point, so starting
+    // anywhere in the dataset costs nothing; it is only travelling far from it that
+    // wants more than float32 can carry.
     // Throws std::runtime_error on fatal problems (missing dataset root).
+    void load(const std::string& datasetRoot, const glm::dvec3& startSeed,
+              double halfWindowMetres = 20000.0);
+    // Bodo, for callers that do not care where they start.
     void load(const std::string& datasetRoot, double halfWindowMetres = 20000.0);
 
     // Loaded tiles, keyed by (lod, col, row). Node-based and held by pointer because
@@ -176,8 +182,9 @@ public:
     bool hasLandCover() const { return hasLandCover_; }
 
 private:
-    // Resolves startWorld_/startDir_ by parsing the Bodo tile's tracks.bin.
-    void resolveStartPoint(const std::string& datasetRoot);
+    // Resolves startWorld_/startDir_ onto the railway near `seed`. Needs the network
+    // loaded, and does not care where the scene origin is (there isn't one yet).
+    void resolveStartPoint(const glm::dvec3& seed);
 
     // Fills networkTracks_ from every tile in the dataset, finest LOD first.
     void loadNetworkTracks(const std::string& datasetRoot);

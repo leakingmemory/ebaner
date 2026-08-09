@@ -202,12 +202,21 @@ TerrainData::WindowChange TerrainData::updateWindow(double centreX, double centr
 }
 
 void TerrainData::load(const std::string& datasetRoot, double halfWindow) {
+    load(datasetRoot, glm::dvec3(kBodoSeedX, kBodoSeedY, kBodoSeedZ), halfWindow);
+}
+
+void TerrainData::load(const std::string& datasetRoot, const glm::dvec3& startSeed,
+                       double halfWindow) {
     if (!fs::exists(datasetRoot)) {
         throw std::runtime_error("dataset root not found: " + datasetRoot);
     }
 
     root_ = datasetRoot;
-    resolveStartPoint(datasetRoot);
+    // The network first: it is read in world coordinates and so does not need an origin,
+    // and resolving the start point onto the rails needs all of it rather than whichever
+    // tile the station happens to sit in.
+    loadNetworkTracks(datasetRoot);
+    resolveStartPoint(startSeed);
     halfWindow_ = halfWindow;
     sceneOrigin_ = startWorld_;
     startPos_ = glm::vec3(0.0f); // camera start is the scene origin itself
@@ -235,8 +244,6 @@ void TerrainData::load(const std::string& datasetRoot, double halfWindow) {
             }
         }
     }
-
-    loadNetworkTracks(datasetRoot);
 
     // Apply the manual track-edit overlay (drop-in link fixes) before anything
     // downstream reads the geometry (carve, path building).
@@ -640,58 +647,73 @@ bool TerrainData::parsePlatformsBin(const std::string& path,
     return !out.empty();
 }
 
-void TerrainData::resolveStartPoint(const std::string& datasetRoot) {
-    // Default fallback: the station node itself.
-    startWorld_ = glm::dvec3(kBodoSeedX, kBodoSeedY, kBodoSeedZ);
+// Put the start on the railway near `seed`, and face it somewhere sensible.
+//
+// A terminus and a through station want different answers. At Bodo the line ends: the
+// only place to stand is the buffer stop, looking in. At Fauske or Rognan the line runs
+// straight past, there is no end to find, and either direction is a valid departure -
+// so the nearest point on the running line, along it, is the answer there.
+void TerrainData::resolveStartPoint(const glm::dvec3& seed) {
+    startWorld_ = seed;
     startDir_ = glm::vec3(1.0f, 0.0f, 0.0f);
 
-    // The Bodo LOD0 tile that contains the seed.
-    const double extent0 = PIXELS * kLodResolution[0];
-    const int col = static_cast<int>(std::floor(kBodoSeedX / extent0));
-    const int row = static_cast<int>(std::floor(kBodoSeedY / extent0));
-    const std::string path = tileDir(datasetRoot, 0, col, row) + "/tracks.bin";
+    // A main-line end this close to the station node is its buffer stop.
+    constexpr double kTerminusM = 150.0;
 
-    std::vector<TrackSegment> segs;
-    if (!parseTracksBin(path, segs)) {
-        std::printf("[TerrainData] tracks.bin missing/empty (%s); using station node\n",
-                    path.c_str());
-        return;
-    }
+    double bestEndD = std::numeric_limits<double>::max();
+    glm::dvec3 endPt{0.0}, endInto{0.0};
+    double bestOnD = std::numeric_limits<double>::max();
+    glm::dvec3 onPt{0.0};
+    glm::dvec2 onDir{1.0, 0.0};
 
-    // Among main-line segments, the endpoint nearest the station seed is the
-    // buffer-stop terminus ("track 1 end").
-    double bestDist = std::numeric_limits<double>::max();
-    glm::dvec3 bestEndpoint = startWorld_;
-    glm::dvec3 bestInterior = startWorld_;
-    bool found = false;
-    for (const TrackSegment& seg : segs) {
-        if (seg.trackType != 0) continue;
-        const auto& v = seg.pts;
-        struct End { glm::dvec3 pt, next; };
-        const End ends[2] = {{v.front(), v[1]}, {v.back(), v[v.size() - 2]}};
-        for (const End& e : ends) {
-            const double dx = e.pt.x - kBodoSeedX;
-            const double dy = e.pt.y - kBodoSeedY;
-            const double d = std::sqrt(dx * dx + dy * dy);
-            if (d < bestDist) {
-                bestDist = d;
-                bestEndpoint = e.pt;
-                bestInterior = e.next;
-                found = true;
+    for (const TrackSegment& sg : networkTracks_) {
+        if (sg.trackType != 0 || sg.pts.size() < 2) continue; // main line only
+        const std::vector<glm::dvec3>& v = sg.pts;
+
+        const std::pair<glm::dvec3, glm::dvec3> ends[2] = {{v.front(), v[1]},
+                                                           {v.back(), v[v.size() - 2]}};
+        for (const auto& [pt, into] : ends) {
+            const double d = std::hypot(pt.x - seed.x, pt.y - seed.y);
+            if (d < bestEndD) {
+                bestEndD = d;
+                endPt = pt;
+                endInto = into;
+            }
+        }
+
+        for (std::size_t k = 0; k + 1 < v.size(); ++k) {
+            const glm::dvec2 a(v[k].x, v[k].y), b(v[k + 1].x, v[k + 1].y);
+            const glm::dvec2 ab = b - a;
+            const double l2 = glm::dot(ab, ab);
+            if (l2 < 1e-9) continue;
+            const double t =
+                std::clamp(glm::dot(glm::dvec2(seed.x, seed.y) - a, ab) / l2, 0.0, 1.0);
+            const glm::dvec2 q = a + ab * t;
+            const double d = std::hypot(q.x - seed.x, q.y - seed.y);
+            if (d < bestOnD) {
+                bestOnD = d;
+                onPt = glm::dvec3(q.x, q.y, v[k].z + (v[k + 1].z - v[k].z) * t);
+                onDir = ab / std::sqrt(l2);
             }
         }
     }
 
-    if (found) {
-        startWorld_ = bestEndpoint;
-        glm::dvec2 dir(bestInterior.x - bestEndpoint.x,
-                       bestInterior.y - bestEndpoint.y);
-        const double len = glm::length(dir);
-        if (len > 1e-6) {
-            dir /= len;
-            startDir_ = glm::vec3(static_cast<float>(dir.x),
-                                  static_cast<float>(dir.y), 0.0f);
-        }
+    glm::dvec2 dir(1.0, 0.0);
+    if (bestEndD <= kTerminusM) {
+        startWorld_ = endPt;
+        dir = glm::dvec2(endInto.x - endPt.x, endInto.y - endPt.y);
+    } else if (bestOnD < std::numeric_limits<double>::max()) {
+        startWorld_ = onPt;
+        dir = onDir;
+    } else {
+        std::printf("[TerrainData] no main line near the start seed; using it as given\n");
+        return;
+    }
+
+    const double len = glm::length(dir);
+    if (len > 1e-6) {
+        dir /= len;
+        startDir_ = glm::vec3(static_cast<float>(dir.x), static_cast<float>(dir.y), 0.0f);
     }
 }
 

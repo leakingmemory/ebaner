@@ -32,6 +32,10 @@ struct TextVertex {
 void appendText(std::vector<TextVertex>& out, const std::string& text, float xPx,
                 float yPx, float pxScale, const glm::vec3& color, int fbW, int fbH);
 
+// How many characters `text` draws as. UTF-8, so this is not its byte count: anything
+// laying text out (panel widths, centring) has to ask this rather than size().
+std::size_t textChars(const std::string& text);
+
 // The 8x8 glyph bitmap for `ch` (row-major, bit i of each byte = column i, LSB leftmost),
 // or nullptr outside ASCII. Exposed so a sign standing in the world can carry the same
 // numerals the HUD draws, rather than needing an asset of its own.

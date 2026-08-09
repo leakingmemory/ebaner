@@ -1,10 +1,11 @@
 # ebaner
 
 A small Vulkan/C++ viewer for the `terrainmapper` game-export data
-(`../norway-rails`). It stitches the elevation tiles around **Bodø station** into
+(`../norway-rails`). It stitches the elevation tiles around a **chosen station** into
 a continuous 3D surface and draws the railway, roads and buildings on top, with a
-first physics-driven rail vehicle. The camera starts at the buffer-stop end of the
-Bodø main track ("track 1 end"), resolved from the `tracks.bin` geometry.
+first physics-driven rail vehicle. The ground streams in as you travel. The camera
+starts on the running line at that station — at a terminus like Bodø that is the
+buffer-stop end of track 1, resolved from the track geometry rather than named here.
 
 ## What it renders
 
@@ -166,8 +167,22 @@ report as skipped rather than failing, so a build without one is still clean.
 ## Run
 
 ```sh
-./build/ebaner ../norway-rails
+./build/ebaner ../norway-rails            # pick the station on the start screen
+./build/ebaner ../norway-rails Fauske     # or name it, and skip straight past
 ```
+
+### Where to start
+
+Both binaries take an optional station name after the dataset. The stations come from
+the export itself — every tile's `meta.json` lists the ones inside it, 720 in all — so
+any of them works, not a list kept here. The name is matched ignoring case and the
+Norwegian letters, so `Bodo` finds `Bodø` and `oteraga` finds `Oteråga`; an unknown name
+prints the near misses rather than guessing. Omitted, the viewer asks on its start screen
+(arrows, PgUp/PgDn, Enter) and the editor opens at Bodø.
+
+Starting far afield is free — the scene is built around whichever station you pick.
+Driving a long way from it is a different matter, and is what the floating-origin work
+still outstanding is for.
 
 The dataset path defaults to `../norway-rails` if omitted. On startup the console
 prints the resolved start point (UTM 33N), the look direction, tile/triangle
@@ -196,7 +211,7 @@ counts, and vehicle physics (mass, inertia, tipping limit).
 ## Track editor (`ebaner-trackedit`)
 
 ```sh
-./build/ebaner-trackedit ../norway-rails
+./build/ebaner-trackedit ../norway-rails          # or: ... ../norway-rails Rognan
 ```
 
 A **WYSIWYG track-network editor** that reuses the same engine: it renders the
