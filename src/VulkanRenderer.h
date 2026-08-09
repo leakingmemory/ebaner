@@ -248,14 +248,18 @@ private:
         uint32_t indexCount = 0;
     };
     std::unordered_map<std::uint64_t, TerrainChunk> terrainChunks_;
-    // A chunk replaced or dropped this frame may still be referenced by a command
-    // buffer in flight, so its buffers wait out the frames that can still be reading
-    // them before being destroyed.
-    struct RetiredChunk {
-        TerrainChunk c;
+    // A buffer replaced this frame may still be referenced by a command buffer in
+    // flight. The alternative is to wait for the device to go idle before touching it,
+    // which is a pipeline stall in the middle of a frame - so instead they wait out the
+    // frames that can still be reading them, and are destroyed once those have passed.
+    struct RetiredBuffer {
+        VkBuffer buf = VK_NULL_HANDLE;
+        VkDeviceMemory mem = VK_NULL_HANDLE;
         int framesLeft = 0;
     };
-    std::vector<RetiredChunk> retired_;
+    std::vector<RetiredBuffer> retired_;
+    // Hands the buffer over to be destroyed later and clears the handles.
+    void retireBuffer(VkBuffer& buf, VkDeviceMemory& mem);
     void retire(TerrainChunk& c);
     void sweepRetired(bool force);
 

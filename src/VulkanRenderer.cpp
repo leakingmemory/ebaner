@@ -1056,9 +1056,17 @@ void VulkanRenderer::createDescriptorSet() {
     vkUpdateDescriptorSets(device_, 1, &w, 0, nullptr);
 }
 
+void VulkanRenderer::retireBuffer(VkBuffer& buf, VkDeviceMemory& mem) {
+    if (buf == VK_NULL_HANDLE) return;
+    // One frame more than can be in flight, so every slot has been waited on by then.
+    retired_.push_back({buf, mem, kMaxFramesInFlight + 1});
+    buf = VK_NULL_HANDLE;
+    mem = VK_NULL_HANDLE;
+}
+
 void VulkanRenderer::retire(TerrainChunk& c) {
-    if (c.vbuf == VK_NULL_HANDLE) return;
-    retired_.push_back({c, kMaxFramesInFlight + 1});
+    retireBuffer(c.ibuf, c.imem);
+    retireBuffer(c.vbuf, c.vmem);
     c = TerrainChunk{};
 }
 
@@ -1068,11 +1076,8 @@ void VulkanRenderer::sweepRetired(bool force) {
             ++i;
             continue;
         }
-        TerrainChunk& c = retired_[i].c;
-        vkDestroyBuffer(device_, c.ibuf, nullptr);
-        vkFreeMemory(device_, c.imem, nullptr);
-        vkDestroyBuffer(device_, c.vbuf, nullptr);
-        vkFreeMemory(device_, c.vmem, nullptr);
+        vkDestroyBuffer(device_, retired_[i].buf, nullptr);
+        vkFreeMemory(device_, retired_[i].mem, nullptr);
         retired_[i] = retired_.back();
         retired_.pop_back();
     }
@@ -1131,15 +1136,10 @@ void VulkanRenderer::createMeshBuffers(const std::vector<Vertex>& vertices,
 void VulkanRenderer::createTrackBuffers(
     const std::vector<TrackVertex>& vertices,
     const std::vector<std::uint32_t>& indices) {
-    // Idempotent: free any previous track buffers first (editor re-preview).
-    if (trackVertexBuffer_ != VK_NULL_HANDLE) {
-        vkDestroyBuffer(device_, trackIndexBuffer_, nullptr);
-        vkFreeMemory(device_, trackIndexMemory_, nullptr);
-        vkDestroyBuffer(device_, trackVertexBuffer_, nullptr);
-        vkFreeMemory(device_, trackVertexMemory_, nullptr);
-        trackVertexBuffer_ = trackIndexBuffer_ = VK_NULL_HANDLE;
-        trackVertexMemory_ = trackIndexMemory_ = VK_NULL_HANDLE;
-    }
+    // Idempotent, and the buffers it replaces are retired rather than destroyed:
+    // a frame still in flight may be reading them.
+    retireBuffer(trackIndexBuffer_, trackIndexMemory_);
+    retireBuffer(trackVertexBuffer_, trackVertexMemory_);
     trackIndexCount_ = static_cast<uint32_t>(indices.size());
     if (indices.empty()) return; // no tracks in the loaded area
 
@@ -1174,15 +1174,10 @@ void VulkanRenderer::createTrackBuffers(
 void VulkanRenderer::createRoadBuffers(
     const std::vector<TrackVertex>& vertices,
     const std::vector<std::uint32_t>& indices) {
-    // Idempotent: free any previous road buffers first (streamed rebuild).
-    if (roadVertexBuffer_ != VK_NULL_HANDLE) {
-        vkDestroyBuffer(device_, roadIndexBuffer_, nullptr);
-        vkFreeMemory(device_, roadIndexMemory_, nullptr);
-        vkDestroyBuffer(device_, roadVertexBuffer_, nullptr);
-        vkFreeMemory(device_, roadVertexMemory_, nullptr);
-        roadVertexBuffer_ = roadIndexBuffer_ = VK_NULL_HANDLE;
-        roadVertexMemory_ = roadIndexMemory_ = VK_NULL_HANDLE;
-    }
+    // Idempotent, and the buffers it replaces are retired rather than destroyed:
+    // a frame still in flight may be reading them.
+    retireBuffer(roadIndexBuffer_, roadIndexMemory_);
+    retireBuffer(roadVertexBuffer_, roadVertexMemory_);
     roadIndexCount_ = static_cast<uint32_t>(indices.size());
     if (indices.empty()) return; // no roads in the loaded area
 
@@ -1216,15 +1211,10 @@ void VulkanRenderer::createRoadBuffers(
 void VulkanRenderer::createBuildingBuffers(
     const std::vector<TrackVertex>& vertices,
     const std::vector<std::uint32_t>& indices) {
-    // Idempotent: free any previous struct/building buffers first (editor re-preview).
-    if (buildingVertexBuffer_ != VK_NULL_HANDLE) {
-        vkDestroyBuffer(device_, buildingIndexBuffer_, nullptr);
-        vkFreeMemory(device_, buildingIndexMemory_, nullptr);
-        vkDestroyBuffer(device_, buildingVertexBuffer_, nullptr);
-        vkFreeMemory(device_, buildingVertexMemory_, nullptr);
-        buildingVertexBuffer_ = buildingIndexBuffer_ = VK_NULL_HANDLE;
-        buildingVertexMemory_ = buildingIndexMemory_ = VK_NULL_HANDLE;
-    }
+    // Idempotent, and the buffers it replaces are retired rather than destroyed:
+    // a frame still in flight may be reading them.
+    retireBuffer(buildingIndexBuffer_, buildingIndexMemory_);
+    retireBuffer(buildingVertexBuffer_, buildingVertexMemory_);
     buildingIndexCount_ = static_cast<uint32_t>(indices.size());
     if (indices.empty()) return; // no buildings in the loaded area
 
@@ -1260,15 +1250,10 @@ void VulkanRenderer::createBuildingBuffers(
 void VulkanRenderer::createSwitchBuffers(
     const std::vector<TrackVertex>& vertices,
     const std::vector<std::uint32_t>& indices) {
-    // Idempotent: free any previous switch buffers first (throw = rebuild).
-    if (switchVertexBuffer_ != VK_NULL_HANDLE) {
-        vkDestroyBuffer(device_, switchIndexBuffer_, nullptr);
-        vkFreeMemory(device_, switchIndexMemory_, nullptr);
-        vkDestroyBuffer(device_, switchVertexBuffer_, nullptr);
-        vkFreeMemory(device_, switchVertexMemory_, nullptr);
-        switchVertexBuffer_ = switchIndexBuffer_ = VK_NULL_HANDLE;
-        switchVertexMemory_ = switchIndexMemory_ = VK_NULL_HANDLE;
-    }
+    // Idempotent, and the buffers it replaces are retired rather than destroyed:
+    // a frame still in flight may be reading them.
+    retireBuffer(switchIndexBuffer_, switchIndexMemory_);
+    retireBuffer(switchVertexBuffer_, switchVertexMemory_);
     switchIndexCount_ = static_cast<uint32_t>(indices.size());
     if (indices.empty() || vertices.empty()) return;
 
@@ -1303,23 +1288,16 @@ void VulkanRenderer::attachSwitches(const std::vector<TrackVertex>& vertices,
 
 void VulkanRenderer::updateSwitches(const std::vector<TrackVertex>& vertices,
                                     const std::vector<std::uint32_t>& indices) {
-    // A throw is rare and user-triggered; wait for the GPU to be idle, then recreate.
-    vkDeviceWaitIdle(device_);
     createSwitchBuffers(vertices, indices);
 }
 
 void VulkanRenderer::createSignalBuffers(
     const std::vector<TrackVertex>& vertices,
     const std::vector<std::uint32_t>& indices) {
-    // Idempotent: free any previous signal buffers first (aspect change = rebuild).
-    if (signalVertexBuffer_ != VK_NULL_HANDLE) {
-        vkDestroyBuffer(device_, signalIndexBuffer_, nullptr);
-        vkFreeMemory(device_, signalIndexMemory_, nullptr);
-        vkDestroyBuffer(device_, signalVertexBuffer_, nullptr);
-        vkFreeMemory(device_, signalVertexMemory_, nullptr);
-        signalVertexBuffer_ = signalIndexBuffer_ = VK_NULL_HANDLE;
-        signalVertexMemory_ = signalIndexMemory_ = VK_NULL_HANDLE;
-    }
+    // Idempotent, and the buffers it replaces are retired rather than destroyed:
+    // a frame still in flight may be reading them.
+    retireBuffer(signalIndexBuffer_, signalIndexMemory_);
+    retireBuffer(signalVertexBuffer_, signalVertexMemory_);
     signalIndexCount_ = static_cast<uint32_t>(indices.size());
     if (indices.empty() || vertices.empty()) return;
 
@@ -1354,18 +1332,15 @@ void VulkanRenderer::attachSignals(const std::vector<TrackVertex>& vertices,
 
 void VulkanRenderer::updateSignals(const std::vector<TrackVertex>& vertices,
                                    const std::vector<std::uint32_t>& indices) {
-    // Aspects change only when occupancy or a switch position does; the geometry is
-    // tiny, but the buffers are device-local, so idle first as the switch stands do.
-    vkDeviceWaitIdle(device_);
     createSignalBuffers(vertices, indices);
 }
 
-// Editor render-preview: recreate the heavy static buffers to reflect pending edits.
-// Rare, user-triggered (the P key), so a full wait-idle + recreate is fine; the
-// per-frame command recording picks up the new buffers next frame.
+// Replace a whole mesh. Nothing waits for the device here: the buffers being replaced
+// are retired, and the per-frame command recording picks up the new ones next frame.
+// These run mid-flight every time the streamed world moves, which is exactly where a
+// wait-idle costs the most.
 void VulkanRenderer::updateTerrain(const std::vector<Vertex>& vertices,
                                    const std::vector<std::uint32_t>& indices) {
-    vkDeviceWaitIdle(device_);
     createMeshBuffers(vertices, indices);
 }
 
@@ -1373,7 +1348,6 @@ void VulkanRenderer::updateTracks(const std::vector<TrackVertex>& vertices,
                                   const std::vector<std::uint32_t>& indices,
                                   std::uint32_t alwaysIndexCount,
                                   const std::vector<TrackDrawChunk>& sleeperChunks) {
-    vkDeviceWaitIdle(device_);
     createTrackBuffers(vertices, indices);
     trackAlwaysIndexCount_ = alwaysIndexCount;
     sleeperChunks_ = sleeperChunks;
@@ -1381,13 +1355,11 @@ void VulkanRenderer::updateTracks(const std::vector<TrackVertex>& vertices,
 
 void VulkanRenderer::updateStructs(const std::vector<TrackVertex>& vertices,
                                    const std::vector<std::uint32_t>& indices) {
-    vkDeviceWaitIdle(device_);
     createBuildingBuffers(vertices, indices);
 }
 
 void VulkanRenderer::updateRoads(const std::vector<TrackVertex>& vertices,
                                  const std::vector<std::uint32_t>& indices) {
-    vkDeviceWaitIdle(device_);
     createRoadBuffers(vertices, indices);
 }
 
