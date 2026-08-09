@@ -13,6 +13,8 @@
 
 #include "SwitchNetwork.h"
 
+#include "SpatialGrid.h"
+
 #include "TerrainData.h"
 #include "TrackOverlay.h"
 #include "TrackPath.h"
@@ -21,10 +23,12 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 namespace {
+
 // 2-D distance from p to segment a-b, plus the clamped parameter t along a->b.
 struct SegHit { float dist; float t; };
 SegHit distToSeg(const glm::dvec2& p, const glm::dvec2& a, const glm::dvec2& b) {
@@ -36,12 +40,19 @@ SegHit distToSeg(const glm::dvec2& p, const glm::dvec2& a, const glm::dvec2& b) 
 
 // Nearest point on a path to scene point X: fills distance, arc-length s and the
 // unit 2-D tangent there. Sampled at ~1 m, adequate for locating a turnout.
+// Sampled at ~1 m over [sLo, sHi] (the whole path when sHi < 0). Bounding the range is
+// what keeps this affordable once the paths are the whole line rather than one station:
+// unbounded, it walks every path end to end for every turnout.
 void nearestOnPath(const TrackPath& p, const glm::dvec2& X, double& outDist,
-                   float& outS, glm::dvec2& outTan) {
+                   float& outS, glm::dvec2& outTan, float sLo = 0.0f,
+                   float sHi = -1.0f) {
     outDist = 1e30;
     const float len = p.length();
-    for (float s = 0.0f; s <= len + 0.5f; s += 1.0f) {
-        const float ss = std::min(s, len);
+    if (sHi < 0.0f) sHi = len;
+    sLo = std::max(0.0f, sLo);
+    sHi = std::min(len, sHi);
+    for (float s = sLo; s <= sHi + 0.5f; s += 1.0f) {
+        const float ss = std::min(s, sHi);
         const glm::vec3 q = p.poseAt(ss).pos;
         const double d = std::hypot(q.x - X.x, q.y - X.y);
         if (d < outDist) {
@@ -51,6 +62,7 @@ void nearestOnPath(const TrackPath& p, const glm::dvec2& X, double& outDist,
             const double tl = std::hypot(tg.x, tg.y);
             outTan = tl > 1e-9 ? glm::dvec2(tg.x / tl, tg.y / tl) : glm::dvec2(1, 0);
         }
+        if (ss >= sHi) break;
     }
 }
 } // namespace
@@ -62,11 +74,27 @@ void SwitchNetwork::build(const TerrainData& data,
     origin_ = data.sceneOrigin();
 
     // --- Detect turnouts (endpoint-on-another-track, minus straight stitches) ---
-    std::unordered_set<std::uint32_t> seen;
     std::vector<const TrackSegment*> segs;
-    for (const Tile& t : data.tiles())
-        for (const TrackSegment& s : t.tracks)
-            if (s.pts.size() >= 2 && seen.insert(s.trackId).second) segs.push_back(&s);
+    for (const TrackSegment& s : data.networkTracks())
+        if (s.pts.size() >= 2) segs.push_back(&s);
+
+    // Index every polyline edge, and separately every segment tip, by grid cell.
+    struct EdgeRef { const TrackSegment* seg; std::uint32_t k; }; // edge k -> k+1
+    std::unordered_map<std::int64_t, std::vector<EdgeRef>> edgeGrid;
+    struct TipRef { const TrackSegment* seg; std::uint8_t which; }; // 0 front, 1 back
+    std::unordered_map<std::int64_t, std::vector<TipRef>> tipGrid;
+    for (const TrackSegment* op : segs) {
+        const std::vector<glm::dvec3>& q = op->pts;
+        for (std::size_t k = 0; k + 1 < q.size(); ++k) {
+            grid::forCellsAlong(q[k].x, q[k].y, q[k + 1].x, q[k + 1].y,
+                                [&](std::int64_t c) {
+                                    edgeGrid[c].push_back(
+                                        {op, static_cast<std::uint32_t>(k)});
+                                });
+        }
+        tipGrid[grid::key(q.front().x, q.front().y)].push_back({op, 0});
+        tipGrid[grid::key(q.back().x, q.back().y)].push_back({op, 1});
+    }
 
     std::vector<Turnout> raw;
     for (const TrackSegment* sp : segs) {
@@ -79,17 +107,24 @@ void SwitchNetwork::build(const TerrainData& data,
             glm::dvec3 hitX{0.0};
             glm::dvec2 hitThru{0.0};
             const TrackSegment* hitSeg = nullptr;
-            for (const TrackSegment* op : segs) {
-                if (op == sp) continue;
-                // The crossed (through/main) track must *pass through* the endpoint, not
-                // itself end there. Skipping tracks that end near the point makes the
-                // main resolve correctly at a multi-way node (several branches meeting a
-                // through line) and rejects a plain end-to-end stitch (two ends meeting).
-                if (std::hypot(e2.x - op->pts.front().x, e2.y - op->pts.front().y) < 3.0 ||
-                    std::hypot(e2.x - op->pts.back().x, e2.y - op->pts.back().y) < 3.0)
-                    continue;
-                const std::vector<glm::dvec3>& q = op->pts;
-                for (std::size_t k = 0; k + 1 < q.size(); ++k) {
+            // A whole cell of reach, not just the 2 m tolerance: an edge is registered
+            // by sampling along it, so the cell holding the point nearest to this end
+            // may be a neighbour of the one a sample landed in.
+            grid::forCellsNear(e2.x, e2.y, grid::kCell, [&](std::int64_t cell) {
+                const auto it = edgeGrid.find(cell);
+                if (it == edgeGrid.end()) return;
+                for (const EdgeRef& er : it->second) {
+                    const TrackSegment* op = er.seg;
+                    if (op == sp) continue;
+                    // The crossed (through/main) track must *pass through* the endpoint,
+                    // not itself end there. Skipping tracks that end near the point makes
+                    // the main resolve correctly at a multi-way node (several branches
+                    // meeting a through line) and rejects a plain end-to-end stitch.
+                    if (std::hypot(e2.x - op->pts.front().x, e2.y - op->pts.front().y) < 3.0 ||
+                        std::hypot(e2.x - op->pts.back().x, e2.y - op->pts.back().y) < 3.0)
+                        continue;
+                    const std::vector<glm::dvec3>& q = op->pts;
+                    const std::size_t k = er.k;
                     const glm::dvec2 a(q[k].x, q[k].y), b(q[k + 1].x, q[k + 1].y);
                     const SegHit h = distToSeg(e2, a, b);
                     if (h.dist < best) {
@@ -100,7 +135,7 @@ void SwitchNetwork::build(const TerrainData& data,
                         hitSeg = op;
                     }
                 }
-            }
+            });
             // A yard fan: several track ends meet here and none passes through as a
             // single segment, so the search above finds nothing. buildTrackPaths chains
             // the straightest opposing pair into one continuous route through the node,
@@ -109,9 +144,13 @@ void SwitchNetwork::build(const TerrainData& data,
             if (!hitSeg) {
                 struct EndRef { const TrackSegment* seg; glm::dvec2 dir; double z; };
                 std::vector<EndRef> ends;
-                for (const TrackSegment* op : segs) {
-                    if (op == sp) continue;
-                    for (int w = 0; w < 2; ++w) {
+                grid::forCellsNear(e2.x, e2.y, 3.0, [&](std::int64_t cell) {
+                    const auto it = tipGrid.find(cell);
+                    if (it == tipGrid.end()) return;
+                    for (const TipRef& tr : it->second) {
+                        const TrackSegment* op = tr.seg;
+                        if (op == sp) continue;
+                        const int w = tr.which;
                         const glm::dvec3& tip = w ? op->pts.back() : op->pts.front();
                         const glm::dvec3& nb2 = w ? op->pts[op->pts.size() - 2] : op->pts[1];
                         if (std::hypot(e2.x - tip.x, e2.y - tip.y) > 3.0) continue;
@@ -119,7 +158,7 @@ void SwitchNetwork::build(const TerrainData& data,
                         const double L = glm::length(d);
                         if (L > 1e-9) ends.push_back({op, d / L, tip.z});
                     }
-                }
+                });
                 double bestDot = -0.7; // <= this is straight enough to be the through route
                 int ia = -1, ib = -1;
                 for (std::size_t x = 0; x < ends.size(); ++x)
@@ -192,6 +231,20 @@ void SwitchNetwork::build(const TerrainData& data,
         if (!dup) turnouts_.push_back(t);
     }
 
+    // Coarse index of the built paths (scene coords), so resolving a turnout looks only
+    // at the paths that actually run past it.
+    constexpr double kPathSampleM = 25.0;
+    std::unordered_map<std::int64_t, std::vector<std::pair<int, float>>> pathGrid;
+    for (int pi = 0; pi < static_cast<int>(paths.size()); ++pi) {
+        const TrackPath& p = paths[pi];
+        for (float s = 0.0f;; s += static_cast<float>(kPathSampleM)) {
+            const float ss = std::min(s, p.length());
+            const glm::vec3 q = p.poseAt(ss).pos;
+            pathGrid[grid::key(q.x, q.y)].push_back({pi, ss});
+            if (ss >= p.length()) break;
+        }
+    }
+
     // --- Resolve each turnout onto the built paths (main + siding) ---
     int resolved = 0;
     for (Turnout& t : turnouts_) {
@@ -202,12 +255,21 @@ void SwitchNetwork::build(const TerrainData& data,
         double bestSide = 0.3, bestMain = 0.7; // required direction agreement
         float sMain = 0.0f, sSiding = 0.0f;
         glm::dvec2 mainTan(1, 0);
-        for (int pi = 0; pi < static_cast<int>(paths.size()); ++pi) {
+        std::vector<std::pair<int, float>> cands; // (path, arc-length near X)
+        grid::forCellsNear(X.x, X.y, grid::kCell, [&](std::int64_t cell) {
+            const auto it = pathGrid.find(cell);
+            if (it != pathGrid.end())
+                cands.insert(cands.end(), it->second.begin(), it->second.end());
+        });
+        std::sort(cands.begin(), cands.end());
+        cands.erase(std::unique(cands.begin(), cands.end()), cands.end());
+        for (const auto& [pi, s0] : cands) {
             const TrackPath& p = paths[pi];
             double d;
             float s;
             glm::dvec2 tan;
-            nearestOnPath(p, X, d, s, tan);
+            nearestOnPath(p, X, d, s, tan, s0 - static_cast<float>(kPathSampleM),
+                          s0 + static_cast<float>(kPathSampleM));
             if (d > 2.5) continue; // not at this turnout
 
             // Siding: a branch whose *end* is at X, leaving along `div`.

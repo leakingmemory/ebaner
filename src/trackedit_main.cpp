@@ -135,13 +135,13 @@ int main(int argc, char** argv) {
         // a tunnel mouth. A geometry edit can move a portal, so both are rebuilt together.
         tunnels.build(data);
         mesh.build(data, &tunnels);
-        tracks.build(paths);
+        tracks.build(paths, glm::vec3(0.0f), data.loadedRadius());
         roads.build(data);
         buildings.build(data);
         platforms.build(data, paths);
         switchNet.build(data, paths);   // turnout detection + routing (all straight)
         applySwitchTypes(switchNet, loadSwitchTypes(datasetRoot)); // manual/motor overrides
-        switches.build(switchNet);
+        switches.build(switchNet, glm::vec3(0.0f), data.loadedRadius());
         graph = buildTrackGraph(data); // raw geo-points + links overlay
     } catch (const std::exception& e) {
         std::fprintf(stderr, "Failed to load terrain: %s\n", e.what());
@@ -760,13 +760,13 @@ int main(int argc, char** argv) {
         const double t0 = glfwGetTime();
         data.recarve();                       // re-cut terrain from pristine + edited track
         paths = buildTrackPaths(data);
-        tracks.build(paths);
+        tracks.build(paths, glm::vec3(0.0f), data.loadedRadius());
         // The bores first: the terrain needs them to know which of its triangles stand in
         // a tunnel mouth. A geometry edit can move a portal, so both are rebuilt together.
         tunnels.build(data);
         mesh.build(data, &tunnels);
         switchNet.build(data, paths);
-        switches.build(switchNet);
+        switches.build(switchNet, glm::vec3(0.0f), data.loadedRadius());
         std::vector<TrackVertex> sv = buildings.vertices();
         std::vector<std::uint32_t> si = buildings.indices();
         auto merge = [&](const std::vector<TrackVertex>& v,
@@ -778,7 +778,7 @@ int main(int argc, char** argv) {
         merge(platforms.vertices(), platforms.indices());
         // Derived from the line speeds, so a geometry edit can move them: rebuilt here
         // rather than once at startup.
-        speedSignMesh.build(speedSigns(paths));
+        speedSignMesh.build(speedSigns(paths, glm::vec3(0.0f), data.loadedRadius()));
         merge(speedSignMesh.vertices(), speedSignMesh.indices());
         merge(tunnels.vertices(), tunnels.indices());
         merge(switches.vertices(), switches.indices());
@@ -795,7 +795,7 @@ int main(int argc, char** argv) {
     // + platforms + switches + signals) — the tail of rebuildRenderPreview without the
     // terrain recarve — so a switch-type change or a signal-path edit updates cheaply.
     auto rebuildStructs = [&]() {
-        switches.build(switchNet);
+        switches.build(switchNet, glm::vec3(0.0f), data.loadedRadius());
         signals.build(allPlacements(), data.sceneOrigin());
         std::vector<TrackVertex> sv = buildings.vertices();
         std::vector<std::uint32_t> si = buildings.indices();
@@ -808,7 +808,7 @@ int main(int argc, char** argv) {
         merge(platforms.vertices(), platforms.indices());
         // Derived from the line speeds, so a geometry edit can move them: rebuilt here
         // rather than once at startup.
-        speedSignMesh.build(speedSigns(paths));
+        speedSignMesh.build(speedSigns(paths, glm::vec3(0.0f), data.loadedRadius()));
         merge(speedSignMesh.vertices(), speedSignMesh.indices());
         merge(tunnels.vertices(), tunnels.indices());
         merge(switches.vertices(), switches.indices());

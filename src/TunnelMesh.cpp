@@ -102,22 +102,22 @@ void TunnelMesh::build(const TerrainData& data) {
     const std::vector<glm::vec2> profOut =
         profile(kHalfW + kShell, kCrownZ + kShell, kFloorZ - kShell);
 
-    // A segment crossing a tile boundary is included in full in every tile it touches, so
-    // take one copy per trackId or every tunnel gets built two or three times over.
+    // A bore is rock shaped around the ground, and the extension that finds each rock
+    // face reads sampleGround - so only build the ones standing on terrain that is
+    // actually loaded. The network reaches the whole dataset; the ground does not.
     std::vector<std::vector<glm::vec3>> lines;
-    std::unordered_set<std::uint32_t> seen;
-    for (const Tile& t : data.tiles()) {
-        for (const TrackSegment& seg : t.tracks) {
-            if (seg.medium != 0x55 && seg.medium != 0x54) continue; // not underground
-            if (!seen.insert(seg.trackId).second) continue;
-            if (seg.pts.size() < 2) continue;
-            std::vector<glm::vec3> line;
-            for (const glm::dvec3& w : seg.pts)
-                line.emplace_back(static_cast<float>(w.x - origin.x),
-                                  static_cast<float>(w.y - origin.y),
-                                  static_cast<float>(w.z - origin.z));
-            lines.push_back(std::move(line));
-        }
+    for (const TrackSegment& seg : data.networkTracks()) {
+        if (seg.medium != 0x55 && seg.medium != 0x54) continue; // not underground
+        if (seg.pts.size() < 2) continue;
+        const glm::dvec3& mid = seg.pts[seg.pts.size() / 2];
+        float g = 0.0f;
+        if (!data.sampleGround(mid.x, mid.y, g)) continue;
+        std::vector<glm::vec3> line;
+        for (const glm::dvec3& w : seg.pts)
+            line.emplace_back(static_cast<float>(w.x - origin.x),
+                              static_cast<float>(w.y - origin.y),
+                              static_cast<float>(w.z - origin.z));
+        lines.push_back(std::move(line));
     }
 
     // One tunnel often arrives as several segments laid end to end - the alignment is cut

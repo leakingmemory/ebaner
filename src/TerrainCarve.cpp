@@ -63,7 +63,9 @@ inline std::int64_t quantKey(double x, double y) { // ~1 m quantisation for port
 }
 } // namespace
 
-void carveTrackCuttings(std::vector<Tile>& tiles, const glm::dvec3& sceneOrigin) {
+void carveTrackCuttings(std::vector<Tile*>& tiles,
+                        const std::vector<TrackSegment>& tracks,
+                        const glm::dvec3& sceneOrigin) {
     // --- Gather portal points (endpoints of underground segments) and dedup the
     // surface segments across tiles (a through-segment appears in every tile). ---
     std::unordered_set<std::int64_t> portals;
@@ -71,8 +73,8 @@ void carveTrackCuttings(std::vector<Tile>& tiles, const glm::dvec3& sceneOrigin)
     std::vector<const TrackSegment*> surface;
     std::unordered_map<int, int> mediumHist;
 
-    for (const Tile& t : tiles) {
-        for (const TrackSegment& s : t.tracks) {
+    {
+        for (const TrackSegment& s : tracks) {
             mediumHist[s.medium]++;
             if (s.pts.size() < 2) continue;
             if (isUnderground(s.medium)) {
@@ -101,6 +103,12 @@ void carveTrackCuttings(std::vector<Tile>& tiles, const glm::dvec3& sceneOrigin)
         const bool lastPortal =
             portals.count(quantKey(s->pts[n - 1].x, s->pts[n - 1].y)) > 0;
         for (std::size_t k = 0; k + 1 < n; ++k) {
+            // A few imported vertices carry a NODATA sentinel for z instead of a height.
+            // Carving down to one digs a crater kilometres deep, which went unnoticed
+            // while only the ground around Bodo was ever loaded.
+            if (isNodata(static_cast<float>(s->pts[k].z)) ||
+                isNodata(static_cast<float>(s->pts[k + 1].z)))
+                continue;
             Edge e;
             e.a = {s->pts[k].x, s->pts[k].y};
             e.b = {s->pts[k + 1].x, s->pts[k + 1].y};
@@ -128,7 +136,8 @@ void carveTrackCuttings(std::vector<Tile>& tiles, const glm::dvec3& sceneOrigin)
     float deepest = 0.0f;
     glm::dvec3 deepestAt{0.0};
 
-    for (Tile& t : tiles) {
+    for (Tile* tp : tiles) {
+        Tile& t = *tp;
         if (t.heights.empty()) continue;
         const double res = t.resolution, ext = t.extent, ox = t.originX, oy = t.originY;
         for (int row = 0; row < P; ++row) {

@@ -34,51 +34,44 @@ std::string overlayFile(const std::string& root) {
     return root + "/overlay/track-edits.txt";
 }
 
-// Nearest track-segment endpoint to a world point across all tiles; returns the
-// endpoint, its track type, and the owning tile index, or false if none within tol.
-bool nearestEndpoint(const std::vector<Tile>& tiles, const glm::dvec3& q, double tol,
-                     glm::dvec3& out, std::uint8_t& trackType, int& tileIdx) {
+// Nearest track-segment endpoint to a world point; returns the endpoint and its track
+// type, or false if none within tol.
+bool nearestEndpoint(const std::vector<TrackSegment>& segs, const glm::dvec3& q,
+                     double tol, glm::dvec3& out, std::uint8_t& trackType) {
     double best = tol;
     bool found = false;
-    for (int ti = 0; ti < static_cast<int>(tiles.size()); ++ti) {
-        for (const TrackSegment& s : tiles[ti].tracks) {
-            if (s.pts.size() < 2) continue;
-            for (const glm::dvec3& e : {s.pts.front(), s.pts.back()}) {
-                const double d = std::hypot(e.x - q.x, e.y - q.y);
-                if (d < best) {
-                    best = d;
-                    out = e;
-                    trackType = s.trackType;
-                    tileIdx = ti;
-                    found = true;
-                }
+    for (const TrackSegment& s : segs) {
+        if (s.pts.size() < 2) continue;
+        for (const glm::dvec3& e : {s.pts.front(), s.pts.back()}) {
+            const double d = std::hypot(e.x - q.x, e.y - q.y);
+            if (d < best) {
+                best = d;
+                out = e;
+                trackType = s.trackType;
+                found = true;
             }
         }
     }
     return found;
 }
 
-// Nearest track *vertex* (any point, not just endpoints) to a world (x,y), across
-// all tiles. Returns tile/segment/vertex indices to mutate, or false if none in tol.
-// If trackId != 0, only vertices of that track are considered, so an override can
-// target one of several coincident siding points.
-bool nearestVertex(const std::vector<Tile>& tiles, double qx, double qy, double tol,
-                   int& tileIdx, int& segIdx, int& vertIdx,
-                   std::uint32_t trackId = 0) {
+// Nearest track *vertex* (any point, not just endpoints) to a world (x,y). Returns
+// segment/vertex indices to mutate, or false if none in tol. If trackId != 0, only
+// vertices of that track are considered, so an override can target one of several
+// coincident siding points.
+bool nearestVertex(const std::vector<TrackSegment>& segs, double qx, double qy,
+                   double tol, int& segIdx, int& vertIdx, std::uint32_t trackId = 0) {
     double best = tol;
     bool found = false;
-    for (int ti = 0; ti < static_cast<int>(tiles.size()); ++ti) {
-        const std::vector<TrackSegment>& segs = tiles[ti].tracks;
-        for (int si = 0; si < static_cast<int>(segs.size()); ++si) {
-            if (trackId != 0 && segs[si].trackId != trackId) continue;
-            const std::vector<glm::dvec3>& p = segs[si].pts;
-            for (int vi = 0; vi < static_cast<int>(p.size()); ++vi) {
-                const double d = std::hypot(p[vi].x - qx, p[vi].y - qy);
-                if (d < best) {
-                    best = d;
-                    tileIdx = ti; segIdx = si; vertIdx = vi;
-                    found = true;
-                }
+    for (int si = 0; si < static_cast<int>(segs.size()); ++si) {
+        if (trackId != 0 && segs[si].trackId != trackId) continue;
+        const std::vector<glm::dvec3>& p = segs[si].pts;
+        for (int vi = 0; vi < static_cast<int>(p.size()); ++vi) {
+            const double d = std::hypot(p[vi].x - qx, p[vi].y - qy);
+            if (d < best) {
+                best = d;
+                segIdx = si; vertIdx = vi;
+                found = true;
             }
         }
     }
@@ -118,8 +111,9 @@ std::vector<TrackEdit> loadTrackOverlay(const std::string& datasetRoot) {
     return edits;
 }
 
-void applyTrackOverlay(std::vector<Tile>& tiles, const std::vector<TrackEdit>& edits) {
-    if (tiles.empty() || edits.empty()) return;
+void applyTrackOverlay(std::vector<TrackSegment>& segs,
+                       const std::vector<TrackEdit>& edits) {
+    if (edits.empty()) return;
     constexpr double kVertexTol = 2.0; // m; snap an elev override to a real vertex
     int elev = 0, links = 0, rails = 0;
 
@@ -136,24 +130,24 @@ void applyTrackOverlay(std::vector<Tile>& tiles, const std::vector<TrackEdit>& e
         r.trackType = 1;  // siding
         r.medium = 0x20;  // surface (drawn as a real rail, not carved)
         r.pts = {edits[i].a, edits[i].b};
-        tiles[0].tracks.push_back(std::move(r));
+        segs.push_back(std::move(r));
         ++rails;
     }
     // Elevation overrides first, so a link's endpoint reflects any regraded z.
     for (const TrackEdit& e : edits) {
         if (e.kind != TrackEdit::Elev) continue;
-        int ti = 0, si = 0, vi = 0;
-        if (nearestVertex(tiles, e.a.x, e.a.y, kVertexTol, ti, si, vi, e.track)) {
-            tiles[ti].tracks[si].pts[vi].z = e.a.z;
+        int si = 0, vi = 0;
+        if (nearestVertex(segs, e.a.x, e.a.y, kVertexTol, si, vi, e.track)) {
+            segs[si].pts[vi].z = e.a.z;
             ++elev;
         }
     }
     // Vertex moves (e.g. snapping a siding end onto the track it crosses).
     for (const TrackEdit& e : edits) {
         if (e.kind != TrackEdit::Move) continue;
-        int ti = 0, si = 0, vi = 0;
-        if (nearestVertex(tiles, e.a.x, e.a.y, kVertexTol, ti, si, vi, e.track)) {
-            tiles[ti].tracks[si].pts[vi] = e.b;
+        int si = 0, vi = 0;
+        if (nearestVertex(segs, e.a.x, e.a.y, kVertexTol, si, vi, e.track)) {
+            segs[si].pts[vi] = e.b;
             ++moves;
         }
     }
@@ -162,9 +156,8 @@ void applyTrackOverlay(std::vector<Tile>& tiles, const std::vector<TrackEdit>& e
         if (edits[i].kind != TrackEdit::Link) continue;
         glm::dvec3 ea, eb;
         std::uint8_t ta = 0, tb = 0;
-        int tia = 0, tib = 0;
-        if (!nearestEndpoint(tiles, edits[i].a, kSnapTol, ea, ta, tia)) continue;
-        if (!nearestEndpoint(tiles, edits[i].b, kSnapTol, eb, tb, tib)) continue;
+        if (!nearestEndpoint(segs, edits[i].a, kSnapTol, ea, ta)) continue;
+        if (!nearestEndpoint(segs, edits[i].b, kSnapTol, eb, tb)) continue;
         if (std::hypot(ea.x - eb.x, ea.y - eb.y) < 1.0) continue; // same point
 
         // A synthetic connector segment joining the two ends. medium = tunnel so the
@@ -175,7 +168,7 @@ void applyTrackOverlay(std::vector<Tile>& tiles, const std::vector<TrackEdit>& e
         c.trackType = ta;      // both ends share type (else the join won't chain)
         c.medium = 0x55;       // tunnel
         c.pts = {ea, eb};
-        tiles[tia].tracks.push_back(std::move(c));
+        segs.push_back(std::move(c));
         ++links;
     }
     if (elev > 0 || links > 0 || moves > 0 || rails > 0)

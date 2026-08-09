@@ -15,6 +15,9 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# So clangd can resolve includes outside src/ (the tests) without guessing.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
@@ -84,6 +87,7 @@ add_library(ebaner_engine STATIC
     src/TrackGraph.cpp
     src/TrackOverlay.cpp
     src/TrackCircuits.cpp
+    src/Streaming.cpp
     src/SignalPaths.cpp
     src/SignalMesh.cpp
     src/SpeedLimits.cpp
@@ -137,3 +141,19 @@ add_executable(ebaner-trackedit
     src/trackedit_main.cpp)
 add_dependencies(ebaner-trackedit shaders)
 target_link_libraries(ebaner-trackedit PRIVATE ebaner_engine)
+
+# ---- tests ----------------------------------------------------------------
+# They run against a real terrainmapper export, since everything here is shaped by
+# what the data is actually like; there is no synthetic dataset to check against.
+# A test skips (exit 77) rather than fails when the export is not there, so a build
+# without one is still clean.
+set(EBANER_TEST_DATASET "${CMAKE_SOURCE_DIR}/../norway-rails"
+    CACHE PATH "terrainmapper export the tests run against")
+
+enable_testing()
+add_executable(TrackEditTest tests/TrackEditTest.cpp)
+add_dependencies(TrackEditTest shaders)
+target_link_libraries(TrackEditTest PRIVATE ebaner_engine)
+target_include_directories(TrackEditTest PRIVATE src)
+add_test(NAME track-edit COMMAND TrackEditTest "${EBANER_TEST_DATASET}")
+set_tests_properties(track-edit PROPERTIES SKIP_RETURN_CODE 77)

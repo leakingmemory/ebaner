@@ -53,6 +53,7 @@ bool nearestRailHeadZ(const glm::vec2& pt, const std::vector<TrackPath>& paths,
     float bestD2 = kTrackSearchRadius * kTrackSearchRadius;
     bool found = false;
     for (const TrackPath& path : paths) {
+        if (!path.nearXY(pt, kTrackSearchRadius)) continue;
         for (float s = 0.0f; s <= path.length(); s += 2.0f) {
             const glm::vec3 c = path.poseAt(s).pos;
             const float dx = c.x - pt.x, dy = c.y - pt.y;
@@ -72,12 +73,14 @@ bool nearestRailHeadZ(const glm::vec2& pt, const std::vector<TrackPath>& paths,
 bool trackWithin(const glm::vec2& pt, const std::vector<TrackPath>& paths,
                  float radius) {
     const float r2 = radius * radius;
-    for (const TrackPath& path : paths)
+    for (const TrackPath& path : paths) {
+        if (!path.nearXY(pt, radius)) continue;
         for (float s = 0.0f; s <= path.length(); s += 2.0f) {
             const glm::vec3 c = path.poseAt(s).pos;
             const float dx = c.x - pt.x, dy = c.y - pt.y;
             if (dx * dx + dy * dy < r2) return true;
         }
+    }
     return false;
 }
 
@@ -104,11 +107,13 @@ void PlatformMesh::build(const TerrainData& data,
 
     std::unordered_set<std::uint64_t> seen;
     std::vector<const PlatformSegment*> uniq;
-    for (const Tile& t : data.tiles())
+    for (const auto& [tileKey, tilePtr] : data.tiles()) {
+        const Tile& t = *tilePtr;
         for (const PlatformSegment& p : t.platforms) {
             if (p.footprint.size() < 3) continue;
             if (seen.insert(hashPlatform(p)).second) uniq.push_back(&p);
         }
+    }
 
     // Quad with an outward normal (flipped to face away from `inside`).
     auto emitQuad = [&](const glm::vec3& p0, const glm::vec3& p1,

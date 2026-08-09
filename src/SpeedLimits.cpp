@@ -54,9 +54,11 @@ float warningDistance(int fromKmh, int toKmh) {
     return kWarnBands[std::size(kWarnBands) - 1]; // the longest band is also the cap
 }
 
-std::vector<SpeedSign> speedSigns(const std::vector<TrackPath>& paths) {
+std::vector<SpeedSign> speedSigns(const std::vector<TrackPath>& paths,
+                                  const glm::vec3& centre, float radius) {
     std::vector<SpeedSign> out;
     for (const TrackPath& p : paths) {
+        if (radius > 0.0f && !p.nearXY(glm::vec2(centre), radius)) continue;
         for (int dir = 1; dir >= -1; dir -= 2) {
             const std::vector<SpeedStretch> st = resolveSpeeds(p, dir);
             const float d = static_cast<float>(dir);
@@ -113,5 +115,15 @@ std::vector<SpeedSign> speedSigns(const std::vector<TrackPath>& paths) {
                                  return s.kind == SpeedSignKind::ReductionMarker && s.kmh < 0;
                              }),
               out.end());
+    // Clip by where each sign stands, not by which path it belongs to: the main line is
+    // one path running the length of the country, so a path that comes near here still
+    // has limit changes hundreds of kilometres away, and each would post a sign.
+    if (radius > 0.0f)
+        out.erase(std::remove_if(out.begin(), out.end(),
+                                 [&](const SpeedSign& s) {
+                                     return std::hypot(s.pos.x - centre.x,
+                                                       s.pos.y - centre.y) > radius;
+                                 }),
+                  out.end());
     return out;
 }

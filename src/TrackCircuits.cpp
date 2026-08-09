@@ -13,6 +13,7 @@
 
 #include "TrackCircuits.h"
 
+#include "SpatialGrid.h"
 #include "TrackOverlay.h" // kRailIdBase (editor-added slip connectors)
 
 #include <algorithm>
@@ -193,6 +194,34 @@ glm::dvec2 endDir(const TrackPoly& t, bool back) {
 
 TrackJunctions trackJunctions(const std::vector<TrackPoly>& polys) {
     TrackJunctions conns;
+
+    // Both searches below ask "which track is at this point", once per track end. Over a
+    // station that is nothing; over the whole line it is 6k ends against 6k polylines,
+    // which is where the junction graph stopped being buildable. Index the ends and the
+    // lines by cell and ask only the neighbourhood.
+    std::unordered_map<std::int64_t, std::vector<std::size_t>> tipGrid, lineGrid;
+    for (std::size_t i = 0; i < polys.size(); ++i) {
+        const TrackPoly& P = polys[i];
+        if (P.pts.size() < 2) continue;
+        tipGrid[grid::key(P.pts.front().x, P.pts.front().y)].push_back(i);
+        tipGrid[grid::key(P.pts.back().x, P.pts.back().y)].push_back(i);
+        for (std::size_t k = 0; k + 1 < P.pts.size(); ++k)
+            grid::forCellsAlong(P.pts[k].x, P.pts[k].y, P.pts[k + 1].x, P.pts[k + 1].y,
+                                [&](std::int64_t c) { lineGrid[c].push_back(i); });
+    }
+    // Scratch reused across ends: the polys a cell query turned up, deduplicated.
+    std::vector<std::size_t> hits;
+    auto gather = [&](const std::unordered_map<std::int64_t, std::vector<std::size_t>>& g,
+                      double x, double y, double reach) {
+        hits.clear();
+        grid::forCellsNear(x, y, reach, [&](std::int64_t c) {
+            const auto it = g.find(c);
+            if (it != g.end()) hits.insert(hits.end(), it->second.begin(), it->second.end());
+        });
+        std::sort(hits.begin(), hits.end());
+        hits.erase(std::unique(hits.begin(), hits.end()), hits.end());
+    };
+
     for (const TrackPoly& A : polys) {
         if (A.pts.size() < 2) continue;
         for (int endBit = 0; endBit < 2; ++endBit) {
@@ -205,7 +234,9 @@ TrackJunctions trackJunctions(const std::vector<TrackPoly>& polys) {
             // track - otherwise routes could be built straight across the diamond.
             const glm::dvec2 dirA = endDir(A, endBit != 0);
             bool continues = false;
-            for (const TrackPoly& C : polys) {
+            gather(tipGrid, e.x, e.y, kJoinTol);
+            for (const std::size_t ci : hits) {
+                const TrackPoly& C = polys[ci];
                 if (C.id == A.id || C.pts.size() < 2) continue;
                 for (int cb = 0; cb < 2 && !continues; ++cb) {
                     const glm::dvec3& ce = cb ? C.pts.back() : C.pts.front();
@@ -223,7 +254,10 @@ TrackJunctions trackJunctions(const std::vector<TrackPoly>& polys) {
             struct Cand { double d, frac; std::uint32_t id; };
             std::vector<Cand> cand;
             double nearest = 1e30;
-            for (const TrackPoly& B : polys) {
+            // A cell of reach: forCellsAlong can miss a cell a line only clips.
+            gather(lineGrid, e.x, e.y, grid::kCell);
+            for (const std::size_t bi : hits) {
+                const TrackPoly& B = polys[bi];
                 if (B.id == A.id || B.pts.size() < 2) continue;
                 double bFrac, d;
                 projFrac(B.pts, glm::dvec2(e.x, e.y), bFrac, d);

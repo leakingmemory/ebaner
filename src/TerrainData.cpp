@@ -25,6 +25,7 @@
 #include <fstream>
 #include <limits>
 #include <stdexcept>
+#include <unordered_set>
 
 namespace fs = std::filesystem;
 
@@ -45,18 +46,146 @@ std::string tileDir(const std::string& root, int lod, int col, int row) {
 
 } // namespace
 
+double TerrainData::lodResolution(int lod) {
+    return kLodResolution[std::clamp(lod, 0, 3)];
+}
+
 void TerrainData::applyTrackEdits(const std::vector<TrackEdit>& edits) {
-    applyTrackOverlay(tiles_, edits);
+    applyTrackOverlay(networkTracks_, edits);
+}
+
+// The loaded tiles as a plain list, for the passes that walk all of them.
+std::vector<Tile*> TerrainData::tileList() {
+    std::vector<Tile*> out;
+    out.reserve(tiles_.size());
+    for (const auto& [key, t] : tiles_) out.push_back(t.get());
+    return out;
 }
 
 void TerrainData::recarve() {
     // Reset each tile to its pre-carve height, then carve again with the current
     // (edited) track geometry — so cuttings/embankments reflect edits without
     // stacking on the previous carve. Mirrors the load()-time carve guard.
-    for (std::size_t i = 0; i < tiles_.size() && i < pristineHeights_.size(); ++i)
-        tiles_[i].heights = pristineHeights_[i];
-    if (std::getenv("EBANER_NOCARVE") == nullptr)
-        carveTrackCuttings(tiles_, sceneOrigin_);
+    for (const auto& [key, t] : tiles_)
+        if (!t->pristine.empty()) t->heights = t->pristine;
+    if (std::getenv("EBANER_NOCARVE") == nullptr) {
+        std::vector<Tile*> list = tileList();
+        carveTrackCuttings(list, networkTracks_, sceneOrigin_);
+    }
+}
+
+bool TerrainData::loadTile(int lod, int col, int row) {
+    const double res = kLodResolution[lod];
+    const double extent = PIXELS * res;
+    const std::string dir = tileDir(root_, lod, col, row);
+    if (!fs::exists(dir)) return false;
+
+    auto t = std::make_unique<Tile>();
+    t->lod = lod;
+    t->col = col;
+    t->row = row;
+    t->resolution = res;
+    t->extent = extent;
+    t->originX = static_cast<double>(col) * extent;
+    t->originY = static_cast<double>(row) * extent;
+
+    if (!loadHeightmap(dir + "/terrain.hm32", t->heights)) return false;
+
+    // Track the elevation range for the colour ramp.
+    for (float h : t->heights) {
+        if (h <= NODATA + 1.0f) continue;
+        minElev_ = std::min(minElev_, h);
+        maxElev_ = std::max(maxElev_, h);
+    }
+
+    // Optional per-tile land cover (present only for AR50 exports).
+    if (loadLandCover(dir + "/landcover.u8", t->landcover)) hasLandCover_ = true;
+
+    // Road + building geometry intersecting this tile. The railway is not read here: it
+    // is loaded whole, once, by loadNetworkTracks.
+    parseRoadsBin(dir + "/roads.bin", t->roads);
+    parseBuildingsBin(dir + "/buildings.bin", t->buildings);
+    parsePlatformsBin(dir + "/platforms.bin", t->platforms);
+
+    // The ground as found, to re-carve from after an edit.
+    t->pristine = t->heights;
+
+    tiles_[tileKey(lod, col, row)] = std::move(t);
+    return true;
+}
+
+bool TerrainData::updateWindow(double centreX, double centreY) {
+    if (root_.empty()) return false;
+    windowCentre_ = glm::dvec2(centreX, centreY);
+
+    // Drop first, so a long run does not hold both windows at once. The evict radius is
+    // one rebuild step wider than the load radius, and no more: a tile on the boundary
+    // would otherwise be read and dropped and read again as the camera drifts over it,
+    // while a generous margin keeps a second window's worth of terrain resident for
+    // nothing (at 20 km loaded, even a 35% margin is nearly twice the ground).
+    constexpr double kEvictMarginM = 2500.0;
+    const double keep = halfWindow_ + kEvictMarginM;
+    std::vector<std::uint64_t> gone;
+    for (const auto& [key, t] : tiles_) {
+        const double tx = t->originX + t->extent * 0.5;
+        const double ty = t->originY + t->extent * 0.5;
+        if (std::hypot(tx - centreX, ty - centreY) > keep + t->extent * 0.5)
+            gone.push_back(key);
+    }
+    for (const std::uint64_t key : gone) tiles_.erase(key);
+
+    // Read whatever is now in range. Same rule as load(): every LOD whose footprint
+    // falls in the window, finest winning wherever it exists.
+    std::vector<Tile*> fresh;
+    for (int lod = 0; lod < 4; ++lod) {
+        const double extent = PIXELS * kLodResolution[lod];
+        const int colMin = static_cast<int>(std::floor((centreX - halfWindow_) / extent));
+        const int colMax = static_cast<int>(std::floor((centreX + halfWindow_) / extent));
+        const int rowMin = static_cast<int>(std::floor((centreY - halfWindow_) / extent));
+        const int rowMax = static_cast<int>(std::floor((centreY + halfWindow_) / extent));
+        for (int col = colMin; col <= colMax; ++col)
+            for (int row = rowMin; row <= rowMax; ++row) {
+                const std::uint64_t key = tileKey(lod, col, row);
+                if (tiles_.count(key)) continue;
+                if (loadTile(lod, col, row)) fresh.push_back(tiles_[key].get());
+            }
+    }
+
+    if (!fresh.empty() && std::getenv("EBANER_NOCARVE") == nullptr) {
+        // Carve only what just arrived, and only against the track near it. The carve
+        // buckets its edges, but building that index over the whole country's rails for
+        // a couple of tiles is most of the cost - so hand it the neighbourhood.
+        double x0 = 1e30, y0 = 1e30, x1 = -1e30, y1 = -1e30;
+        for (const Tile* t : fresh) {
+            x0 = std::min(x0, t->originX);
+            y0 = std::min(y0, t->originY);
+            x1 = std::max(x1, t->originX + t->extent);
+            y1 = std::max(y1, t->originY + t->extent);
+        }
+        constexpr double kMargin = 500.0; // a cutting is shaped by track just outside
+        std::vector<TrackSegment> near;
+        for (const TrackSegment& s : networkTracks_) {
+            bool touches = false;
+            for (const glm::dvec3& p : s.pts)
+                if (p.x >= x0 - kMargin && p.x <= x1 + kMargin && p.y >= y0 - kMargin &&
+                    p.y <= y1 + kMargin) {
+                    touches = true;
+                    break;
+                }
+            if (touches) near.push_back(s);
+        }
+        carveTrackCuttings(fresh, near, sceneOrigin_);
+    }
+
+    if (!fresh.empty() || !gone.empty()) {
+        std::size_t samples = 0;
+        for (const auto& [key, t] : tiles_) samples += t->heights.size();
+        std::printf("[TerrainData] window at (%.0f, %.0f): +%zu -%zu tiles, %zu resident "
+                    "(%zu samples)\n",
+                    centreX, centreY, fresh.size(), gone.size(), tiles_.size(), samples);
+        std::fflush(stdout);
+    }
+    return !fresh.empty() || !gone.empty();
 }
 
 void TerrainData::load(const std::string& datasetRoot, double halfWindow) {
@@ -64,12 +193,15 @@ void TerrainData::load(const std::string& datasetRoot, double halfWindow) {
         throw std::runtime_error("dataset root not found: " + datasetRoot);
     }
 
+    root_ = datasetRoot;
     resolveStartPoint(datasetRoot);
+    halfWindow_ = halfWindow;
     sceneOrigin_ = startWorld_;
     startPos_ = glm::vec3(0.0f); // camera start is the scene origin itself
 
     const double cx = startWorld_.x;
     const double cy = startWorld_.y;
+    windowCentre_ = glm::dvec2(cx, cy);
 
     // Because LOD tiles don't overlap in coverage, loading every existing tile
     // whose footprint falls inside the window yields a continuous surface.
@@ -85,61 +217,27 @@ void TerrainData::load(const std::string& datasetRoot, double halfWindow) {
 
         for (int col = colMin; col <= colMax; ++col) {
             for (int row = rowMin; row <= rowMax; ++row) {
-                const std::string dir = tileDir(datasetRoot, lod, col, row);
-                if (!fs::exists(dir)) continue;
-
-                Tile t;
-                t.lod = lod;
-                t.col = col;
-                t.row = row;
-                t.resolution = res;
-                t.extent = extent;
-                t.originX = static_cast<double>(col) * extent;
-                t.originY = static_cast<double>(row) * extent;
-
-                if (!loadHeightmap(dir + "/terrain.hm32", t.heights)) continue;
-
-                // Track the elevation range for the colour ramp.
-                for (float h : t.heights) {
-                    if (h <= NODATA + 1.0f) continue;
-                    minElev_ = std::min(minElev_, h);
-                    maxElev_ = std::max(maxElev_, h);
-                }
-
-                // Optional per-tile land cover (present only for AR50 exports).
-                if (loadLandCover(dir + "/landcover.u8", t.landcover))
-                    hasLandCover_ = true;
-
-                // Railway track + road + building geometry intersecting this tile.
-                parseTracksBin(dir + "/tracks.bin", t.tracks);
-                parseRoadsBin(dir + "/roads.bin", t.roads);
-                parseBuildingsBin(dir + "/buildings.bin", t.buildings);
-                parsePlatformsBin(dir + "/platforms.bin", t.platforms);
-
-                totalSamples += t.heights.size();
-                tiles_.push_back(std::move(t));
+                if (loadTile(lod, col, row))
+                    totalSamples += tiles_[tileKey(lod, col, row)]->heights.size();
             }
         }
     }
 
-    // Apply the manual track-edit overlay (drop-in link fixes) over the generated
-    // tiles before anything downstream reads them (carve, path building).
-    if (std::getenv("EBANER_NOOVERLAY") == nullptr)
-        applyTrackOverlay(tiles_, loadTrackOverlay(datasetRoot));
+    loadNetworkTracks(datasetRoot);
 
-    // Keep a pristine copy of every tile's heightfield before carving, so the editor
-    // can re-carve from it after an edit (recarve()) instead of stacking cuttings.
-    pristineHeights_.clear();
-    pristineHeights_.reserve(tiles_.size());
-    for (const Tile& t : tiles_) pristineHeights_.push_back(t.heights);
+    // Apply the manual track-edit overlay (drop-in link fixes) before anything
+    // downstream reads the geometry (carve, path building).
+    if (std::getenv("EBANER_NOOVERLAY") == nullptr)
+        applyTrackEdits(loadTrackOverlay(datasetRoot));
 
     // Carve trenches into the terrain where surface track falls below it, so the
     // rails/ballast sit in a cutting instead of being buried. Re-derive the
     // elevation range afterwards from the carved heights. Guarded for comparison.
     if (std::getenv("EBANER_NOCARVE") == nullptr) {
-        carveTrackCuttings(tiles_, sceneOrigin_);
-        for (const Tile& t : tiles_)
-            for (float h : t.heights) {
+        std::vector<Tile*> list = tileList();
+        carveTrackCuttings(list, networkTracks_, sceneOrigin_);
+        for (const Tile* t : list)
+            for (float h : t->heights) {
                 if (h <= NODATA + 1.0f) continue;
                 minElev_ = std::min(minElev_, h);
                 maxElev_ = std::max(maxElev_, h);
@@ -164,25 +262,97 @@ void TerrainData::load(const std::string& datasetRoot, double halfWindow) {
 bool TerrainData::sampleGround(double worldX, double worldY,
                                float& elevation) const {
     bool found = false;
-    double bestRes = 1e30;
-    for (const Tile& t : tiles_) {
-        if (t.heights.empty()) continue;
-        if (worldX < t.originX || worldX >= t.originX + t.extent ||
-            worldY < t.originY || worldY >= t.originY + t.extent)
-            continue;
-        if (t.resolution >= bestRes) continue; // prefer the finest LOD
+    // Finest LOD first, and straight to the tile that covers the point. This used to
+    // scan every loaded tile, which is fine for a window and quadratic for a world:
+    // the carve, the bores and the platforms all ask it per sample.
+    for (int lod = 0; lod < 4 && !found; ++lod) {
+        const double extent = PIXELS * kLodResolution[lod];
+        const Tile* t = tileAt(lod, static_cast<int>(std::floor(worldX / extent)),
+                               static_cast<int>(std::floor(worldY / extent)));
+        if (t == nullptr || t->heights.empty()) continue;
         // Row 0 is the north edge (max Y); columns run west->east.
-        int col = static_cast<int>((worldX - t.originX) / t.resolution);
-        int row = static_cast<int>((t.originY + t.extent - worldY) / t.resolution);
+        int col = static_cast<int>((worldX - t->originX) / t->resolution);
+        int row = static_cast<int>((t->originY + t->extent - worldY) / t->resolution);
         col = std::clamp(col, 0, PIXELS - 1);
         row = std::clamp(row, 0, PIXELS - 1);
-        const float h = t.heights[static_cast<std::size_t>(row) * PIXELS + col];
+        const float h = t->heights[static_cast<std::size_t>(row) * PIXELS + col];
         if (h <= NODATA) continue; // no data here in this tile
         elevation = h;
-        bestRes = t.resolution;
         found = true;
     }
     return found;
+}
+
+void TerrainData::loadNetworkTracks(const std::string& datasetRoot) {
+    networkTracks_.clear();
+    std::unordered_set<std::uint32_t> seen;
+    std::size_t files = 0;
+
+    // Finest LOD first, so the copy kept per trackId is the most detailed one. A
+    // segment crossing tiles is written in full into every tile it touches, so one
+    // copy per id is the whole segment - the same dedup buildTrackPaths does, just
+    // done once here instead of over and over downstream.
+    for (int lod = 0; lod < 4; ++lod) {
+        const std::string lodDir = datasetRoot + "/tiles/" + std::to_string(lod);
+        std::error_code ec;
+        if (!fs::is_directory(lodDir, ec)) continue;
+        for (const fs::directory_entry& e : fs::directory_iterator(lodDir, ec)) {
+            if (!e.is_directory()) continue;
+            std::vector<TrackSegment> segs;
+            if (!parseTracksBin(e.path().string() + "/tracks.bin", segs)) continue;
+            ++files;
+            for (TrackSegment& s : segs) {
+                if (s.pts.size() < 2) continue;
+                if (!seen.insert(s.trackId).second) continue;
+                networkTracks_.push_back(std::move(s));
+            }
+        }
+    }
+
+    // Repair missing elevations before anything downstream sees them. A few hundred
+    // imported vertices carry the NODATA sentinel in z instead of a height, and every
+    // consumer reads z as a real number: the carve digs a crater kilometres deep, and
+    // TrackPath measures arc length in 3-D, so one such vertex adds ~20 km to a path's
+    // length and wrecks every position along it. Interpolating between the valid
+    // neighbours either side restores a sane grade; a run at the end takes the nearest
+    // valid height.
+    std::size_t repaired = 0, hopeless = 0;
+    for (TrackSegment& sg : networkTracks_) {
+        const std::size_t n = sg.pts.size();
+        auto bad = [&](std::size_t i) { return sg.pts[i].z <= NODATA + 1.0; };
+        std::size_t firstGood = n;
+        for (std::size_t i = 0; i < n; ++i)
+            if (!bad(i)) { firstGood = i; break; }
+        if (firstGood == n) { // nothing to interpolate from
+            for (glm::dvec3& q : sg.pts) q.z = 0.0;
+            hopeless += n;
+            continue;
+        }
+        for (std::size_t i = 0; i < n; ++i) {
+            if (!bad(i)) continue;
+            ++repaired;
+            std::size_t lo = n, hi = n;
+            for (std::size_t j = i; j-- > 0;)
+                if (!bad(j)) { lo = j; break; }
+            for (std::size_t j = i + 1; j < n; ++j)
+                if (!bad(j)) { hi = j; break; }
+            if (lo < n && hi < n) {
+                const double f = static_cast<double>(i - lo) / static_cast<double>(hi - lo);
+                sg.pts[i].z = sg.pts[lo].z + (sg.pts[hi].z - sg.pts[lo].z) * f;
+            } else {
+                sg.pts[i].z = sg.pts[lo < n ? lo : hi].z;
+            }
+        }
+    }
+    if (repaired > 0 || hopeless > 0)
+        std::printf("[TerrainData] repaired %zu track vertices with no elevation"
+                    "%s\n", repaired + hopeless,
+                    hopeless ? " (some whole segments had none)" : "");
+
+    std::size_t pts = 0;
+    for (const TrackSegment& s : networkTracks_) pts += s.pts.size();
+    std::printf("[TerrainData] network: %zu tracks (%zu points) from %zu tiles\n",
+                networkTracks_.size(), pts, files);
 }
 
 bool TerrainData::parseTracksBin(const std::string& path,

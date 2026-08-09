@@ -66,11 +66,13 @@ void RoadMesh::build(const TerrainData& data) {
     // Collect unique roads across tiles (dedup by geometry).
     std::unordered_set<std::uint64_t> seen;
     std::vector<const RoadSegment*> uniq;
-    for (const Tile& t : data.tiles())
+    for (const auto& [tileKey, tilePtr] : data.tiles()) {
+        const Tile& t = *tilePtr;
         for (const RoadSegment& r : t.roads) {
             if (r.pts.size() < 2) continue;
             if (seen.insert(hashRoad(r)).second) uniq.push_back(&r);
         }
+    }
 
     // Flat mitred ribbon for one road centreline (scene-relative, given lift).
     auto emitRibbon = [&](const RoadSegment& r, const RoadStyle& st) {

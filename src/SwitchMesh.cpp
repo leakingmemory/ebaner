@@ -27,7 +27,8 @@ const glm::vec3 kTarget{0.90f, 0.90f, 0.88f};
 const glm::vec3 kDark{0.12f, 0.12f, 0.13f};
 } // namespace
 
-void SwitchMesh::build(const SwitchNetwork& net) {
+void SwitchMesh::build(const SwitchNetwork& net, const glm::vec3& centre,
+                       float radius) {
     vertices_.clear();
     indices_.clear();
     const glm::dvec3 origin = net.sceneOrigin();
@@ -106,6 +107,10 @@ void SwitchMesh::build(const SwitchNetwork& net) {
     for (std::size_t idx = 0; idx < turnouts.size(); ++idx) {
         const Turnout& t = turnouts[idx];
         if (t.mainPath < 0) continue; // inert turnout (a crossing) — no working switch
+        if (radius > 0.0f &&
+            std::hypot(static_cast<float>(t.world.x - origin.x) - centre.x,
+                       static_cast<float>(t.world.y - origin.y) - centre.y) > radius)
+            continue;
         ++stands;
         const SwitchState st = net.state(static_cast<int>(idx));
         const SwitchType ty = net.type(static_cast<int>(idx));

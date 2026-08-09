@@ -15,7 +15,9 @@
 
 #include <glm/glm.hpp>
 #include <cstdint>
+#include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 struct TrackEdit;
@@ -60,8 +62,10 @@ struct PlatformSegment {
     std::vector<glm::dvec2> footprint; // exterior ring, not closed
 };
 
-// One loaded terrain tile: a 256x256 grid of float32 elevations plus the
-// geometry needed to place it in the world (EPSG:25833, metres).
+// One loaded terrain tile: a 256x256 grid of float32 elevations plus the geometry
+// needed to place it in the world (EPSG:25833, metres). Tiles carry the ground and
+// what is scattered on it; the railway is not here but in TerrainData::networkTracks,
+// which covers the whole dataset rather than the loaded window.
 struct Tile {
     int lod = 0;
     int col = 0;
@@ -71,8 +75,10 @@ struct Tile {
     double resolution = 0.0; // metres per pixel
     double extent = 0.0;     // tile size in metres (256 * resolution)
     std::vector<float> heights;      // 256*256, row 0 = north edge
+    // The heights as loaded, before carveTrackCuttings. Kept per tile so a re-carve
+    // after an edit starts from the ground rather than stacking on the last cutting.
+    std::vector<float> pristine;
     std::vector<std::uint8_t> landcover; // 256*256 AR50 artype, empty if absent
-    std::vector<TrackSegment> tracks;    // railway segments intersecting this tile
     std::vector<RoadSegment> roads;      // road segments intersecting this tile
     std::vector<BuildingSegment> buildings; // buildings intersecting this tile
     std::vector<PlatformSegment> platforms; // platforms intersecting this tile
@@ -89,9 +95,40 @@ public:
     // Throws std::runtime_error on fatal problems (missing dataset root).
     void load(const std::string& datasetRoot, double halfWindowMetres = 20000.0);
 
-    const std::vector<Tile>& tiles() const { return tiles_; }
+    // Loaded tiles, keyed by (lod, col, row). Node-based and held by pointer because
+    // tiles come and go while the program runs and other code holds references into
+    // them across a load: a vector would rehome every tile the moment one more arrived.
+    using TileMap = std::unordered_map<std::uint64_t, std::unique_ptr<Tile>>;
+    static std::uint64_t tileKey(int lod, int col, int row) {
+        return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(lod)) << 40) |
+               (static_cast<std::uint64_t>(static_cast<std::uint32_t>(col) & 0xFFFFF) << 20) |
+               (static_cast<std::uint64_t>(static_cast<std::uint32_t>(row) & 0xFFFFF));
+    }
+    const TileMap& tiles() const { return tiles_; }
+    const Tile* tileAt(int lod, int col, int row) const {
+        const auto it = tiles_.find(tileKey(lod, col, row));
+        return it == tiles_.end() ? nullptr : it->second.get();
+    }
+    // Metres per pixel at each LOD; a tile spans PIXELS * this.
+    static double lodResolution(int lod);
 
-    // Apply track-edit overlays to the loaded tiles in-session (mutating the
+    // Every railway segment in the dataset, one copy per trackId (finest LOD wins),
+    // in world coords. The terrain is windowed and streams, but the rail network is
+    // four orders of magnitude smaller than the ground under it - the whole thing is
+    // ~10 MB and under a second to read - so it is loaded once and stays. Anything
+    // that has to follow the rails rather than draw them reads this and never has to
+    // ask whether the track it wants is loaded: signalling and routing far ahead of
+    // the train work the same as under it.
+    const std::vector<TrackSegment>& networkTracks() const { return networkTracks_; }
+
+    // Move the loaded window to `centre` (world x,y): read whatever tiles are now in
+    // range and drop whatever has fallen out of it. Newly read tiles are carved before
+    // they are published. Returns true if anything changed, i.e. the meshes are stale.
+    //
+    // Not safe to call while another thread is reading the tiles.
+    bool updateWindow(double centreX, double centreY);
+
+    // Apply track-edit overlays to the rail network in-session (mutating the
     // geometry), so the editor can preview edits before they are saved. The saved
     // overlay file is already applied during load().
     void applyTrackEdits(const std::vector<TrackEdit>& edits);
@@ -109,6 +146,11 @@ public:
     // Scene origin (world coords) that all rendered geometry is relative to.
     glm::dvec3 sceneOrigin() const { return sceneOrigin_; }
 
+    // How far out the terrain was loaded, scene-relative. Visual geometry that would
+    // otherwise follow the whole network - the rails above all - is built to this, so
+    // nothing is drawn standing over ground that was never loaded.
+    float loadedRadius() const { return static_cast<float>(halfWindow_); }
+
     // Camera start, scene-relative (metres). z is terrain/track elevation.
     glm::vec3 startPos() const { return startPos_; }
 
@@ -125,6 +167,15 @@ public:
 private:
     // Resolves startWorld_/startDir_ by parsing the Bodo tile's tracks.bin.
     void resolveStartPoint(const std::string& datasetRoot);
+
+    // Fills networkTracks_ from every tile in the dataset, finest LOD first.
+    void loadNetworkTracks(const std::string& datasetRoot);
+
+    // Reads one tile into the map. False if it has no heightfield on disk.
+    bool loadTile(int lod, int col, int row);
+
+    // The loaded tiles as a plain list, for passes that walk all of them.
+    std::vector<Tile*> tileList();
 
     // Reads a single terrain.hm32 into `out`; returns false if unreadable.
     bool loadHeightmap(const std::string& path, std::vector<float>& out) const;
@@ -149,14 +200,15 @@ private:
     static bool parsePlatformsBin(const std::string& path,
                                   std::vector<PlatformSegment>& out);
 
-    std::vector<Tile> tiles_;
-    // Per-tile heightfield as loaded, before carveTrackCuttings — the source recarve()
-    // resets to so re-carving after an edit doesn't stack on already-carved terrain.
-    std::vector<std::vector<float>> pristineHeights_;
+    TileMap tiles_;
+    std::vector<TrackSegment> networkTracks_;
+    std::string root_;          // dataset root, for reading tiles after load()
+    glm::dvec2 windowCentre_{0.0};
     glm::dvec3 sceneOrigin_{0.0};
     glm::dvec3 startWorld_{0.0};  // world coords of track-1 terminus
     glm::vec3 startPos_{0.0f};
     glm::vec3 startDir_{1.0f, 0.0f, 0.0f};
+    double halfWindow_ = 0.0;
     float minElev_ = 0.0f;
     float maxElev_ = 1.0f;
     bool hasLandCover_ = false;

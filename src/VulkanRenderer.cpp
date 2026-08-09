@@ -1142,6 +1142,15 @@ void VulkanRenderer::createTrackBuffers(
 void VulkanRenderer::createRoadBuffers(
     const std::vector<TrackVertex>& vertices,
     const std::vector<std::uint32_t>& indices) {
+    // Idempotent: free any previous road buffers first (streamed rebuild).
+    if (roadVertexBuffer_ != VK_NULL_HANDLE) {
+        vkDestroyBuffer(device_, roadIndexBuffer_, nullptr);
+        vkFreeMemory(device_, roadIndexMemory_, nullptr);
+        vkDestroyBuffer(device_, roadVertexBuffer_, nullptr);
+        vkFreeMemory(device_, roadVertexMemory_, nullptr);
+        roadVertexBuffer_ = roadIndexBuffer_ = VK_NULL_HANDLE;
+        roadVertexMemory_ = roadIndexMemory_ = VK_NULL_HANDLE;
+    }
     roadIndexCount_ = static_cast<uint32_t>(indices.size());
     if (indices.empty()) return; // no roads in the loaded area
 
@@ -1342,6 +1351,12 @@ void VulkanRenderer::updateStructs(const std::vector<TrackVertex>& vertices,
                                    const std::vector<std::uint32_t>& indices) {
     vkDeviceWaitIdle(device_);
     createBuildingBuffers(vertices, indices);
+}
+
+void VulkanRenderer::updateRoads(const std::vector<TrackVertex>& vertices,
+                                 const std::vector<std::uint32_t>& indices) {
+    vkDeviceWaitIdle(device_);
+    createRoadBuffers(vertices, indices);
 }
 
 void VulkanRenderer::createVehicleBuffers(

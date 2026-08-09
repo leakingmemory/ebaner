@@ -38,7 +38,11 @@ struct TrackDrawChunk {
 };
 
 // Builds a realistic railway cross-section (ballast bed, sleepers, two rails) for
-// all tracks in the loaded tiles, deduped by trackId.
+// the tracks near a point.
+//
+// The paths cover the whole line, but the rails are expensive geometry - a few tens
+// of thousands of vertices per kilometre - so only the ones within `radius` of
+// `centre` are built. The network stays resident as data and streams as pictures.
 //
 // The index buffer is laid out as [ballast + rails ("always")] followed by
 // [sleeper chunks]. Ballast and rails are always drawn; sleeper boxes are only
@@ -46,7 +50,9 @@ struct TrackDrawChunk {
 // ballast standing in for them at distance.
 class TrackMesh {
 public:
-    void build(const std::vector<TrackPath>& paths);
+    // `radius` <= 0 means every path, which is only safe for a bounded network.
+    void build(const std::vector<TrackPath>& paths, const glm::vec3& centre,
+               float radius);
 
     const std::vector<TrackVertex>& vertices() const { return vertices_; }
     const std::vector<std::uint32_t>& indices() const { return indices_; }

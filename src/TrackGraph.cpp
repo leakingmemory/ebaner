@@ -13,6 +13,10 @@
 
 #include "TrackGraph.h"
 
+#include "SpatialGrid.h"
+
+#include <unordered_map>
+
 #include "TerrainData.h"
 
 #include <cmath>
@@ -39,7 +43,6 @@ glm::vec3 pointColor(std::uint8_t trackType) {
 
 TrackGraph buildTrackGraph(const TerrainData& data) {
     const glm::dvec3 origin = data.sceneOrigin();
-    std::unordered_set<std::uint32_t> seen;
     TrackGraph g;
 
     // Endpoints (scene + world) and all edges of every segment, to detect dead
@@ -50,9 +53,8 @@ TrackGraph buildTrackGraph(const TerrainData& data) {
     struct Edge { glm::vec2 a, b; std::uint32_t track; };
     std::vector<Edge> edges;
 
-    for (const Tile& t : data.tiles()) {
-        for (const TrackSegment& seg : t.tracks) {
-            if (!seen.insert(seg.trackId).second) continue; // one per through-track
+    {
+        for (const TrackSegment& seg : data.networkTracks()) {
             if (seg.pts.size() < 2) continue;
 
             // Convert to scene-relative and drop coincident points (mirrors
@@ -103,19 +105,40 @@ TrackGraph buildTrackGraph(const TerrainData& data) {
     // *different* track's line (~1.5 m). The loose ends of broken links; the editor
     // lets you connect two of them, or snap one onto the track it crosses.
     constexpr float kNodeTol = 1.0f, kTouchTol = 0.6f;
+    // Both questions are asked once per endpoint against every endpoint and every edge
+    // in the network, which over the whole line is ~150M plus ~1.2G tests. Index them.
+    std::unordered_map<std::int64_t, std::vector<std::size_t>> endGrid, edgeGrid;
+    for (std::size_t i = 0; i < ends.size(); ++i)
+        endGrid[grid::key(ends[i].scene.x, ends[i].scene.y)].push_back(i);
+    for (std::size_t e = 0; e < edges.size(); ++e)
+        grid::forCellsAlong(edges[e].a.x, edges[e].a.y, edges[e].b.x, edges[e].b.y,
+                            [&](std::int64_t c) { edgeGrid[c].push_back(e); });
+
     for (std::size_t i = 0; i < ends.size(); ++i) {
         bool joined = false;
-        for (std::size_t j = 0; j < ends.size() && !joined; ++j) {
-            if (j == i) continue;
-            if (std::hypot(ends[i].scene.x - ends[j].scene.x,
-                           ends[i].scene.y - ends[j].scene.y) <= kNodeTol)
-                joined = true;
-        }
+        grid::forCellsNear(ends[i].scene.x, ends[i].scene.y, kNodeTol,
+                           [&](std::int64_t c) {
+                               const auto it = endGrid.find(c);
+                               if (it == endGrid.end()) return;
+                               for (const std::size_t j : it->second) {
+                                   if (j == i) continue;
+                                   if (std::hypot(ends[i].scene.x - ends[j].scene.x,
+                                                  ends[i].scene.y - ends[j].scene.y) <=
+                                       kNodeTol)
+                                       joined = true;
+                               }
+                           });
         const glm::vec2 ep(ends[i].scene);
-        for (std::size_t e = 0; e < edges.size() && !joined; ++e)
-            if (edges[e].track != ends[i].track &&
-                distToSeg(ep, edges[e].a, edges[e].b) <= kTouchTol)
-                joined = true;
+        // A cell of reach: forCellsAlong can miss a cell an edge only clips.
+        if (!joined)
+            grid::forCellsNear(ep.x, ep.y, grid::kCell, [&](std::int64_t c) {
+                const auto it = edgeGrid.find(c);
+                if (it == edgeGrid.end()) return;
+                for (const std::size_t e : it->second)
+                    if (edges[e].track != ends[i].track &&
+                        distToSeg(ep, edges[e].a, edges[e].b) <= kTouchTol)
+                        joined = true;
+            });
         if (!joined) {
             g.deadEnds.push_back({ends[i].scene, glm::vec3(1.0f, 0.15f, 0.12f)});
             g.deadEndWorld.push_back(ends[i].world);

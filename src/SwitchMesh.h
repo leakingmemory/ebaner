@@ -32,7 +32,9 @@ class SwitchNetwork;
 // merges it into the static building buffers.
 class SwitchMesh {
 public:
-    void build(const SwitchNetwork& net);
+    // Only the stands within `radius` of `centre` (scene-relative) are built; the
+    // network spans the line, the geometry follows the camera. radius <= 0 = all.
+    void build(const SwitchNetwork& net, const glm::vec3& centre, float radius);
 
     const std::vector<TrackVertex>& vertices() const { return vertices_; }
     const std::vector<std::uint32_t>& indices() const { return indices_; }

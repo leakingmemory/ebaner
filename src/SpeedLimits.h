@@ -82,4 +82,8 @@ float warningDistance(int fromKmh, int toKmh);
 // The first stretch of a path is never a change: nothing preceded it to rise from or drop to,
 // and a path boundary is an artefact of how the import was chained rather than a place a
 // driver would expect a sign.
-std::vector<SpeedSign> speedSigns(const std::vector<TrackPath>& paths);
+// Only signs on the paths within `radius` of `centre` (scene-relative); radius <= 0 =
+// all. The limits themselves are a property of the track and are resolved wherever they
+// are asked for - this bounds the posts, not the rules.
+std::vector<SpeedSign> speedSigns(const std::vector<TrackPath>& paths,
+                                  const glm::vec3& centre, float radius);

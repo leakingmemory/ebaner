@@ -91,6 +91,8 @@ public:
                       const std::vector<TrackDrawChunk>& sleeperChunks);
     void updateStructs(const std::vector<TrackVertex>& vertices,
                        const std::vector<std::uint32_t>& indices);
+    void updateRoads(const std::vector<TrackVertex>& vertices,
+                     const std::vector<std::uint32_t>& indices);
     // Set the 2-D text overlay (screen-space triangles) drawn on top each frame.
     void setOverlayText(const std::vector<TextVertex>& vertices);
 

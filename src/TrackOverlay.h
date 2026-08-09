@@ -19,7 +19,7 @@
 #include <string>
 #include <vector>
 
-struct Tile;
+struct TrackSegment;
 
 // Connecting rails added by the editor's `rail`/slip tools get trackIds at or above
 // this base. They are intentional switch connectors, so the switch detector skips its
@@ -52,7 +52,10 @@ std::vector<TrackEdit> loadTrackOverlay(const std::string& datasetRoot);
 // Apply edits to the loaded tiles: Elev edits override the nearest track vertex's z;
 // each Link snaps a/b to the nearest track-segment endpoints and appends a synthetic
 // connector segment so the two routes join into one continuous line (buildTrackPaths).
-void applyTrackOverlay(std::vector<Tile>& tiles, const std::vector<TrackEdit>& edits);
+// Apply edits to the rail network in place. There is one store of track geometry -
+// everything that draws or follows the rails reads it - so an edit lands once, here.
+void applyTrackOverlay(std::vector<TrackSegment>& segs,
+                       const std::vector<TrackEdit>& edits);
 
 // Append edits to the overlay file (batch; opens once), creating `overlay/` if
 // needed. Returns false on write failure.

@@ -54,6 +54,17 @@ public:
     };
     std::vector<SpeedPoint> speedPoints() const;
 
+    // Axis-aligned bounds over the control points (scene-relative). A cheap first
+    // question for "is this path anywhere near here" - with the whole line resident,
+    // anything that used to walk every path end to end has to ask that first.
+    const glm::vec3& boundsMin() const { return bmin_; }
+    const glm::vec3& boundsMax() const { return bmax_; }
+    // True if `pt` (scene x,y) is within `margin` of those bounds.
+    bool nearXY(const glm::vec2& pt, float margin) const {
+        return pt.x >= bmin_.x - margin && pt.x <= bmax_.x + margin &&
+               pt.y >= bmin_.y - margin && pt.y <= bmax_.y + margin;
+    }
+
     std::uint32_t trackId() const { return trackId_; }
     std::uint8_t trackType() const { return trackType_; }
 
@@ -62,6 +73,7 @@ private:
     // span i interpolates ctrl_[i+1]..ctrl_[i+2]) and their centripetal knots.
     std::vector<glm::vec3> ctrl_;
     std::vector<float> knot_;
+    glm::vec3 bmin_{0.0f}, bmax_{0.0f};
 
     // Arc-length table entry mapping cumulative length s -> global parameter
     // g = span + local-u (in [0, numSpans]).

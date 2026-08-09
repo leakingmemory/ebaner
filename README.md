@@ -145,6 +145,24 @@ This builds two executables that share the same rendering/loading engine
 (`libebaner_engine`): the **`ebaner`** viewer above, and **`ebaner-trackedit`**
 below.
 
+## Test
+
+```sh
+ctest --test-dir build --output-on-failure
+```
+
+The tests run against a real terrainmapper export, since what the code has to cope
+with is decided by what the data is actually like — there is no synthetic dataset to
+check against. They look for one at `../norway-rails`; point them elsewhere with
+`cmake -S . -B build -DEBANER_TEST_DATASET=/path/to/export`. Without an export they
+report as skipped rather than failing, so a build without one is still clean.
+
+- **`track-edit`** — an edit made in the track editor reaches every store that holds
+  track geometry: the windowed tiles the terrain carve reads, and the resident network
+  the paths, junction graph and turnouts are built from. Editing only one of them fails
+  silently — applied to the tiles alone, raising a rail re-cuts the ground and leaves
+  the rail where it was.
+
 ## Run
 
 ```sh

@@ -70,6 +70,12 @@ TrackPath::TrackPath(std::uint32_t trackId, std::uint8_t trackType,
     }
     length_ = table_.empty() ? 0.0f : table_.back().s;
 
+    bmin_ = bmax_ = ctrl_.front();
+    for (const glm::vec3& c : ctrl_) {
+        bmin_ = glm::min(bmin_, c);
+        bmax_ = glm::max(bmax_, c);
+    }
+
     // Precompute a smoothed superelevation (cant) per sample from the design
     // speed and curvature: theta = sign(k) * min(factor*atan(v^2*|k|/g), maxCant).
     std::vector<float> raw(table_.size(), 0.0f);
@@ -293,16 +299,16 @@ struct DSU {
 
 std::vector<TrackPath> buildTrackPaths(const TerrainData& data) {
     const glm::dvec3 origin = data.sceneOrigin();
-    std::unordered_set<std::uint32_t> seen;
     std::size_t mainVerts = 0, knownVerts = 0; // speed-plumbing summary
     int minSpeed = 0, maxSpeed = 0;
     std::unordered_map<int, int> speedHist;
 
-    // --- Collect unique segments (finest-LOD copy per trackId), scene-relative. ---
+    // --- Collect the segments, scene-relative. ---
+    // The network is the whole dataset's track, already one copy per trackId, so the
+    // paths span the line rather than whatever terrain happens to be loaded.
     std::vector<Seg> segs;
-    for (const Tile& t : data.tiles()) {
-        for (const TrackSegment& seg : t.tracks) {
-            if (!seen.insert(seg.trackId).second) continue; // one per through-track
+    {
+        for (const TrackSegment& seg : data.networkTracks()) {
             if (seg.pts.size() < 2) continue;
             Seg s;
             s.trackType = seg.trackType;

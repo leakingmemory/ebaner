@@ -122,7 +122,7 @@ void TerrainMesh::build(const TerrainData& data, const TunnelMesh* bores) {
     std::unordered_map<std::uint64_t, const Tile*> byKey;
     std::unordered_map<const Tile*, std::uint32_t> baseIdx;
     byKey.reserve(tiles.size() * 2);
-    for (const Tile& t : tiles) byKey[keyOf(t.lod, t.col, t.row)] = &t;
+    for (const auto& [tileKey, tp] : tiles) byKey[keyOf(tp->lod, tp->col, tp->row)] = tp.get();
 
     auto heightOf = [&](const Tile* t, int r, int c) -> float {
         return t->heights[static_cast<std::size_t>(r) * P + c];
@@ -196,8 +196,8 @@ void TerrainMesh::build(const TerrainData& data, const TunnelMesh* bores) {
     };
 
     // --- Pass 1: interior vertices + de-overlapped quads ---
-    for (const Tile& t : tiles) {
-        const Tile* a = &t;
+    for (const auto& [tileKey, tp] : tiles) {
+        const Tile* a = tp.get();
         const std::uint32_t base = static_cast<std::uint32_t>(vertices_.size());
         baseIdx[a] = base;
         for (int row = 0; row < P; ++row)
@@ -234,9 +234,9 @@ void TerrainMesh::build(const TerrainData& data, const TunnelMesh* bores) {
     // --- Pass 2: edge bridges (stitch seams between neighbouring tiles) ---
     // edge: 0=N (row 0), 1=E (col 255), 2=S (row 255), 3=W (col 0)
     const bool stitch = std::getenv("EBANER_NOSTITCH") == nullptr;
-    for (const Tile& t : tiles) {
+    for (const auto& [tileKey, tp] : tiles) {
         if (!stitch) break;
-        const Tile* a = &t;
+        const Tile* a = tp.get();
         const std::uint32_t abase = baseIdx[a];
 
         for (int edge = 0; edge < 4; ++edge) {
@@ -361,8 +361,8 @@ void TerrainMesh::build(const TerrainData& data, const TunnelMesh* bores) {
         return best;
     };
     if (stitch) {
-        for (const Tile& t : tiles) {
-            const Tile* a = &t;
+        for (const auto& [tileKey, tp] : tiles) {
+            const Tile* a = tp.get();
             const double oX = a->originX, oY = a->originY, E = a->extent;
             const double cornersXY[4][2] = {
                 {oX + E, oY + E}, {oX, oY + E}, {oX + E, oY}, {oX, oY}};

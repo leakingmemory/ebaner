@@ -18,6 +18,7 @@
 #include <vector>
 
 struct Tile;
+struct TrackSegment;
 
 // Carve cuttings into the terrain height grids where a *surface* railway track
 // falls below the terrain, so the rails and ballast sit in a trench instead of
@@ -30,4 +31,8 @@ struct Tile;
 // terrain mesh (which reads Tile::heights for surface, normals and seam stitching)
 // stays watertight. Modifies Tile::heights in place. `sceneOrigin` is only used to
 // log the deepest cutting's scene-relative location.
-void carveTrackCuttings(std::vector<Tile>& tiles, const glm::dvec3& sceneOrigin);
+// `tracks` is the whole rail network, not just what crosses these tiles: a cutting is
+// shaped by track that may run in from a neighbour.
+void carveTrackCuttings(std::vector<Tile*>& tiles,
+                        const std::vector<TrackSegment>& tracks,
+                        const glm::dvec3& sceneOrigin);

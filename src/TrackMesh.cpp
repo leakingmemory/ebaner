@@ -11,6 +11,7 @@
 // should have received a copy of the license along with ebaner; if not, see
 // <https://www.gnu.org/licenses/>.
 
+#include <algorithm>
 #include "TrackMesh.h"
 
 #include "TrackPath.h"
@@ -61,21 +62,58 @@ const glm::vec3 kRailCol(0.40f, 0.25f, 0.18f);    // rusty steel
 
 // Sample distances along a path: 0, step, 2*step, ... , length (endpoint always
 // included so the sweep closes exactly).
-std::vector<float> sampleDistances(float length, float step) {
+std::vector<float> sampleDistances(float from, float to, float step) {
     std::vector<float> ss;
-    for (float s = 0.0f; s < length; s += step) ss.push_back(s);
-    ss.push_back(length);
+    for (float s = from; s < to; s += step) ss.push_back(s);
+    ss.push_back(to);
     return ss;
 }
 
 } // namespace
 
-void TrackMesh::build(const std::vector<TrackPath>& paths) {
+void TrackMesh::build(const std::vector<TrackPath>& paths, const glm::vec3& centre,
+                      float radius) {
     // Reset accumulators so build() is idempotent (the editor rebuilds to re-preview).
     vertices_.clear();
     indices_.clear();
     chunks_.clear();
     alwaysIndexCount_ = 0;
+
+    // Which stretch of each path to draw. A path is not near or far as a whole - the
+    // main line runs the length of the country - so this clips it to the arc length
+    // that is actually in reach. A bounding box only answers the first, cheap half of
+    // that question: a long path's box covers everything, so it must not be the last
+    // word or half the network comes out "near".
+    struct Run { const TrackPath* path; float from, to; };
+    std::vector<Run> near;
+    constexpr float kProbeM = 100.0f; // how finely the reach is bracketed
+    for (const TrackPath& p : paths) {
+        if (radius <= 0.0f) { near.push_back({&p, 0.0f, p.length()}); continue; }
+        if (!p.nearXY(glm::vec2(centre), radius)) continue;
+        // Every contiguous stretch in range, not the span from the first to the last:
+        // a path can run in, leave, and come back hundreds of kilometres later, and
+        // bridging that gap would build the whole line.
+        float lo = -1.0f, hi = -1.0f;
+        auto flushRun = [&]() {
+            if (lo < 0.0f) return;
+            // Out to the probe either side, so a run is not cut short of the radius by
+            // where the probe happened to land.
+            near.push_back({&p, std::max(0.0f, lo - kProbeM),
+                            std::min(p.length(), hi + kProbeM)});
+            lo = hi = -1.0f;
+        };
+        for (float s = 0.0f;; s += kProbeM) {
+            const float ss = std::min(s, p.length());
+            if (glm::distance(p.poseAt(ss).pos, centre) < radius) {
+                if (lo < 0.0f) lo = ss;
+                hi = ss;
+            } else {
+                flushRun();
+            }
+            if (ss >= p.length()) break;
+        }
+        flushRun();
+    }
 
     // Emit one quad (two triangles) with an outward-facing normal. The normal is
     // the geometric normal, flipped to point away from `inside` so lighting is
@@ -116,8 +154,9 @@ void TrackMesh::build(const std::vector<TrackPath>& paths) {
     };
 
     // --- Pass 1: ballast bed + rails (always drawn) ------------------------
-    for (const TrackPath& path : paths) {
-        const std::vector<float> ss = sampleDistances(path.length(), kRailSampleStep);
+    for (const Run& run : near) {
+        const TrackPath& path = *run.path;
+        const std::vector<float> ss = sampleDistances(run.from, run.to, kRailSampleStep);
         for (std::size_t i = 0; i + 1 < ss.size(); ++i) {
             const TrackPose pa = path.poseAt(ss[i]);
             const TrackPose pb = path.poseAt(ss[i + 1]);
@@ -191,8 +230,9 @@ void TrackMesh::build(const std::vector<TrackPath>& paths) {
                   kSleeperCol);
     };
 
-    for (const TrackPath& path : paths) {
-        const float total = path.length();
+    for (const Run& run : near) {
+        const TrackPath& path = *run.path;
+        const float total = run.to;
         std::uint32_t chunkFirst = static_cast<std::uint32_t>(indices_.size());
         glm::vec3 accum(0.0f);
         int accumN = 0;
@@ -209,7 +249,7 @@ void TrackMesh::build(const std::vector<TrackPath>& paths) {
             accumN = 0;
         };
 
-        for (float dist = 0.0f; dist <= total + 1e-3f; dist += kSleeperSpacing) {
+        for (float dist = run.from; dist <= total + 1e-3f; dist += kSleeperSpacing) {
             const TrackPose p = path.poseAt(dist);
             emitSleeper(p.pos, p.right, p.up, p.tangent);
             accum += p.pos;
@@ -220,6 +260,6 @@ void TrackMesh::build(const std::vector<TrackPath>& paths) {
     }
 
     std::printf(
-        "[TrackMesh] %zu tracks, %zu vertices, %zu triangles, %zu sleeper chunks\n",
-        paths.size(), vertices_.size(), indices_.size() / 3, chunks_.size());
+        "[TrackMesh] %zu track runs, %zu vertices, %zu triangles, %zu sleeper chunks\n",
+        near.size(), vertices_.size(), indices_.size() / 3, chunks_.size());
 }

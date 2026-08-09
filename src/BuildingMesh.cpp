@@ -63,11 +63,13 @@ void BuildingMesh::build(const TerrainData& data) {
 
     std::unordered_set<std::uint64_t> seen;
     std::vector<const BuildingSegment*> uniq;
-    for (const Tile& t : data.tiles())
+    for (const auto& [tileKey, tilePtr] : data.tiles()) {
+        const Tile& t = *tilePtr;
         for (const BuildingSegment& b : t.buildings) {
             if (b.footprint.size() < 3) continue;
             if (seen.insert(hashBuilding(b)).second) uniq.push_back(&b);
         }
+    }
 
     // Quad with an outward normal (flipped to face away from `inside`).
     auto emitQuad = [&](const glm::vec3& p0, const glm::vec3& p1,

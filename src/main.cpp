@@ -29,6 +29,7 @@
 #include "TrackMesh.h"
 #include "SpeedLimits.h"
 #include "SpeedSignMesh.h"
+#include "Streaming.h"
 #include "TrackPath.h"
 #include "TunnelMesh.h"
 #include "Audio.h"
@@ -189,20 +190,22 @@ int main(int argc, char** argv) {
     TrackGraph graph; // raw track lines (scene-relative), for the 2-D traffic-manager map
     try {
         data.load(datasetRoot);
+       
         paths = buildTrackPaths(data);
+       
         // The bores first: the terrain needs them to know which of its triangles are
         // standing in a tunnel mouth.
         tunnels.build(data);
         std::printf("[TunnelMesh] %zu bore(s), %.0f m, %zu vertices\n", tunnels.boreCount(),
                     tunnels.totalLength(), tunnels.vertices().size());
         mesh.build(data, &tunnels);
-        tracks.build(paths);
+        tracks.build(paths, glm::vec3(0.0f), data.loadedRadius());
         roads.build(data);
         buildings.build(data);
         platforms.build(data, paths);
         switchNet.build(data, paths);   // turnout detection + routing
         applySwitchTypes(switchNet, loadSwitchTypes(datasetRoot)); // manual/motor overrides
-        switches.build(switchNet);
+        switches.build(switchNet, glm::vec3(0.0f), data.loadedRadius());
         graph = buildTrackGraph(data);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "Failed to load terrain: %s\n", e.what());
@@ -294,7 +297,7 @@ int main(int argc, char** argv) {
     // change, so they join the static bucket too.
     SpeedSignMesh speedSignMesh;
     {
-        const std::vector<SpeedSign> sg = speedSigns(paths);
+        const std::vector<SpeedSign> sg = speedSigns(paths, glm::vec3(0.0f), data.loadedRadius());
         speedSignMesh.build(sg);
         const std::uint32_t vbase = static_cast<std::uint32_t>(structVerts.size());
         structVerts.insert(structVerts.end(), speedSignMesh.vertices().begin(),
@@ -325,6 +328,7 @@ int main(int argc, char** argv) {
                       tracks.alwaysIndexCount(), tracks.sleeperChunks(),
                       roads.vertices(), roads.indices(),
                       structVerts, structIndices);
+       
     } catch (const std::exception& e) {
         std::fprintf(stderr, "Vulkan init failed: %s\n", e.what());
         glfwDestroyWindow(window);
@@ -332,6 +336,17 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
     renderer.attachSwitches(switches.vertices(), switches.indices());
+
+    // From here the world follows the camera: tiles are read and dropped, and every mesh
+    // built from them is rebuilt, on a worker thread. The rail network is not rebuilt -
+    // it is already the whole line - so nothing a vehicle is standing on is disturbed.
+    WorldStreamer streamer;
+    // The scene point the visual geometry currently follows. Switch stands are rebuilt on
+    // their own when one is thrown, and have to be built about the same point.
+    glm::vec3 worldCentre(0.0f);
+    glm::vec2 elevRange(data.minElevation(), data.maxElevation());
+    if (std::getenv("EBANER_NOSTREAM") == nullptr)
+        streamer.start(data, paths, switchNet);
 
     std::printf(
         "\nControls: WASD move, Q/E down/up, mouse look, Shift boost, "
@@ -1098,7 +1113,7 @@ int main(int argc, char** argv) {
             return;
         }
         switchNet.toggle(i);
-        switches.build(switchNet);
+        switches.build(switchNet, worldCentre, data.loadedRadius());
         renderer.updateSwitches(switches.vertices(), switches.indices());
         g_mapDirty = true;
         switchesChanged = true;
@@ -1149,7 +1164,7 @@ int main(int argc, char** argv) {
         }
         for (const PathSwitch& ps : toMove) switchNet.setState(ps.turnout, ps.need);
         if (!toMove.empty()) {
-            switches.build(switchNet);
+            switches.build(switchNet, worldCentre, data.loadedRadius());
             renderer.updateSwitches(switches.vertices(), switches.indices());
         }
         routeSet[pi] = 1;
@@ -1220,7 +1235,7 @@ int main(int argc, char** argv) {
             if (switchNet.state(ps.turnout) != ps.need) toMove.push_back(ps);
         for (const PathSwitch& ps : toMove) switchNet.setState(ps.turnout, ps.need);
         if (!toMove.empty()) {
-            switches.build(switchNet);
+            switches.build(switchNet, worldCentre, data.loadedRadius());
             renderer.updateSwitches(switches.vertices(), switches.indices());
         }
         // The dwarfs along the way are opened too, and keep their own release logic - a
@@ -1322,6 +1337,30 @@ int main(int argc, char** argv) {
         int fbw = 0, fbh = 0;
         glfwGetFramebufferSize(window, &fbw, &fbh);
         if (fbw == 0 || fbh == 0) { continue; } // minimised
+
+        // Stream the world around the camera. Taking a finished build swaps every buffer
+        // at once and waits for the GPU to go idle, which is the cost of rebuilding whole
+        // rather than per chunk; it happens once every couple of kilometres travelled.
+        {
+            streamer.update(g_camera.position());
+            WorldStreamer::Build nb;
+            if (streamer.take(nb)) {
+                worldCentre = nb.centre;
+                elevRange = glm::vec2(nb.minElev, nb.maxElev);
+                renderer.updateTerrain(nb.terrainV, nb.terrainI);
+                renderer.updateTracks(nb.trackV, nb.trackI, nb.trackAlways,
+                                      nb.sleeperChunks);
+                renderer.updateRoads(nb.roadV, nb.roadI);
+                renderer.updateStructs(nb.structV, nb.structI);
+                switches.build(switchNet, worldCentre, data.loadedRadius());
+                renderer.updateSwitches(switches.vertices(), switches.indices());
+                std::printf("[stream] rebuilt about scene (%.0f, %.0f): %zu terrain, "
+                            "%zu track, %zu struct vertices\n",
+                            nb.centre.x, nb.centre.y, nb.terrainV.size(),
+                            nb.trackV.size(), nb.structV.size());
+                std::fflush(stdout);
+            }
+        }
 
         // Live track-circuit occupancy: recomputed every frame (the ground signals read it
         // in the cab view, not just the map). The overlay/aspects are rebuilt only when it
@@ -1715,7 +1754,7 @@ int main(int argc, char** argv) {
             const VehicleState prev = vehicle->state();
             vehicle->update(simDt, pushInput);
             if (vehicle->consumeSwitchChanged()) { // a switch was forced/broken
-                switches.build(switchNet);
+                switches.build(switchNet, worldCentre, data.loadedRadius());
                 renderer.updateSwitches(switches.vertices(), switches.indices());
                 g_mapDirty = true; // refresh the map marker if it's open
                 switchesChanged = true;
@@ -1778,7 +1817,7 @@ int main(int argc, char** argv) {
                 if (!g_mapMode && aimedSwitch >= 0 &&
                     switchNet.type(aimedSwitch) != SwitchType::Motor) {
                     switchNet.toggle(aimedSwitch);
-                    switches.build(switchNet);
+                    switches.build(switchNet, worldCentre, data.loadedRadius());
                     renderer.updateSwitches(switches.vertices(), switches.indices());
                     switchesChanged = true;
                     std::printf("[Switch] %d -> %s\n", aimedSwitch,
@@ -1915,12 +1954,17 @@ int main(int argc, char** argv) {
         }
         renderer.setMapMode(g_mapMode);
         // .w channels carry the elevation range for the colour ramp.
-        pc.sunDir = glm::vec4(sunDir, data.minElevation());
-        pc.camPos = glm::vec4(g_camera.position(), data.maxElevation());
+        pc.sunDir = glm::vec4(sunDir, elevRange.x);
+        pc.camPos = glm::vec4(g_camera.position(), elevRange.y);
 
         if (shotPath) {
-            if (frame == 20) renderer.requestCapture(shotPath);
-            if (frame == 24) glfwSetWindowShouldClose(window, GLFW_TRUE);
+            // EBANER_SHOTFRAME delays the capture, so a scripted run can wait for the
+            // streamer to have built the world it was pointed at.
+            static const int shotAt = std::getenv("EBANER_SHOTFRAME")
+                                          ? std::atoi(std::getenv("EBANER_SHOTFRAME"))
+                                          : 20;
+            if (frame == shotAt) renderer.requestCapture(shotPath);
+            if (frame == shotAt + 4) glfwSetWindowShouldClose(window, GLFW_TRUE);
         }
         renderer.drawFrame(pc);
         ++frame;
