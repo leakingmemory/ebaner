@@ -131,9 +131,30 @@ void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 o
             continue;
         }
 
+        // A simple station signal carries two lamps, red over green, and nothing else:
+        // it can only stop you or let you by. Both steady - there is no third thing for a
+        // flash to distinguish it from. Dark (an unmanned station) lights neither, which
+        // falls out of the two tests below rather than needing a case of its own.
+        if (s.kind == SignalKind::StationEntry) {
+            const float mastH = 4.5f; // a main signal's mast: it is one, on a short head
+            box(B + UP * (mastH * 0.5f), R, F, UP, 0.07f, 0.07f, mastH * 0.5f, kBody);
+            const float hw = 0.30f, hd = 0.15f, hh = 0.52f; // head half extents
+            const glm::vec3 C = B + UP * (mastH + hh);
+            box(C, R, F, UP, hw, hd, hh, kBody);
+            box(C - F * (hd + 0.01f), R, F, UP, hw * 1.25f, 0.02f, hh * 1.1f, kBody);
+            const glm::vec3 n = -F;
+            const glm::vec3 face = C - F * (hd + 0.04f);
+            const float r = 0.13f, sp = 0.26f; // lens radius, half the lamp spacing
+            if (s.aspect == SignalAspect::Stop) lamp(face + UP * sp, R, UP, r, kRedOn);
+            else disc(face + UP * sp, n, R, UP, r, kRedOff);
+            if (s.aspect == SignalAspect::Clear) lamp(face - UP * sp, R, UP, r, kGreenOn);
+            else disc(face - UP * sp, n, R, UP, r, kGreenOff);
+            continue;
+        }
+
         // How high the dwarf box sits: on its own short post normally, or low on the
         // main signal's mast when the two share a pole.
-        const bool isExit = s.kind != SignalKind::Dwarf; // exit or entry: same head
+        const bool isExit = s.kind != SignalKind::Dwarf; // any main: the same head
         const bool drawDwarf = !isExit || s.withDwarf;
         const float dwarfH = 1.0f;
 
@@ -152,6 +173,7 @@ void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 o
             const float r = 0.13f, sp = 0.40f; // lens radius, vertical lamp spacing
             // Norwegian main-signal aspects: red alone is stop; the upper green alone is
             // proceed over a deviation (C2); both greens is proceed, no restriction (C1).
+            // Dark lights nothing: every lens falls through to its unlit disc below.
             const bool danger = s.aspect == SignalAspect::Stop;
             const bool proceed = s.aspect == SignalAspect::Clear ||
                                  s.aspect == SignalAspect::ClearReduced;

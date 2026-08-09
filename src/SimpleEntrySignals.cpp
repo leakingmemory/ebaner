@@ -1,0 +1,115 @@
+// ebaner - a Vulkan viewer for terrainmapper rail/terrain exports.
+// Copyright (C) 2026 Jan-Espen Oversand <sigsegv@radiotube.org>
+//
+// This file is part of ebaner. ebaner is free software: you can redistribute it
+// and/or modify it under the terms of version 3 of the GNU General Public License
+// as published by the Free Software Foundation.
+//
+// ebaner is distributed in the hope that it will be useful, but WITHOUT ANY
+// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+// PARTICULAR PURPOSE. See the GNU General Public License for more details. You
+// should have received a copy of the license along with ebaner; if not, see
+// <https://www.gnu.org/licenses/>.
+
+#include "SimpleEntrySignals.h"
+
+#include <cmath>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+
+namespace fs = std::filesystem;
+
+namespace {
+
+std::string signalsFile(const std::string& root) {
+    return root + "/overlay/simple-entry-signals.txt";
+}
+
+// `<trackHex>:<frac>`, as the rest of the overlay anchors things.
+bool parseAt(const std::string& tok, std::uint32_t& track, double& frac) {
+    const auto c = tok.find(':');
+    if (c == std::string::npos) return false;
+    track = static_cast<std::uint32_t>(
+        std::strtoul(tok.substr(0, c).c_str(), nullptr, 16));
+    frac = std::atof(tok.substr(c + 1).c_str());
+    return true;
+}
+
+} // namespace
+
+std::vector<SimpleEntrySignal> loadSimpleEntrySignals(const std::string& datasetRoot) {
+    std::vector<SimpleEntrySignal> out;
+    std::ifstream f(signalsFile(datasetRoot));
+    if (!f) return out;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        std::istringstream is(line);
+        std::string kind, atTok, dirTok;
+        SimpleEntrySignal s;
+        is >> kind >> s.id;
+        if (kind != "entry") continue;
+        readName(is, s.name);
+        is >> atTok >> dirTok;
+        if (atTok.empty() || !parseAt(atTok, s.trackId, s.frac)) continue;
+        s.dir = dirTok == "-" ? -1 : 1;
+        readName(is, s.station); // optional; absent leaves it empty = nearest wins
+        out.push_back(std::move(s));
+    }
+    return out;
+}
+
+bool writeSimpleEntrySignals(const std::string& datasetRoot,
+                             const std::vector<SimpleEntrySignal>& sigs) {
+    std::error_code ec;
+    fs::create_directories(datasetRoot + "/overlay", ec);
+    std::ofstream f(signalsFile(datasetRoot), std::ios::trunc);
+    if (!f) return false;
+    f << "# ebaner simple entry signals. Red or green, no track circuits and no routes;\n"
+         "# the only interlocking is that a station shows one green at a time.\n"
+         "# entry <id> \"<name>\" <trackHex>:<frac> <+|-> [\"<station>\"]\n"
+         "# + governs movements toward increasing frac. The station is optional and\n"
+         "# normally left out: the nearest one is used, which cannot go stale.\n";
+    for (const SimpleEntrySignal& s : sigs) {
+        f << "entry " << s.id << ' ' << quoteName(s.name) << ' ' << std::hex << s.trackId
+          << std::dec << ':' << s.frac << ' ' << (s.dir < 0 ? '-' : '+');
+        if (!s.station.empty()) f << ' ' << quoteName(s.station);
+        f << '\n';
+    }
+    return static_cast<bool>(f);
+}
+
+std::vector<SignalStation> attachStations(const std::vector<SimpleEntrySignal>& sigs,
+                                          const std::vector<Station>& stations,
+                                          const std::vector<TrackPoly>& polys) {
+    std::vector<SignalStation> out(sigs.size());
+    for (std::size_t i = 0; i < sigs.size(); ++i) {
+        const SimpleEntrySignal& s = sigs[i];
+        const glm::dvec3 w = fracToWorld(polys, s.trackId, s.frac);
+        if (w.x == 0.0 && w.y == 0.0) continue; // stale/missing track
+
+        // An override names its station outright; otherwise take the nearest.
+        if (!s.station.empty()) {
+            out[i].name = s.station;
+            if (const Station* st = findStation(stations, s.station))
+                out[i].distanceM = std::hypot(st->world.x - w.x, st->world.y - w.y);
+            out[i].far = out[i].distanceM > kFarM;
+            continue;
+        }
+        double best = 1e30;
+        for (const Station& st : stations) {
+            const double d = std::hypot(st.world.x - w.x, st.world.y - w.y);
+            if (d < best) {
+                best = d;
+                out[i].name = st.name;
+            }
+        }
+        if (!out[i].name.empty()) {
+            out[i].distanceM = best;
+            out[i].far = best > kFarM;
+        }
+    }
+    return out;
+}

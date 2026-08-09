@@ -301,6 +301,33 @@ at a red dead-end and **Enter** to pick end **A**, aim at the other loose end an
 clears the pick). The two segments join into one continuous route and the train runs
 across the former gap.
 
+**Simple entry signals.** The entry signals proper are routes between track-circuit
+borders, with C1/C2 authorities and full interlocking — which needs circuits drawn
+through the station, so they exist at Bodø and nowhere else. These are the plain
+alternative: a short head with two steady lamps, red over green, and no circuits or
+routes behind them. Pick **Simple entry signals** from the
+Esc menu, then **click any point on any track** to place one (as with a distant signal —
+no border needed), **right-click** to select, **F** to turn it round, **F2** to name,
+**X** to delete, **Ctrl+S** to save to `overlay/simple-entry-signals.txt`.
+
+Each attaches to the **nearest station** in the export, and the station is what they are
+interlocked by. A station is either **off** — unmanned, its signals dark, trains running
+through without reference to them — or **on**, when they show red and **one of them may
+be cleared at a time**. A typical station has two, one at each end, and clearing one puts
+the other back to red. Stations start off, so placing signals on a line does not stop the
+traffic already running over it; switching a station off again clears any green with it,
+so it comes back on in a known state.
+
+The editor HUD names the station a selected signal attached to and how far off it is,
+flagging anything beyond 4 km as suspect — that is almost certainly not the station it
+serves. An explicit station name can be written into the overlay line to overrule the
+nearest-station rule where two stations sit close together.
+
+In the viewer they are worked from the traffic manager (`O`), where **E** opens the
+nearest station: the first line switches the station on or off, then **All red**, then its
+signals. A signal holds whatever it was last given — nothing else resets it, no train
+passing and no timer — which is why the state of each is on the line beside it.
+
 ## Data format
 
 See `../terrainmapper/doc/game-export-format.md`. In short: 256×256 little-endian

@@ -115,14 +115,25 @@ bool writeDistantSignals(const std::string& datasetRoot,
 // a deviation). A dwarf never shows ClearReduced. A distant carries the same three values
 // meaning *expect* that - there is nothing it can say that a main cannot, so a parallel
 // enum would only be one more thing to keep in step.
-enum class SignalAspect { Stop, TrainOnTrack, Clear, ClearReduced };
+// Dark is a signal showing nothing at all, which only the simple station signals do: an
+// unmanned station switches its signals off entirely and trains run through without
+// reference to them. It is not "stop" and it is not a fault - an unlit mast is a real
+// indication with its own meaning, so it is a value here rather than an absence.
+enum class SignalAspect { Stop, TrainOnTrack, Clear, ClearReduced, Dark };
 
 // Which signal stands at a placement: the low dwarf (dvergsignal) that governs shunting
 // moves, one of the two tall main signals - the exit protecting a route out of the station,
 // the entry authorising one in - or the distant that repeats, from braking distance, what
 // the first main signal ahead is showing. Both mains carry the same three-lamp head; only
 // the entry's danger aspect flashes, while every distant lamp does.
-enum class SignalKind { Dwarf, Exit, Entry, Distant };
+//
+// StationEntry is the simple entry signal (SimpleEntrySignals.h): a main signal's mast
+// under a short head carrying two steady lamps, red over green - stop or go, and dark
+// when its station is unmanned. Nothing flashes: there is no third indication for a
+// flash to tell apart. It is a kind of its own rather than reusing Entry because `paths`
+// below indexes whichever collection `kind` names, and those are different collections -
+// which is exactly the confusion `kind` is here to prevent.
+enum class SignalKind { Dwarf, Exit, Entry, Distant, StationEntry };
 
 // Where a signal sits: the on-track start point of a route and its initial travel
 // direction (a signal governs movements leaving that point in that direction).

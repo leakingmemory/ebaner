@@ -30,6 +30,7 @@
 #include "SwitchNetwork.h"
 #include "SignalMesh.h"
 #include "SignalPaths.h"
+#include "SimpleEntrySignals.h"
 #include "SpeedLimits.h"
 #include "SpeedSignMesh.h"
 #include "TunnelMesh.h"
@@ -270,7 +271,8 @@ int main(int argc, char** argv) {
     // switch (turnout) properties, mini signal paths and exit (main) signals, switched
     // from the Escape menu. ---
     enum class EdMode {
-        Geometry, Circuits, Switches, SignalPaths, ExitSignals, EntrySignals, DistantSignals
+        Geometry, Circuits, Switches, SignalPaths, ExitSignals, EntrySignals,
+        DistantSignals, SimpleEntries
     };
     EdMode mode = EdMode::Geometry;
     int selTurnout = -1;             // selected turnout (index into switchNet.turnouts())
@@ -316,6 +318,14 @@ int main(int argc, char** argv) {
     bool distantDirty = false;       // unsaved distant-signal changes
     int selDistant = -1;             // selected distant (index into distantSignals)
     int nextDistantId = 1;           // auto-increment distant id
+    // Simple entry signals: red/green, no circuits, one green per station.
+    std::vector<SimpleEntrySignal> simpleEntries = loadSimpleEntrySignals(datasetRoot);
+    std::vector<SignalStation> simpleEntryStation;
+    bool simpleDirty = false;
+    int selSimple = -1;
+    int nextSimpleId = 1;
+    for (const SimpleEntrySignal& e : simpleEntries)
+        nextSimpleId = std::max(nextSimpleId, e.id + 1);
     for (const DistantSignal& d : distantSignals)
         nextDistantId = std::max(nextDistantId, d.id + 1);
     TrackCircuits tc = loadTrackCircuits(datasetRoot); // borders + sections (own overlay)
@@ -326,7 +336,7 @@ int main(int argc, char** argv) {
     // What the shared rename modal is editing. Every route carries a real name - they are
     // what the operator will pick from when setting a route - so creating one opens this
     // straight away, pre-filled with the auto default.
-    enum class NameTarget { None, Section, Path, Exit, ExitRoute, Entry, Distant };
+    enum class NameTarget { None, Section, Path, Exit, ExitRoute, Entry, Distant, Simple };
     NameTarget namingWhat = NameTarget::None;
     int namingIdx = -1;              // index into whichever collection that names
     int nextSectionId = 1;           // auto-increment section id
@@ -358,6 +368,9 @@ int main(int argc, char** argv) {
         else if (what == NameTarget::Distant && idx >= 0 &&
                  idx < static_cast<int>(distantSignals.size()))
             cur = &distantSignals[idx].name;
+        else if (what == NameTarget::Simple && idx >= 0 &&
+                 idx < static_cast<int>(simpleEntries.size()))
+            cur = &simpleEntries[idx].name;
         if (!cur) return;
         namingWhat = what;
         namingIdx = idx;
@@ -408,6 +421,18 @@ int main(int argc, char** argv) {
             sp.world = w;
             sp.forward = trackTangent(polys, d.trackId, d.frac, d.dir);
             sp.at = {d.trackId, d.frac};
+            sp.paths.push_back(static_cast<int>(i));
+            out.push_back(std::move(sp));
+        }
+        for (std::size_t i = 0; i < simpleEntries.size(); ++i) {
+            const SimpleEntrySignal& e = simpleEntries[i];
+            const glm::dvec3 w = fracToWorld(polys, e.trackId, e.frac);
+            if (w.x == 0.0 && w.y == 0.0) continue;
+            SignalPlacement sp;
+            sp.kind = SignalKind::StationEntry;
+            sp.world = w;
+            sp.forward = trackTangent(polys, e.trackId, e.frac, e.dir);
+            sp.at = {e.trackId, e.frac};
             sp.paths.push_back(static_cast<int>(i));
             out.push_back(std::move(sp));
         }
@@ -1416,7 +1441,8 @@ int main(int argc, char** argv) {
     const std::vector<std::string> kMenuItems = {"Geometry edit", "Track circuits",
                                                  "Switches", "Signal paths",
                                                  "Exit signals", "Entry signals",
-                                                 "Distant signals", "Exit"};
+                                                 "Distant signals",
+                                                 "Simple entry signals", "Exit"};
     // Flashing lamps (an entry signal's danger) blink from the push constant rather than by
     // rebuilding the signal mesh - here those vertices share the struct buffer with 32k
     // buildings, so a rebuild twice a second is out of the question.
@@ -1458,11 +1484,13 @@ int main(int argc, char** argv) {
                            : sel == "Exit signals"  ? EdMode::ExitSignals
                            : sel == "Entry signals" ? EdMode::EntrySignals
                            : sel == "Distant signals" ? EdMode::DistantSignals
+                           : sel == "Simple entry signals" ? EdMode::SimpleEntries
                                                     : EdMode::Geometry;
                     selected.clear(); selA = selB = -1; selBorder = -1;
                     selTurnout = -1;
                     pathStart = -1; selPath = -1; selExit = -1; pendingVias.clear();
                     selExitRoute = -1; armedExit = -1; selEntry = -1; selDistant = -1;
+                    selSimple = -1;
                     showPending = false;
                     rebuildOverlay();
                     g_menuOpen = false;
@@ -1502,16 +1530,25 @@ int main(int argc, char** argv) {
                                : namingWhat == NameTarget::ExitRoute  ? "exit route"
                                : namingWhat == NameTarget::Entry      ? "entry signal"
                                : namingWhat == NameTarget::Distant    ? "distant signal"
+                               : namingWhat == NameTarget::Simple ? "simple entry signal"
                                                                       : "";
             const char* pfx = namingWhat == NameTarget::Section      ? "S"
                               : namingWhat == NameTarget::Path       ? "P"
                               : namingWhat == NameTarget::Exit       ? "E"
                               : namingWhat == NameTarget::Entry      ? "N"
                               : namingWhat == NameTarget::Distant    ? "D"
+                              : namingWhat == NameTarget::Simple     ? "SE"
                                                                      : "R";
             if (e && !prevNameEnter) {
                 std::vector<SignalPath>* nr = namedRoutes(namingWhat);
-                if (namingWhat == NameTarget::Distant && namingIdx >= 0 &&
+                if (namingWhat == NameTarget::Simple && namingIdx >= 0 &&
+                    namingIdx < static_cast<int>(simpleEntries.size())) {
+                    SimpleEntrySignal& e = simpleEntries[namingIdx];
+                    e.name = g_nameBuf.empty() ? (pfx + std::to_string(e.id)) : g_nameBuf;
+                    simpleDirty = true;
+                    std::printf("[trackedit] %s %d named \"%s\" (Ctrl+S to save)\n", what,
+                                e.id, e.name.c_str());
+                } else if (namingWhat == NameTarget::Distant && namingIdx >= 0 &&
                     namingIdx < static_cast<int>(distantSignals.size())) {
                     DistantSignal& d = distantSignals[namingIdx];
                     d.name = g_nameBuf.empty() ? (pfx + std::to_string(d.id)) : g_nameBuf;
@@ -1560,6 +1597,9 @@ int main(int argc, char** argv) {
             else if (namingWhat == NameTarget::Distant && namingIdx >= 0 &&
                      namingIdx < static_cast<int>(distantSignals.size()))
                 nid = distantSignals[namingIdx].id;
+            else if (namingWhat == NameTarget::Simple && namingIdx >= 0 &&
+                     namingIdx < static_cast<int>(simpleEntries.size()))
+                nid = simpleEntries[namingIdx].id;
             std::string title = "NAME ";
             for (const char* c = what; *c; ++c)
                 title.push_back(static_cast<char>(std::toupper(*c)));
@@ -1654,7 +1694,8 @@ int main(int argc, char** argv) {
         // ring drawn around the hovered one is the sole cue for where that is.
         if ((mode == EdMode::Circuits || mode == EdMode::Switches ||
              mode == EdMode::SignalPaths || mode == EdMode::ExitSignals ||
-             mode == EdMode::EntrySignals || mode == EdMode::DistantSignals) &&
+             mode == EdMode::EntrySignals || mode == EdMode::DistantSignals ||
+             mode == EdMode::SimpleEntries) &&
             !g_mouseCaptured) {
             double mx = 0.0, my = 0.0;
             glfwGetCursorPos(window, &mx, &my);
@@ -2035,6 +2076,33 @@ int main(int argc, char** argv) {
                 rebuildOverlay();
             }
             if (kF2 && !prevF2 && haveSel) beginNaming(NameTarget::Distant, selDistant);
+        } else if (mode == EdMode::SimpleEntries) { // --- Simple entry signals mode ---
+            const bool haveSel =
+                selSimple >= 0 && selSimple < static_cast<int>(simpleEntries.size());
+            // F: turn it round. Which way it faces is which movements it governs.
+            if (kF && !prevF) {
+                if (haveSel) {
+                    SimpleEntrySignal& e = simpleEntries[selSimple];
+                    e.dir = -e.dir;
+                    simpleDirty = true;
+                    pathMsg = std::string("governs movements toward ") +
+                              (e.dir > 0 ? "+frac" : "-frac");
+                    rebuildStructs();
+                } else {
+                    pathMsg = "right-click a simple entry signal first, then F";
+                }
+                pathMsgUntil = glfwGetTime() + 3.0;
+                rebuildOverlay();
+            }
+            if (kX && !prevX && haveSel) {
+                simpleEntries.erase(simpleEntries.begin() + selSimple);
+                selSimple = -1;
+                simpleDirty = true;
+                std::printf("[trackedit] simple entry signal removed (Ctrl+S to save)\n");
+                rebuildStructs();
+                rebuildOverlay();
+            }
+            if (kF2 && !prevF2 && haveSel) beginNaming(NameTarget::Simple, selSimple);
         } else { // --- Signal-paths / exit-signals modes ---
             // V: pin the hovered border as a via the route must pass through, so an
             // otherwise ambiguous destination can be narrowed to one road.
@@ -2293,6 +2361,15 @@ int main(int argc, char** argv) {
                     std::fprintf(stderr, "[trackedit] failed to write exit routes\n");
                 }
             }
+        } else if (kSave && !prevS && mode == EdMode::SimpleEntries && simpleDirty) {
+            if (writeSimpleEntrySignals(datasetRoot, simpleEntries)) {
+                std::printf("[trackedit] saved %zu simple entry signal(s) to "
+                            "%s/overlay/simple-entry-signals.txt\n", simpleEntries.size(),
+                            datasetRoot.c_str());
+                simpleDirty = false;
+            } else {
+                std::fprintf(stderr, "[trackedit] failed to write simple entry signals\n");
+            }
         } else if (kSave && !prevS && mode == EdMode::EntrySignals && entryDirty) {
             if (writeEntrySignals(datasetRoot, entrySignals)) {
                 std::printf("[trackedit] saved %zu entry signal(s) to "
@@ -2424,6 +2501,24 @@ int main(int argc, char** argv) {
                 beginNaming(NameTarget::Distant, selDistant);
             }
             rebuildOverlay();
+        } else if (!g_mouseCaptured && mL && !prevML && mode == EdMode::SimpleEntries) {
+            // Free placement, same as a distant: any point on any track, no border needed.
+            if (circHit) {
+                SimpleEntrySignal e;
+                e.id = nextSimpleId++;
+                e.name = "SE" + std::to_string(e.id);
+                e.trackId = circTrack;
+                e.frac = circFrac;
+                simpleEntries.push_back(std::move(e));
+                selSimple = static_cast<int>(simpleEntries.size()) - 1;
+                simpleDirty = true;
+                rebuildStructs();
+                std::printf("[trackedit] simple entry signal %d on %#x at %.6f "
+                            "(Ctrl+S to save)\n", simpleEntries[selSimple].id, circTrack,
+                            circFrac);
+                beginNaming(NameTarget::Simple, selSimple);
+            }
+            rebuildOverlay();
         } else if (!g_mouseCaptured && mL && !prevML && armed()) {
             // Drawing a route up to the armed exit signal: the destination is already fixed,
             // so one click on the start border is the whole gesture.
@@ -2521,6 +2616,29 @@ int main(int argc, char** argv) {
                                    (clip.y / clip.w * 0.5f + 0.5f) * fbh);
                 const float dpx = glm::length(px - cur);
                 if (dpx < best) { best = dpx; selDistant = static_cast<int>(i); }
+            }
+            rebuildOverlay();
+        } else if (!g_mouseCaptured && mR && !prevMR && mode == EdMode::SimpleEntries) {
+            double mx = 0.0, my = 0.0;
+            glfwGetCursorPos(window, &mx, &my);
+            int winw = fbw, winh = fbh;
+            glfwGetWindowSize(window, &winw, &winh);
+            const glm::vec2 cur(static_cast<float>(mx) * fbw / std::max(winw, 1),
+                                static_cast<float>(my) * fbh / std::max(winh, 1));
+            const glm::dvec3 o = data.sceneOrigin();
+            float best = 24.0f; // px
+            selSimple = -1;
+            for (std::size_t i = 0; i < simpleEntries.size(); ++i) {
+                const SimpleEntrySignal& e = simpleEntries[i];
+                const glm::dvec3 w = fracToWorld(polys, e.trackId, e.frac);
+                if (w.x == 0.0 && w.y == 0.0) continue;
+                const glm::vec4 clip = viewProj * glm::vec4(
+                    float(w.x - o.x), float(w.y - o.y), float(w.z - o.z) + 2.0f, 1.0f);
+                if (clip.w <= 0.0f) continue;
+                const glm::vec2 px((clip.x / clip.w * 0.5f + 0.5f) * fbw,
+                                   (clip.y / clip.w * 0.5f + 0.5f) * fbh);
+                const float dpx = glm::length(px - cur);
+                if (dpx < best) { best = dpx; selSimple = static_cast<int>(i); }
             }
             rebuildOverlay();
         } else if (!g_mouseCaptured && mR && !prevMR && routeMode) {
@@ -2720,6 +2838,42 @@ int main(int argc, char** argv) {
                                        : "SWITCHES: click=select  M=manual/motor  "
                                          "hover circuit + L=add/remove lock",
                        x, 40.0f + 7 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
+          } else if (mode == EdMode::SimpleEntries) { // --- Simple entry signals HUD ---
+            appendText(tv, "MODE: SIMPLE ENTRY SIGNALS (Esc menu to switch)", x,
+                       40.0f + 3 * lh, sc, glm::vec3(1.0f, 0.75f, 0.3f), fbw, fbh);
+            const bool haveSel =
+                selSimple >= 0 && selSimple < static_cast<int>(simpleEntries.size());
+            // Attachment is what decides which signals interlock with which, so it is
+            // worked out live and shown - it is not visible from the mast otherwise.
+            simpleEntryStation = attachStations(simpleEntries, stations, polys);
+            std::size_t stationCount = 0;
+            {
+                std::set<std::string> names;
+                for (const SignalStation& ss : simpleEntryStation)
+                    if (!ss.name.empty()) names.insert(ss.name);
+                stationCount = names.size();
+            }
+            std::snprintf(buf, sizeof(buf), "SIGNALS %zu  at %zu station(s)",
+                          simpleEntries.size(), stationCount);
+            appendText(tv, buf, x, 40.0f + 4 * lh, sc,
+                       haveSel ? glm::vec3(1.0f, 0.9f, 0.3f) : glm::vec3(0.9f, 0.85f, 0.7f),
+                       fbw, fbh);
+            if (haveSel) {
+                const SignalStation& ss = simpleEntryStation[selSimple];
+                std::snprintf(buf, sizeof(buf), "%s -> %s (%.0f m)%s   faces %s",
+                              simpleEntries[selSimple].name.c_str(),
+                              ss.name.empty() ? "(no station)" : ss.name.c_str(),
+                              ss.distanceM, ss.far ? "  FAR - check this" : "",
+                              simpleEntries[selSimple].dir > 0 ? "+frac" : "-frac");
+                appendText(tv, buf, x, 40.0f + 5 * lh, sc,
+                           ss.far ? glm::vec3(1.0f, 0.55f, 0.3f)
+                                  : glm::vec3(0.8f, 0.95f, 0.8f),
+                           fbw, fbh);
+            }
+            appendText(tv,
+                       "click track: place   right-click: select   F: turn   F2: name   "
+                       "X: delete",
+                       x, 40.0f + 6 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
           } else if (mode == EdMode::DistantSignals) { // --- Distant signals mode HUD ---
             appendText(tv, "MODE: DISTANT SIGNALS (Esc menu to switch)", x, 40.0f + 3 * lh,
                        sc, glm::vec3(1.0f, 0.75f, 0.3f), fbw, fbh);

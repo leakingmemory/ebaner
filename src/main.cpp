@@ -18,6 +18,7 @@
 #include "RoadMesh.h"
 #include "SignalMesh.h"
 #include "SignalPaths.h"
+#include "SimpleEntrySignals.h"
 #include "SwitchMesh.h"
 #include "SwitchNetwork.h"
 #include "SwitchTypes.h"
@@ -74,6 +75,8 @@ bool g_mapMode = false;     // traffic-manager 2-D map view
 bool g_mapDirty = false;    // (re)build the map overlay this frame
 bool g_routePick = false;   // traffic manager: the exit-route picker is open
 int g_routePickSel = 0;     // highlighted route in that picker
+bool g_signalPick = false;  // traffic manager: the simple-entry-signal picker is open
+int g_signalPickSel = 0;    // highlighted signal in that picker
 float g_mapZoom = 1.0f;     // map zoom: 1 = ~4 km tall, higher = zoomed in
 constexpr float kMapZoomMin = 0.5f;  // ~8 km tall (zoomed out)
 constexpr float kMapZoomMax = 40.0f; // ~100 m tall (zoomed in)
@@ -108,7 +111,8 @@ void keyCallback(GLFWwindow* win, int key, int, int action, int) {
     // Escape closes the route picker if it is open, else toggles the menu overlay; while
     // the menu is open the other hotkeys are inert.
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
-        if (g_routePick) g_routePick = false;
+        if (g_signalPick) g_signalPick = false;
+        else if (g_routePick) g_routePick = false;
         else g_menuOpen = !g_menuOpen;
     }
     if (g_menuOpen) return;
@@ -147,6 +151,12 @@ void keyCallback(GLFWwindow* win, int key, int, int action, int) {
     if (g_mapMode && key == GLFW_KEY_R && action == GLFW_PRESS) {
         g_routePick = !g_routePick;
         g_routePickSel = 0;
+    }
+    // E offers the simple entry signals of the nearest station. Only in the map, and
+    // only E is free there - the map binds nothing but WASD to pan.
+    if (g_mapMode && key == GLFW_KEY_E && action == GLFW_PRESS) {
+        g_signalPick = !g_signalPick;
+        g_signalPickSel = 0;
     }
     // Z / X zoom the map in / out (keyboard alternative to the scroll wheel;
     // repeat-enabled so holding the key keeps zooming).
@@ -530,6 +540,42 @@ int main(int argc, char** argv) {
         sp.paths.push_back(static_cast<int>(i));
         sigPlacements.push_back(std::move(sp));
     }
+    // Simple entry signals: red or green, no circuits, one green per station. Placed
+    // like the distants - a plain point on a track - but they govern rather than repeat.
+    const std::vector<SimpleEntrySignal> simpleEntries =
+        loadSimpleEntrySignals(datasetRoot);
+    const std::vector<SignalStation> simpleEntryStation =
+        attachStations(simpleEntries, stations, polys);
+    // What each station is doing. A station is either unmanned - its signals dark, trains
+    // running through without reference to them - or manned, when they show red and one of
+    // them may be cleared. Unmanned is the default and the absent case: a line with signals
+    // newly placed on it still runs exactly as it did before they were there, rather than
+    // stopping dead until someone goes and clears them.
+    //
+    // Runtime only. Which station is manned belongs in the overlay no more than a switch
+    // position does.
+    struct StationState {
+        bool manned = false;
+        int green = -1; // index into simpleEntries, -1 = all red
+    };
+    std::unordered_map<std::string, StationState> simpleStationState;
+    // placement index -> index into simpleEntries, so the aspect can be written back.
+    std::vector<int> simpleEntryPlacement(simpleEntries.size(), -1);
+    for (std::size_t i = 0; i < simpleEntries.size(); ++i) {
+        const SimpleEntrySignal& e = simpleEntries[i];
+        const glm::dvec3 w = fracToWorld(polys, e.trackId, e.frac);
+        if (w.x == 0.0 && w.y == 0.0) continue; // stale/missing track
+        SignalPlacement sp;
+        sp.kind = SignalKind::StationEntry;
+        sp.world = w;
+        sp.forward = trackTangent(polys, e.trackId, e.frac, e.dir);
+        sp.at = {e.trackId, e.frac};
+        sp.paths.push_back(static_cast<int>(i));
+        simpleEntryPlacement[i] = static_cast<int>(sigPlacements.size());
+        sigPlacements.push_back(std::move(sp));
+    }
+    if (!simpleEntries.empty())
+        std::printf("[SimpleEntry] %zu signal(s)\n", simpleEntries.size());
     // The junction graph is geometry, so it cannot change while the viewer runs: build it
     // once here rather than on every distant-signal read.
     const TrackJunctions junctions = trackJunctions(polys);
@@ -809,6 +855,7 @@ int main(int argc, char** argv) {
                            : sp.aspect == SignalAspect::ClearReduced
                                ? glm::vec3(0.9f, 0.9f, 0.2f)
                                : glm::vec3(1.0f, 0.7f, 0.1f)) // expect stop: amber
+                : sp.aspect == SignalAspect::Dark         ? glm::vec3(0.45f, 0.45f, 0.5f)
                 : sp.aspect == SignalAspect::Clear        ? glm::vec3(0.2f, 1.0f, 0.3f)
                 : sp.aspect == SignalAspect::ClearReduced ? glm::vec3(0.6f, 1.0f, 0.2f)
                                                           : glm::vec3(1.0f, 0.2f, 0.15f);
@@ -925,6 +972,7 @@ int main(int argc, char** argv) {
             const bool hovered = static_cast<int>(k) == hoverSignal;
             const glm::vec3 col =
                 armed ? glm::vec3(1.0f, 1.0f, 0.4f) // armed: yellow, like its destinations
+                : asp == SignalAspect::Dark           ? glm::vec3(0.45f, 0.45f, 0.5f)
                       : asp == SignalAspect::Clear        ? glm::vec3(0.3f, 1.0f, 0.4f)
                         : asp == SignalAspect::TrainOnTrack ? glm::vec3(1.0f, 0.75f, 0.15f)
                                                             : glm::vec3(1.0f, 0.25f, 0.2f);
@@ -1005,7 +1053,7 @@ int main(int argc, char** argv) {
         std::snprintf(hint, sizeof(hint),
                       "O: cab  Esc: menu  scroll/Z-X: zoom  WASD: pan  click switch to throw  "
                       "click signal then destination to set a route  R: exit routes  "
-                      "(view %.1f km)",
+                      "E: entry signals  (view %.1f km)",
                       4.0f / g_mapZoom);
         appendText(tv, hint, x, y, sc * 0.75f, glm::vec3(0.7f, 0.85f, 0.7f), fbw, fbh);
         y += lh;
@@ -1072,6 +1120,7 @@ int main(int argc, char** argv) {
     bool prevMenuEnter = false, prevMenuUp = false, prevMenuDown = false;
     bool mapAttached = false; // whether the map overlay is currently attached
     bool switchesChanged = true; // a switch moved: re-evaluate the signal aspects
+    bool simpleSignalsChanged = true; // a simple entry signal was set (or first frame)
     bool prevMapClick = false; // edge-trigger for the map left-click
     bool prevPickUp = false, prevPickDown = false, prevPickEnter = false;
     const std::vector<std::string> kMenuItems = {"Traffic manager", "Exit"};
@@ -1362,6 +1411,67 @@ int main(int argc, char** argv) {
         if (items.empty()) items.push_back("(no exit routes here)");
         return items;
     };
+    // The simple entry signals belong to a station by name, so the picker is that
+    // station's list. Which station: whichever real one the map is looking at.
+    auto simpleStationHere = [&]() -> std::string {
+        if (simpleEntries.empty() || stations.empty()) return {};
+        const glm::dvec3 org = data.sceneOrigin();
+        const glm::vec2 at = mapCenter + g_mapPan;
+        const glm::dvec2 world(org.x + at.x, org.y + at.y);
+        std::string best;
+        double bestD = 1e30;
+        for (std::size_t i = 0; i < simpleEntries.size(); ++i) {
+            const std::string& nm = simpleEntryStation[i].name;
+            if (nm.empty()) continue;
+            const Station* st = findStation(stations, nm);
+            if (!st) continue;
+            const double d = std::hypot(st->world.x - world.x, st->world.y - world.y);
+            if (d < bestD) { bestD = d; best = nm; }
+        }
+        return best;
+    };
+    auto simpleSignalsAt = [&](const std::string& station) {
+        std::vector<int> out;
+        for (std::size_t i = 0; i < simpleEntries.size(); ++i)
+            if (simpleEntryStation[i].name == station) out.push_back(static_cast<int>(i));
+        return out;
+    };
+    // The station's own switch first, then its signals. Off is a station-wide state -
+    // unmanned, signals dark, trains through - so it cannot be a per-signal choice. Then
+    // all-red, because nothing else clears a green: these hold until told otherwise.
+    auto signalPickItems = [&](const std::string& station, const std::vector<int>& ss) {
+        constexpr std::size_t kName = 26;
+        auto fit = [](std::string t, std::size_t n) {
+            if (t.size() > n) t = t.substr(0, n - 1) + "~";
+            t.resize(n, ' ');
+            return t;
+        };
+        const auto it = simpleStationState.find(station);
+        const bool manned = it != simpleStationState.end() && it->second.manned;
+        const int green = manned ? it->second.green : -1;
+        std::vector<std::string> items{
+            fit(manned ? "Switch station off (unmanned)" : "Switch station on (manned)",
+                kName + 6) +
+            (manned ? "  ON" : "  OFF")};
+        items.push_back(fit("All red", kName + 6) + (manned && green < 0 ? "  *" : ""));
+        for (int i : ss)
+            items.push_back(fit(simpleEntries[i].name, kName + 6) +
+                            (!manned ? "  dark" : i == green ? "  GREEN" : "  red"));
+        if (ss.empty()) items.push_back("(no simple entry signals here)");
+        return items;
+    };
+    auto appendSignalPicker = [&](std::vector<TextVertex>& tv, int fbw, int fbh) {
+        if (!g_signalPick) return;
+        const std::string station = simpleStationHere();
+        const std::vector<int> ss = simpleSignalsAt(station);
+        const std::string title =
+            "ENTRY SIGNALS" + (station.empty() ? "" : " - " + station) +
+            "  (Up/Down, Enter, Esc)";
+        appendMenu(tv, title, signalPickItems(station, ss),
+                   std::clamp(g_signalPickSel, 0, static_cast<int>(ss.size()) + 1), fbw,
+                   fbh);
+    };
+
     // The picker panel, drawn after the map HUD so it sits over the map.
     auto appendRoutePicker = [&](std::vector<TextVertex>& tv, int fbw, int fbh) {
         if (!g_routePick) return;
@@ -1491,8 +1601,9 @@ int main(int argc, char** argv) {
                 }
             }
         }
-        if (occupancyChanged || switchesChanged) {
+        if (occupancyChanged || switchesChanged || simpleSignalsChanged) {
             switchesChanged = false;
+            simpleSignalsChanged = false;
             // What each main signal shows: danger unless a route it governs is set and has
             // not yet been entered, then C1 (two greens) or C2 (one green) per its type.
             std::vector<SignalAspect> exitAspects(sigPlacements.size(), SignalAspect::Stop);
@@ -1501,6 +1612,17 @@ int main(int argc, char** argv) {
                 exitAspects[mr.placement] = mainCandidates[mr.route].type == RouteType::C2
                                                 ? SignalAspect::ClearReduced
                                                 : SignalAspect::Clear;
+            }
+            // Dark where the station is unmanned; otherwise red, bar the one cleared.
+            for (std::size_t i = 0; i < simpleEntries.size(); ++i) {
+                const int pi = simpleEntryPlacement[i];
+                if (pi < 0) continue;
+                const auto it = simpleStationState.find(simpleEntryStation[i].name);
+                const bool manned = it != simpleStationState.end() && it->second.manned;
+                const bool green = manned && it->second.green == static_cast<int>(i);
+                exitAspects[pi] = !manned  ? SignalAspect::Dark
+                                  : green  ? SignalAspect::Clear
+                                           : SignalAspect::Stop;
             }
             bool aspectsMoved = updateSignalAspects(sigPlacements, signalPaths, switchNet,
                                                     polys, circuits, secOccupied, routeSet,
@@ -1655,6 +1777,42 @@ int main(int argc, char** argv) {
                 }
             }
             prevPickUp = pU; prevPickDown = pD; prevPickEnter = pE;
+        } else if (g_mapMode && !g_menuOpen && g_signalPick) {
+            auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
+            const bool pU = down(GLFW_KEY_UP), pD = down(GLFW_KEY_DOWN),
+                       pE = down(GLFW_KEY_ENTER);
+            const std::string station = simpleStationHere();
+            const std::vector<int> ss = simpleSignalsAt(station);
+            // + the station switch and the all-red line
+            const int n = static_cast<int>(ss.size()) + 2;
+            if (pU && !prevPickUp) g_signalPickSel = (g_signalPickSel + n - 1) % n;
+            if (pD && !prevPickDown) g_signalPickSel = (g_signalPickSel + 1) % n;
+            g_signalPickSel = std::clamp(g_signalPickSel, 0, n - 1);
+            if (pE && !prevPickEnter && !station.empty()) {
+                StationState& st = simpleStationState[station];
+                if (g_signalPickSel == 0) {
+                    // Turning a station off clears any green with it: it comes back on in
+                    // a known state rather than resuming whatever it was left showing.
+                    st.manned = !st.manned;
+                    st.green = -1;
+                    setMapMsg(station + (st.manned ? ": manned, signals at danger"
+                                                   : ": unmanned, signals off"));
+                } else if (g_signalPickSel == 1) {
+                    st.green = -1;
+                    setMapMsg(station + ": all entry signals at danger");
+                } else {
+                    // One green per station is the whole interlocking: setting this one
+                    // puts every other signal here back to red by construction, because
+                    // the station holds a single id rather than a flag per signal.
+                    st.green = ss[g_signalPickSel - 2];
+                    if (!st.manned) st.manned = true; // clearing one implies it is manned
+                    setMapMsg(simpleEntries[st.green].name + " cleared (" + station +
+                              ": one green at a time)");
+                }
+                simpleSignalsChanged = true;
+                g_mapDirty = true;
+            }
+            prevPickUp = pU; prevPickDown = pD; prevPickEnter = pE;
         } else {
             prevPickUp = prevPickDown = prevPickEnter = false;
         }
@@ -1688,6 +1846,7 @@ int main(int argc, char** argv) {
             std::vector<TextVertex> tv;
             appendMapHud(tv, fbw, fbh, nullptr);
             appendRoutePicker(tv, fbw, fbh);
+            appendSignalPicker(tv, fbw, fbh);
             renderer.setOverlayText(tv);
         } else if (mode == Mode::Menu) {
             // --- Start screen: pick a vehicle ---
@@ -1893,6 +2052,7 @@ int main(int argc, char** argv) {
                 std::vector<TextVertex> tv;
                 appendMapHud(tv, fbw, fbh, &*vehicle);
                 appendRoutePicker(tv, fbw, fbh);
+                appendSignalPicker(tv, fbw, fbh);
                 renderer.setOverlayText(tv);
             } else {
                 std::vector<TextVertex> tv;
