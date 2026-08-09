@@ -198,7 +198,6 @@ int main(int argc, char** argv) {
         tunnels.build(data);
         std::printf("[TunnelMesh] %zu bore(s), %.0f m, %zu vertices\n", tunnels.boreCount(),
                     tunnels.totalLength(), tunnels.vertices().size());
-        mesh.build(data, &tunnels);
         tracks.build(paths, glm::vec3(0.0f), data.loadedRadius());
         roads.build(data);
         buildings.build(data);
@@ -323,7 +322,9 @@ int main(int argc, char** argv) {
     VulkanRenderer renderer;
     g_renderer = &renderer;
     try {
-        renderer.init(window, mesh.vertices(), mesh.indices(), texData,
+        // The ground is uploaded per tile, just below and just as the streamer does it,
+        // so there is one path for it and no whole-world copy to drop afterwards.
+        renderer.init(window, {}, {}, texData,
                       tracks.vertices(), tracks.indices(),
                       tracks.alwaysIndexCount(), tracks.sleeperChunks(),
                       roads.vertices(), roads.indices(),
@@ -335,6 +336,18 @@ int main(int argc, char** argv) {
         glfwTerminate();
         return EXIT_FAILURE;
     }
+    {
+        TerrainMesh chunk;
+        std::size_t verts = 0;
+        for (const auto& [key, t] : data.tiles()) {
+            chunk.buildTile(data, *t, &tunnels);
+            renderer.setTerrainChunk(key, chunk.vertices(), chunk.indices());
+            verts += chunk.vertices().size();
+        }
+        std::printf("[TerrainMesh] %zu chunk(s), %zu vertices\n",
+                    renderer.terrainChunkCount(), verts);
+    }
+
     renderer.attachSwitches(switches.vertices(), switches.indices());
 
     // From here the world follows the camera: tiles are read and dropped, and every mesh
@@ -1347,17 +1360,28 @@ int main(int argc, char** argv) {
             if (streamer.take(nb)) {
                 worldCentre = nb.centre;
                 elevRange = glm::vec2(nb.minElev, nb.maxElev);
-                renderer.updateTerrain(nb.terrainV, nb.terrainI);
+                // Ground goes in a tile at a time, so only the ring that changed is
+                // uploaded; the rest still swaps whole.
+                for (const std::uint64_t key : nb.terrainDrop)
+                    renderer.removeTerrainChunk(key);
+                std::size_t chunkVerts = 0;
+                for (const WorldStreamer::Chunk& c : nb.terrainChunks) {
+                    renderer.setTerrainChunk(c.key, c.vertices, c.indices);
+                    chunkVerts += c.vertices.size();
+                }
                 renderer.updateTracks(nb.trackV, nb.trackI, nb.trackAlways,
                                       nb.sleeperChunks);
                 renderer.updateRoads(nb.roadV, nb.roadI);
                 renderer.updateStructs(nb.structV, nb.structI);
                 switches.build(switchNet, worldCentre, data.loadedRadius());
                 renderer.updateSwitches(switches.vertices(), switches.indices());
-                std::printf("[stream] rebuilt about scene (%.0f, %.0f): %zu terrain, "
-                            "%zu track, %zu struct vertices\n",
-                            nb.centre.x, nb.centre.y, nb.terrainV.size(),
-                            nb.trackV.size(), nb.structV.size());
+                std::printf("[stream] about scene (%.0f, %.0f): %zu chunk(s) in "
+                            "(%zu vertices), %zu out, %zu resident; %zu track, "
+                            "%zu struct vertices\n",
+                            nb.centre.x, nb.centre.y, nb.terrainChunks.size(),
+                            chunkVerts, nb.terrainDrop.size(),
+                            renderer.terrainChunkCount(), nb.trackV.size(),
+                            nb.structV.size());
                 std::fflush(stdout);
             }
         }

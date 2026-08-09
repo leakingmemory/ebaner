@@ -35,22 +35,30 @@ class TrackPath;
 // a `TrackPath*` a vehicle is standing on. What moves is the *scenery*: the ground, the
 // roads, the buildings, and the rails as geometry rather than as a route.
 //
-// A rebuild is whole rather than per tile. That is a deliberate first cut: it reuses the
-// renderer's existing "replace these buffers" path instead of introducing per-chunk
-// buffers, at the cost of a brief stall when the finished world is handed over. The work
-// itself - reading tiles, carving them, building every mesh - runs on this thread, so
-// only the handover is felt.
+// The ground is rebuilt a tile at a time: a window move touches a ring of tiles, not the
+// whole world, so only those chunks are built and uploaded. What makes that possible is
+// that every terrain triangle belongs to exactly one tile, seams included.
+//
+// The rest - rails, roads, buildings - is still rebuilt whole and swapped in one go. It is
+// the smaller half, and chunking it means the same treatment for four more meshes.
 //
 // Threading contract: while a build is in flight this thread owns the TerrainData
 // exclusively. The render thread must read nothing from it but the values that do not
 // move (the scene origin, the window radius).
 class WorldStreamer {
 public:
+    // One tile's ground, ready to upload.
+    struct Chunk {
+        std::uint64_t key = 0;
+        std::vector<Vertex> vertices;
+        std::vector<std::uint32_t> indices;
+    };
+
     // One finished world, ready to be handed to the renderer.
     struct Build {
         glm::vec3 centre{0.0f}; // scene-relative, what this was built around
-        std::vector<Vertex> terrainV;
-        std::vector<std::uint32_t> terrainI;
+        std::vector<Chunk> terrainChunks; // built or rebuilt
+        std::vector<std::uint64_t> terrainDrop; // no longer resident
         std::vector<TrackVertex> trackV;
         std::vector<std::uint32_t> trackI;
         std::uint32_t trackAlways = 0;

@@ -23,6 +23,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 struct GLFWwindow;
@@ -81,6 +82,16 @@ public:
                        const std::vector<std::uint32_t>& indices);
     void updateSignals(const std::vector<TrackVertex>& vertices,
                        const std::vector<std::uint32_t>& indices);
+    // --- Terrain chunks -----------------------------------------------------
+    // The terrain is held one tile at a time, so streaming replaces only the ground
+    // that actually changed instead of the whole world. Passing empty geometry drops
+    // the chunk. Buffers a in-flight frame may still be reading are retired rather
+    // than destroyed, and freed once those frames have passed.
+    void setTerrainChunk(std::uint64_t key, const std::vector<Vertex>& vertices,
+                         const std::vector<std::uint32_t>& indices);
+    void removeTerrainChunk(std::uint64_t key);
+    std::size_t terrainChunkCount() const { return terrainChunks_.size(); }
+
     // Editor render-preview: recreate the terrain / track / struct (building) buffers
     // to reflect pending edits. Heavy and user-triggered; each waits for GPU idle.
     void updateTerrain(const std::vector<Vertex>& vertices,
@@ -228,11 +239,25 @@ private:
     VkCommandPool commandPool_ = VK_NULL_HANDLE;
     std::vector<VkCommandBuffer> commandBuffers_;
 
-    VkBuffer vertexBuffer_ = VK_NULL_HANDLE;
-    VkDeviceMemory vertexMemory_ = VK_NULL_HANDLE;
-    VkBuffer indexBuffer_ = VK_NULL_HANDLE;
-    VkDeviceMemory indexMemory_ = VK_NULL_HANDLE;
-    uint32_t indexCount_ = 0;
+    // One tile's ground. Keyed the way TerrainData keys its tiles.
+    struct TerrainChunk {
+        VkBuffer vbuf = VK_NULL_HANDLE;
+        VkDeviceMemory vmem = VK_NULL_HANDLE;
+        VkBuffer ibuf = VK_NULL_HANDLE;
+        VkDeviceMemory imem = VK_NULL_HANDLE;
+        uint32_t indexCount = 0;
+    };
+    std::unordered_map<std::uint64_t, TerrainChunk> terrainChunks_;
+    // A chunk replaced or dropped this frame may still be referenced by a command
+    // buffer in flight, so its buffers wait out the frames that can still be reading
+    // them before being destroyed.
+    struct RetiredChunk {
+        TerrainChunk c;
+        int framesLeft = 0;
+    };
+    std::vector<RetiredChunk> retired_;
+    void retire(TerrainChunk& c);
+    void sweepRetired(bool force);
 
     VkBuffer trackVertexBuffer_ = VK_NULL_HANDLE;
     VkDeviceMemory trackVertexMemory_ = VK_NULL_HANDLE;

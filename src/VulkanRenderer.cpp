@@ -1056,18 +1056,40 @@ void VulkanRenderer::createDescriptorSet() {
     vkUpdateDescriptorSets(device_, 1, &w, 0, nullptr);
 }
 
-void VulkanRenderer::createMeshBuffers(const std::vector<Vertex>& vertices,
-                                       const std::vector<std::uint32_t>& indices) {
-    // Idempotent: free any previous terrain buffers first (editor re-preview).
-    if (vertexBuffer_ != VK_NULL_HANDLE) {
-        vkDestroyBuffer(device_, indexBuffer_, nullptr);
-        vkFreeMemory(device_, indexMemory_, nullptr);
-        vkDestroyBuffer(device_, vertexBuffer_, nullptr);
-        vkFreeMemory(device_, vertexMemory_, nullptr);
-        vertexBuffer_ = indexBuffer_ = VK_NULL_HANDLE;
-        vertexMemory_ = indexMemory_ = VK_NULL_HANDLE;
+void VulkanRenderer::retire(TerrainChunk& c) {
+    if (c.vbuf == VK_NULL_HANDLE) return;
+    retired_.push_back({c, kMaxFramesInFlight + 1});
+    c = TerrainChunk{};
+}
+
+void VulkanRenderer::sweepRetired(bool force) {
+    for (std::size_t i = 0; i < retired_.size();) {
+        if (!force && --retired_[i].framesLeft > 0) {
+            ++i;
+            continue;
+        }
+        TerrainChunk& c = retired_[i].c;
+        vkDestroyBuffer(device_, c.ibuf, nullptr);
+        vkFreeMemory(device_, c.imem, nullptr);
+        vkDestroyBuffer(device_, c.vbuf, nullptr);
+        vkFreeMemory(device_, c.vmem, nullptr);
+        retired_[i] = retired_.back();
+        retired_.pop_back();
     }
-    indexCount_ = static_cast<uint32_t>(indices.size());
+}
+
+void VulkanRenderer::removeTerrainChunk(std::uint64_t key) {
+    const auto it = terrainChunks_.find(key);
+    if (it == terrainChunks_.end()) return;
+    retire(it->second);
+    terrainChunks_.erase(it);
+}
+
+void VulkanRenderer::setTerrainChunk(std::uint64_t key,
+                                     const std::vector<Vertex>& vertices,
+                                     const std::vector<std::uint32_t>& indices) {
+    removeTerrainChunk(key);
+    if (indices.empty()) return;
 
     auto upload = [&](const void* data, VkDeviceSize size, VkBufferUsageFlags usage,
                       VkBuffer& buffer, VkDeviceMemory& memory) {
@@ -1081,19 +1103,29 @@ void VulkanRenderer::createMeshBuffers(const std::vector<Vertex>& vertices,
         vkMapMemory(device_, stagingMem, 0, size, 0, &mapped);
         std::memcpy(mapped, data, static_cast<std::size_t>(size));
         vkUnmapMemory(device_, stagingMem);
-
         createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage,
                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, buffer, memory);
         copyBuffer(staging, buffer, size);
-
         vkDestroyBuffer(device_, staging, nullptr);
         vkFreeMemory(device_, stagingMem, nullptr);
     };
 
+    TerrainChunk c;
+    c.indexCount = static_cast<uint32_t>(indices.size());
     upload(vertices.data(), sizeof(Vertex) * vertices.size(),
-           VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, vertexBuffer_, vertexMemory_);
+           VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, c.vbuf, c.vmem);
     upload(indices.data(), sizeof(std::uint32_t) * indices.size(),
-           VK_BUFFER_USAGE_INDEX_BUFFER_BIT, indexBuffer_, indexMemory_);
+           VK_BUFFER_USAGE_INDEX_BUFFER_BIT, c.ibuf, c.imem);
+    terrainChunks_[key] = c;
+}
+
+// The whole terrain as one chunk. The editor rebuilds the world in one go rather than
+// streaming it, and this is also how the first frame's world arrives.
+void VulkanRenderer::createMeshBuffers(const std::vector<Vertex>& vertices,
+                                       const std::vector<std::uint32_t>& indices) {
+    for (auto& [key, c] : terrainChunks_) retire(c);
+    terrainChunks_.clear();
+    setTerrainChunk(0, vertices, indices);
 }
 
 void VulkanRenderer::createTrackBuffers(
@@ -1601,9 +1633,12 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageInde
     // dark clear. The push constants (ortho pc.viewProj), viewport and scissor above still
     // apply to the overlay pipelines.
     if (!mapMode_) {
-    vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer_, &offset);
-    vkCmdBindIndexBuffer(cmd, indexBuffer_, 0, VK_INDEX_TYPE_UINT32);
-    vkCmdDrawIndexed(cmd, indexCount_, 1, 0, 0, 0);
+    for (const auto& [key, c] : terrainChunks_) {
+        if (c.indexCount == 0) continue;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &c.vbuf, &offset);
+        vkCmdBindIndexBuffer(cmd, c.ibuf, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, c.indexCount, 1, 0, 0, 0);
+    }
 
     // Roads reuse the track pipeline (flat solid-colour lit ribbons). Drawn before
     // the railway so tracks sit on top at level crossings.
@@ -1824,6 +1859,9 @@ void VulkanRenderer::drawFrame(const PushConstants& pc) {
         std::memcpy(textVertexMapped_[currentFrame_], pendingTextVertices_.data(),
                     sizeof(TextVertex) * textVertexCount_);
 
+    // A frame has passed, so buffers retired that many frames ago are now unreferenced.
+    sweepRetired(/*force=*/false);
+
     vkResetCommandBuffer(commandBuffers_[currentFrame_], 0);
     recordCommandBuffer(commandBuffers_[currentFrame_], imageIndex);
 
@@ -1916,10 +1954,9 @@ void VulkanRenderer::cleanup() {
     vkDestroyPipelineLayout(device_, pipelineLayout_, nullptr);
     vkDestroyRenderPass(device_, renderPass_, nullptr);
 
-    vkDestroyBuffer(device_, indexBuffer_, nullptr);
-    vkFreeMemory(device_, indexMemory_, nullptr);
-    vkDestroyBuffer(device_, vertexBuffer_, nullptr);
-    vkFreeMemory(device_, vertexMemory_, nullptr);
+    for (auto& [key, c] : terrainChunks_) retire(c);
+    terrainChunks_.clear();
+    sweepRetired(/*force=*/true); // shutting down: nothing is in flight any more
     vkDestroyBuffer(device_, trackIndexBuffer_, nullptr);
     vkFreeMemory(device_, trackIndexMemory_, nullptr);
     vkDestroyBuffer(device_, trackVertexBuffer_, nullptr);

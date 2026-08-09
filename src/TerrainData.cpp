@@ -114,8 +114,9 @@ bool TerrainData::loadTile(int lod, int col, int row) {
     return true;
 }
 
-bool TerrainData::updateWindow(double centreX, double centreY) {
-    if (root_.empty()) return false;
+TerrainData::WindowChange TerrainData::updateWindow(double centreX, double centreY) {
+    WindowChange ch;
+    if (root_.empty()) return ch;
     windowCentre_ = glm::dvec2(centreX, centreY);
 
     // Drop first, so a long run does not hold both windows at once. The evict radius is
@@ -132,7 +133,13 @@ bool TerrainData::updateWindow(double centreX, double centreY) {
         if (std::hypot(tx - centreX, ty - centreY) > keep + t->extent * 0.5)
             gone.push_back(key);
     }
-    for (const std::uint64_t key : gone) tiles_.erase(key);
+    for (const std::uint64_t key : gone) {
+        const Tile& t = *tiles_[key];
+        ch.touched.push_back({t.originX, t.originY, t.originX + t.extent,
+                              t.originY + t.extent});
+        ch.removed.push_back(key);
+        tiles_.erase(key);
+    }
 
     // Read whatever is now in range. Same rule as load(): every LOD whose footprint
     // falls in the window, finest winning wherever it exists.
@@ -147,7 +154,12 @@ bool TerrainData::updateWindow(double centreX, double centreY) {
             for (int row = rowMin; row <= rowMax; ++row) {
                 const std::uint64_t key = tileKey(lod, col, row);
                 if (tiles_.count(key)) continue;
-                if (loadTile(lod, col, row)) fresh.push_back(tiles_[key].get());
+                if (!loadTile(lod, col, row)) continue;
+                const Tile& t = *tiles_[key];
+                fresh.push_back(tiles_[key].get());
+                ch.added.push_back(key);
+                ch.touched.push_back({t.originX, t.originY, t.originX + t.extent,
+                                      t.originY + t.extent});
             }
     }
 
@@ -177,15 +189,16 @@ bool TerrainData::updateWindow(double centreX, double centreY) {
         carveTrackCuttings(fresh, near, sceneOrigin_);
     }
 
-    if (!fresh.empty() || !gone.empty()) {
+    if (ch.any()) {
         std::size_t samples = 0;
         for (const auto& [key, t] : tiles_) samples += t->heights.size();
         std::printf("[TerrainData] window at (%.0f, %.0f): +%zu -%zu tiles, %zu resident "
                     "(%zu samples)\n",
-                    centreX, centreY, fresh.size(), gone.size(), tiles_.size(), samples);
+                    centreX, centreY, ch.added.size(), ch.removed.size(), tiles_.size(),
+                    samples);
         std::fflush(stdout);
     }
-    return !fresh.empty() || !gone.empty();
+    return ch;
 }
 
 void TerrainData::load(const std::string& datasetRoot, double halfWindow) {

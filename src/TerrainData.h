@@ -121,12 +121,23 @@ public:
     // the train work the same as under it.
     const std::vector<TrackSegment>& networkTracks() const { return networkTracks_; }
 
+    // What a window move did, so a caller can rebuild only what it has to.
+    struct WindowChange {
+        std::vector<std::uint64_t> added;
+        std::vector<std::uint64_t> removed;
+        // Footprints (x0, y0, x1, y1) of the tiles involved, added and removed alike.
+        // A tile's ground is built with the seams it shares with its neighbours, so a
+        // tile appearing or vanishing makes the ring around it stale too.
+        std::vector<glm::dvec4> touched;
+        bool any() const { return !added.empty() || !removed.empty(); }
+    };
+
     // Move the loaded window to `centre` (world x,y): read whatever tiles are now in
     // range and drop whatever has fallen out of it. Newly read tiles are carved before
-    // they are published. Returns true if anything changed, i.e. the meshes are stale.
+    // they are published.
     //
     // Not safe to call while another thread is reading the tiles.
-    bool updateWindow(double centreX, double centreY);
+    WindowChange updateWindow(double centreX, double centreY);
 
     // Apply track-edit overlays to the rail network in-session (mutating the
     // geometry), so the editor can preview edits before they are saved. The saved

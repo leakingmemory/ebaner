@@ -24,6 +24,7 @@
 #include "TunnelMesh.h"
 
 #include <cstdio>
+#include <unordered_set>
 #include <cstdlib>
 
 namespace {
@@ -91,20 +92,40 @@ void WorldStreamer::run() {
         const float radius = data_->loadedRadius();
 
         // From here until `building_` clears, this thread owns the terrain.
-        data_->updateWindow(origin.x + centre.x, origin.y + centre.y);
+        const TerrainData::WindowChange ch =
+            data_->updateWindow(origin.x + centre.x, origin.y + centre.y);
 
         Build b;
         b.centre = centre;
+        b.terrainDrop = ch.removed;
 
         // The bores first: the terrain has to know which of its triangles stand in a
         // tunnel mouth. Both depend on the tiles that just arrived.
         TunnelMesh tunnels;
         tunnels.build(*data_);
 
+        // Which ground to rebuild: the tiles that arrived, and every resident tile whose
+        // footprint touches one that arrived or left. A tile builds the seams it shares
+        // with its neighbours, and builds none where a neighbour is missing - so a tile
+        // appearing or vanishing leaves the ring around it holding a stale edge.
+        std::unordered_set<std::uint64_t> dirty(ch.added.begin(), ch.added.end());
+        for (const glm::dvec4& box : ch.touched) {
+            constexpr double kAdj = 1.0; // footprints share an edge exactly
+            for (const auto& [key, t] : data_->tiles()) {
+                if (t->originX > box.z + kAdj || t->originX + t->extent < box.x - kAdj ||
+                    t->originY > box.w + kAdj || t->originY + t->extent < box.y - kAdj)
+                    continue;
+                dirty.insert(key);
+            }
+        }
+
         TerrainMesh terrain;
-        terrain.build(*data_, &tunnels);
-        b.terrainV = terrain.vertices();
-        b.terrainI = terrain.indices();
+        for (const std::uint64_t key : dirty) {
+            const auto it = data_->tiles().find(key);
+            if (it == data_->tiles().end()) continue;
+            terrain.buildTile(*data_, *it->second, &tunnels);
+            b.terrainChunks.push_back({key, terrain.vertices(), terrain.indices()});
+        }
 
         TrackMesh tracks;
         tracks.build(*paths_, centre, radius);

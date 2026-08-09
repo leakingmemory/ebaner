@@ -42,11 +42,35 @@ void TerrainMesh::build(const TerrainData& data, const TunnelMesh* bores) {
     // Reset accumulators so build() is idempotent (the editor rebuilds to re-preview).
     vertices_.clear();
     indices_.clear();
+    dropped_ = 0;
+    for (const auto& [key, t] : data.tiles()) appendTile(data, t.get(), bores);
+    std::printf("[TerrainMesh] %zu vertices, %zu indices; %zu sub-triangles cut for "
+                "tunnel mouths\n",
+                vertices_.size(), indices_.size(), dropped_);
+}
+
+void TerrainMesh::buildTile(const TerrainData& data, const Tile& tile,
+                            const TunnelMesh* bores) {
+    vertices_.clear();
+    indices_.clear();
+    dropped_ = 0;
+    appendTile(data, &tile, bores);
+}
+
+// One tile's contribution: its own interior, plus the seams and corners it owns.
+//
+// Every triangle in the terrain belongs to exactly one tile. The interior is obviously
+// the tile's own; a seam is built by whichever of the two neighbours owns it (the finer,
+// or N/E on a same-LOD tie), and a corner by the finest of its four quadrants. What makes
+// that enough to build a tile alone is that the seam and corner passes emit their own
+// vertices for the *neighbour* side rather than indexing into the neighbour's - so a
+// tile's triangles only ever reference vertices this call appended.
+void TerrainMesh::appendTile(const TerrainData& data, const Tile* a,
+                             const TunnelMesh* bores) {
     const glm::dvec3 origin = data.sceneOrigin();
-    const auto& tiles = data.tiles();
     // Every triangle goes through here so the tunnel test is applied in one place: a
     // triangle whose centre stands inside a bore is what would otherwise seal the mouth.
-    std::size_t dropped = 0;
+
     // A terrain cell is 10 m and a bore is 7 m across, so dropping whole triangles would take
     // away far more hillside than the mouth and leave a gap nothing can plausibly fill. The
     // few triangles that actually stand at a portal are subdivided first, and only the parts
@@ -109,20 +133,14 @@ void TerrainMesh::build(const TerrainData& data, const TunnelMesh* bores) {
         for (int r = 0; r < kSub; ++r)
             for (int q = 0; q + r < kSub; ++q) {
                 const std::uint32_t a = at(q, r), b = at(q + 1, r), c = at(q, r + 1);
-                if (allIn(a, b, c)) ++dropped;
+                if (allIn(a, b, c)) ++dropped_;
                 else keep(a, b, c);
                 if (q + r + 1 >= kSub) continue;
                 const std::uint32_t d = at(q + 1, r + 1);
-                if (allIn(b, d, c)) ++dropped;
+                if (allIn(b, d, c)) ++dropped_;
                 else keep(b, d, c);
             }
     };
-
-    // --- Tile index + per-tile vertex base ---
-    std::unordered_map<std::uint64_t, const Tile*> byKey;
-    std::unordered_map<const Tile*, std::uint32_t> baseIdx;
-    byKey.reserve(tiles.size() * 2);
-    for (const auto& [tileKey, tp] : tiles) byKey[keyOf(tp->lod, tp->col, tp->row)] = tp.get();
 
     auto heightOf = [&](const Tile* t, int r, int c) -> float {
         return t->heights[static_cast<std::size_t>(r) * P + c];
@@ -135,10 +153,9 @@ void TerrainMesh::build(const TerrainData& data, const TunnelMesh* bores) {
     auto ownerAt = [&](double wx, double wy) -> const Tile* {
         for (int lod = 0; lod < 4; ++lod) {
             const double E = P * kRes[lod];
-            const int col = static_cast<int>(std::floor(wx / E));
-            const int row = static_cast<int>(std::floor(wy / E));
-            auto it = byKey.find(keyOf(lod, col, row));
-            if (it != byKey.end()) return it->second;
+            const Tile* t = data.tileAt(lod, static_cast<int>(std::floor(wx / E)),
+                                        static_cast<int>(std::floor(wy / E)));
+            if (t) return t;
         }
         return nullptr;
     };
@@ -196,48 +213,41 @@ void TerrainMesh::build(const TerrainData& data, const TunnelMesh* bores) {
     };
 
     // --- Pass 1: interior vertices + de-overlapped quads ---
-    for (const auto& [tileKey, tp] : tiles) {
-        const Tile* a = tp.get();
-        const std::uint32_t base = static_cast<std::uint32_t>(vertices_.size());
-        baseIdx[a] = base;
-        for (int row = 0; row < P; ++row)
-            for (int col = 0; col < P; ++col)
-                emit(worldX(a, col), worldY(a, row), heightOf(a, row, col),
-                     tileNormal(a, row, col), lcOf(a, row, col));
+    const std::uint32_t base = static_cast<std::uint32_t>(vertices_.size());
+    for (int row = 0; row < P; ++row)
+        for (int col = 0; col < P; ++col)
+            emit(worldX(a, col), worldY(a, row), heightOf(a, row, col),
+                 tileNormal(a, row, col), lcOf(a, row, col));
 
-        for (int row = 0; row < P - 1; ++row) {
-            for (int col = 0; col < P - 1; ++col) {
-                const float h00 = heightOf(a, row, col);
-                const float h01 = heightOf(a, row, col + 1);
-                const float h10 = heightOf(a, row + 1, col);
-                const float h11 = heightOf(a, row + 1, col + 1);
-                if (isNodata(h00) || isNodata(h01) || isNodata(h10) ||
-                    isNodata(h11))
-                    continue;
-                // De-overlap: keep the quad only if this tile is the finest one
-                // covering the quad centre (else a finer tile renders it).
-                const double cx = a->originX + (col + 1) * a->resolution;
-                const double cy = a->originY + a->extent - (row + 1) * a->resolution;
-                if (ownerAt(cx, cy) != a) continue;
+    for (int row = 0; row < P - 1; ++row) {
+        for (int col = 0; col < P - 1; ++col) {
+            const float h00 = heightOf(a, row, col);
+            const float h01 = heightOf(a, row, col + 1);
+            const float h10 = heightOf(a, row + 1, col);
+            const float h11 = heightOf(a, row + 1, col + 1);
+            if (isNodata(h00) || isNodata(h01) || isNodata(h10) ||
+                isNodata(h11))
+                continue;
+            // De-overlap: keep the quad only if this tile is the finest one
+            // covering the quad centre (else a finer tile renders it).
+            const double cx = a->originX + (col + 1) * a->resolution;
+            const double cy = a->originY + a->extent - (row + 1) * a->resolution;
+            if (ownerAt(cx, cy) != a) continue;
 
-                const std::uint32_t v00 = base + row * P + col;
-                const std::uint32_t v01 = v00 + 1;
-                const std::uint32_t v10 = v00 + P;
-                const std::uint32_t v11 = v10 + 1;
-                emitTri(v00, v10, v01);
-                emitTri(v01, v10, v11);
-            }
+            const std::uint32_t v00 = base + row * P + col;
+            const std::uint32_t v01 = v00 + 1;
+            const std::uint32_t v10 = v00 + P;
+            const std::uint32_t v11 = v10 + 1;
+            emitTri(v00, v10, v01);
+            emitTri(v01, v10, v11);
         }
     }
-    const std::size_t interiorIdx = indices_.size();
 
     // --- Pass 2: edge bridges (stitch seams between neighbouring tiles) ---
     // edge: 0=N (row 0), 1=E (col 255), 2=S (row 255), 3=W (col 0)
     const bool stitch = std::getenv("EBANER_NOSTITCH") == nullptr;
-    for (const auto& [tileKey, tp] : tiles) {
-        if (!stitch) break;
-        const Tile* a = tp.get();
-        const std::uint32_t abase = baseIdx[a];
+    if (stitch) {
+        const std::uint32_t abase = base;
 
         for (int edge = 0; edge < 4; ++edge) {
             const bool ownOnTie = (edge == 0 || edge == 1); // N,E win same-LOD tie
@@ -361,57 +371,48 @@ void TerrainMesh::build(const TerrainData& data, const TunnelMesh* bores) {
         return best;
     };
     if (stitch) {
-        for (const auto& [tileKey, tp] : tiles) {
-            const Tile* a = tp.get();
-            const double oX = a->originX, oY = a->originY, E = a->extent;
-            const double cornersXY[4][2] = {
-                {oX + E, oY + E}, {oX, oY + E}, {oX + E, oY}, {oX, oY}};
-            for (auto& c : cornersXY) {
-                const double cx = c[0], cy = c[1];
-                const Tile* q[4];
-                quadrantOwners(cx, cy, q);
-                if (cornerBuilder(q) != a) continue;
+        const double oX = a->originX, oY = a->originY, E = a->extent;
+        const double cornersXY[4][2] = {
+            {oX + E, oY + E}, {oX, oY + E}, {oX + E, oY}, {oX, oY}};
+        for (auto& c : cornersXY) {
+            const double cx = c[0], cy = c[1];
+            const Tile* q[4];
+            quadrantOwners(cx, cy, q);
+            if (cornerBuilder(q) != a) continue;
 
-                // Sample each present quadrant's nearest-corner surface point.
-                const double off[4][2] = {
-                    {-0.5, -0.5}, {0.5, -0.5}, {0.5, 0.5}, {-0.5, 0.5}};
-                long idx[4] = {-1, -1, -1, -1};
-                for (int k = 0; k < 4; ++k) {
-                    if (!q[k]) continue;
-                    const double res = q[k]->resolution;
-                    const double px = cx + off[k][0] * res;
-                    const double py = cy + off[k][1] * res;
-                    float z;
-                    glm::vec3 n;
-                    if (sampleAt(q[k], px, py, z, n)) {
-                        const int lcC = std::clamp(
-                            static_cast<int>(std::floor((px - q[k]->originX) / res)),
-                            0, P - 1);
-                        const int lcR = std::clamp(
-                            static_cast<int>(std::floor(
-                                (q[k]->originY + q[k]->extent - py) / res)),
-                            0, P - 1);
-                        idx[k] = static_cast<long>(
-                            emit(px, py, z, n, lcOf(q[k], lcR, lcC)));
-                    }
+            // Sample each present quadrant's nearest-corner surface point.
+            const double off[4][2] = {
+                {-0.5, -0.5}, {0.5, -0.5}, {0.5, 0.5}, {-0.5, 0.5}};
+            long idx[4] = {-1, -1, -1, -1};
+            for (int k = 0; k < 4; ++k) {
+                if (!q[k]) continue;
+                const double res = q[k]->resolution;
+                const double px = cx + off[k][0] * res;
+                const double py = cy + off[k][1] * res;
+                float z;
+                glm::vec3 n;
+                if (sampleAt(q[k], px, py, z, n)) {
+                    const int lcC = std::clamp(
+                        static_cast<int>(std::floor((px - q[k]->originX) / res)),
+                        0, P - 1);
+                    const int lcR = std::clamp(
+                        static_cast<int>(std::floor(
+                            (q[k]->originY + q[k]->extent - py) / res)),
+                        0, P - 1);
+                    idx[k] = static_cast<long>(
+                        emit(px, py, z, n, lcOf(q[k], lcR, lcC)));
                 }
-                // Fan around the corner (CCW: SW,SE,NE,NW), skipping missing ones.
-                auto tri = [&](int i, int j, int k) {
-                    if (idx[i] < 0 || idx[j] < 0 || idx[k] < 0) return;
-                    emitTri(static_cast<std::uint32_t>(idx[i]),
-                            static_cast<std::uint32_t>(idx[j]),
-                            static_cast<std::uint32_t>(idx[k]));
-                };
-                tri(0, 1, 2);
-                tri(0, 2, 3);
             }
+            // Fan around the corner (CCW: SW,SE,NE,NW), skipping missing ones.
+            auto tri = [&](int i, int j, int k) {
+                if (idx[i] < 0 || idx[j] < 0 || idx[k] < 0) return;
+                emitTri(static_cast<std::uint32_t>(idx[i]),
+                        static_cast<std::uint32_t>(idx[j]),
+                        static_cast<std::uint32_t>(idx[k]));
+            };
+            tri(0, 1, 2);
+            tri(0, 2, 3);
         }
     }
 
-    const std::size_t stitchIdx = indices_.size() - interiorIdx;
-    std::printf("[TerrainMesh] %zu vertices, %zu indices "
-                "(%zu interior + %zu stitch triangles); %zu sub-triangles cut for "
-                "tunnel mouths\n",
-                vertices_.size(), indices_.size(), interiorIdx / 3,
-                stitchIdx / 3, dropped);
 }

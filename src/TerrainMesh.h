@@ -18,6 +18,7 @@
 #include <vector>
 
 class TerrainData;
+struct Tile;
 class TunnelMesh;
 
 // Interleaved vertex used by the terrain pipeline.
@@ -38,10 +39,19 @@ class TerrainMesh {
 public:
     void build(const TerrainData& data, const TunnelMesh* bores = nullptr);
 
+    // One tile's chunk: its own interior plus the seams and corners it owns. Adding a
+    // tile therefore also dirties the neighbours that own a seam with it - they built no
+    // seam while it was absent.
+    void buildTile(const TerrainData& data, const Tile& tile,
+                   const TunnelMesh* bores = nullptr);
+
     const std::vector<Vertex>& vertices() const { return vertices_; }
     const std::vector<std::uint32_t>& indices() const { return indices_; }
 
 private:
+    void appendTile(const TerrainData& data, const Tile* a, const TunnelMesh* bores);
+    std::size_t dropped_ = 0; // sub-triangles cut for tunnel mouths
+
     std::vector<Vertex> vertices_;
     std::vector<std::uint32_t> indices_;
 };
