@@ -24,6 +24,7 @@
 #include "Font.h"
 #include "PlatformMesh.h"
 #include "RoadMesh.h"
+#include "StationPicker.h"
 #include "Stations.h"
 #include "SwitchMesh.h"
 #include "SwitchNetwork.h"
@@ -120,8 +121,63 @@ int main(int argc, char** argv) {
     const std::vector<Station> stations = loadStations(datasetRoot);
     const Station* start = pickStation(stations, (argc > 2) ? argv[2] : "");
     if (!start) return EXIT_FAILURE;
+
+    // --- Window ---
+    if (!glfwInit()) {
+        std::fprintf(stderr, "glfwInit failed\n");
+        return EXIT_FAILURE;
+    }
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    GLFWwindow* window =
+        glfwCreateWindow(1280, 720, ("ebaner-trackedit - " + start->name).c_str(),
+                         nullptr, nullptr);
+    if (!window) {
+        std::fprintf(stderr, "window creation failed (is Vulkan/WSI available?)\n");
+        glfwTerminate();
+        return EXIT_FAILURE;
+    }
+
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    glfwSetCursorPosCallback(window, cursorCallback);
+    glfwSetKeyCallback(window, keyCallback);
+    glfwSetCharCallback(window, charCallback);
+    glfwSetFramebufferSizeCallback(window, resizeCallback);
+
+    // --- Land-cover textures ---
+    std::vector<std::uint8_t> texPixels = landtex::generate();
+    LandTextureData texData;
+    texData.pixels = texPixels.data();
+    texData.size = landtex::SIZE;
+    texData.layers = landtex::LAYERS;
+    texData.byteSize = texPixels.size();
+
+    // --- Renderer -----------------------------------------------------------
+    // Up on an empty world, so the station can be chosen before any tile is read:
+    // it is the station that decides where the terrain window goes.
+    VulkanRenderer renderer;
+    g_renderer = &renderer;
+    try {
+        renderer.init(window, {}, {}, texData, {}, {}, 0, {}, {}, {}, {}, {});
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "Vulkan init failed: %s\n", e.what());
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return EXIT_FAILURE;
+    }
+
+    // Which station to open at. Named on the command line, or asked for here.
+    if (const Station* picked = runStationPicker(window, renderer, stations, start)) {
+        start = picked;
+    } else {
+        renderer.cleanup();
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return EXIT_SUCCESS; // closed at the picker
+    }
+    glfwSetWindowTitle(window, ("ebaner-trackedit - " + start->name).c_str());
     std::printf("[trackedit] opening at %s (%s)\n", start->name.c_str(),
                 start->line.c_str());
+    drawLoadingNotice(window, renderer, *start);
 
     // --- Load terrain data and build the scene meshes (same as the viewer) ---
     TerrainData data;
@@ -160,43 +216,6 @@ int main(int argc, char** argv) {
                 graph.trackCount, graph.points.size(), graph.lines.size() / 2,
                 graph.deadEnds.size());
 
-    // --- Window ---
-    if (!glfwInit()) {
-        std::fprintf(stderr, "glfwInit failed\n");
-        return EXIT_FAILURE;
-    }
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    GLFWwindow* window =
-        glfwCreateWindow(1280, 720, ("ebaner-trackedit - " + start->name).c_str(),
-                         nullptr, nullptr);
-    if (!window) {
-        std::fprintf(stderr, "window creation failed (is Vulkan/WSI available?)\n");
-        glfwTerminate();
-        return EXIT_FAILURE;
-    }
-
-    glm::vec3 startPos = data.startPos() + glm::vec3(0.0f, 0.0f, 5.0f);
-    g_camera.init(startPos, data.startDir());
-    if (const char* cam = std::getenv("EBANER_CAM")) {
-        float x, y, z, yaw, pitch;
-        if (std::sscanf(cam, "%f,%f,%f,%f,%f", &x, &y, &z, &yaw, &pitch) == 5)
-            g_camera.setPose(glm::vec3(x, y, z), glm::radians(yaw),
-                             glm::radians(pitch));
-    }
-
-    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-    glfwSetCursorPosCallback(window, cursorCallback);
-    glfwSetKeyCallback(window, keyCallback);
-    glfwSetCharCallback(window, charCallback);
-    glfwSetFramebufferSizeCallback(window, resizeCallback);
-
-    // --- Land-cover textures ---
-    std::vector<std::uint8_t> texPixels = landtex::generate();
-    LandTextureData texData;
-    texData.pixels = texPixels.data();
-    texData.size = landtex::SIZE;
-    texData.layers = landtex::LAYERS;
-    texData.byteSize = texPixels.size();
 
     // Platforms draw as solid-lit static geometry identical to buildings; merge
     // them into the building buffers (offsetting indices), as the viewer does.
@@ -220,19 +239,20 @@ int main(int argc, char** argv) {
             structIndices.push_back(idx + vbase);
     }
 
-    // --- Renderer ---
-    VulkanRenderer renderer;
-    g_renderer = &renderer;
-    try {
-        renderer.init(window, mesh.vertices(), mesh.indices(), texData,
-                      tracks.vertices(), tracks.indices(), tracks.alwaysIndexCount(),
-                      tracks.sleeperChunks(), roads.vertices(), roads.indices(),
-                      structVerts, structIndices);
-    } catch (const std::exception& e) {
-        std::fprintf(stderr, "Vulkan init failed: %s\n", e.what());
-        glfwDestroyWindow(window);
-        glfwTerminate();
-        return EXIT_FAILURE;
+    // Hand the built world over - what renderer.init used to carry in.
+    renderer.updateTerrain(mesh.vertices(), mesh.indices());
+    renderer.updateTracks(tracks.vertices(), tracks.indices(),
+                          tracks.alwaysIndexCount(), tracks.sleeperChunks());
+    renderer.updateRoads(roads.vertices(), roads.indices());
+    renderer.updateStructs(structVerts, structIndices);
+
+    glm::vec3 startPos = data.startPos() + glm::vec3(0.0f, 0.0f, 5.0f);
+    g_camera.init(startPos, data.startDir());
+    if (const char* cam = std::getenv("EBANER_CAM")) {
+        float x, y, z, yaw, pitch;
+        if (std::sscanf(cam, "%f,%f,%f,%f,%f", &x, &y, &z, &yaw, &pitch) == 5)
+            g_camera.setPose(glm::vec3(x, y, z), glm::radians(yaw),
+                             glm::radians(pitch));
     }
 
     // --- Editor state ---

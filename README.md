@@ -177,8 +177,8 @@ Both binaries take an optional station name after the dataset. The stations come
 the export itself — every tile's `meta.json` lists the ones inside it, 720 in all — so
 any of them works, not a list kept here. The name is matched ignoring case and the
 Norwegian letters, so `Bodo` finds `Bodø` and `oteraga` finds `Oteråga`; an unknown name
-prints the near misses rather than guessing. Omitted, the viewer asks on its start screen
-(arrows, PgUp/PgDn, Enter) and the editor opens at Bodø.
+prints the near misses rather than guessing. Omitted, both ask on screen before loading
+anything (arrows, PgUp/PgDn, Enter; Esc quits).
 
 Starting far afield is free — the scene is built around whichever station you pick.
 Driving a long way from it is a different matter, and is what the floating-origin work

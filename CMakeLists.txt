@@ -89,6 +89,7 @@ add_library(ebaner_engine STATIC
     src/TrackCircuits.cpp
     src/Streaming.cpp
     src/Stations.cpp
+    src/StationPicker.cpp
     src/SignalPaths.cpp
     src/SignalMesh.cpp
     src/SpeedLimits.cpp

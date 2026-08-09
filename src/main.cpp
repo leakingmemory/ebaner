@@ -29,6 +29,7 @@
 #include "TrackMesh.h"
 #include "SpeedLimits.h"
 #include "SpeedSignMesh.h"
+#include "StationPicker.h"
 #include "Stations.h"
 #include "Streaming.h"
 #include "TrackPath.h"
@@ -241,75 +242,20 @@ int main(int argc, char** argv) {
 
     // --- Start screen, part one: where ---------------------------------------
     // Reading the world takes long enough that it cannot be done speculatively, so the
-    // station is settled here and the loading follows. EBANER_STATION skips the screen,
-    // as EBANER_VEHICLE does for the second half of it.
-    if (std::getenv("EBANER_STATION")) {
-        if (const Station* s = findStation(stations, std::getenv("EBANER_STATION")))
-            start = s;
-    } else if (std::getenv("EBANER_SCREENSHOT") == nullptr) {
-        int pick = 0;
-        for (std::size_t i = 0; i < stations.size(); ++i)
-            if (&stations[i] == start) pick = static_cast<int>(i);
-        std::vector<std::string> names;
-        names.reserve(stations.size());
-        for (const Station& st : stations)
-            names.push_back(st.name + (st.isStop() ? "  (stop)" : "") + "  " + st.line);
-
-        bool pUp = false, pDn = false, pPgU = false, pPgD = false, pEnter = false;
-        while (!glfwWindowShouldClose(window)) {
-            glfwPollEvents();
-            int fw = 0, fh = 0;
-            glfwGetFramebufferSize(window, &fw, &fh);
-            if (fw == 0 || fh == 0) continue;
-            auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
-            const bool u = down(GLFW_KEY_UP), d = down(GLFW_KEY_DOWN);
-            const bool pu = down(GLFW_KEY_PAGE_UP), pd = down(GLFW_KEY_PAGE_DOWN);
-            const bool en = down(GLFW_KEY_ENTER);
-            const int n = static_cast<int>(names.size());
-            if (u && !pUp) pick = (pick + n - 1) % n;
-            if (d && !pDn) pick = (pick + 1) % n;
-            if (pu && !pPgU) pick = (pick + n - 10) % n;
-            if (pd && !pPgD) pick = (pick + 10) % n;
-            if (down(GLFW_KEY_ESCAPE)) { glfwSetWindowShouldClose(window, GLFW_TRUE); }
-            if (en && !pEnter) { start = &stations[pick]; break; }
-            pUp = u; pDn = d; pPgU = pu; pPgD = pd; pEnter = en;
-
-            // A window over the list: 720 stations will not fit on a screen.
-            constexpr int kShown = 15;
-            const int first = std::clamp(pick - kShown / 2, 0,
-                                         std::max(0, n - kShown));
-            std::vector<std::string> page(names.begin() + first,
-                                          names.begin() + std::min(n, first + kShown));
-            std::vector<TextVertex> tv;
-            appendMenu(tv, "START AT  (arrows, PgUp/PgDn, Enter)", page, pick - first,
-                       fw, fh);
-            renderer.setOverlayText(tv);
-            PushConstants pc{};
-            pc.viewProj = glm::mat4(1.0f);
-            renderer.drawFrame(pc);
-        }
-        if (glfwWindowShouldClose(window)) {
-            renderer.cleanup();
-            glfwDestroyWindow(window);
-            glfwTerminate();
-            return EXIT_SUCCESS;
-        }
+    // station is settled here and the loading follows. The vehicle is chosen afterwards,
+    // once there are paths for it to stand on.
+    if (const Station* picked = runStationPicker(window, renderer, stations, start)) {
+        start = picked;
+    } else {
+        renderer.cleanup();
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return EXIT_SUCCESS; // closed at the picker
     }
     glfwSetWindowTitle(window, ("ebaner - " + start->name).c_str());
     std::printf("[main] starting at %s (%s)\n", start->name.c_str(),
                 start->line.c_str());
-    {
-        // One frame saying so, because reading and building the world blocks for a good
-        // few seconds and an unpainted window looks like a hang.
-        int fw = 0, fh = 0;
-        glfwGetFramebufferSize(window, &fw, &fh);
-        std::vector<TextVertex> tv;
-        appendMenu(tv, "LOADING", {start->name, start->line}, -1, fw, fh);
-        renderer.setOverlayText(tv);
-        PushConstants pc{};
-        pc.viewProj = glm::mat4(1.0f);
-        renderer.drawFrame(pc);
-    }
+    drawLoadingNotice(window, renderer, *start);
 
     try {
         data.load(datasetRoot, start->world);
