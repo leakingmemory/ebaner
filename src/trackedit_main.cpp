@@ -258,6 +258,12 @@ int main(int argc, char** argv) {
     // --- Editor state ---
     int selA = -1, selB = -1;      // picked dead-end indices (into graph.deadEnds)
     std::set<int> selected;        // selected geo-points (indices into graph.points)
+    // Growing a selection along the line. The set says what is chosen but not which way
+    // to carry on: after the selection crosses onto another track its indices are no
+    // longer one contiguous run, so the two ends are remembered explicitly, each with the
+    // index direction that walks *into* the track it currently sits on.
+    struct Frontier { int at = -1, step = 0; };
+    Frontier growFwd, growBack;
     std::vector<TrackEdit> pending; // edits made this session, not yet saved
 
     // --- Modes: geometry editing (default), track-circuit (sensing-section) authoring,
@@ -778,7 +784,8 @@ int main(int argc, char** argv) {
         buildPolys(); // keep circuit polylines (border projection/flood) in sync
         // Elev edits keep the point count/order, so the selection stays valid; link
         // edits add a segment (indices shift) so the selection must clear.
-        if (!keepSelection) { selected.clear(); selA = selB = -1; }
+        // The selection is gone, so the walk along the line has nowhere to resume from.
+        if (!keepSelection) { selected.clear(); selA = selB = -1; growFwd = growBack = {}; }
         rebuildOverlay();
     };
     // Rebuild the *rendered* world (rails/sleepers, carved terrain, switch stands) from
@@ -927,6 +934,94 @@ int main(int argc, char** argv) {
         applyEditsLive(es, /*keepSelection=*/true);
     };
     // Raise (+) / lower (-) every selected point's elevation by `delta` metres.
+    // --- Growing a selection along the line ----------------------------------
+    // The points of one track are a contiguous run of indices in route order, so
+    // walking a track is index arithmetic. Tracks are the awkward part: the main line
+    // through a station is several of them end to end (at Fauske, 2.8 km then 4.0 km),
+    // and a stretch worth editing usually crosses at least one boundary. So when the
+    // walk runs off the end of a track it looks for another track ending at the same
+    // point and carries on down that one.
+    auto trackRange = [&](int idx) {
+        const std::uint32_t t = graph.pointTrack[idx];
+        int lo = idx, hi = idx;
+        while (lo > 0 && graph.pointTrack[lo - 1] == t) --lo;
+        const int n = static_cast<int>(graph.pointTrack.size());
+        while (hi + 1 < n && graph.pointTrack[hi + 1] == t) ++hi;
+        return std::pair<int, int>{lo, hi};
+    };
+    // Reset both frontiers to the current selection (called whenever it is set afresh).
+    auto resetGrow = [&]() {
+        growFwd = growBack = {};
+        if (selected.empty()) return;
+        growFwd = {*selected.rbegin(), +1};
+        growBack = {*selected.begin(), -1};
+    };
+    // One point further along from `f`, hopping tracks at a shared end. False at a
+    // genuine dead end.
+    auto advance = [&](Frontier& f) {
+        if (f.at < 0) return false;
+        const auto [lo, hi] = trackRange(f.at);
+        const int next = f.at + f.step;
+        if (next >= lo && next <= hi) {
+            f.at = next;
+            selected.insert(next);
+            return true;
+        }
+        // Off the end: another track ending here continues the route. Several may meet
+        // at a throat, so take the straightest - the same rule buildTrackPaths chains
+        // by - or growing a selection would wander off down the first siding it met.
+        const glm::dvec3 tip = graph.pointWorld[f.at];
+        const int prevIdx = f.at - f.step;
+        glm::dvec2 in(1.0, 0.0);
+        if (prevIdx >= lo && prevIdx <= hi) {
+            in = glm::dvec2(tip.x - graph.pointWorld[prevIdx].x,
+                            tip.y - graph.pointWorld[prevIdx].y);
+            if (const double L = glm::length(in); L > 1e-9) in /= L;
+        }
+        constexpr double kJoin = 2.0; // m, as the junction graph uses
+        int bestJ = -1, bestStep = 0;
+        double bestDot = 0.0; // anything sharper than a right angle is not a continuation
+        for (std::size_t j = 0; j < graph.pointWorld.size(); ++j) {
+            if (graph.pointTrack[j] == graph.pointTrack[f.at]) continue;
+            if (std::hypot(graph.pointWorld[j].x - tip.x,
+                           graph.pointWorld[j].y - tip.y) > kJoin)
+                continue;
+            const auto [jlo, jhi] = trackRange(static_cast<int>(j));
+            if (static_cast<int>(j) != jlo && static_cast<int>(j) != jhi)
+                continue; // must be that track's own end, not a point it passes through
+            const int step = (static_cast<int>(j) == jlo) ? +1 : -1;
+            const int nxt = static_cast<int>(j) + step;
+            if (nxt < jlo || nxt > jhi) continue; // a two-point stub going nowhere
+            glm::dvec2 out(graph.pointWorld[nxt].x - graph.pointWorld[j].x,
+                           graph.pointWorld[nxt].y - graph.pointWorld[j].y);
+            if (const double L = glm::length(out); L > 1e-9) out /= L;
+            const double dot = glm::dot(in, out);
+            if (dot > bestDot) {
+                bestDot = dot;
+                bestJ = static_cast<int>(j);
+                bestStep = step;
+            }
+        }
+        if (bestJ < 0) return false;
+        f.at = bestJ;
+        f.step = bestStep;
+        selected.insert(f.at);
+        return true;
+    };
+    auto growSelection = [&](int dir, int count) {
+        if (selected.empty()) return;
+        if (growFwd.at < 0) resetGrow();
+        Frontier& f = dir > 0 ? growFwd : growBack;
+        int added = 0;
+        for (int i = 0; i < count; ++i) {
+            if (!advance(f)) break;
+            ++added;
+        }
+        if (added == 0)
+            std::printf("[trackedit] selection reaches the end of the line that way\n");
+        rebuildOverlay();
+    };
+
     auto doElevStep = [&](double delta) {
         if (selected.empty()) return;
         std::vector<TrackEdit> es;
@@ -961,6 +1056,7 @@ int main(int argc, char** argv) {
         const int next = group[((it - group.begin()) + 1) % group.size()];
         selected.clear();
         selected.insert(next);
+        resetGrow();
         rebuildOverlay();
         std::printf("[trackedit] cycled to track %#x z=%.2f (%zu coincident here)\n",
                     graph.pointTrack[next], graph.pointWorld[next].z, group.size());
@@ -1329,6 +1425,8 @@ int main(int argc, char** argv) {
         return std::fmod(glfwGetTime(), kBlinkPeriod) < kBlinkPeriod * 0.5 ? 1.0f : 0.0f;
     };
     float elevRepeat = 0.0f; // auto-repeat throttle for Up/Down raise/lower
+    float growRepeat = 0.0f; // and for Left/Right extend-along-the-line
+    bool prevLeft = false, prevRight = false;
     double lastTime = glfwGetTime();
 
     while (!glfwWindowShouldClose(window)) {
@@ -1771,6 +1869,10 @@ int main(int argc, char** argv) {
         const bool kF = glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS;
         // Save is Ctrl+S (plain S is the backward-movement key).
         const bool kSave = ctrl && glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS;
+        const bool kLeft = glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS;
+        const bool kRight = glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS;
+        const bool shiftSel = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
+                              glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
         if (mode == EdMode::Geometry) {
             if (kEnter && !prevEnter && hover >= 0) {
                 if (selA < 0) selA = hover;
@@ -1778,6 +1880,22 @@ int main(int argc, char** argv) {
                 rebuildOverlay();
             }
             if (kX && !prevX) { selA = selB = -1; rebuildOverlay(); }
+            // Left/Right: run the selection along the line, so a stretch worth
+            // regrading does not have to be clicked point by point. Same scaling as
+            // the elevation keys, and it carries on across track boundaries.
+            if (mode == EdMode::Geometry && !selected.empty()) {
+                const int growN = ctrl ? 50 : shiftSel ? 10 : 1;
+                if (kRight || kLeft) {
+                    growRepeat -= dt;
+                    if ((kRight && !prevRight) || (kLeft && !prevLeft) ||
+                        growRepeat <= 0.0f) {
+                        growSelection(kRight ? +1 : -1, growN);
+                        growRepeat = 0.12f;
+                    }
+                } else {
+                    growRepeat = 0.0f;
+                }
+            }
             if (kL && !prevL && selA >= 0 && selB >= 0) {
                 TrackEdit e;
                 e.kind = TrackEdit::Link;
@@ -2043,14 +2161,23 @@ int main(int argc, char** argv) {
         if (kP && !prevP) rebuildRenderPreview();
         // Up/Down: raise/lower the selected point(s). Auto-repeats while held (an
         // immediate first step, then throttled) so big changes don't need many taps.
-        constexpr double kElevStep = 0.1; // metres per step (auto-repeats while held)
+        //
+        // Three sizes, because the range wanted spans three orders of magnitude: a
+        // decimetre to settle a point onto the grade, a metre to shape one, ten to drag
+        // a length of line out of a hillside. At the fine step alone the last of those
+        // is a hundred taps or ten seconds on the key.
+        const bool shift = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
+                           glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
+        const double elevStep = ctrl ? 10.0 : shift ? 1.0 : 0.1; // metres
         const bool kUp = glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS;
         const bool kDn = glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS;
         if (mode == EdMode::Geometry && (kUp || kDn) && !selected.empty()) {
             elevRepeat -= dt;
             if ((kUp && !prevUp) || (kDn && !prevDown) || elevRepeat <= 0.0f) {
-                doElevStep(kUp ? kElevStep : -kElevStep);
-                elevRepeat = 0.09f;
+                doElevStep(kUp ? elevStep : -elevStep);
+                // The coarse steps repeat more slowly: at the fine rate, ten metres a
+                // tick runs away with the point before the key is back up.
+                elevRepeat = ctrl ? 0.22f : shift ? 0.14f : 0.09f;
             }
         } else {
             elevRepeat = 0.0f;
@@ -2195,6 +2322,7 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "[trackedit] failed to write signal-paths file\n");
             }
         }
+        prevLeft = kLeft; prevRight = kRight;
         prevEnter = kEnter; prevL = kL; prevX = kX; prevG = kG; prevS = kSave;
         prevJ = kJ; prevN = kN; prevR = kR; prevK = kK; prevC = kC; prevP = kP;
         prevF2 = kF2; prevM = kM; prevV = kV; prevB = kB; prevT = kT; prevF = kF;
@@ -2213,6 +2341,7 @@ int main(int argc, char** argv) {
             } else if (!ctrl) {
                 selected.clear();
             }
+            resetGrow(); // a fresh pick starts the walk over
             rebuildOverlay();
         } else if (!g_mouseCaptured && mL && !prevML && mode == EdMode::Circuits) {
             // A move is armed: this click relocates the selected border (and everything
@@ -2453,10 +2582,30 @@ int main(int argc, char** argv) {
                 if (selected.size() == 1) // show the track id so coincident points differ
                     std::snprintf(selz, sizeof(selz), " trk %#x z=%.2f",
                                   graph.pointTrack[*selected.begin()], zmin);
-                else std::snprintf(selz, sizeof(selz), " z=%.2f..%.2f", zmin, zmax);
+                else {
+                    // How much line is selected. Measured along the contiguous runs, so
+                    // the metre or two skipped at each track boundary is not counted.
+                    double span = 0.0;
+                    for (int i : selected) {
+                        const int nxt = i + 1;
+                        if (!selected.count(nxt)) continue;
+                        if (graph.pointTrack[nxt] != graph.pointTrack[i]) continue;
+                        span += std::hypot(graph.pointWorld[nxt].x - graph.pointWorld[i].x,
+                                           graph.pointWorld[nxt].y - graph.pointWorld[i].y);
+                    }
+                    std::snprintf(selz, sizeof(selz), " z=%.1f..%.1f  %.0f m", zmin, zmax,
+                                  span);
+                }
             }
+            // Read live, so the legend shows the step the modifiers are asking for.
+            const bool ctrlHud =
+                glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
+                glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
+            const bool shiftHud =
+                glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
+                glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
             std::snprintf(buf, sizeof(buf),
-                          "SELECTED %zu%s   keys: G Up/Dn N J R K C   P render",
+                          "SELECTED %zu%s   keys: G N J R K C   P render",
                           selected.size(), selz);
             appendText(tv, buf, x, 40.0f + 4 * lh, sc,
                        selected.empty() ? glm::vec3(0.7f, 0.85f, 0.7f)
@@ -2472,11 +2621,22 @@ int main(int argc, char** argv) {
                        (pending.empty() && rmv == 0) ? glm::vec3(0.6f, 0.9f, 0.6f)
                                                      : glm::vec3(1.0f, 0.6f, 0.3f),
                        fbw, fbh);
+            // The elevation step gets its own line: the selection line above already
+            // carries a track id and a height range and has no room to spare. Shown live,
+            // so holding the modifier tells you what a tap is about to do.
+            std::snprintf(buf, sizeof(buf),
+                          "ELEV Up/Dn %s m   GROW Lt/Rt %s pt   Shift/Ctrl scale",
+                          ctrlHud ? "10" : shiftHud ? "1" : "0.1",
+                          ctrlHud ? "50" : shiftHud ? "10" : "1");
+            appendText(tv, buf, x, 40.0f + 6 * lh, sc,
+                       (ctrlHud || shiftHud) ? glm::vec3(1.0f, 0.9f, 0.3f)
+                                             : glm::vec3(0.7f, 0.85f, 0.7f),
+                       fbw, fbh);
             appendText(tv,
                        g_mouseCaptured ? "SELECT: press Tab to free the cursor"
                                        : "SELECT: click point, Ctrl+click multi, "
                                          "click empty to clear",
-                       x, 40.0f + 6 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
+                       x, 40.0f + 7 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
           } else if (mode == EdMode::Circuits) { // --- Circuits mode HUD ---
             appendText(tv, "MODE: TRACK CIRCUITS (Esc menu to switch)", x, 40.0f + 3 * lh,
                        sc, glm::vec3(1.0f, 0.6f, 0.6f), fbw, fbh);

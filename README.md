@@ -241,9 +241,20 @@ multi-selection; clicking empty space clears it. Picking is screen-space from th
 cursor. The **elevation** of the point under the cursor is labelled beside it, and the
 HUD shows the selected point's elevation (or the `min..max` range for a group).
 
+**Selecting a stretch (`Left` / `Right`).** Clicking every point of a kilometre of
+line is not on, so the arrows run the selection along it: **Right** extends it forward,
+**Left** backward, one point at a time, **Shift** ten, **Ctrl** fifty (auto-repeating
+while held). It follows the route rather than one track — the main line through a
+station is several tracks end to end — and at a junction it takes the straightest
+continuation, the same rule the path builder chains by, so it does not wander off down
+a siding. The HUD shows how many points and how many metres are selected.
+
 **Raising / lowering.** With points selected, **Up** / **Down** nudge their elevation
-by 0.1 m (auto-repeating while held, so bigger moves just hold the key). Each is an
-`elev` override, previewed live and saved with Ctrl+S — handy for fixing a stray point.
+by 0.1 m; **Shift** makes it 1 m and **Ctrl** 10 m, for dropping a long stretch onto
+the terrain rather than fixing a stray point. All auto-repeat while held, the coarser
+steps more slowly. Every selected point moves by the *same* amount, so the grade
+through the selection is preserved — it is a shift, not a flattening (for that, see
+`G` below). Each is an `elev` override, previewed live and saved with Ctrl+S.
 
 **Straightening a grade (`G`).** Where a track profile has a vertical bump that
 shouldn't be there, select points on that track (at least the two ends of the run)
