@@ -34,10 +34,11 @@ std::string overlayFile(const std::string& root) {
     return root + "/overlay/track-edits.txt";
 }
 
-// Nearest track-segment endpoint to a world point; returns the endpoint and its track
-// type, or false if none within tol.
+// Nearest track-segment endpoint to a world point; returns the endpoint with its track
+// type and medium, or false if none within tol.
 bool nearestEndpoint(const std::vector<TrackSegment>& segs, const glm::dvec3& q,
-                     double tol, glm::dvec3& out, std::uint8_t& trackType) {
+                     double tol, glm::dvec3& out, std::uint8_t& trackType,
+                     std::uint8_t& medium) {
     double best = tol;
     bool found = false;
     for (const TrackSegment& s : segs) {
@@ -48,6 +49,7 @@ bool nearestEndpoint(const std::vector<TrackSegment>& segs, const glm::dvec3& q,
                 best = d;
                 out = e;
                 trackType = s.trackType;
+                medium = s.medium;
                 found = true;
             }
         }
@@ -155,18 +157,24 @@ void applyTrackOverlay(std::vector<TrackSegment>& segs,
     for (std::size_t i = 0; i < edits.size(); ++i) {
         if (edits[i].kind != TrackEdit::Link) continue;
         glm::dvec3 ea, eb;
-        std::uint8_t ta = 0, tb = 0;
-        if (!nearestEndpoint(segs, edits[i].a, kSnapTol, ea, ta)) continue;
-        if (!nearestEndpoint(segs, edits[i].b, kSnapTol, eb, tb)) continue;
+        std::uint8_t ta = 0, tb = 0, ma = 0x20, mb = 0x20;
+        if (!nearestEndpoint(segs, edits[i].a, kSnapTol, ea, ta, ma)) continue;
+        if (!nearestEndpoint(segs, edits[i].b, kSnapTol, eb, tb, mb)) continue;
         if (std::hypot(ea.x - eb.x, ea.y - eb.y) < 1.0) continue; // same point
 
-        // A synthetic connector segment joining the two ends. medium = tunnel so the
-        // terrain carve leaves it (the gap is typically inside a mountain anyway),
-        // and a unique high trackId so it survives buildTrackPaths' dedup.
+        // A synthetic connector segment joining the two ends, with a unique high trackId
+        // so it survives buildTrackPaths' dedup.
+        //
+        // It takes the medium of what it joins. A gap at a tunnel mouth, or inside the
+        // mountain, is tunnel: the terrain carve leaves it alone and the bore runs
+        // through. A gap between two surface tracks is surface - call that one tunnel
+        // and a bore grows along it, leaving a length of rock tube lying in the open
+        // where the missing embankment should be.
+        auto underground = [](std::uint8_t m) { return m == 0x55 || m == 0x54; };
         TrackSegment c;
         c.trackId = kConnectorIdBase + static_cast<std::uint32_t>(i);
         c.trackType = ta;      // both ends share type (else the join won't chain)
-        c.medium = 0x55;       // tunnel
+        c.medium = (underground(ma) || underground(mb)) ? 0x55 : 0x20;
         c.pts = {ea, eb};
         segs.push_back(std::move(c));
         ++links;
