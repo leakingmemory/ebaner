@@ -19,10 +19,12 @@
 // be left shut by a train that turned back. So it is driven here directly, with the
 // occupancy dictated rather than simulated, and no dataset in the way.
 
+#include "FlagPosts.h"
 #include "LevelCrossings.h"
 
 #include <cmath>
 #include <cstdio>
+#include <map>
 #include <string>
 
 namespace {
@@ -225,6 +227,61 @@ int main(int argc, char** argv) {
         check(same, "ids, names, tracks, fracs and overrides survive");
         check(back.size() > 1 && back[0].outerM == 0.0 && back[1].outerM == 900.0,
               "an absent override stays absent, a set one is kept");
+    }
+
+    // The TXP's flag. Each post is its own: setting one says nothing about any other,
+    // and nothing about whether the station is manned - a manned station has no flag out
+    // most of the time.
+    {
+        std::puts("\nThe flag posts:");
+        std::vector<FlagColour> shown(3, FlagColour::None);
+        // Cycling is the whole control: none -> red -> green -> none, per post.
+        auto cycle = [&](int i) {
+            shown[i] = shown[i] == FlagColour::None    ? FlagColour::Red
+                       : shown[i] == FlagColour::Red   ? FlagColour::Green
+                                                       : FlagColour::None;
+        };
+        check(shown[0] == FlagColour::None && shown[1] == FlagColour::None &&
+                  shown[2] == FlagColour::None,
+              "every fixture starts empty");
+
+        cycle(0);
+        check(shown[0] == FlagColour::Red, "one cycle puts a red flag out");
+        check(shown[1] == FlagColour::None && shown[2] == FlagColour::None,
+              "and no other post is touched");
+
+        cycle(1);
+        cycle(1);
+        check(shown[1] == FlagColour::Green, "a second post goes to green on its own");
+        check(shown[0] == FlagColour::Red,
+              "while the first keeps its red - the posts are independent");
+
+        cycle(0);
+        check(shown[0] == FlagColour::Green && shown[1] == FlagColour::Green,
+              "two greens at one station are allowed");
+
+        cycle(0);
+        check(shown[0] == FlagColour::None, "a third cycle takes it down again");
+        check(shown[1] == FlagColour::Green, "leaving the other post as it was");
+    }
+
+    if (argc > 1) {
+        std::puts("\nThe flag-post overlay round-trips:");
+        std::vector<FlagPost> ps;
+        ps.push_back({1, "Fauske vest", 0x6d7, 0.31, 1, ""});
+        ps.push_back({2, "Rognan søndre", 0x6d9, 0.62, -1, "Rognan"});
+        check(writeFlagPosts(argv[1], ps), "write");
+        const std::vector<FlagPost> back = loadFlagPosts(argv[1]);
+        check(back.size() == 2, "both posts come back");
+        bool same = back.size() == ps.size();
+        for (std::size_t i = 0; same && i < back.size(); ++i)
+            same = back[i].id == ps[i].id && back[i].name == ps[i].name &&
+                   back[i].trackId == ps[i].trackId &&
+                   std::abs(back[i].frac - ps[i].frac) < 1e-9 &&
+                   back[i].side == ps[i].side && back[i].station == ps[i].station;
+        check(same, "ids, names, tracks, fracs, sides and overrides survive");
+        check(back.size() > 1 && back[0].side == 1 && back[1].side == -1,
+              "a flipped side is kept as flipped");
     }
 
     std::printf("\n%s\n", failures ? "FAILED" : "PASSED");

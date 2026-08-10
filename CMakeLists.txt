@@ -93,6 +93,8 @@ add_library(ebaner_engine STATIC
     src/SimpleEntrySignals.cpp
     src/LevelCrossings.cpp
     src/CrossingMesh.cpp
+    src/FlagPosts.cpp
+    src/FlagMesh.cpp
     src/SignalPaths.cpp
     src/SignalMesh.cpp
     src/SpeedLimits.cpp

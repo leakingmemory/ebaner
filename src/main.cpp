@@ -18,7 +18,11 @@
 #include "RoadMesh.h"
 #include "SignalMesh.h"
 #include "SignalPaths.h"
+#include <cassert>
+
 #include "CrossingMesh.h"
+#include "FlagMesh.h"
+#include "FlagPosts.h"
 #include "LevelCrossings.h"
 #include "SimpleEntrySignals.h"
 #include "SwitchMesh.h"
@@ -611,8 +615,21 @@ int main(int argc, char** argv) {
                     crossingSites[i].outerM, crossingSites[i].innerM);
     }
 
+    // Flag posts: the hand signal the station's TXP hangs out.
+    const std::vector<FlagPost> flagPosts = loadFlagPosts(datasetRoot);
+    const std::vector<SignalStation> flagPostStation =
+        attachStations(flagPosts, stations, polys);
+    // What each post is displaying, one entry per post and answerable to nothing else.
+    // Not part of StationState: a flag is set and taken down on its own, several posts
+    // may show different things at once, and a manned station most of the time has no
+    // flag out at all. Runtime only, as a switch position is.
+    std::vector<FlagColour> flagShown(flagPosts.size(), FlagColour::None);
+    if (!flagPosts.empty())
+        std::printf("[FlagPost] %zu post(s)\n", flagPosts.size());
+
     SignalMesh signals;
     CrossingMesh crossingMesh;
+    FlagMesh flagMesh;
     // Signals and crossings share one buffer: both change while the sim runs, and the
     // renderer already has an update path for that one. Merged as the struct bucket is.
     std::vector<TrackVertex> signalVerts;
@@ -628,6 +645,13 @@ int main(int argc, char** argv) {
                            crossingMesh.vertices().end());
         signalIdx.reserve(signalIdx.size() + crossingMesh.indices().size());
         for (const std::uint32_t i : crossingMesh.indices()) signalIdx.push_back(i + base);
+
+        flagMesh.build(flagPosts, flagShown, polys, data.sceneOrigin());
+        const std::uint32_t fbase = static_cast<std::uint32_t>(signalVerts.size());
+        signalVerts.insert(signalVerts.end(), flagMesh.vertices().begin(),
+                           flagMesh.vertices().end());
+        signalIdx.reserve(signalIdx.size() + flagMesh.indices().size());
+        for (const std::uint32_t i : flagMesh.indices()) signalIdx.push_back(i + fbase);
     };
     rebuildSignalBuffer();
     renderer.attachSignals(signalVerts, signalIdx);
@@ -1158,6 +1182,9 @@ int main(int argc, char** argv) {
     bool mapAttached = false; // whether the map overlay is currently attached
     bool switchesChanged = true; // a switch moved: re-evaluate the signal aspects
     bool simpleSignalsChanged = true; // a simple entry signal was set (or first frame)
+    // A flag moves no aspect, so it needs its own trigger: the rebuild below is gated on
+    // an aspect having changed, and a flag would otherwise be set and never drawn.
+    bool flagsChanged = false;
     bool prevMapClick = false; // edge-trigger for the map left-click
     bool prevPickUp = false, prevPickDown = false, prevPickEnter = false;
     const std::vector<std::string> kMenuItems = {"Traffic manager", "Exit"};
@@ -1473,6 +1500,29 @@ int main(int argc, char** argv) {
             if (simpleEntryStation[i].name == station) out.push_back(static_cast<int>(i));
         return out;
     };
+    auto flagPostsAt = [&](const std::string& station) {
+        std::vector<int> out;
+        for (std::size_t i = 0; i < flagPosts.size(); ++i)
+            if (flagPostStation[i].name == station) out.push_back(static_cast<int>(i));
+        return out;
+    };
+    // Where each line of the station panel sits. Derived once because the panel is drawn
+    // in one place and acted on in another, a few hundred lines apart, and an off-by-one
+    // between them would quietly act on a different line from the highlighted one.
+    struct PanelLayout {
+        int sigFirst = 2;  // after the manned switch and the all-red line
+        int sigCount = 0;  // lines the signals occupy (1 even when there are none)
+        int flagFirst = 0; // then one line per flag post, which Enter cycles
+        int count = 0;
+    };
+    auto panelLayout = [](const std::vector<int>& ss, const std::vector<int>& fp) {
+        PanelLayout L;
+        L.sigCount = ss.empty() ? 1 : static_cast<int>(ss.size());
+        L.flagFirst = L.sigFirst + L.sigCount;
+        L.count = L.flagFirst + static_cast<int>(fp.size());
+        return L;
+    };
+
     // The station's own switch first, then its signals. Off is a station-wide state -
     // unmanned, signals dark, trains through - so it cannot be a per-signal choice. Then
     // all-red, because nothing else clears a green: these hold until told otherwise.
@@ -1495,6 +1545,18 @@ int main(int argc, char** argv) {
             items.push_back(fit(simpleEntries[i].name, kName + 6) +
                             (!manned ? "  dark" : i == green ? "  GREEN" : "  red"));
         if (ss.empty()) items.push_back("(no simple entry signals here)");
+
+        // One line per flag post, which Enter cycles through none, red and green. Each
+        // is its own: nothing here reads or writes another post, or the manned switch.
+        const std::vector<int> fp = flagPostsAt(station);
+        for (int i : fp) {
+            const char* w = flagShown[i] == FlagColour::Red     ? "  RED FLAG"
+                            : flagShown[i] == FlagColour::Green ? "  GREEN FLAG"
+                                                                : "  no flag";
+            items.push_back(fit("Flag: " + flagPosts[i].name, kName + 6) + w);
+        }
+        // The layout the input side indexes by has to be the list actually drawn.
+        assert(static_cast<int>(items.size()) == panelLayout(ss, fp).count);
         return items;
     };
     auto appendSignalPicker = [&](std::vector<TextVertex>& tv, int fbw, int fbh) {
@@ -1502,11 +1564,15 @@ int main(int argc, char** argv) {
         const std::string station = simpleStationHere();
         const std::vector<int> ss = simpleSignalsAt(station);
         const std::string title =
-            "ENTRY SIGNALS" + (station.empty() ? "" : " - " + station) +
+            "STATION" + (station.empty() ? "" : " - " + station) +
             "  (Up/Down, Enter, Esc)";
-        appendMenu(tv, title, signalPickItems(station, ss),
-                   std::clamp(g_signalPickSel, 0, static_cast<int>(ss.size()) + 1), fbw,
-                   fbh);
+        // Clamp against what is actually drawn: the list is the signals and the flags
+        // together now, so the signal count alone would cut the highlight short.
+        const std::vector<std::string> items = signalPickItems(station, ss);
+        appendMenu(tv, title, items,
+                   std::clamp(g_signalPickSel, 0,
+                              std::max(0, static_cast<int>(items.size()) - 1)),
+                   fbw, fbh);
     };
 
     // The picker panel, drawn after the map HUD so it sits over the map.
@@ -1682,7 +1748,7 @@ int main(int argc, char** argv) {
                 }
             }
         }
-        if (occupancyChanged || switchesChanged || simpleSignalsChanged) {
+        if (occupancyChanged || switchesChanged || simpleSignalsChanged || flagsChanged) {
             switchesChanged = false;
             simpleSignalsChanged = false;
             // What each main signal shows: danger unless a route it governs is set and has
@@ -1713,7 +1779,8 @@ int main(int argc, char** argv) {
             // any route having moved.
             if (updateDistantAspects(sigPlacements, polys, junctions, switchNet))
                 aspectsMoved = true;
-            if (aspectsMoved) {
+            if (aspectsMoved || flagsChanged) {
+                flagsChanged = false;
                 rebuildSignalBuffer();
                 renderer.updateSignals(signalVerts, signalIdx);
             }
@@ -1864,8 +1931,9 @@ int main(int argc, char** argv) {
                        pE = down(GLFW_KEY_ENTER);
             const std::string station = simpleStationHere();
             const std::vector<int> ss = simpleSignalsAt(station);
-            // + the station switch and the all-red line
-            const int n = static_cast<int>(ss.size()) + 2;
+            const std::vector<int> fp = flagPostsAt(station);
+            const PanelLayout L = panelLayout(ss, fp);
+            const int n = L.count;
             if (pU && !prevPickUp) g_signalPickSel = (g_signalPickSel + n - 1) % n;
             if (pD && !prevPickDown) g_signalPickSel = (g_signalPickSel + 1) % n;
             g_signalPickSel = std::clamp(g_signalPickSel, 0, n - 1);
@@ -1881,14 +1949,28 @@ int main(int argc, char** argv) {
                 } else if (g_signalPickSel == 1) {
                     st.green = -1;
                     setMapMsg(station + ": all entry signals at danger");
+                } else if (g_signalPickSel < L.flagFirst) {
+                    if (!ss.empty()) {
+                        // One green per station is the whole interlocking: setting this
+                        // one puts every other signal here back to red by construction,
+                        // because the station holds a single id rather than a flag per
+                        // signal.
+                        st.green = ss[g_signalPickSel - L.sigFirst];
+                        if (!st.manned) st.manned = true; // clearing one implies manned
+                        setMapMsg(simpleEntries[st.green].name + " cleared (" + station +
+                                  ": one green at a time)");
+                    }
                 } else {
-                    // One green per station is the whole interlocking: setting this one
-                    // puts every other signal here back to red by construction, because
-                    // the station holds a single id rather than a flag per signal.
-                    st.green = ss[g_signalPickSel - 2];
-                    if (!st.manned) st.manned = true; // clearing one implies it is manned
-                    setMapMsg(simpleEntries[st.green].name + " cleared (" + station +
-                              ": one green at a time)");
+                    // Cycle this post and only this post: none -> red -> green -> none.
+                    const int i = fp[g_signalPickSel - L.flagFirst];
+                    flagShown[i] = flagShown[i] == FlagColour::None ? FlagColour::Red
+                                   : flagShown[i] == FlagColour::Red ? FlagColour::Green
+                                                                     : FlagColour::None;
+                    setMapMsg(flagPosts[i].name + ": " +
+                              (flagShown[i] == FlagColour::Red     ? "red flag out"
+                               : flagShown[i] == FlagColour::Green ? "green flag out"
+                                                                   : "flag taken down"));
+                    flagsChanged = true;
                 }
                 simpleSignalsChanged = true;
                 g_mapDirty = true;

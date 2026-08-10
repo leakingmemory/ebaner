@@ -80,36 +80,3 @@ bool writeSimpleEntrySignals(const std::string& datasetRoot,
     }
     return static_cast<bool>(f);
 }
-
-std::vector<SignalStation> attachStations(const std::vector<SimpleEntrySignal>& sigs,
-                                          const std::vector<Station>& stations,
-                                          const std::vector<TrackPoly>& polys) {
-    std::vector<SignalStation> out(sigs.size());
-    for (std::size_t i = 0; i < sigs.size(); ++i) {
-        const SimpleEntrySignal& s = sigs[i];
-        const glm::dvec3 w = fracToWorld(polys, s.trackId, s.frac);
-        if (w.x == 0.0 && w.y == 0.0) continue; // stale/missing track
-
-        // An override names its station outright; otherwise take the nearest.
-        if (!s.station.empty()) {
-            out[i].name = s.station;
-            if (const Station* st = findStation(stations, s.station))
-                out[i].distanceM = std::hypot(st->world.x - w.x, st->world.y - w.y);
-            out[i].far = out[i].distanceM > kFarM;
-            continue;
-        }
-        double best = 1e30;
-        for (const Station& st : stations) {
-            const double d = std::hypot(st.world.x - w.x, st.world.y - w.y);
-            if (d < best) {
-                best = d;
-                out[i].name = st.name;
-            }
-        }
-        if (!out[i].name.empty()) {
-            out[i].distanceM = best;
-            out[i].far = best > kFarM;
-        }
-    }
-    return out;
-}

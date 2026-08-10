@@ -362,6 +362,29 @@ releases itself after a minute of everything being clear.
 Each crossing runs its **own** blink, phased off its id, so two within sight of one
 another are visibly out of step — as real ones are, each having its own oscillator.
 
+**Flag posts.** The hand signal a station's TXP hangs out: **red for stop, green for
+pass through, and an empty fixture** when the station is unmanned or neither applies. Pick
+**Flag posts** from the Esc menu and **click a point on any track**; **right-click**
+selects, **F** swaps which side of the track the post stands on, **F2** names, **X**
+deletes, **Ctrl+S** saves to `overlay/flag-posts.txt`.
+
+The flag is not carried. It is on a stick that slots horizontally into a fixture near the
+top of the post, so it hangs down toward the track and stays there. The post and its
+fixture stand whether or not anything is in them — an empty fixture is itself an
+indication. Because the flag hangs it reads from either direction, so there is no facing
+to author; `F` is placement, not aim.
+
+Each post attaches to the **nearest station**, which is only how the panel groups them:
+`O` for the traffic manager, then **E**, gives one line per post under that station's
+signals, and **Enter cycles it** — no flag, red, green, no flag. Every post is
+independent. Setting one says nothing about any other, several may show different things
+at once, and none of them is tied to the manned switch: a manned station has no flag out
+most of the time.
+
+Nothing constrains the flag against the fixed signalling either — a green flag against a
+red entry signal is allowed, because part of why a hand signal exists is to say what the
+signalling cannot.
+
 ## Data format
 
 See `../terrainmapper/doc/game-export-format.md`. In short: 256×256 little-endian
