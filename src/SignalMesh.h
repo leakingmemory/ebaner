@@ -13,6 +13,26 @@
 
 #pragma once
 
+#include <cmath>
+
+// --- Blink -----------------------------------------------------------------------
+// A blinking lamp carries its own period and phase (see SignalMesh.cpp's lampAt), and
+// the push constant carries a clock rather than a lit/dark flag. Two lamps can then run
+// at different rates, and two crossings at the same rate can run out of step.
+//
+// The clock wraps so float32 keeps its resolution. Every period in use divides the wrap
+// exactly, so the wrap is invisible; one that did not would show a single clipped blink
+// every few minutes.
+constexpr float kBlinkWrapS = 300.0f;
+constexpr float kSignalBlinkS = 1.0f;   // a signal's flashing danger, as it always was
+constexpr float kCrossingSlowS = 1.5f;  // a crossing at rest
+constexpr float kCrossingFastS = 0.5f;  // a crossing with a train coming
+
+// The value for PushConstants::params.y.
+inline float blinkClock(double nowSeconds) {
+    return static_cast<float>(std::fmod(nowSeconds, static_cast<double>(kBlinkWrapS)));
+}
+
 #include "SignalPaths.h" // SignalPlacement
 #include "TrackMesh.h"   // TrackVertex (shared solid-lit vertex)
 

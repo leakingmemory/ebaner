@@ -23,7 +23,7 @@ layout(push_constant) uniform PushConstants {
     mat4 viewProj;
     vec4 sunDir;   // xyz = direction to sun; w = min elevation
     vec4 camPos;   // xyz = camera position (scene-relative); w = max elevation
-    vec4 params;   // x = scene alpha; y = flashing-lamp blink state (1 = lit)
+    vec4 params;   // x = scene alpha; y = blink clock (seconds, wrapped)
 } pc;
 
 layout(location = 0) out vec3 vWorldPos;
@@ -47,7 +47,11 @@ void main() {
     // Bounded, not open-ended: the band below the lamps is tunnel rock, whose normal is a
     // normal and not a lamp centre to be blown up about.
     const bool isLamp = inTexLayer < -2.5 && inTexLayer > -4.5;
-    const bool lampLit = inTexLayer > -3.5 || pc.params.y > 0.5;
+    // A blinking lamp carries its period in uv.x and its phase in uv.y, so each one runs
+    // on its own clock; a steady lamp (-3) is lit always.
+    const bool lampLit =
+        inTexLayer > -3.5 ||
+        (inUv.x > 0.0 && fract((pc.params.y + inUv.y) / inUv.x) < 0.5);
     if (isLamp && lampLit) {
         const vec3 c = inNormal; // lamp centre
         vec3 off = inPos - c;

@@ -18,6 +18,8 @@
 #include "RoadMesh.h"
 #include "SignalMesh.h"
 #include "SignalPaths.h"
+#include "CrossingMesh.h"
+#include "LevelCrossings.h"
 #include "SimpleEntrySignals.h"
 #include "SwitchMesh.h"
 #include "SwitchNetwork.h"
@@ -591,9 +593,44 @@ int main(int argc, char** argv) {
     auto miniAspect = [](const SignalPlacement& sp) {
         return sp.kind == SignalKind::Dwarf ? sp.aspect : sp.dwarfAspect;
     };
+    // Level crossings, secured by lights alone. Their detection circuits are their own -
+    // arc-length ranges either side of the crossing - so nothing has to be authored for
+    // one to work, and none of the track-circuit machinery is involved.
+    const std::vector<LevelCrossing> crossings = loadLevelCrossings(datasetRoot);
+    const std::vector<CrossingSite> crossingSites =
+        resolveCrossings(crossings, paths, polys, data.sceneOrigin());
+    std::vector<CrossingState> crossingStates(crossings.size());
+    for (std::size_t i = 0; i < crossings.size(); ++i) {
+        if (crossingSites[i].path < 0) {
+            std::fprintf(stderr, "[Crossing] \"%s\" is not on any path - stale overlay?\n",
+                         crossings[i].name.c_str());
+            continue;
+        }
+        std::printf("[Crossing] %-16s %5.0f km/h -> approach %.0f m, inner +/-%.0f m\n",
+                    crossings[i].name.c_str(), crossingSites[i].lineSpeedKmh,
+                    crossingSites[i].outerM, crossingSites[i].innerM);
+    }
+
     SignalMesh signals;
-    signals.build(sigPlacements, data.sceneOrigin());
-    renderer.attachSignals(signals.vertices(), signals.indices());
+    CrossingMesh crossingMesh;
+    // Signals and crossings share one buffer: both change while the sim runs, and the
+    // renderer already has an update path for that one. Merged as the struct bucket is.
+    std::vector<TrackVertex> signalVerts;
+    std::vector<std::uint32_t> signalIdx;
+    auto rebuildSignalBuffer = [&]() {
+        signals.build(sigPlacements, data.sceneOrigin());
+        crossingMesh.build(crossings, crossingSites, crossingStates, paths,
+                           data.sceneOrigin());
+        signalVerts = signals.vertices();
+        signalIdx = signals.indices();
+        const std::uint32_t base = static_cast<std::uint32_t>(signalVerts.size());
+        signalVerts.insert(signalVerts.end(), crossingMesh.vertices().begin(),
+                           crossingMesh.vertices().end());
+        signalIdx.reserve(signalIdx.size() + crossingMesh.indices().size());
+        for (const std::uint32_t i : crossingMesh.indices()) signalIdx.push_back(i + base);
+    };
+    rebuildSignalBuffer();
+    renderer.attachSignals(signalVerts, signalIdx);
 
     // Route setting (traffic manager): a set route holds its switches and shows its signal
     // clear. It drops as soon as a train enters its circuits (the lock lifts then too; the
@@ -1561,6 +1598,50 @@ int main(int argc, char** argv) {
                             pathName(static_cast<int>(pi)).c_str());
             }
         }
+        // Level crossings: each reads its own circuits and runs its own sequence. Every
+        // frame rather than only on an occupancy change, because the phases are timed -
+        // the 5 s delays and the stuck timeout advance whether or not a train moved.
+        if (!crossings.empty()) {
+            const std::vector<VehicleFrame> axles =
+                vehicle ? vehicle->axleFrames() : std::vector<VehicleFrame>{};
+            bool anyPhaseMoved = false;
+            for (std::size_t ci = 0; ci < crossings.size(); ++ci) {
+                const CrossingSite& site = crossingSites[ci];
+                if (site.path < 0) continue;
+                // Where each axle sits along this crossing's own path, as a signed
+                // distance from the crossing. An axle on some other path is simply not on
+                // this crossing's road, which is the deferred branching case behaving
+                // sanely rather than accidentally.
+                CrossingOccupancy occ;
+                const TrackPath& p = paths[site.path];
+                for (const VehicleFrame& ax : axles) {
+                    // Project the axle onto the path near the crossing rather than
+                    // searching the whole of it: a path can be tens of kilometres long.
+                    float bestS = 0.0f;
+                    double bestD = 1e30;
+                    const float lo = std::max(0.0f, site.s - site.outerM - 200.0f);
+                    const float hi = std::min(p.length(), site.s + site.outerM + 200.0f);
+                    for (float t = lo; t <= hi; t += 5.0f) {
+                        const glm::vec3 q = p.poseAt(t).pos;
+                        const double d = std::hypot(q.x - ax.pos.x, q.y - ax.pos.y);
+                        if (d < bestD) { bestD = d; bestS = t; }
+                    }
+                    if (bestD > 4.0) continue; // not on this road at all
+                    const float rel = bestS - site.s;
+                    if (std::abs(rel) <= site.innerM) occ.inner = true;
+                    else if (rel < 0.0f && rel >= -site.outerM) occ.outerA = true;
+                    else if (rel > 0.0f && rel <= site.outerM) occ.outerB = true;
+                }
+                const CrossingPhase was = crossingStates[ci].phase;
+                stepCrossing(crossingStates[ci], occ, now);
+                if (crossingStates[ci].phase != was) anyPhaseMoved = true;
+            }
+            if (anyPhaseMoved) {
+                rebuildSignalBuffer();
+                renderer.updateSignals(signalVerts, signalIdx);
+            }
+        }
+
         // Main routes unwind circuit by circuit. Two different rules, deliberately:
         // every circuit's lock is released as that circuit is itself entered, so the route
         // gives up the road behind the train rather than all at once; but only a circuit
@@ -1633,8 +1714,8 @@ int main(int argc, char** argv) {
             if (updateDistantAspects(sigPlacements, polys, junctions, switchNet))
                 aspectsMoved = true;
             if (aspectsMoved) {
-                signals.build(sigPlacements, data.sceneOrigin());
-                renderer.updateSignals(signals.vertices(), signals.indices());
+                rebuildSignalBuffer();
+                renderer.updateSignals(signalVerts, signalIdx);
             }
         }
 
@@ -2165,9 +2246,8 @@ int main(int argc, char** argv) {
         // Flashing lamps (an entry signal's danger) blink from the push constant rather
         // than by rebuilding the signal mesh: in the editor those vertices share a buffer
         // with 32k buildings, so a rebuild twice a second is out of the question there.
-        constexpr double kBlinkPeriod = 1.0; // s, half lit
         PushConstants pc{};
-        pc.params.y = std::fmod(now, kBlinkPeriod) < kBlinkPeriod * 0.5 ? 1.0f : 0.0f;
+        pc.params.y = blinkClock(now); // a clock; each lamp blinks on its own period
         if (g_mapMode) {
             pc.viewProj = mapOrtho(aspect); // top-down ortho, centred + zoomed + panned
         } else {

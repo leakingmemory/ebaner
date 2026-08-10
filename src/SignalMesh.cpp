@@ -13,6 +13,8 @@
 
 #include "SignalMesh.h"
 
+#include "LampGeometry.h"
+
 #include <cmath>
 
 namespace {
@@ -31,67 +33,25 @@ void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 o
     vertices_.clear();
     indices_.clear();
 
-    auto tri = [&](const glm::vec3& p0, const glm::vec3& p1, const glm::vec3& p2,
-                   const glm::vec3& n, const glm::vec3& c) {
-        const std::uint32_t base = static_cast<std::uint32_t>(vertices_.size());
-        vertices_.push_back({p0, n, c, {0.0f, 0.0f}, -1.0f});
-        vertices_.push_back({p1, n, c, {0.0f, 0.0f}, -1.0f});
-        vertices_.push_back({p2, n, c, {0.0f, 0.0f}, -1.0f});
-        indices_.push_back(base + 0);
-        indices_.push_back(base + 1);
-        indices_.push_back(base + 2);
+    // The drawing vocabulary lives in LampGeometry.h so the signals and the level
+    // crossings share one copy of it - above all one copy of how a lit lens is tagged.
+    auto tri = [&](const glm::vec3& a, const glm::vec3& b, const glm::vec3& c,
+                   const glm::vec3& n, const glm::vec3& col) {
+        lampgeom::tri(vertices_, indices_, a, b, c, n, col);
     };
-    auto quad = [&](const glm::vec3& p0, const glm::vec3& p1, const glm::vec3& p2,
-                    const glm::vec3& p3, const glm::vec3& n, const glm::vec3& c) {
-        tri(p0, p1, p2, n, c);
-        tri(p0, p2, p3, n, c);
-    };
-    // Box with orthonormal local axes r/f/u and half-extents hr/hf/hu about centre c.
     auto box = [&](const glm::vec3& c, const glm::vec3& r, const glm::vec3& f,
                    const glm::vec3& u, float hr, float hf, float hu, const glm::vec3& col) {
-        const glm::vec3 R = r * hr, F = f * hf, U = u * hu;
-        auto P = [&](float sr, float sf, float su) { return c + R * sr + F * sf + U * su; };
-        quad(P(1, -1, -1), P(1, 1, -1), P(1, 1, 1), P(1, -1, 1), r, col);
-        quad(P(-1, 1, -1), P(-1, -1, -1), P(-1, -1, 1), P(-1, 1, 1), -r, col);
-        quad(P(1, 1, -1), P(-1, 1, -1), P(-1, 1, 1), P(1, 1, 1), f, col);
-        quad(P(-1, -1, -1), P(1, -1, -1), P(1, -1, 1), P(-1, -1, 1), -f, col);
-        quad(P(-1, -1, 1), P(1, -1, 1), P(1, 1, 1), P(-1, 1, 1), u, col);
-        quad(P(-1, 1, -1), P(1, 1, -1), P(1, -1, -1), P(-1, -1, -1), -u, col);
+        lampgeom::box(vertices_, indices_, c, r, f, u, hr, hf, hu, col);
     };
-    // A filled disc facing +n, in the (w,up) plane - a lamp lens.
     auto disc = [&](const glm::vec3& c, const glm::vec3& n, const glm::vec3& w,
                     const glm::vec3& up, float rad, const glm::vec3& col) {
-        constexpr int N = 12;
-        for (int i = 0; i < N; ++i) {
-            const float a0 = 6.2831853f * i / N, a1 = 6.2831853f * (i + 1) / N;
-            const glm::vec3 p0 = c + (w * std::cos(a0) + up * std::sin(a0)) * rad;
-            const glm::vec3 p1 = c + (w * std::cos(a1) + up * std::sin(a1)) * rad;
-            tri(c, p0, p1, n, col);
-        }
+        lampgeom::disc(vertices_, indices_, c, n, w, up, rad, col);
     };
-
-    // A lit main-signal lens. Same disc, but tagged emissive for the shader: it carries
-    // its own centre in the normal slot (unused once the sun term is skipped) so the
-    // shader can hold it to a minimum apparent size, which is what keeps a signal
-    // readable from far down the line.
+    // Every signal here blinks at the one rate the signalling uses, all in step.
     auto lamp = [&](const glm::vec3& c, const glm::vec3& w, const glm::vec3& up, float rad,
                     const glm::vec3& col, bool flashing = false) {
-        // -3 steady, -4 flashing: the shader blinks the latter and, crucially, leaves it at
-        // true scale while dark so it does not bloom into a blob at range.
-        const float kLampLayer = flashing ? -4.0f : -3.0f;
-        constexpr int N = 12;
-        for (int i = 0; i < N; ++i) {
-            const float a0 = 6.2831853f * i / N, a1 = 6.2831853f * (i + 1) / N;
-            const glm::vec3 p0 = c + (w * std::cos(a0) + up * std::sin(a0)) * rad;
-            const glm::vec3 p1 = c + (w * std::cos(a1) + up * std::sin(a1)) * rad;
-            const std::uint32_t base = static_cast<std::uint32_t>(vertices_.size());
-            vertices_.push_back({c, c, col, {0.0f, 0.0f}, kLampLayer});
-            vertices_.push_back({p0, c, col, {0.0f, 0.0f}, kLampLayer});
-            vertices_.push_back({p1, c, col, {0.0f, 0.0f}, kLampLayer});
-            indices_.push_back(base + 0);
-            indices_.push_back(base + 1);
-            indices_.push_back(base + 2);
-        }
+        lampgeom::lamp(vertices_, indices_, c, w, up, rad, col,
+                       flashing ? kSignalBlinkS : 0.0f, 0.0f);
     };
 
     const glm::vec3 UP(0.0f, 0.0f, 1.0f);

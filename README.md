@@ -328,6 +328,40 @@ nearest station: the first line switches the station on or off, then **All red**
 signals. A signal holds whatever it was last given — nothing else resets it, no train
 passing and no timer — which is why the state of each is on the line beside it.
 
+**Level crossings.** A crossing secured by lights alone — no barriers. Pick **Level
+crossings** from the Esc menu and **click a point on any track**; **right-click** selects,
+**F2** names, **X** deletes, **Ctrl+S** saves to `overlay/level-crossings.txt`. There is
+no flip: a crossing faces both ways.
+
+Four heads, each **red over white** and flashing: two facing the train, one each way along
+the track, and two facing the road across it. Three detection circuits come with the
+crossing rather than being drawn — an **inner** one over the crossing and out past the
+train signals either side, and an **approach** circuit each way. The approach distance is
+derived from the line speed there (braking distance plus the time the sequence needs), so
+a 130 km/h main line arms about 1.5 km out and a 40 km/h branch a couple of hundred
+metres; the editor HUD shows what it worked out, and a distance written into the overlay
+line overrules it.
+
+The sequence, with the road's lights first and the train's second:
+
+| | road | train |
+|---|---|---|
+| **idle** | white, slow | red, slow |
+| **closing** (5 s) | red, fast | red, fast |
+| **secured** | red, fast | white, fast |
+| **opening** (5 s) | red, fast | red, fast |
+
+An approach circuit arms it on the **edge** — clear to occupied — and only from idle,
+which is what stops a departing train re-arming the crossing from the far circuit. The
+inner circuit arms it whenever it is occupied, no edge and no gate, because it is the
+fallback for an approach circuit that has failed. The release runs on the inner circuit
+clearing and on nothing else, and mirrors the delay: the train's signal drops to red at
+once, the road opens 5 s later. A crossing armed by a movement that then turned back
+releases itself after a minute of everything being clear.
+
+Each crossing runs its **own** blink, phased off its id, so two within sight of one
+another are visibly out of step — as real ones are, each having its own oscillator.
+
 ## Data format
 
 See `../terrainmapper/doc/game-export-format.md`. In short: 256×256 little-endian

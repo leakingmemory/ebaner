@@ -30,6 +30,8 @@
 #include "SwitchNetwork.h"
 #include "SignalMesh.h"
 #include "SignalPaths.h"
+#include "CrossingMesh.h"
+#include "LevelCrossings.h"
 #include "SimpleEntrySignals.h"
 #include "SpeedLimits.h"
 #include "SpeedSignMesh.h"
@@ -272,7 +274,7 @@ int main(int argc, char** argv) {
     // from the Escape menu. ---
     enum class EdMode {
         Geometry, Circuits, Switches, SignalPaths, ExitSignals, EntrySignals,
-        DistantSignals, SimpleEntries
+        DistantSignals, SimpleEntries, Crossings
     };
     EdMode mode = EdMode::Geometry;
     int selTurnout = -1;             // selected turnout (index into switchNet.turnouts())
@@ -326,6 +328,14 @@ int main(int argc, char** argv) {
     int nextSimpleId = 1;
     for (const SimpleEntrySignal& e : simpleEntries)
         nextSimpleId = std::max(nextSimpleId, e.id + 1);
+    // Level crossings, secured by lights alone.
+    std::vector<LevelCrossing> crossings = loadLevelCrossings(datasetRoot);
+    std::vector<CrossingSite> crossingSites;
+    bool crossingDirty = false;
+    int selCrossing = -1;
+    int nextCrossingId = 1;
+    for (const LevelCrossing& x : crossings)
+        nextCrossingId = std::max(nextCrossingId, x.id + 1);
     for (const DistantSignal& d : distantSignals)
         nextDistantId = std::max(nextDistantId, d.id + 1);
     TrackCircuits tc = loadTrackCircuits(datasetRoot); // borders + sections (own overlay)
@@ -336,7 +346,8 @@ int main(int argc, char** argv) {
     // What the shared rename modal is editing. Every route carries a real name - they are
     // what the operator will pick from when setting a route - so creating one opens this
     // straight away, pre-filled with the auto default.
-    enum class NameTarget { None, Section, Path, Exit, ExitRoute, Entry, Distant, Simple };
+    enum class NameTarget { None, Section, Path, Exit, ExitRoute, Entry, Distant, Simple,
+                           Crossing };
     NameTarget namingWhat = NameTarget::None;
     int namingIdx = -1;              // index into whichever collection that names
     int nextSectionId = 1;           // auto-increment section id
@@ -371,6 +382,9 @@ int main(int argc, char** argv) {
         else if (what == NameTarget::Simple && idx >= 0 &&
                  idx < static_cast<int>(simpleEntries.size()))
             cur = &simpleEntries[idx].name;
+        else if (what == NameTarget::Crossing && idx >= 0 &&
+                 idx < static_cast<int>(crossings.size()))
+            cur = &crossings[idx].name;
         if (!cur) return;
         namingWhat = what;
         namingIdx = idx;
@@ -874,6 +888,15 @@ int main(int argc, char** argv) {
         merge(tunnels.vertices(), tunnels.indices());
         merge(switches.vertices(), switches.indices());
         merge(signals.vertices(), signals.indices());
+        // The crossings, all idle here - the editor has no trains, so what a crossing
+        // would do is not what it is being placed for.
+        crossingSites = resolveCrossings(crossings, paths, polys, data.sceneOrigin());
+        {
+            CrossingMesh cm;
+            cm.build(crossings, crossingSites, std::vector<CrossingState>(crossings.size()),
+                     paths, data.sceneOrigin());
+            merge(cm.vertices(), cm.indices());
+        }
         renderer.updateStructs(sv, si);
     };
     // Try to close an exit route from the pinned start border to the armed exit signal.
@@ -1442,14 +1465,13 @@ int main(int argc, char** argv) {
                                                  "Switches", "Signal paths",
                                                  "Exit signals", "Entry signals",
                                                  "Distant signals",
-                                                 "Simple entry signals", "Exit"};
+                                                 "Simple entry signals",
+                                                 "Level crossings", "Exit"};
     // Flashing lamps (an entry signal's danger) blink from the push constant rather than by
     // rebuilding the signal mesh - here those vertices share the struct buffer with 32k
     // buildings, so a rebuild twice a second is out of the question.
-    auto blinkLit = [] {
-        constexpr double kBlinkPeriod = 1.0; // s, half lit
-        return std::fmod(glfwGetTime(), kBlinkPeriod) < kBlinkPeriod * 0.5 ? 1.0f : 0.0f;
-    };
+    // A clock rather than a lit/dark flag: each lamp carries its own period and phase.
+    auto blinkLit = [] { return blinkClock(glfwGetTime()); };
     float elevRepeat = 0.0f; // auto-repeat throttle for Up/Down raise/lower
     float growRepeat = 0.0f; // and for Left/Right extend-along-the-line
     bool prevLeft = false, prevRight = false;
@@ -1485,12 +1507,13 @@ int main(int argc, char** argv) {
                            : sel == "Entry signals" ? EdMode::EntrySignals
                            : sel == "Distant signals" ? EdMode::DistantSignals
                            : sel == "Simple entry signals" ? EdMode::SimpleEntries
+                           : sel == "Level crossings" ? EdMode::Crossings
                                                     : EdMode::Geometry;
                     selected.clear(); selA = selB = -1; selBorder = -1;
                     selTurnout = -1;
                     pathStart = -1; selPath = -1; selExit = -1; pendingVias.clear();
                     selExitRoute = -1; armedExit = -1; selEntry = -1; selDistant = -1;
-                    selSimple = -1;
+                    selSimple = -1; selCrossing = -1;
                     showPending = false;
                     rebuildOverlay();
                     g_menuOpen = false;
@@ -1531,6 +1554,7 @@ int main(int argc, char** argv) {
                                : namingWhat == NameTarget::Entry      ? "entry signal"
                                : namingWhat == NameTarget::Distant    ? "distant signal"
                                : namingWhat == NameTarget::Simple ? "simple entry signal"
+                               : namingWhat == NameTarget::Crossing ? "level crossing"
                                                                       : "";
             const char* pfx = namingWhat == NameTarget::Section      ? "S"
                               : namingWhat == NameTarget::Path       ? "P"
@@ -1538,10 +1562,18 @@ int main(int argc, char** argv) {
                               : namingWhat == NameTarget::Entry      ? "N"
                               : namingWhat == NameTarget::Distant    ? "D"
                               : namingWhat == NameTarget::Simple     ? "SE"
+                              : namingWhat == NameTarget::Crossing   ? "X"
                                                                      : "R";
             if (e && !prevNameEnter) {
                 std::vector<SignalPath>* nr = namedRoutes(namingWhat);
-                if (namingWhat == NameTarget::Simple && namingIdx >= 0 &&
+                if (namingWhat == NameTarget::Crossing && namingIdx >= 0 &&
+                    namingIdx < static_cast<int>(crossings.size())) {
+                    LevelCrossing& x = crossings[namingIdx];
+                    x.name = g_nameBuf.empty() ? (pfx + std::to_string(x.id)) : g_nameBuf;
+                    crossingDirty = true;
+                    std::printf("[trackedit] %s %d named \"%s\" (Ctrl+S to save)\n", what,
+                                x.id, x.name.c_str());
+                } else if (namingWhat == NameTarget::Simple && namingIdx >= 0 &&
                     namingIdx < static_cast<int>(simpleEntries.size())) {
                     SimpleEntrySignal& e = simpleEntries[namingIdx];
                     e.name = g_nameBuf.empty() ? (pfx + std::to_string(e.id)) : g_nameBuf;
@@ -1600,6 +1632,9 @@ int main(int argc, char** argv) {
             else if (namingWhat == NameTarget::Simple && namingIdx >= 0 &&
                      namingIdx < static_cast<int>(simpleEntries.size()))
                 nid = simpleEntries[namingIdx].id;
+            else if (namingWhat == NameTarget::Crossing && namingIdx >= 0 &&
+                     namingIdx < static_cast<int>(crossings.size()))
+                nid = crossings[namingIdx].id;
             std::string title = "NAME ";
             for (const char* c = what; *c; ++c)
                 title.push_back(static_cast<char>(std::toupper(*c)));
@@ -1695,7 +1730,7 @@ int main(int argc, char** argv) {
         if ((mode == EdMode::Circuits || mode == EdMode::Switches ||
              mode == EdMode::SignalPaths || mode == EdMode::ExitSignals ||
              mode == EdMode::EntrySignals || mode == EdMode::DistantSignals ||
-             mode == EdMode::SimpleEntries) &&
+             mode == EdMode::SimpleEntries || mode == EdMode::Crossings) &&
             !g_mouseCaptured) {
             double mx = 0.0, my = 0.0;
             glfwGetCursorPos(window, &mx, &my);
@@ -2103,6 +2138,19 @@ int main(int argc, char** argv) {
                 rebuildOverlay();
             }
             if (kF2 && !prevF2 && haveSel) beginNaming(NameTarget::Simple, selSimple);
+        } else if (mode == EdMode::Crossings) { // --- Level crossings mode ---
+            const bool haveSel =
+                selCrossing >= 0 && selCrossing < static_cast<int>(crossings.size());
+            // No flip: a crossing faces both ways by construction.
+            if (kX && !prevX && haveSel) {
+                crossings.erase(crossings.begin() + selCrossing);
+                selCrossing = -1;
+                crossingDirty = true;
+                std::printf("[trackedit] level crossing removed (Ctrl+S to save)\n");
+                rebuildStructs();
+                rebuildOverlay();
+            }
+            if (kF2 && !prevF2 && haveSel) beginNaming(NameTarget::Crossing, selCrossing);
         } else { // --- Signal-paths / exit-signals modes ---
             // V: pin the hovered border as a via the route must pass through, so an
             // otherwise ambiguous destination can be narrowed to one road.
@@ -2361,6 +2409,15 @@ int main(int argc, char** argv) {
                     std::fprintf(stderr, "[trackedit] failed to write exit routes\n");
                 }
             }
+        } else if (kSave && !prevS && mode == EdMode::Crossings && crossingDirty) {
+            if (writeLevelCrossings(datasetRoot, crossings)) {
+                std::printf("[trackedit] saved %zu level crossing(s) to "
+                            "%s/overlay/level-crossings.txt\n", crossings.size(),
+                            datasetRoot.c_str());
+                crossingDirty = false;
+            } else {
+                std::fprintf(stderr, "[trackedit] failed to write level crossings\n");
+            }
         } else if (kSave && !prevS && mode == EdMode::SimpleEntries && simpleDirty) {
             if (writeSimpleEntrySignals(datasetRoot, simpleEntries)) {
                 std::printf("[trackedit] saved %zu simple entry signal(s) to "
@@ -2501,6 +2558,23 @@ int main(int argc, char** argv) {
                 beginNaming(NameTarget::Distant, selDistant);
             }
             rebuildOverlay();
+        } else if (!g_mouseCaptured && mL && !prevML && mode == EdMode::Crossings) {
+            if (circHit) {
+                LevelCrossing x;
+                x.id = nextCrossingId++;
+                x.name = "X" + std::to_string(x.id);
+                x.trackId = circTrack;
+                x.frac = circFrac;
+                crossings.push_back(std::move(x));
+                selCrossing = static_cast<int>(crossings.size()) - 1;
+                crossingDirty = true;
+                rebuildStructs();
+                std::printf("[trackedit] level crossing %d on %#x at %.6f "
+                            "(Ctrl+S to save)\n", crossings[selCrossing].id, circTrack,
+                            circFrac);
+                beginNaming(NameTarget::Crossing, selCrossing);
+            }
+            rebuildOverlay();
         } else if (!g_mouseCaptured && mL && !prevML && mode == EdMode::SimpleEntries) {
             // Free placement, same as a distant: any point on any track, no border needed.
             if (circHit) {
@@ -2616,6 +2690,29 @@ int main(int argc, char** argv) {
                                    (clip.y / clip.w * 0.5f + 0.5f) * fbh);
                 const float dpx = glm::length(px - cur);
                 if (dpx < best) { best = dpx; selDistant = static_cast<int>(i); }
+            }
+            rebuildOverlay();
+        } else if (!g_mouseCaptured && mR && !prevMR && mode == EdMode::Crossings) {
+            double mx = 0.0, my = 0.0;
+            glfwGetCursorPos(window, &mx, &my);
+            int winw = fbw, winh = fbh;
+            glfwGetWindowSize(window, &winw, &winh);
+            const glm::vec2 cur(static_cast<float>(mx) * fbw / std::max(winw, 1),
+                                static_cast<float>(my) * fbh / std::max(winh, 1));
+            const glm::dvec3 o = data.sceneOrigin();
+            float best = 24.0f; // px
+            selCrossing = -1;
+            for (std::size_t i = 0; i < crossings.size(); ++i) {
+                const glm::dvec3 w =
+                    fracToWorld(polys, crossings[i].trackId, crossings[i].frac);
+                if (w.x == 0.0 && w.y == 0.0) continue;
+                const glm::vec4 clip = viewProj * glm::vec4(
+                    float(w.x - o.x), float(w.y - o.y), float(w.z - o.z) + 2.0f, 1.0f);
+                if (clip.w <= 0.0f) continue;
+                const glm::vec2 px((clip.x / clip.w * 0.5f + 0.5f) * fbw,
+                                   (clip.y / clip.w * 0.5f + 0.5f) * fbh);
+                const float dpx = glm::length(px - cur);
+                if (dpx < best) { best = dpx; selCrossing = static_cast<int>(i); }
             }
             rebuildOverlay();
         } else if (!g_mouseCaptured && mR && !prevMR && mode == EdMode::SimpleEntries) {
@@ -2838,6 +2935,37 @@ int main(int argc, char** argv) {
                                        : "SWITCHES: click=select  M=manual/motor  "
                                          "hover circuit + L=add/remove lock",
                        x, 40.0f + 7 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
+          } else if (mode == EdMode::Crossings) { // --- Level crossings HUD ---
+            appendText(tv, "MODE: LEVEL CROSSINGS (Esc menu to switch)", x, 40.0f + 3 * lh,
+                       sc, glm::vec3(1.0f, 0.75f, 0.3f), fbw, fbh);
+            const bool haveSel =
+                selCrossing >= 0 && selCrossing < static_cast<int>(crossings.size());
+            std::snprintf(buf, sizeof(buf), "CROSSINGS %zu", crossings.size());
+            appendText(tv, buf, x, 40.0f + 4 * lh, sc,
+                       haveSel ? glm::vec3(1.0f, 0.9f, 0.3f) : glm::vec3(0.9f, 0.85f, 0.7f),
+                       fbw, fbh);
+            if (haveSel && selCrossing < static_cast<int>(crossingSites.size())) {
+                // The circuit extents are the whole configuration of a crossing and are
+                // invisible from the masts, so they are worked out live and shown.
+                const CrossingSite& st = crossingSites[selCrossing];
+                if (st.path < 0)
+                    std::snprintf(buf, sizeof(buf), "%s   NOT ON ANY PATH",
+                                  crossings[selCrossing].name.c_str());
+                else
+                    std::snprintf(buf, sizeof(buf),
+                                  "%s   %.0f km/h -> approach %.0f m%s   inner +/-%.0f m",
+                                  crossings[selCrossing].name.c_str(), st.lineSpeedKmh,
+                                  st.outerM,
+                                  crossings[selCrossing].outerM > 0.0 ? " (set)" : "",
+                                  st.innerM);
+                appendText(tv, buf, x, 40.0f + 5 * lh, sc,
+                           st.path < 0 ? glm::vec3(1.0f, 0.55f, 0.3f)
+                                       : glm::vec3(0.8f, 0.95f, 0.8f),
+                           fbw, fbh);
+            }
+            appendText(tv,
+                       "click track: place   right-click: select   F2: name   X: delete",
+                       x, 40.0f + 6 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
           } else if (mode == EdMode::SimpleEntries) { // --- Simple entry signals HUD ---
             appendText(tv, "MODE: SIMPLE ENTRY SIGNALS (Esc menu to switch)", x,
                        40.0f + 3 * lh, sc, glm::vec3(1.0f, 0.75f, 0.3f), fbw, fbh);

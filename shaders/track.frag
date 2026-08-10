@@ -55,7 +55,11 @@ void main() {
     // lamp flashes: on the dark beat it reads as an unlit lens rather than vanishing, which
     // is what the lens looks like between flashes.
     if (vTexLayer < -2.5 && vTexLayer > -4.5) {
-        const bool dark = vTexLayer < -3.5 && pc.params.y < 0.5;
+        // Blinking (-4) reads its own period from uv.x and phase from uv.y; steady (-3)
+        // is lit always. uv is free to carry them because it is only ever sampled above,
+        // for the ballast top, where texLayer is >= 0.
+        const bool blinking = vTexLayer < -3.5 && vUv.x > 0.0;
+        const bool dark = blinking && fract((pc.params.y + vUv.y) / vUv.x) >= 0.5;
         outColor = vec4(dark ? base * 0.16 : base, pc.params.x);
         return;
     }

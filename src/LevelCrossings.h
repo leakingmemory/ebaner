@@ -1,0 +1,134 @@
+// ebaner - a Vulkan viewer for terrainmapper rail/terrain exports.
+// Copyright (C) 2026 Jan-Espen Oversand <sigsegv@radiotube.org>
+//
+// This file is part of ebaner. ebaner is free software: you can redistribute it
+// and/or modify it under the terms of version 3 of the GNU General Public License
+// as published by the Free Software Foundation.
+//
+// ebaner is distributed in the hope that it will be useful, but WITHOUT ANY
+// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+// PARTICULAR PURPOSE. See the GNU General Public License for more details. You
+// should have received a copy of the license along with ebaner; if not, see
+// <https://www.gnu.org/licenses/>.
+
+#pragma once
+
+#include "TrackCircuits.h" // TrackPoly, fracToWorld
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+class TrackPath;
+
+// A level crossing secured by lights alone - no barriers.
+//
+// Four heads, each red over white and flashing: two facing the train, one each way along
+// the track, and two facing the road, one each way across it. Three detection circuits,
+// all belonging to the crossing rather than to the authored track circuits in
+// TrackCircuits.h - nothing has to be drawn for one of these to work.
+//
+// File `<datasetRoot>/overlay/level-crossings.txt`:
+//   crossing <id> "<name>" <trackHex>:<frac> [<outerM>]
+struct LevelCrossing {
+    int id = 0;
+    std::string name;
+    std::uint32_t trackId = 0;
+    double frac = 0.0;
+    // How far out the approach circuits reach. 0 means derive it from the line speed
+    // here, which is what nearly every crossing should do; a value overrules that where
+    // the derivation comes out wrong.
+    double outerM = 0.0;
+};
+
+std::vector<LevelCrossing> loadLevelCrossings(const std::string& datasetRoot);
+bool writeLevelCrossings(const std::string& datasetRoot,
+                         const std::vector<LevelCrossing>& xs);
+
+// --- Geometry -------------------------------------------------------------------
+// Where the train heads stand either side of the crossing, and how far past them the
+// inner circuit reaches. A train that has pulled up to a signal must still be detected
+// and must still be able to see it, so the circuit has to outlast the signal.
+constexpr double kSignalOffsetM = 25.0;
+constexpr double kInnerMarginM = 25.0;
+inline double innerHalfM() { return kSignalOffsetM + kInnerMarginM; }
+
+// The approach distance derived from the line speed: braking at a service rate, plus the
+// time the crossing needs to run its own sequence. At 130 km/h that is around 1.5 km; at
+// 40 km/h a couple of hundred metres, so a yard crossing does not arm a kilometre out.
+// Not SpeedLimits.h's kServiceDecel, which is deliberately conservative because warning
+// a driver early about a speed change costs nothing. Arming a crossing early does cost
+// something - the road is shut for longer than it needs to be - so this is the rate a
+// train actually brakes at rather than a pessimistic bound.
+constexpr double kCrossingBrakeDecel = 0.7; // m/s^2
+constexpr double kSequenceS = 15.0;    // s of running the crossing wants in hand
+constexpr double kOuterMinM = 200.0;
+constexpr double kOuterMaxM = 2000.0;
+double approachDistance(double lineSpeedKmh);
+
+// A crossing resolved onto the built paths: which path it sits on and where, plus the
+// circuit extents in that path's arc length. Paths are built once and never rebuilt, so
+// this is worked out once at load.
+struct CrossingSite {
+    int path = -1;      // index into the path list, -1 = not on any (stale overlay)
+    float s = 0.0f;     // arc length of the crossing along that path
+    float innerM = 0.0f;
+    float outerM = 0.0f;
+    float lineSpeedKmh = 0.0f; // what the approach distance was derived from
+};
+// `origin` is the scene origin: the polys are in world coordinates and the paths are
+// scene-relative, so resolving one onto the other has to cross between them.
+std::vector<CrossingSite> resolveCrossings(const std::vector<LevelCrossing>& xs,
+                                           const std::vector<TrackPath>& paths,
+                                           const std::vector<TrackPoly>& polys,
+                                           const glm::dvec3& origin);
+
+// --- The sequence ---------------------------------------------------------------
+// Closing and Opening light identically - the crossing is shut to the road in both - and
+// differ only in where they lead. That is the 5 s reverse falling out as the same state
+// entered from the other end.
+enum class CrossingPhase { Idle, Closing, Secured, Opening };
+
+// How long the train's red is held before it goes to white, and the same delay again on
+// the way back out.
+constexpr double kTrainDelayS = 5.0;
+// A train can arm an approach circuit and then reverse away without ever arriving. As
+// described the crossing would stay shut for good, so an all-clear this long releases it.
+constexpr double kStuckTimeoutS = 60.0;
+
+struct CrossingState {
+    CrossingPhase phase = CrossingPhase::Idle;
+    double phaseSince = 0.0; // when the current phase began
+    double allClearSince = 0.0; // when every circuit last became clear (0 = not clear)
+    bool prevOuterA = false, prevOuterB = false; // for the edge gate
+    // Whether the train has actually reached the crossing this cycle. Without it,
+    // Secured would release the instant it was entered: the sequence starts while the
+    // train is still out on the approach, so an unoccupied inner circuit at that moment
+    // means "not here yet", not "gone past".
+    bool innerSeen = false;
+};
+
+// What the three circuits see this instant.
+struct CrossingOccupancy {
+    bool outerA = false; // approach on the -s side
+    bool inner = false;
+    bool outerB = false; // approach on the +s side
+};
+
+// Advance one crossing. `now` is a monotonic clock in seconds.
+//
+// Two rules carry the safety argument here:
+//  - the approach circuits arm the sequence on their *edge* (clear -> occupied) and only
+//    from Idle, which is what stops a departing train re-arming the crossing from the far
+//    approach circuit as it leaves;
+//  - the inner circuit arms it whenever it is occupied, no edge and no gate, because it is
+//    the fallback for an approach circuit that has failed.
+void stepCrossing(CrossingState& st, const CrossingOccupancy& occ, double now);
+
+// What each head shows. Only one lamp of a head is ever lit.
+struct CrossingLights {
+    bool trainRed = false, trainWhite = false;
+    bool roadRed = false, roadWhite = false;
+    bool fast = false; // the active pulse; idle is the slow one
+};
+CrossingLights crossingLights(CrossingPhase phase);

@@ -91,6 +91,8 @@ add_library(ebaner_engine STATIC
     src/Stations.cpp
     src/StationPicker.cpp
     src/SimpleEntrySignals.cpp
+    src/LevelCrossings.cpp
+    src/CrossingMesh.cpp
     src/SignalPaths.cpp
     src/SignalMesh.cpp
     src/SpeedLimits.cpp
@@ -160,3 +162,13 @@ target_link_libraries(TrackEditTest PRIVATE ebaner_engine)
 target_include_directories(TrackEditTest PRIVATE src)
 add_test(NAME track-edit COMMAND TrackEditTest "${EBANER_TEST_DATASET}")
 set_tests_properties(track-edit PROPERTIES SKIP_RETURN_CODE 77)
+
+# The crossing sequence is pure logic and needs no export, so it always runs.
+add_executable(CrossingSequenceTest tests/CrossingSequenceTest.cpp)
+add_dependencies(CrossingSequenceTest shaders)
+target_link_libraries(CrossingSequenceTest PRIVATE ebaner_engine)
+target_include_directories(CrossingSequenceTest PRIVATE src)
+# The writable dir is where the overlay round-trip writes its scratch file; without one
+# the test still runs, just without that part.
+add_test(NAME crossing-sequence
+         COMMAND CrossingSequenceTest "${CMAKE_CURRENT_BINARY_DIR}/crossing-test")
