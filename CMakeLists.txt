@@ -95,6 +95,8 @@ add_library(ebaner_engine STATIC
     src/CrossingMesh.cpp
     src/FlagPosts.cpp
     src/FlagMesh.cpp
+    src/TxpPositions.cpp
+    src/TxpMesh.cpp
     src/SignalPaths.cpp
     src/SignalMesh.cpp
     src/SpeedLimits.cpp

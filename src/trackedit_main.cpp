@@ -32,6 +32,8 @@
 #include "SignalPaths.h"
 #include "CrossingMesh.h"
 #include "FlagMesh.h"
+#include "TxpMesh.h"
+#include "TxpPositions.h"
 #include "FlagPosts.h"
 #include "LevelCrossings.h"
 #include "SimpleEntrySignals.h"
@@ -276,7 +278,7 @@ int main(int argc, char** argv) {
     // from the Escape menu. ---
     enum class EdMode {
         Geometry, Circuits, Switches, SignalPaths, ExitSignals, EntrySignals,
-        DistantSignals, SimpleEntries, Crossings, FlagPosts
+        DistantSignals, SimpleEntries, Crossings, FlagPosts, TxpPositions
     };
     EdMode mode = EdMode::Geometry;
     int selTurnout = -1;             // selected turnout (index into switchNet.turnouts())
@@ -345,6 +347,13 @@ int main(int argc, char** argv) {
     int selFlag = -1;
     int nextFlagId = 1;
     for (const FlagPost& fp : flagPosts) nextFlagId = std::max(nextFlagId, fp.id + 1);
+    // Where the TXP stands to give permission to leave.
+    std::vector<TxpPosition> txpPositions = loadTxpPositions(datasetRoot);
+    std::vector<SignalStation> txpStation;
+    bool txpDirty = false;
+    int selTxp = -1;
+    int nextTxpId = 1;
+    for (const TxpPosition& t : txpPositions) nextTxpId = std::max(nextTxpId, t.id + 1);
     for (const DistantSignal& d : distantSignals)
         nextDistantId = std::max(nextDistantId, d.id + 1);
     TrackCircuits tc = loadTrackCircuits(datasetRoot); // borders + sections (own overlay)
@@ -356,7 +365,7 @@ int main(int argc, char** argv) {
     // what the operator will pick from when setting a route - so creating one opens this
     // straight away, pre-filled with the auto default.
     enum class NameTarget { None, Section, Path, Exit, ExitRoute, Entry, Distant, Simple,
-                           Crossing, Flag };
+                           Crossing, Flag, Txp };
     NameTarget namingWhat = NameTarget::None;
     int namingIdx = -1;              // index into whichever collection that names
     int nextSectionId = 1;           // auto-increment section id
@@ -397,6 +406,9 @@ int main(int argc, char** argv) {
         else if (what == NameTarget::Flag && idx >= 0 &&
                  idx < static_cast<int>(flagPosts.size()))
             cur = &flagPosts[idx].name;
+        else if (what == NameTarget::Txp && idx >= 0 &&
+                 idx < static_cast<int>(txpPositions.size()))
+            cur = &txpPositions[idx].name;
         if (!cur) return;
         namingWhat = what;
         namingIdx = idx;
@@ -917,6 +929,16 @@ int main(int argc, char** argv) {
             fm.build(flagPosts, std::vector<FlagColour>(flagPosts.size(), FlagColour::None),
                      polys, data.sceneOrigin());
             merge(fm.vertices(), fm.indices());
+        }
+        // The TXP is drawn at every position here, sign and all, though in the sim they
+        // appear only where the signal is actually being given: there would otherwise be
+        // nothing to see, select or aim while placing one.
+        txpStation = attachStations(txpPositions, stations, polys);
+        {
+            TxpMesh tm;
+            tm.build(txpPositions, std::vector<char>(txpPositions.size(), 1), polys,
+                     data.sceneOrigin());
+            merge(tm.vertices(), tm.indices());
         }
         renderer.updateStructs(sv, si);
     };
@@ -1488,7 +1510,7 @@ int main(int argc, char** argv) {
                                                  "Distant signals",
                                                  "Simple entry signals",
                                                  "Level crossings", "Flag posts",
-                                                 "Exit"};
+                                                 "TXP positions", "Exit"};
     // Flashing lamps (an entry signal's danger) blink from the push constant rather than by
     // rebuilding the signal mesh - here those vertices share the struct buffer with 32k
     // buildings, so a rebuild twice a second is out of the question.
@@ -1531,12 +1553,13 @@ int main(int argc, char** argv) {
                            : sel == "Simple entry signals" ? EdMode::SimpleEntries
                            : sel == "Level crossings" ? EdMode::Crossings
                            : sel == "Flag posts" ? EdMode::FlagPosts
+                           : sel == "TXP positions" ? EdMode::TxpPositions
                                                     : EdMode::Geometry;
                     selected.clear(); selA = selB = -1; selBorder = -1;
                     selTurnout = -1;
                     pathStart = -1; selPath = -1; selExit = -1; pendingVias.clear();
                     selExitRoute = -1; armedExit = -1; selEntry = -1; selDistant = -1;
-                    selSimple = -1; selCrossing = -1; selFlag = -1;
+                    selSimple = -1; selCrossing = -1; selFlag = -1; selTxp = -1;
                     showPending = false;
                     rebuildOverlay();
                     g_menuOpen = false;
@@ -1579,6 +1602,7 @@ int main(int argc, char** argv) {
                                : namingWhat == NameTarget::Simple ? "simple entry signal"
                                : namingWhat == NameTarget::Crossing ? "level crossing"
                                : namingWhat == NameTarget::Flag ? "flag post"
+                               : namingWhat == NameTarget::Txp ? "TXP position"
                                                                       : "";
             const char* pfx = namingWhat == NameTarget::Section      ? "S"
                               : namingWhat == NameTarget::Path       ? "P"
@@ -1588,10 +1612,18 @@ int main(int argc, char** argv) {
                               : namingWhat == NameTarget::Simple     ? "SE"
                               : namingWhat == NameTarget::Crossing   ? "X"
                               : namingWhat == NameTarget::Flag       ? "FL"
+                              : namingWhat == NameTarget::Txp        ? "TX"
                                                                      : "R";
             if (e && !prevNameEnter) {
                 std::vector<SignalPath>* nr = namedRoutes(namingWhat);
-                if (namingWhat == NameTarget::Flag && namingIdx >= 0 &&
+                if (namingWhat == NameTarget::Txp && namingIdx >= 0 &&
+                    namingIdx < static_cast<int>(txpPositions.size())) {
+                    TxpPosition& t = txpPositions[namingIdx];
+                    t.name = g_nameBuf.empty() ? (pfx + std::to_string(t.id)) : g_nameBuf;
+                    txpDirty = true;
+                    std::printf("[trackedit] %s %d named \"%s\" (Ctrl+S to save)\n", what,
+                                t.id, t.name.c_str());
+                } else if (namingWhat == NameTarget::Flag && namingIdx >= 0 &&
                     namingIdx < static_cast<int>(flagPosts.size())) {
                     FlagPost& fp = flagPosts[namingIdx];
                     fp.name = g_nameBuf.empty() ? (pfx + std::to_string(fp.id)) : g_nameBuf;
@@ -1670,6 +1702,9 @@ int main(int argc, char** argv) {
             else if (namingWhat == NameTarget::Flag && namingIdx >= 0 &&
                      namingIdx < static_cast<int>(flagPosts.size()))
                 nid = flagPosts[namingIdx].id;
+            else if (namingWhat == NameTarget::Txp && namingIdx >= 0 &&
+                     namingIdx < static_cast<int>(txpPositions.size()))
+                nid = txpPositions[namingIdx].id;
             std::string title = "NAME ";
             for (const char* c = what; *c; ++c)
                 title.push_back(static_cast<char>(std::toupper(*c)));
@@ -1766,7 +1801,7 @@ int main(int argc, char** argv) {
              mode == EdMode::SignalPaths || mode == EdMode::ExitSignals ||
              mode == EdMode::EntrySignals || mode == EdMode::DistantSignals ||
              mode == EdMode::SimpleEntries || mode == EdMode::Crossings ||
-             mode == EdMode::FlagPosts) &&
+             mode == EdMode::FlagPosts || mode == EdMode::TxpPositions) &&
             !g_mouseCaptured) {
             double mx = 0.0, my = 0.0;
             glfwGetCursorPos(window, &mx, &my);
@@ -2215,6 +2250,48 @@ int main(int argc, char** argv) {
                 rebuildOverlay();
             }
             if (kF2 && !prevF2 && haveSel) beginNaming(NameTarget::Flag, selFlag);
+        } else if (mode == EdMode::TxpPositions) { // --- TXP positions mode ---
+            const bool haveSel =
+                selTxp >= 0 && selTxp < static_cast<int>(txpPositions.size());
+            // Two separate toggles on purpose: F turns the signal round, B walks the TXP
+            // across the track. Tying them together would move one when you meant the
+            // other.
+            if (kF && !prevF) {
+                if (haveSel) {
+                    txpPositions[selTxp].dir = -txpPositions[selTxp].dir;
+                    txpDirty = true;
+                    pathMsg = std::string("shown to a train departing toward ") +
+                              (txpPositions[selTxp].dir > 0 ? "+frac" : "-frac");
+                    rebuildStructs();
+                } else {
+                    pathMsg = "right-click a TXP position first, then F";
+                }
+                pathMsgUntil = glfwGetTime() + 3.0;
+                rebuildOverlay();
+            }
+            if (kB && !prevB) {
+                if (haveSel) {
+                    txpPositions[selTxp].side = -txpPositions[selTxp].side;
+                    txpDirty = true;
+                    pathMsg = std::string("stands ") +
+                              (txpPositions[selTxp].side > 0 ? "right" : "left") +
+                              " of increasing frac";
+                    rebuildStructs();
+                } else {
+                    pathMsg = "right-click a TXP position first, then B";
+                }
+                pathMsgUntil = glfwGetTime() + 3.0;
+                rebuildOverlay();
+            }
+            if (kX && !prevX && haveSel) {
+                txpPositions.erase(txpPositions.begin() + selTxp);
+                selTxp = -1;
+                txpDirty = true;
+                std::printf("[trackedit] TXP position removed (Ctrl+S to save)\n");
+                rebuildStructs();
+                rebuildOverlay();
+            }
+            if (kF2 && !prevF2 && haveSel) beginNaming(NameTarget::Txp, selTxp);
         } else { // --- Signal-paths / exit-signals modes ---
             // V: pin the hovered border as a via the route must pass through, so an
             // otherwise ambiguous destination can be narrowed to one road.
@@ -2473,6 +2550,15 @@ int main(int argc, char** argv) {
                     std::fprintf(stderr, "[trackedit] failed to write exit routes\n");
                 }
             }
+        } else if (kSave && !prevS && mode == EdMode::TxpPositions && txpDirty) {
+            if (writeTxpPositions(datasetRoot, txpPositions)) {
+                std::printf("[trackedit] saved %zu TXP position(s) to "
+                            "%s/overlay/txp-positions.txt\n", txpPositions.size(),
+                            datasetRoot.c_str());
+                txpDirty = false;
+            } else {
+                std::fprintf(stderr, "[trackedit] failed to write TXP positions\n");
+            }
         } else if (kSave && !prevS && mode == EdMode::FlagPosts && flagDirty) {
             if (writeFlagPosts(datasetRoot, flagPosts)) {
                 std::printf("[trackedit] saved %zu flag post(s) to "
@@ -2631,6 +2717,22 @@ int main(int argc, char** argv) {
                 beginNaming(NameTarget::Distant, selDistant);
             }
             rebuildOverlay();
+        } else if (!g_mouseCaptured && mL && !prevML && mode == EdMode::TxpPositions) {
+            if (circHit) {
+                TxpPosition t;
+                t.id = nextTxpId++;
+                t.name = "TX" + std::to_string(t.id);
+                t.trackId = circTrack;
+                t.frac = circFrac;
+                txpPositions.push_back(std::move(t));
+                selTxp = static_cast<int>(txpPositions.size()) - 1;
+                txpDirty = true;
+                rebuildStructs();
+                std::printf("[trackedit] TXP position %d on %#x at %.6f (Ctrl+S to save)\n",
+                            txpPositions[selTxp].id, circTrack, circFrac);
+                beginNaming(NameTarget::Txp, selTxp);
+            }
+            rebuildOverlay();
         } else if (!g_mouseCaptured && mL && !prevML && mode == EdMode::FlagPosts) {
             if (circHit) {
                 FlagPost fp;
@@ -2779,6 +2881,29 @@ int main(int argc, char** argv) {
                                    (clip.y / clip.w * 0.5f + 0.5f) * fbh);
                 const float dpx = glm::length(px - cur);
                 if (dpx < best) { best = dpx; selDistant = static_cast<int>(i); }
+            }
+            rebuildOverlay();
+        } else if (!g_mouseCaptured && mR && !prevMR && mode == EdMode::TxpPositions) {
+            double mx = 0.0, my = 0.0;
+            glfwGetCursorPos(window, &mx, &my);
+            int winw = fbw, winh = fbh;
+            glfwGetWindowSize(window, &winw, &winh);
+            const glm::vec2 cur(static_cast<float>(mx) * fbw / std::max(winw, 1),
+                                static_cast<float>(my) * fbh / std::max(winh, 1));
+            const glm::dvec3 o = data.sceneOrigin();
+            float best = 24.0f; // px
+            selTxp = -1;
+            for (std::size_t i = 0; i < txpPositions.size(); ++i) {
+                const glm::dvec3 w =
+                    fracToWorld(polys, txpPositions[i].trackId, txpPositions[i].frac);
+                if (w.x == 0.0 && w.y == 0.0) continue;
+                const glm::vec4 clip = viewProj * glm::vec4(
+                    float(w.x - o.x), float(w.y - o.y), float(w.z - o.z) + 2.0f, 1.0f);
+                if (clip.w <= 0.0f) continue;
+                const glm::vec2 px((clip.x / clip.w * 0.5f + 0.5f) * fbw,
+                                   (clip.y / clip.w * 0.5f + 0.5f) * fbh);
+                const float dpx = glm::length(px - cur);
+                if (dpx < best) { best = dpx; selTxp = static_cast<int>(i); }
             }
             rebuildOverlay();
         } else if (!g_mouseCaptured && mR && !prevMR && mode == EdMode::FlagPosts) {
@@ -3047,6 +3172,35 @@ int main(int argc, char** argv) {
                                        : "SWITCHES: click=select  M=manual/motor  "
                                          "hover circuit + L=add/remove lock",
                        x, 40.0f + 7 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
+          } else if (mode == EdMode::TxpPositions) { // --- TXP positions HUD ---
+            appendText(tv, "MODE: TXP POSITIONS (Esc menu to switch)", x, 40.0f + 3 * lh,
+                       sc, glm::vec3(1.0f, 0.75f, 0.3f), fbw, fbh);
+            const bool haveSel =
+                selTxp >= 0 && selTxp < static_cast<int>(txpPositions.size());
+            std::snprintf(buf, sizeof(buf), "TXP POSITIONS %zu", txpPositions.size());
+            appendText(tv, buf, x, 40.0f + 4 * lh, sc,
+                       haveSel ? glm::vec3(1.0f, 0.9f, 0.3f) : glm::vec3(0.9f, 0.85f, 0.7f),
+                       fbw, fbh);
+            if (haveSel && selTxp < static_cast<int>(txpStation.size())) {
+                // The direction and the side are the whole configuration and neither can
+                // be read off a small figure at any distance.
+                const SignalStation& ss = txpStation[selTxp];
+                std::snprintf(buf, sizeof(buf),
+                              "%s -> %s (%.0f m)%s   departs %s   stands %s",
+                              txpPositions[selTxp].name.c_str(),
+                              ss.name.empty() ? "(no station)" : ss.name.c_str(),
+                              ss.distanceM, ss.far ? "  FAR - check this" : "",
+                              txpPositions[selTxp].dir > 0 ? "+frac" : "-frac",
+                              txpPositions[selTxp].side > 0 ? "right" : "left");
+                appendText(tv, buf, x, 40.0f + 5 * lh, sc,
+                           ss.far ? glm::vec3(1.0f, 0.55f, 0.3f)
+                                  : glm::vec3(0.8f, 0.95f, 0.8f),
+                           fbw, fbh);
+            }
+            appendText(tv,
+                       "click track: place   right-click: select   F: direction   "
+                       "B: side   F2: name   X: delete",
+                       x, 40.0f + 6 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
           } else if (mode == EdMode::FlagPosts) { // --- Flag posts HUD ---
             appendText(tv, "MODE: FLAG POSTS (Esc menu to switch)", x, 40.0f + 3 * lh, sc,
                        glm::vec3(1.0f, 0.75f, 0.3f), fbw, fbh);

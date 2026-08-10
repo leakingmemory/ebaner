@@ -20,6 +20,7 @@
 // occupancy dictated rather than simulated, and no dataset in the way.
 
 #include "FlagPosts.h"
+#include "TxpPositions.h"
 #include "LevelCrossings.h"
 
 #include <cmath>
@@ -263,6 +264,63 @@ int main(int argc, char** argv) {
         cycle(0);
         check(shown[0] == FlagColour::None, "a third cycle takes it down again");
         check(shown[1] == FlagColour::Green, "leaving the other post as it was");
+    }
+
+    // Permission to leave. Unlike the flags this one really is a person, so a station
+    // can only have it showing in one place - and unlike the entry signals it does not
+    // care whether the station is manned.
+    {
+        std::puts("\nThe TXP's departure signal:");
+        const std::string A = "Fauske", B = "Rognan";
+        const std::string of[3] = {A, A, B};
+        std::map<std::string, int> showingAt; // station -> position, absent = none
+        auto shown = [&](int i) {
+            const auto it = showingAt.find(of[i]);
+            return it != showingAt.end() && it->second == i;
+        };
+        // Toggling, as the panel does it.
+        auto toggle = [&](int i) {
+            const auto it = showingAt.find(of[i]);
+            if (it != showingAt.end() && it->second == i) showingAt.erase(of[i]);
+            else showingAt[of[i]] = i;
+        };
+        check(!shown(0) && !shown(1) && !shown(2), "nobody is standing out to begin with");
+
+        toggle(0);
+        check(shown(0), "the signal is shown where it was set");
+        check(!shown(1), "and not at the station's other position");
+        check(!shown(2), "nor at the other station");
+
+        toggle(1);
+        check(shown(1) && !shown(0),
+              "showing the second takes the TXP away from the first - one place at a time");
+
+        toggle(2);
+        check(shown(2) && shown(1), "a different station has its own TXP");
+
+        toggle(1);
+        check(!shown(1), "toggling the shown one stands the TXP down");
+        check(shown(2), "leaving the other station as it was");
+    }
+
+    if (argc > 1) {
+        std::puts("\nThe TXP-position overlay round-trips:");
+        std::vector<TxpPosition> ts;
+        ts.push_back({1, "Fauske spor 1", 0x6d7, 0.42, 1, 1, ""});
+        ts.push_back({2, "Fauske spor 2", 0x6d9, 0.18, -1, -1, "Fauske"});
+        check(writeTxpPositions(argv[1], ts), "write");
+        const std::vector<TxpPosition> back = loadTxpPositions(argv[1]);
+        check(back.size() == 2, "both positions come back");
+        bool same = back.size() == ts.size();
+        for (std::size_t i = 0; same && i < back.size(); ++i)
+            same = back[i].id == ts[i].id && back[i].name == ts[i].name &&
+                   back[i].trackId == ts[i].trackId &&
+                   std::abs(back[i].frac - ts[i].frac) < 1e-9 &&
+                   back[i].dir == ts[i].dir && back[i].side == ts[i].side &&
+                   back[i].station == ts[i].station;
+        check(same, "ids, names, tracks, fracs, directions, sides and overrides survive");
+        check(back.size() > 1 && back[1].dir == -1 && back[1].side == -1,
+              "a flipped direction and a flipped side are both kept");
     }
 
     if (argc > 1) {

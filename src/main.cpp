@@ -22,6 +22,8 @@
 
 #include "CrossingMesh.h"
 #include "FlagMesh.h"
+#include "TxpMesh.h"
+#include "TxpPositions.h"
 #include "FlagPosts.h"
 #include "LevelCrossings.h"
 #include "SimpleEntrySignals.h"
@@ -627,9 +629,21 @@ int main(int argc, char** argv) {
     if (!flagPosts.empty())
         std::printf("[FlagPost] %zu post(s)\n", flagPosts.size());
 
+    // Where the TXP stands to give a train permission to leave. One position showing per
+    // station: a person really can only be in one place, which is what separates this
+    // from the flags in their fixtures. Held outside StationState on purpose - that is
+    // about manning, and this does not depend on it.
+    const std::vector<TxpPosition> txpPositions = loadTxpPositions(datasetRoot);
+    const std::vector<SignalStation> txpStation =
+        attachStations(txpPositions, stations, polys);
+    std::unordered_map<std::string, int> txpShowingAt; // station -> position, absent none
+    if (!txpPositions.empty())
+        std::printf("[TxpPosition] %zu position(s)\n", txpPositions.size());
+
     SignalMesh signals;
     CrossingMesh crossingMesh;
     FlagMesh flagMesh;
+    TxpMesh txpMesh;
     // Signals and crossings share one buffer: both change while the sim runs, and the
     // renderer already has an update path for that one. Merged as the struct bucket is.
     std::vector<TrackVertex> signalVerts;
@@ -652,6 +666,20 @@ int main(int argc, char** argv) {
                            flagMesh.vertices().end());
         signalIdx.reserve(signalIdx.size() + flagMesh.indices().size());
         for (const std::uint32_t i : flagMesh.indices()) signalIdx.push_back(i + fbase);
+
+        // The TXP appears only where the departure signal is actually being given.
+        std::vector<char> txpShowing(txpPositions.size(), 0);
+        for (std::size_t i = 0; i < txpPositions.size(); ++i) {
+            const auto it = txpShowingAt.find(txpStation[i].name);
+            if (it != txpShowingAt.end() && it->second == static_cast<int>(i))
+                txpShowing[i] = 1;
+        }
+        txpMesh.build(txpPositions, txpShowing, polys, data.sceneOrigin());
+        const std::uint32_t tbase = static_cast<std::uint32_t>(signalVerts.size());
+        signalVerts.insert(signalVerts.end(), txpMesh.vertices().begin(),
+                           txpMesh.vertices().end());
+        signalIdx.reserve(signalIdx.size() + txpMesh.indices().size());
+        for (const std::uint32_t i : txpMesh.indices()) signalIdx.push_back(i + tbase);
     };
     rebuildSignalBuffer();
     renderer.attachSignals(signalVerts, signalIdx);
@@ -1506,6 +1534,16 @@ int main(int argc, char** argv) {
             if (flagPostStation[i].name == station) out.push_back(static_cast<int>(i));
         return out;
     };
+    auto showingHere = [&](const std::string& station) {
+        const auto it = txpShowingAt.find(station);
+        return it == txpShowingAt.end() ? -1 : it->second;
+    };
+    auto txpPositionsAt = [&](const std::string& station) {
+        std::vector<int> out;
+        for (std::size_t i = 0; i < txpPositions.size(); ++i)
+            if (txpStation[i].name == station) out.push_back(static_cast<int>(i));
+        return out;
+    };
     // Where each line of the station panel sits. Derived once because the panel is drawn
     // in one place and acted on in another, a few hundred lines apart, and an off-by-one
     // between them would quietly act on a different line from the highlighted one.
@@ -1513,13 +1551,16 @@ int main(int argc, char** argv) {
         int sigFirst = 2;  // after the manned switch and the all-red line
         int sigCount = 0;  // lines the signals occupy (1 even when there are none)
         int flagFirst = 0; // then one line per flag post, which Enter cycles
+        int txpFirst = 0;  // then one line per TXP position, which Enter toggles
         int count = 0;
     };
-    auto panelLayout = [](const std::vector<int>& ss, const std::vector<int>& fp) {
+    auto panelLayout = [](const std::vector<int>& ss, const std::vector<int>& fp,
+                          const std::vector<int>& tp) {
         PanelLayout L;
         L.sigCount = ss.empty() ? 1 : static_cast<int>(ss.size());
         L.flagFirst = L.sigFirst + L.sigCount;
-        L.count = L.flagFirst + static_cast<int>(fp.size());
+        L.txpFirst = L.flagFirst + static_cast<int>(fp.size());
+        L.count = L.txpFirst + static_cast<int>(tp.size());
         return L;
     };
 
@@ -1555,8 +1596,17 @@ int main(int argc, char** argv) {
                                                                 : "  no flag";
             items.push_back(fit("Flag: " + flagPosts[i].name, kName + 6) + w);
         }
+        // Permission to leave: one line per position, which Enter shows or takes down.
+        // Only one at a station can be showing, so the others read as blank.
+        const std::vector<int> tp = txpPositionsAt(station);
+        const auto tit = txpShowingAt.find(station);
+        const int showing = tit == txpShowingAt.end() ? -1 : tit->second;
+        for (int i : tp)
+            items.push_back(fit("Depart: " + txpPositions[i].name, kName + 6) +
+                            (i == showing ? "  SHOWN" : "  -"));
+
         // The layout the input side indexes by has to be the list actually drawn.
-        assert(static_cast<int>(items.size()) == panelLayout(ss, fp).count);
+        assert(static_cast<int>(items.size()) == panelLayout(ss, fp, tp).count);
         return items;
     };
     auto appendSignalPicker = [&](std::vector<TextVertex>& tv, int fbw, int fbh) {
@@ -1932,7 +1982,8 @@ int main(int argc, char** argv) {
             const std::string station = simpleStationHere();
             const std::vector<int> ss = simpleSignalsAt(station);
             const std::vector<int> fp = flagPostsAt(station);
-            const PanelLayout L = panelLayout(ss, fp);
+            const std::vector<int> tp = txpPositionsAt(station);
+            const PanelLayout L = panelLayout(ss, fp, tp);
             const int n = L.count;
             if (pU && !prevPickUp) g_signalPickSel = (g_signalPickSel + n - 1) % n;
             if (pD && !prevPickDown) g_signalPickSel = (g_signalPickSel + 1) % n;
@@ -1960,6 +2011,19 @@ int main(int argc, char** argv) {
                         setMapMsg(simpleEntries[st.green].name + " cleared (" + station +
                                   ": one green at a time)");
                     }
+                } else if (g_signalPickSel >= L.txpFirst) {
+                    // One position per station shows at a time - a person cannot stand in
+                    // two places - so this is a single index, and showing one takes down
+                    // whichever was showing before by construction.
+                    const int i = tp[g_signalPickSel - L.txpFirst];
+                    if (showingHere(station) == i) {
+                        txpShowingAt.erase(station);
+                        setMapMsg(txpPositions[i].name + ": TXP stands down");
+                    } else {
+                        txpShowingAt[station] = i;
+                        setMapMsg(txpPositions[i].name + ": permission to leave shown");
+                    }
+                    flagsChanged = true;
                 } else {
                     // Cycle this post and only this post: none -> red -> green -> none.
                     const int i = fp[g_signalPickSel - L.flagFirst];
