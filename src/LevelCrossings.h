@@ -95,10 +95,22 @@ constexpr double kTrainDelayS = 5.0;
 // A train can arm an approach circuit and then reverse away without ever arriving. As
 // described the crossing would stay shut for good, so an all-clear this long releases it.
 constexpr double kStuckTimeoutS = 60.0;
+// How long the warning bell rings for, measured from the moment the sequence starts.
+//
+// It stops well before the crossing opens, and the lights carry the warning from there.
+// A crossing on a long approach can stay shut for minutes, and a bell that rang the whole
+// time would be unbearable for whoever lives beside it - the bell is there to catch the
+// attention of someone already at the crossing, which it has either done by now or will
+// not do at all.
+constexpr double kBellS = 30.0;
 
 struct CrossingState {
     CrossingPhase phase = CrossingPhase::Idle;
     double phaseSince = 0.0; // when the current phase began
+    // When the crossing last left Idle. Distinct from phaseSince, which restarts at every
+    // phase change: the bell has to run across Closing into Secured without being
+    // retriggered halfway by the change between them.
+    double activeSince = 0.0;
     double allClearSince = 0.0; // when every circuit last became clear (0 = not clear)
     bool prevOuterA = false, prevOuterB = false; // for the edge gate
     // Whether the train has actually reached the crossing this cycle. Without it,
@@ -132,3 +144,7 @@ struct CrossingLights {
     bool fast = false; // the active pulse; idle is the slow one
 };
 CrossingLights crossingLights(CrossingPhase phase);
+
+// Whether the warning bell is sounding. Silent while idle, and silent again kBellS after
+// the sequence started even though the crossing is still shut and still flashing.
+bool crossingBell(const CrossingState& st, double now);

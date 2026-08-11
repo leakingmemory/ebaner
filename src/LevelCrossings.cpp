@@ -147,6 +147,8 @@ void stepCrossing(CrossingState& st, const CrossingOccupancy& occ, double now) {
     st.prevOuterB = occ.outerB;
 
     const auto enter = [&](CrossingPhase p) {
+        // Leaving Idle is the crossing activating, and what the bell is timed from.
+        if (st.phase == CrossingPhase::Idle && p != CrossingPhase::Idle) st.activeSince = now;
         st.phase = p;
         st.phaseSince = now;
     };
@@ -208,4 +210,9 @@ CrossingLights crossingLights(CrossingPhase phase) {
             break;
     }
     return l;
+}
+
+bool crossingBell(const CrossingState& st, double now) {
+    if (st.phase == CrossingPhase::Idle) return false;
+    return now - st.activeSince < kBellS;
 }

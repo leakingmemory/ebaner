@@ -195,6 +195,10 @@ int main(int argc, char** argv) {
         Audio::dumpEngineTest(dump);
         return EXIT_SUCCESS;
     }
+    if (const char* dump = std::getenv("EBANER_AUDIO_DUMP_CROSSING")) {
+        Audio::dumpCrossingTest(dump);
+        return EXIT_SUCCESS;
+    }
 
     // Which station to start at. The dataset carries them - name, position, and
     // whether it is a station or a stop - so this is a lookup, not a table of ours.
@@ -2235,6 +2239,20 @@ int main(int argc, char** argv) {
             for (int k = 0; k < 2 && k < static_cast<int>(secs.size()); ++k)
                 engGain[k] = glm::clamp((50.0f - glm::distance(camPos, secs[k].pos)) / 38.0f,
                                         0.0f, 1.0f);
+            // The crossing bell: whichever ringing crossing is loudest from here. A bell
+            // carries further than the brakes do, and it is the crossing's own sound
+            // rather than the train's, so it is placed at the crossing and not the cab.
+            float bellGain = 0.0f;
+            for (std::size_t ci = 0; ci < crossings.size(); ++ci) {
+                const CrossingSite& site = crossingSites[ci];
+                if (site.path < 0) continue;
+                if (!crossingBell(crossingStates[ci], now)) continue;
+                const glm::vec3 at = paths[site.path].poseAt(site.s).pos;
+                bellGain = std::max(bellGain,
+                                    glm::clamp((250.0f - glm::distance(camPos, at)) / 200.0f,
+                                               0.0f, 1.0f));
+            }
+            audio.setCrossingBell(bellGain);
             audio.update(*vehicle, simDt, distGain, engGain[0], engGain[1]);
             vmesh.build(*vehicle);
             renderer.updateVehicleVertices(vmesh.vertices());

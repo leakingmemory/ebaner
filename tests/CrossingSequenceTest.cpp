@@ -304,6 +304,59 @@ int main(int argc, char** argv) {
         check(shown(2), "leaving the other station as it was");
     }
 
+    // The warning bell runs on its own clock, not the phases.
+    //
+    // It has to survive the change from Closing to Secured - phaseSince restarts there,
+    // and timing the bell off that would retrigger it halfway and ring for kBellS again -
+    // and it has to stop while the crossing is still shut and still flashing, which is the
+    // whole point: the lights carry the warning after the bell has had its say.
+    {
+        std::puts("\nThe crossing's warning bell:");
+        CrossingState st;
+        CrossingOccupancy occ;
+        double now = 100.0;
+        check(!crossingBell(st, now), "silent while the crossing is idle");
+
+        occ.outerA = true; // a train arms the approach
+        stepCrossing(st, occ, now);
+        check(st.phase == CrossingPhase::Closing, "the sequence starts");
+        check(crossingBell(st, now), "the bell starts with it");
+
+        // Through the phase change, which is where a bell timed off phaseSince breaks.
+        now += kTrainDelayS + 1.0;
+        occ.outerA = false;
+        stepCrossing(st, occ, now);
+        check(st.phase == CrossingPhase::Secured, "and reaches Secured");
+        check(crossingBell(st, now), "the bell rings on through the phase change");
+
+        now = 100.0 + kBellS - 0.5;
+        stepCrossing(st, occ, now);
+        check(crossingBell(st, now), "still ringing just before its time is up");
+
+        now = 100.0 + kBellS + 0.5;
+        stepCrossing(st, occ, now);
+        check(!crossingBell(st, now), "silent once kBellS has passed");
+        check(st.phase == CrossingPhase::Secured, "while the crossing is still shut");
+        check(crossingLights(st.phase).roadRed && crossingLights(st.phase).fast,
+              "and the road lights are still flashing red");
+
+        // A later train gets a bell of its own rather than staying silent.
+        now += 200.0;
+        occ.inner = true;
+        stepCrossing(st, occ, now);   // release
+        occ.inner = false;
+        now += kTrainDelayS + 1.0;
+        stepCrossing(st, occ, now);   // Opening -> Idle
+        while (st.phase != CrossingPhase::Idle && now < 1e5) {
+            now += 1.0;
+            stepCrossing(st, occ, now);
+        }
+        check(st.phase == CrossingPhase::Idle, "the crossing opens again");
+        occ.outerB = true;
+        stepCrossing(st, occ, now);
+        check(crossingBell(st, now), "and the next train rings the bell afresh");
+    }
+
     // A station needs several positions - a TXP at one end of Fauske cannot be seen from
     // the other - and the editor has to draw all of them while the sim draws only the one
     // being signalled. Easy to collapse into a single rule by handing the editor the same

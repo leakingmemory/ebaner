@@ -37,6 +37,13 @@ public:
     // distance to the bogies; `engGain0/1` do the same per engine end. All in [0,1].
     void update(const Vehicle& v, float dt, float brakeGain, float engGain0,
                 float engGain1);
+    // Main thread: how loudly the nearest ringing level crossing is heard, already
+    // attenuated by camera distance, in [0,1]. Zero silences it.
+    //
+    // Only a level, never a strike: the strike clock lives on the audio thread, so the
+    // bell keeps an even rhythm no matter what the frame rate does. Driving one strike
+    // per frame would make the bell speed up and stutter with the graphics.
+    void setCrossingBell(float gain) { bellGain_.store(gain, std::memory_order_relaxed); }
     void toggleMuted() { muted_.store(!muted_.load()); }
     bool muted() const { return muted_.load(); }
     void shutdown();
@@ -49,6 +56,10 @@ public:
     // verification; needs no audio device).
     static void dumpTest(const std::string& wavPath);
     static void dumpEngineTest(const std::string& wavPath);
+    // A crossing activating: the bell rings and then falls silent under the still
+    // flashing lights, which is the whole point of the sequence and cannot be heard in
+    // any single strike.
+    static void dumpCrossingTest(const std::string& wavPath);
 
 private:
     // Shared main -> audio thread (lock-free).
@@ -59,6 +70,7 @@ private:
     std::atomic<float> engGain_[2]{};     // per-engine distance attenuation [0,1]
     std::atomic<bool> compActive_{false}; // a compressor is pumping
     std::atomic<unsigned> valveEvents_{0};
+    std::atomic<float> bellGain_{0.0f};   // nearest ringing crossing [0,1]
     std::atomic<bool> muted_{false};
 
     // Main-thread only.
@@ -88,6 +100,16 @@ private:
     int exhaustIdx_ = 0;
     float exhaustLp_ = 0.0f;
     float compPhase_ = 0.0f, compLp_ = 0.0f, compEnv_ = 0.0f; // compressor pump voice
+    // Crossing bell: a struck gong, so one running envelope and phase per partial. The
+    // partials are inharmonic, which is what makes it a bell rather than a horn.
+    static constexpr int kBellPartials = 7;
+    float bellEnv_[kBellPartials] = {};
+    float bellPhase_[kBellPartials] = {};
+    float bellGainEnv_ = 0.0f;  // smoothed distance level
+    float bellTimer_ = 0.0f;    // seconds until the next strike
+    float bellClap_ = 0.0f;     // clapper transient envelope
+    float bellClapLp_ = 0.0f;
+    std::uint32_t bellStrike_ = 0; // strike counter, for the small per-strike variation
     unsigned lastEvents_ = 0;
     std::uint32_t rng_ = 0x1234567u;
     float sampleRate_ = 44100.0f;

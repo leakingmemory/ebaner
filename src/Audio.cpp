@@ -37,6 +37,21 @@
 
 namespace {
 constexpr float kPi = 3.14159265358979f;
+
+// --- The crossing bell's voice ---------------------------------------------------
+// Struck once per flash of the lights (SignalMesh.h's kCrossingFastS): bell and lamps
+// run off the same relay at a real crossing, and hearing them agree is most of what
+// makes the thing read as one machine.
+constexpr float kBellStrikeS = 0.5f;
+// Nominal pitch. A crossing gong is small and deliberately piercing, so the strong
+// partial an ear latches onto lands near 1.3 kHz - right where it cuts through an engine.
+constexpr float kBellHz = 660.0f;
+// Bell partials: hum, prime, minor third, fifth, nominal, and two above it. Inharmonic
+// on purpose - equal-tempered ratios here would sound like an organ, not a bell.
+constexpr float kBellRatio[7] = {0.5f, 1.0f, 1.19f, 1.5f, 2.0f, 2.66f, 4.14f};
+// The high partials start loudest and die first, which is the shape of a clang.
+constexpr float kBellAmp[7] = {0.10f, 0.26f, 0.20f, 0.22f, 0.34f, 0.20f, 0.11f};
+constexpr float kBellDecayS[7] = {1.40f, 0.85f, 0.55f, 0.40f, 0.30f, 0.16f, 0.10f};
 } // namespace
 
 #if HAVE_PORTAUDIO
@@ -116,6 +131,7 @@ void Audio::render(float* out, int n) {
     const float engGainT[2] = {engGain_[0].load(std::memory_order_relaxed),
                                engGain_[1].load(std::memory_order_relaxed)};
     const float compTarget = compActive_.load(std::memory_order_relaxed) ? 1.0f : 0.0f;
+    const float bellTarget = bellGain_.load(std::memory_order_relaxed);
     const unsigned ev = valveEvents_.load(std::memory_order_relaxed);
     if (ev != lastEvents_) { // a valve just operated -> click
         lastEvents_ = ev;
@@ -219,9 +235,48 @@ void Audio::render(float* out, int n) {
             comp = compLp_ * compEnv_ * std::max(engGainEnv_[0], engGainEnv_[1]);
         }
 
+        // --- Crossing warning bell ------------------------------------------------
+        // A struck gong rather than a tone. The partials are inharmonic - the ratios a
+        // cast bell gives, hum through nominal and above - and each decays at its own
+        // rate, the high ones fastest. That is what turns a chord into a clang: the
+        // strike is bright and metallic and rings down into the low partials.
+        bellGainEnv_ += (bellTarget - bellGainEnv_) * (bellTarget > bellGainEnv_ ? 0.01f
+                                                                                 : 0.0006f);
+        float bell = 0.0f;
+        if (bellGainEnv_ > 1e-4f) {
+            bellTimer_ -= 1.0f / fs;
+            if (bellTimer_ <= 0.0f && bellTarget > 1e-4f) {
+                bellTimer_ += kBellStrikeS;
+                ++bellStrike_;
+                // A hair of variation per strike, so a long ring does not turn into an
+                // obvious loop of one identical sample.
+                const float vary = 0.92f + 0.08f * static_cast<float>(bellStrike_ & 3u) / 3.0f;
+                for (int p = 0; p < kBellPartials; ++p)
+                    bellEnv_[p] += kBellAmp[p] * vary; // add, so close strikes overlap
+                bellClap_ = 1.0f;
+            }
+            for (int p = 0; p < kBellPartials; ++p) {
+                if (bellEnv_[p] < 1e-5f) continue;
+                bellEnv_[p] *= std::exp(-1.0f / (kBellDecayS[p] * fs));
+                bellPhase_[p] += kBellHz * kBellRatio[p] / fs;
+                if (bellPhase_[p] > 1.0f) bellPhase_[p] -= 1.0f;
+                bell += bellEnv_[p] * std::sin(2.0f * kPi * bellPhase_[p]);
+            }
+            // The clapper itself: a few milliseconds of bright noise on the strike, which
+            // is most of what makes it read as struck metal rather than a synth tone.
+            if (bellClap_ > 1e-4f) {
+                bellClap_ *= std::exp(-1.0f / (0.004f * fs));
+                rng_ = rng_ * 1664525u + 1013904223u;
+                const float bn = static_cast<float>(rng_ >> 8) / 8388608.0f - 1.0f;
+                bellClapLp_ += (bn - bellClapLp_) * 0.7f; // gentle high-pass-ish shaping
+                bell += (bn - bellClapLp_) * bellClap_ * 0.5f;
+            }
+            bell *= bellGainEnv_;
+        }
+
         float s = muted ? 0.0f
                         : (hiss * 1.2f + click * 0.9f) * envEnv_ + engine * 0.30f +
-                              comp * 0.22f;
+                              comp * 0.22f + bell * 0.34f;
         s = std::clamp(s, -1.0f, 1.0f);
         out[i] = s;
     }
@@ -472,6 +527,38 @@ void Audio::dumpEngineTest(const std::string& wavPath) {
         a.engGain_[0].store(1.0f);
         a.engGain_[1].store(1.0f);
         a.compActive_.store(s.comp);
+        const int total = static_cast<int>(s.dur * fs);
+        float buf[256];
+        for (int done = 0; done < total; done += 256) {
+            const int n = std::min(256, total - done);
+            a.render(buf, n);
+            for (int i = 0; i < n; ++i)
+                pcm.push_back(static_cast<std::int16_t>(
+                    std::clamp(buf[i], -1.0f, 1.0f) * 32767.0f));
+        }
+    }
+    writeWav(wavPath, pcm, static_cast<int>(fs));
+    std::fprintf(stderr, "audio: wrote %s (%zu samples)\n", wavPath.c_str(), pcm.size());
+}
+
+void Audio::dumpCrossingTest(const std::string& wavPath) {
+    const float fs = 44100.0f;
+    Audio a;
+    a.sampleRate_ = fs;
+    // A train approaches, the crossing activates, the bell runs its kBellS and stops
+    // while the lights keep flashing, then the train passes and the crossing opens. The
+    // level also swings with distance, which is what a bell heard from a moving cab does.
+    struct Seg { float dur, gain; const char* what; };
+    const Seg segs[] = {
+        {1.0f, 0.00f, "idle"},
+        {8.0f, 0.45f, "activated, heard from a distance"},
+        {12.0f, 1.00f, "closer"},
+        {10.0f, 0.70f, "still ringing, drawing away"},
+        {6.0f, 0.00f, "bell done - the lights flash on in silence"},
+    };
+    std::vector<std::int16_t> pcm;
+    for (const Seg& s : segs) {
+        a.bellGain_.store(s.gain);
         const int total = static_cast<int>(s.dur * fs);
         float buf[256];
         for (int done = 0; done < total; done += 256) {
