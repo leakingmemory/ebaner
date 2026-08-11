@@ -21,6 +21,16 @@
 class TerrainData;
 class TrackPath;
 
+// The top of the platform slab covering a world point, scene-relative; false if no
+// platform covers it.
+//
+// Shared with the slab itself rather than worked out again by whoever needs to stand
+// something on a platform: the datum is "0.76 m above top-of-rail, but never under the
+// terrain", and a second copy of that would drift from the surface actually drawn and
+// leave the thing hovering or sunk.
+bool platformTopAt(const TerrainData& data, const std::vector<TrackPath>& paths,
+                   double worldX, double worldY, float& topZ);
+
 // Extrudes OSM station-platform footprints into low lit concrete slabs (walls +
 // flat top). Reuses TrackVertex and the track pipeline; deduped by geometry
 // (platforms carry no id). The slab top is placed a standard step height above

@@ -637,6 +637,9 @@ int main(int argc, char** argv) {
     const std::vector<SignalStation> txpStation =
         attachStations(txpPositions, stations, polys);
     std::unordered_map<std::string, int> txpShowingAt; // station -> position, absent none
+    // Where a platform puts them above the rail. Static, so found once rather than on
+    // every rebuild - it costs a search over every platform and path.
+    const std::vector<float> txpLift = txpStandLift(txpPositions, polys, data, paths);
     if (!txpPositions.empty())
         std::printf("[TxpPosition] %zu position(s)\n", txpPositions.size());
 
@@ -674,7 +677,7 @@ int main(int argc, char** argv) {
             if (it != txpShowingAt.end() && it->second == static_cast<int>(i))
                 txpShowing[i] = 1;
         }
-        txpMesh.build(txpPositions, txpShowing, polys, data.sceneOrigin());
+        txpMesh.build(txpPositions, txpShowing, polys, data.sceneOrigin(), txpLift);
         const std::uint32_t tbase = static_cast<std::uint32_t>(signalVerts.size());
         signalVerts.insert(signalVerts.end(), txpMesh.vertices().begin(),
                            txpMesh.vertices().end());

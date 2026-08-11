@@ -936,8 +936,10 @@ int main(int argc, char** argv) {
         txpStation = attachStations(txpPositions, stations, polys);
         {
             TxpMesh tm;
+            // Recomputed rather than cached: placing or dragging a position can move it
+            // on or off a platform, and this only runs when something actually changed.
             tm.build(txpPositions, std::vector<char>(txpPositions.size(), 1), polys,
-                     data.sceneOrigin());
+                     data.sceneOrigin(), txpStandLift(txpPositions, polys, data, paths));
             merge(tm.vertices(), tm.indices());
         }
         renderer.updateStructs(sv, si);

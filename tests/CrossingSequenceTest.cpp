@@ -20,6 +20,7 @@
 // occupancy dictated rather than simulated, and no dataset in the way.
 
 #include "FlagPosts.h"
+#include "TxpMesh.h"
 #include "TxpPositions.h"
 #include "LevelCrossings.h"
 
@@ -301,6 +302,55 @@ int main(int argc, char** argv) {
         toggle(1);
         check(!shown(1), "toggling the shown one stands the TXP down");
         check(shown(2), "leaving the other station as it was");
+    }
+
+    // A station needs several positions - a TXP at one end of Fauske cannot be seen from
+    // the other - and the editor has to draw all of them while the sim draws only the one
+    // being signalled. Easy to collapse into a single rule by handing the editor the same
+    // showing vector the sim uses, which would leave the author unable to see what a
+    // station covers. Driven on the mesh, over a straight synthetic track, no dataset.
+    {
+        std::puts("\nEvery position is drawn in the editor, only the shown one in the sim:");
+        std::vector<TrackPoly> polys;
+        TrackPoly p;
+        p.id = 0x6d7;
+        for (int i = 0; i <= 10; ++i) p.pts.push_back({1000.0 * i / 10, 0.0, 0.0});
+        polys.push_back(p);
+
+        std::vector<TxpPosition> ps;
+        ps.push_back({1, "vest", 0x6d7, 0.20, 1, 1, "Fauske"});
+        ps.push_back({2, "midt", 0x6d7, 0.50, 1, 1, "Fauske"});
+        ps.push_back({3, "aust", 0x6d7, 0.80, -1, -1, "Fauske"});
+
+        TxpMesh none, one, all;
+        none.build(ps, std::vector<char>(ps.size(), 0), polys, glm::dvec3(0.0));
+        std::vector<char> justMid(ps.size(), 0);
+        justMid[1] = 1;
+        one.build(ps, justMid, polys, glm::dvec3(0.0));
+        all.build(ps, std::vector<char>(ps.size(), 1), polys, glm::dvec3(0.0));
+
+        const std::size_t per = one.vertices().size();
+        check(none.vertices().empty(), "nobody stands out when nothing is showing");
+        check(per > 0, "the one being signalled is drawn");
+        check(all.vertices().size() == per * ps.size(),
+              "the editor draws a figure at every position, not just the shown one");
+
+        // And they must stand apart: three figures on one spot would author as one.
+        std::vector<glm::vec3> where;
+        for (std::size_t i = 0; i < ps.size(); ++i) {
+            std::vector<char> sh(ps.size(), 0);
+            sh[i] = 1;
+            TxpMesh m;
+            m.build(ps, sh, polys, glm::dvec3(0.0));
+            glm::vec3 lo(1e9f);
+            for (const TrackVertex& v : m.vertices()) lo = glm::min(lo, v.pos);
+            where.push_back(lo);
+        }
+        float closest = 1e9f;
+        for (std::size_t i = 0; i < where.size(); ++i)
+            for (std::size_t j = i + 1; j < where.size(); ++j)
+                closest = std::min(closest, glm::length(where[i] - where[j]));
+        check(closest > 5.0f, "the positions stand in genuinely different places");
     }
 
     if (argc > 1) {

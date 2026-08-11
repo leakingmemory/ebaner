@@ -27,10 +27,14 @@
 //
 // Usage: TrackEditTest <datasetRoot>   (exit 77 = skipped, no dataset)
 
+#include "PlatformMesh.h"
 #include "TerrainData.h"
+#include "TrackCircuits.h" // TrackPoly
 #include "TrackGraph.h"
 #include "TrackOverlay.h"
 #include "TrackPath.h"
+#include "TxpMesh.h"
+#include "TxpPositions.h"
 
 #include <cmath>
 #include <cstdio>
@@ -156,6 +160,66 @@ int main(int argc, char** argv) {
     // curve by very slightly less than the nudge. Only that it clearly moved matters.
     if (haveRail)
         check(rail1 - rail0 > kNudgeM * 0.5, "rebuilt rails", rail1 - rail0, kNudgeM);
+
+    // The TXP stands on the platform, not in it.
+    //
+    // The track z is the rail head and a Norwegian platform is a step above that, so a
+    // figure placed at track level is buried to the waist in the slab. It has to be
+    // measured at the spot they actually stand, a few metres to the side, which is often
+    // exactly the difference between the ballast and the platform. This lives here rather
+    // than in the pure-logic test because it needs real platform footprints to stand on.
+    {
+        std::vector<TrackPoly> polys;
+        for (std::size_t i = 0; i < g1.pointWorld.size(); ++i) {
+            if (polys.empty() || polys.back().id != g1.pointTrack[i])
+                polys.push_back({g1.pointTrack[i], {}});
+            polys.back().pts.push_back(g1.pointWorld[i]);
+        }
+        const glm::dvec3 origin = data.sceneOrigin();
+
+        // Hunt for spots whose standing position lands on a platform, and check each one
+        // puts the figure's feet on the slab rather than through it.
+        int found = 0;
+        for (const TrackPoly& poly : polys) {
+            if (found >= 3) break;
+            for (double frac : {0.25, 0.5, 0.75}) {
+                if (found >= 3) break;
+                for (int side : {1, -1}) {
+                    std::vector<TxpPosition> t(1);
+                    t[0].id = 1;
+                    t[0].trackId = poly.id;
+                    t[0].frac = frac;
+                    t[0].side = side;
+                    const std::vector<float> lift = txpStandLift(t, polys, data, paths1);
+                    if (std::abs(lift[0]) < 1e-4f) continue; // not on a platform
+
+                    TxpMesh m;
+                    m.build(t, std::vector<char>{1}, polys, origin, lift);
+                    if (m.vertices().empty()) continue;
+                    float feet = 1e30f;
+                    for (const TrackVertex& v : m.vertices())
+                        feet = std::min(feet, v.pos.z);
+
+                    // The slab top at the spot they stand on, from the same place the
+                    // drawn surface comes from.
+                    const glm::dvec3 w = fracToWorld(polys, poly.id, frac);
+                    const glm::dvec2 tg = trackTangent(polys, poly.id, frac, 1);
+                    const double l = std::hypot(tg.x, tg.y);
+                    if (l < 1e-9) continue;
+                    const double sx = w.x + (tg.y / l) * 3.2 * side;
+                    const double sy = w.y + (-tg.x / l) * 3.2 * side;
+                    float top = 0.0f;
+                    if (!platformTopAt(data, paths1, sx, sy, top)) continue;
+
+                    check(std::abs(feet - top) < 0.01, "TXP feet on the platform slab",
+                          feet - top, 0.0);
+                    ++found;
+                }
+            }
+        }
+        if (found == 0)
+            std::puts("  no track passes a platform in this window - nothing to check");
+    }
 
     std::printf("%s\n", failures ? "FAILED" : "PASSED");
     return failures ? 1 : 0;

@@ -21,6 +21,23 @@
 #include <vector>
 
 struct TrackPoly;
+class TerrainData;
+class TrackPath;
+
+// How far above the track each position stands, parallel to `ps`.
+//
+// A position on a platform has to stand on the slab: the track z is the rail head, and a
+// Norwegian platform is a step above that, so a figure placed at track level is buried to
+// the waist in it. Measured at the spot the TXP actually stands, not at the track point -
+// they are a few metres to the side, which is often exactly the difference between the
+// ballast and the platform.
+//
+// Worked out once at load rather than per rebuild: the answer cannot change while the sim
+// runs, and finding the platform means searching every platform and path.
+std::vector<float> txpStandLift(const std::vector<TxpPosition>& ps,
+                                const std::vector<TrackPoly>& polys,
+                                const TerrainData& data,
+                                const std::vector<TrackPath>& paths);
 
 // The TXP, standing at a position and holding up the departure sign.
 //
@@ -32,8 +49,11 @@ public:
     // `showing` is parallel to `ps`: a position with nothing showing draws nothing at
     // all, which is the point - a figure standing at every authored position for the
     // whole session would be worse than none.
+    // `lift` comes from txpStandLift and may be empty, which stands everyone at track
+    // level - the right answer where no platform is involved.
     void build(const std::vector<TxpPosition>& ps, const std::vector<char>& showing,
-               const std::vector<TrackPoly>& polys, const glm::dvec3& origin);
+               const std::vector<TrackPoly>& polys, const glm::dvec3& origin,
+               const std::vector<float>& lift = {});
 
     const std::vector<TrackVertex>& vertices() const { return vertices_; }
     const std::vector<std::uint32_t>& indices() const { return indices_; }

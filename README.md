@@ -387,7 +387,8 @@ signalling cannot.
 
 **TXP positions (permission to leave).** The one hand signal that hangs on nothing: the
 TXP walks out to a spot beside the track where the driver can see them and holds up a
-**white sign with a green circle**, giving a stopped train permission to leave. Pick **TXP
+round sign — **a green ring around a white centre**, a European prohibitory sign with the
+red swapped for green — giving a stopped train permission to leave. Pick **TXP
 positions** from the Esc menu and **click a point on any track**; **right-click** selects,
 **F** turns the signal round, **B** swaps which side of the track they stand, **F2** names,
 **X** deletes, **Ctrl+S** saves to `overlay/txp-positions.txt`.
@@ -396,11 +397,16 @@ The direction is where the train departs to — the driver is looking that way, 
 faces back against it. The side is absolute, so turning the signal round does not walk
 them across the track.
 
+A station is meant to have **as many positions as it needs**, and most need several: a TXP
+standing at one end of Fauske cannot be seen from the other, so anywhere a train might be
+stopped wants its own spot. **The editor draws a figure at every position**, which is the
+only way to see what a station actually covers while authoring it.
+
 Worked from the station panel (`O`, then **E**), one line per position which Enter shows
-or takes down. **One at a time per station**: showing one stands the TXP down wherever
-they were. That is the one place the "one person" argument really holds — unlike the
-flags, which sit in fixtures and can all be out at once. Nothing is drawn at a position
-that is not showing, and nothing depends on the manned switch.
+or takes down. **Only one shows at a time per station**: showing one stands the TXP down
+wherever they were. That is the one place the "one person" argument really holds — unlike
+the flags, which sit in fixtures and can all be out at once. In the sim nothing is drawn
+at a position that is not showing, and nothing depends on the manned switch.
 
 ## Data format
 

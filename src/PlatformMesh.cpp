@@ -68,6 +68,84 @@ bool nearestRailHeadZ(const glm::vec2& pt, const std::vector<TrackPath>& paths,
     return found;
 }
 
+// Where one platform's slab sits, scene-relative: the bottom the walls reach down to and
+// the flat top. Split out of build() because the TXP has to stand on that top, and the
+// only way for the figure and the surface to agree is for both to come from here.
+struct SlabZ {
+    float bottom = 0.0f;
+    float top = 0.0f;
+};
+
+SlabZ slabZ(const PlatformSegment& p, const TerrainData& data,
+            const std::vector<TrackPath>& paths, const glm::dvec3& origin) {
+    const int n = static_cast<int>(p.footprint.size());
+
+    // Ground under the footprint: the walls reach down to the lowest so nothing floats,
+    // and the top must clear the highest so it never sinks into rising terrain. Sampled
+    // densely along the edges - the ring vertices alone miss the long-edge maxima.
+    float gmin = 1e30f, gmax = -1e30f;
+    bool anyGround = false;
+    for (int i = 0; i < n; ++i) {
+        const glm::dvec2& wa = p.footprint[i];
+        const glm::dvec2& wc = p.footprint[(i + 1) % n];
+        const double len = glm::length(wc - wa);
+        const int steps = std::max(1, static_cast<int>(len / 5.0));
+        for (int s = 0; s <= steps; ++s) {
+            const glm::dvec2 w = wa + (wc - wa) * (static_cast<double>(s) / steps);
+            float e;
+            if (data.sampleGround(w.x, w.y, e)) {
+                gmin = std::min(gmin, e);
+                gmax = std::max(gmax, e);
+                anyGround = true;
+            }
+        }
+    }
+    const float gminS = static_cast<float>((anyGround ? gmin : p.baseZ) - origin.z);
+    const float gmaxS = static_cast<float>((anyGround ? gmax : p.baseZ) - origin.z);
+
+    // The correct datum is the adjacent *rail*, not the terrain: a platform is built a
+    // fixed step height above top-of-rail. Take the two ends (the farthest-apart
+    // footprint vertices) and use the lowest neighbouring rail head.
+    int e0 = 0, e1 = 0;
+    float far2 = -1.0f;
+    for (int i = 0; i < n; ++i)
+        for (int j = i + 1; j < n; ++j) {
+            const glm::dvec2 d = p.footprint[i] - p.footprint[j];
+            const float d2 = static_cast<float>(glm::dot(d, d));
+            if (d2 > far2) { far2 = d2; e0 = i; e1 = j; }
+        }
+    float railZ = std::numeric_limits<float>::max();
+    bool haveRail = false;
+    for (int end : {e0, e1}) {
+        const glm::vec2 s(static_cast<float>(p.footprint[end].x - origin.x),
+                          static_cast<float>(p.footprint[end].y - origin.y));
+        float rz;
+        if (nearestRailHeadZ(s, paths, rz)) {
+            railZ = std::min(railZ, rz);
+            haveRail = true;
+        }
+    }
+
+    SlabZ z;
+    z.bottom = gminS;
+    z.top = haveRail ? std::max(railZ + kPlatformAboveRail, gmaxS + 0.05f)
+                     : gmaxS + p.height; // isolated platform: fall back to terrain
+    return z;
+}
+
+// Ray-crossing test against a footprint ring (world xy, not closed).
+bool insideRing(const std::vector<glm::dvec2>& ring, double x, double y) {
+    bool in = false;
+    const std::size_t n = ring.size();
+    for (std::size_t i = 0, j = n - 1; i < n; j = i++) {
+        const glm::dvec2& a = ring[i];
+        const glm::dvec2& b = ring[j];
+        if ((a.y > y) == (b.y > y)) continue;
+        if (x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x) in = !in;
+    }
+    return in;
+}
+
 // True if any track centreline passes within `radius` (horizontal) of `pt`
 // (scene-relative x,y) — used to decide which long edges face a track.
 bool trackWithin(const glm::vec2& pt, const std::vector<TrackPath>& paths,
@@ -175,58 +253,8 @@ void PlatformMesh::build(const TerrainData& data,
         }
         centroid /= static_cast<float>(n);
 
-        // Ground under the footprint (scene-relative z): the walls reach down to
-        // the lowest so nothing floats, and the top must clear the highest so it
-        // never sinks into rising terrain. Sample the loaded terrain densely
-        // along the edges (ring vertices alone miss the long-edge maxima).
-        float gmin = 1e30f, gmax = -1e30f;
-        bool anyGround = false;
-        for (int i = 0; i < n; ++i) {
-            const glm::dvec2& wa = p.footprint[i];
-            const glm::dvec2& wc = p.footprint[(i + 1) % n];
-            const double len = glm::length(wc - wa);
-            const int steps = std::max(1, static_cast<int>(len / 5.0));
-            for (int s = 0; s <= steps; ++s) {
-                const glm::dvec2 w = wa + (wc - wa) * (double(s) / steps);
-                float e;
-                if (data.sampleGround(w.x, w.y, e)) {
-                    gmin = std::min(gmin, e);
-                    gmax = std::max(gmax, e);
-                    anyGround = true;
-                }
-            }
-        }
-        const float gminS = static_cast<float>(
-            (anyGround ? gmin : p.baseZ) - origin.z);
-        const float gmaxS = static_cast<float>(
-            (anyGround ? gmax : p.baseZ) - origin.z);
-
-        // The correct datum for a platform is the adjacent *rail*, not the
-        // terrain: it is built a fixed step height above top-of-rail. Find the
-        // two ends (the farthest-apart footprint vertices) and use the lowest
-        // neighbouring rail head; the flat top sits kPlatformAboveRail above it.
-        int e0 = 0, e1 = 0;
-        float far2 = -1.0f;
-        for (int i = 0; i < n; ++i)
-            for (int j = i + 1; j < n; ++j) {
-                const float d2 = glm::dot(fp[i] - fp[j], fp[i] - fp[j]);
-                if (d2 > far2) { far2 = d2; e0 = i; e1 = j; }
-            }
-        float railZ = std::numeric_limits<float>::max();
-        bool haveRail = false;
-        for (int end : {e0, e1}) {
-            float rz;
-            if (nearestRailHeadZ(fp[end], paths, rz)) {
-                railZ = std::min(railZ, rz);
-                haveRail = true;
-            }
-        }
-
-        const float zb = gminS;
-        // Never let the top sink under the terrain (keep a little clearance).
-        const float zt = haveRail
-            ? std::max(railZ + kPlatformAboveRail, gmaxS + 0.05f)
-            : gmaxS + p.height; // isolated platform: fall back to terrain
+        const SlabZ z = slabZ(p, data, paths, origin);
+        const float zb = z.bottom, zt = z.top;
         const glm::vec3 inside(centroid.x, centroid.y, (zb + zt) * 0.5f);
 
         // Walls: one quad per footprint edge.
@@ -325,4 +353,19 @@ void PlatformMesh::build(const TerrainData& data,
 
     std::printf("[PlatformMesh] %zu platforms, %zu vertices, %zu triangles\n",
                 uniq.size(), vertices_.size(), indices_.size() / 3);
+}
+
+bool platformTopAt(const TerrainData& data, const std::vector<TrackPath>& paths,
+                   double worldX, double worldY, float& topZ) {
+    // No dedup needed: a footprint straddling a tile boundary appears in both tiles as
+    // the same geometry, so whichever copy is found first gives the same answer.
+    for (const auto& [tileKey, tilePtr] : data.tiles()) {
+        for (const PlatformSegment& p : tilePtr->platforms) {
+            if (p.footprint.size() < 3) continue;
+            if (!insideRing(p.footprint, worldX, worldY)) continue;
+            topZ = slabZ(p, data, paths, data.sceneOrigin()).top;
+            return true;
+        }
+    }
+    return false;
 }
