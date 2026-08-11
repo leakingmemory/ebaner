@@ -324,9 +324,19 @@ serves. An explicit station name can be written into the overlay line to overrul
 nearest-station rule where two stations sit close together.
 
 In the viewer they are worked from the traffic manager (`O`), where **E** opens the
-nearest station: the first line switches the station on or off, then **All red**, then its
-signals. A signal holds whatever it was last given — nothing else resets it, no train
-passing and no timer — which is why the state of each is on the line beside it.
+station being worked: the first line switches the station on or off, then **All red**,
+then its signals. A signal holds whatever it was last given — nothing else resets it, no
+train passing and no timer — which is why the state of each is on the line beside it.
+
+**Which station** the traffic manager is working is named in its title, and everything it
+does — the entry-signal panel, the flag and TXP lines under it, and the exit routes `R`
+offers — acts on that one station. Opening the map lands on the station nearest the train,
+which is the one meant nine times out of ten; **N** and **B** then walk to the next and
+previous station along the line, bringing the view with them. The list is the stations of
+the line the run started on, in the order they come in, whether or not anything is
+authored at them yet — that is what makes it possible to go and author something at the
+next one. `EBANER_MAP=1` opens the traffic manager straight away, and `EBANER_MAP=<name>`
+opens it at a named station, which is how it is screenshotted headlessly.
 
 **Level crossings.** A crossing secured by lights alone — no barriers. Pick **Level
 crossings** from the Esc menu and **click a point on any track**; **right-click** selects,
@@ -375,8 +385,8 @@ indication. Because the flag hangs it reads from either direction, so there is n
 to author; `F` is placement, not aim.
 
 Each post attaches to the **nearest station**, which is only how the panel groups them:
-`O` for the traffic manager, then **E**, gives one line per post under that station's
-signals, and **Enter cycles it** — no flag, red, green, no flag. Every post is
+`O` for the traffic manager, then **E**, gives one line per post under the worked
+station's signals, and **Enter cycles it** — no flag, red, green, no flag. Every post is
 independent. Setting one says nothing about any other, several may show different things
 at once, and none of them is tied to the manned switch: a manned station has no flag out
 most of the time.

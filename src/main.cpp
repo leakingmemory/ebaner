@@ -85,12 +85,17 @@ bool g_routePick = false;   // traffic manager: the exit-route picker is open
 int g_routePickSel = 0;     // highlighted route in that picker
 bool g_signalPick = false;  // traffic manager: the simple-entry-signal picker is open
 int g_signalPickSel = 0;    // highlighted signal in that picker
+// Traffic manager: pending station changes, +1 for the next station and -1 for the
+// previous. An accumulator rather than an index because the key callback cannot see the
+// station list, which lives in main() with everything else the panel works from.
+int g_tmStationStep = 0;
 float g_mapZoom = 1.0f;     // map zoom: 1 = ~4 km tall, higher = zoomed in
 constexpr float kMapZoomMin = 0.5f;  // ~8 km tall (zoomed out)
 constexpr float kMapZoomMax = 40.0f; // ~100 m tall (zoomed in)
 glm::vec2 g_mapPan(0.0f);   // WASD pan offset from the default centre (scene metres)
 std::string g_mapMsg;       // transient map feedback (e.g. a blocked-throw reason)
 double g_mapMsgUntil = 0.0; // glfwGetTime() until which g_mapMsg is shown
+bool g_mapMsgOk = false;    // whether it reports something done or something refused
 
 void cursorCallback(GLFWwindow*, double x, double y) {
     if (g_menuOpen || g_mapMode) return; // menu/map open: cursor is free, no mouselook
@@ -165,6 +170,18 @@ void keyCallback(GLFWwindow* win, int key, int, int action, int) {
     if (g_mapMode && key == GLFW_KEY_E && action == GLFW_PRESS) {
         g_signalPick = !g_signalPick;
         g_signalPickSel = 0;
+    }
+    // Walk to the next / previous station to work. Only in the map: N is the cab
+    // reverser's neutral, which means nothing from a dispatcher's view - the same reason
+    // R is free here. A dispatcher works one station at a time and needs to reach the
+    // others without hunting for them across the map.
+    //
+    // Left / Right do the same. They are the obvious keys for stepping along a line and
+    // nothing in the map uses them (the pickers take Up / Down), so there is no reason to
+    // make someone remember that "back" is B.
+    if (g_mapMode && action == GLFW_PRESS) {
+        if (key == GLFW_KEY_N || key == GLFW_KEY_RIGHT) ++g_tmStationStep;
+        if (key == GLFW_KEY_B || key == GLFW_KEY_LEFT) --g_tmStationStep;
     }
     // Z / X zoom the map in / out (keyboard alternative to the scroll wheel;
     // repeat-enabled so holding the key keeps zooming).
@@ -480,18 +497,26 @@ int main(int argc, char** argv) {
         (void)g;
     };
 
-    // Where the map is centred (scene-relative): the centroid of the routed turnouts -
-    // the Bodo station throat, which is the operational detail the view is about, so
-    // zooming stays framed on it. Falls back to the scene origin if there are none.
+    // Where the map is centred (scene-relative): the centroid of the routed turnouts of
+    // the station started at - its throat, which is the operational detail the view is
+    // about, so zooming stays framed on it. Falls back to the scene origin if there are
+    // none.
+    //
+    // Only the turnouts near the origin count. The rail network is resident and global,
+    // so averaging all of them puts the centre in the middle of the country and opens the
+    // traffic manager on a station hundreds of kilometres from the train.
     glm::vec2 mapCenter(0.0f);
     {
+        constexpr double kThroatM = 4000.0; // the station and its approaches, no more
         const glm::dvec3 org = switchNet.sceneOrigin();
         const auto& tos = switchNet.turnouts();
         glm::dvec2 sum(0.0);
         int n = 0;
         for (const auto& t : tos) {
             if (t.mainPath < 0) continue; // inert crossing: not a working switch
-            sum += glm::dvec2(t.world.x - org.x, t.world.y - org.y);
+            const glm::dvec2 at(t.world.x - org.x, t.world.y - org.y);
+            if (glm::length(at) > kThroatM) continue;
+            sum += at;
             ++n;
         }
         if (n > 0) mapCenter = glm::vec2(sum / static_cast<double>(n));
@@ -1104,6 +1129,66 @@ int main(int argc, char** argv) {
         renderer.attachTrackGraph(lines, points);
     };
 
+    // The stations the traffic manager can work, in the order the line runs.
+    //
+    // A dispatcher works one station at a time, so the panel needs to be told which one
+    // rather than inferring it from wherever the map happens to have been panned. The set
+    // is the start station's own line: the signals, flags and TXP positions are all
+    // loaded whole and the rail network is resident, so any station on the line can be
+    // worked, whether or not anything is authored at it yet - offering only the ones that
+    // already own something would leave nowhere to switch *to*, which is the whole point.
+    // The dataset carries the line name, so this is a filter and not a table of ours.
+    struct TmStation {
+        std::string name;
+        glm::vec2 at{0.0f}; // scene-relative, for centring the map and finding the nearest
+    };
+    std::vector<TmStation> tmStations;
+    {
+        const glm::dvec3 org = data.sceneOrigin();
+        for (const Station& st : stations) {
+            if (st.line != start->line) continue;
+            tmStations.push_back({st.name,
+                                  glm::vec2(static_cast<float>(st.world.x - org.x),
+                                            static_cast<float>(st.world.y - org.y))});
+        }
+        // Ordered by how far along they are from where the run started, which on a line
+        // is the order they come in: stepping through them walks the railway rather than
+        // hopping about it alphabetically.
+        const glm::vec2 from(static_cast<float>(start->world.x - org.x),
+                             static_cast<float>(start->world.y - org.y));
+        std::sort(tmStations.begin(), tmStations.end(),
+                  [&](const TmStation& a, const TmStation& b) {
+                      return glm::length(a.at - from) < glm::length(b.at - from);
+                  });
+    }
+    // Which one the panel is working. Set to the nearest when the map is opened, and
+    // moved from there by hand - see the N / B keys below.
+    int tmStation = 0;
+    // Set when a station was asked for outright, so the first open keeps it instead of
+    // snapping to whichever is nearest the train. Cleared once that open has happened.
+    bool tmPinned = false;
+    auto tmNearest = [&](glm::vec2 to) {
+        int best = 0;
+        float bestD = std::numeric_limits<float>::max();
+        for (std::size_t i = 0; i < tmStations.size(); ++i) {
+            const float d = glm::length(tmStations[i].at - to);
+            if (d < bestD) { bestD = d; best = static_cast<int>(i); }
+        }
+        return best;
+    };
+    // Where the station being worked is, for the map and for the route picker.
+    auto tmStationAt = [&]() {
+        if (tmStations.empty()) return mapCenter;
+        return tmStations[std::clamp(tmStation, 0,
+                                     static_cast<int>(tmStations.size()) - 1)].at;
+    };
+    // The simple entry signals belong to a station by name, so the picker is that
+    // station's list - the one the traffic manager is working.
+    auto simpleStationHere = [&]() -> std::string {
+        if (tmStations.empty()) return {};
+        return tmStations[std::clamp(tmStation, 0,
+                                     static_cast<int>(tmStations.size()) - 1)].name;
+    };
     // The map-mode HUD: title, colour legend, and controls. When a vehicle is given
     // (the sim runs live under the map) its speed is shown so the motion is visible.
     auto appendMapHud = [&](std::vector<TextVertex>& tv, int fbw, int fbh,
@@ -1111,8 +1196,19 @@ int main(int argc, char** argv) {
         const float sc = std::max(2.0f, static_cast<float>(fbh) / 240.0f);
         const float x = 40.0f, lh = 12.0f * sc;
         float y = 40.0f;
-        appendText(tv, "TRAFFIC MANAGER - BODO", x, y, sc,
-                   glm::vec3(1.0f, 0.95f, 0.5f), fbw, fbh);
+        // Name the station being worked, not the one the dataset starts at: every panel
+        // below acts on it, so which it is has to be on screen.
+        {
+            std::string title = "TRAFFIC MANAGER";
+            const std::string here = simpleStationHere();
+            if (!here.empty()) {
+                title += " - " + here;
+                if (tmStations.size() > 1)
+                    title += "  (" + std::to_string(tmStation + 1) + "/" +
+                             std::to_string(tmStations.size()) + ")";
+            }
+            appendText(tv, title, x, y, sc, glm::vec3(1.0f, 0.95f, 0.5f), fbw, fbh);
+        }
         y += lh;
         if (veh) {
             char buf[64];
@@ -1147,9 +1243,10 @@ int main(int argc, char** argv) {
         }
         char hint[224];
         std::snprintf(hint, sizeof(hint),
-                      "O: cab  Esc: menu  scroll/Z-X: zoom  WASD: pan  click switch to throw  "
-                      "click signal then destination to set a route  R: exit routes  "
-                      "E: entry signals  (view %.1f km)",
+                      "O: cab  Esc: menu  scroll/Z-X: zoom  WASD: pan  "
+                      "Left/Right or N/B: prev/next station  "
+                      "click switch to throw  click signal then destination for a route  "
+                      "R: exit routes  E: entry signals  (view %.1f km)",
                       4.0f / g_mapZoom);
         appendText(tv, hint, x, y, sc * 0.75f, glm::vec3(0.7f, 0.85f, 0.7f), fbw, fbh);
         y += lh;
@@ -1193,9 +1290,13 @@ int main(int argc, char** argv) {
         }
         // Transient feedback from a switch click (thrown / blocked reason).
         if (glfwGetTime() < g_mapMsgUntil && !g_mapMsg.empty()) {
-            const bool ok = g_mapMsg.rfind("Switch thrown", 0) == 0;
+            // Green for something done, orange for something refused. Carried by the
+            // setter rather than sniffed from the text: matching a prefix meant every new
+            // message was an error by default, so walking to a station announced itself in
+            // the same colour as a blocked route and looked like it had failed.
             appendText(tv, g_mapMsg, x, y, sc,
-                       ok ? glm::vec3(0.5f, 1.0f, 0.6f) : glm::vec3(1.0f, 0.55f, 0.4f),
+                       g_mapMsgOk ? glm::vec3(0.5f, 1.0f, 0.6f)
+                                  : glm::vec3(1.0f, 0.55f, 0.4f),
                        fbw, fbh);
         }
     };
@@ -1207,6 +1308,20 @@ int main(int argc, char** argv) {
         menuIndex = std::clamp(std::atoi(vsel), 0, kNumVehicleSpecs - 1);
         spawnVehicle(menuIndex);
         mode = Mode::Sim;
+    }
+    // Open the traffic manager straight away, and optionally at a named station. The map
+    // is otherwise only reachable by pressing keys, which left the one part of the sim
+    // that is all panels and no 3-D view impossible to screenshot or check headlessly.
+    if (const char* msel = std::getenv("EBANER_MAP")) {
+        g_mapMode = true;
+        g_mapDirty = true;
+        mode = Mode::Sim;
+        for (std::size_t i = 0; i < tmStations.size(); ++i)
+            if (tmStations[i].name == msel) {
+                tmStation = static_cast<int>(i);
+                tmPinned = true;
+                g_mapPan = glm::clamp(tmStations[i].at, mapMin, mapMax) - mapCenter;
+            }
     }
     bool prevUp = false, prevDown = false, prevK1 = false, prevK2 = false,
          prevK3 = false, prevK4 = false, prevK5 = false, prevEnter = false;
@@ -1224,8 +1339,8 @@ int main(int argc, char** argv) {
     bool prevPickUp = false, prevPickDown = false, prevPickEnter = false;
     const std::vector<std::string> kMenuItems = {"Traffic manager", "Exit"};
 
-    auto setMapMsg = [&](const std::string& m) {
-        g_mapMsg = m; g_mapMsgUntil = glfwGetTime() + 3.0;
+    auto setMapMsg = [&](const std::string& m, bool ok = false) {
+        g_mapMsg = m; g_mapMsgOk = ok; g_mapMsgUntil = glfwGetTime() + 3.0;
     };
     auto pathName = [&](int pi) {
         return signalPaths[pi].name.empty() || signalPaths[pi].name == "-"
@@ -1316,7 +1431,8 @@ int main(int argc, char** argv) {
         g_mapDirty = true;
         switchesChanged = true;
         setMsg(std::string("Switch thrown -> ") +
-               (switchNet.state(i) == SwitchState::Straight ? "straight" : "diverging"));
+                   (switchNet.state(i) == SwitchState::Straight ? "straight" : "diverging"),
+               true);
     };
 
     // Set a route: move its switches into position, lock the path and clear its signal.
@@ -1369,13 +1485,16 @@ int main(int argc, char** argv) {
         switchesChanged = true;
         g_mapDirty = true;
         setMapMsg("Route " + pathName(pi) + " set" +
-                  (toMove.empty() ? "" : " (" + std::to_string(toMove.size()) + " switch(es) moved)"));
+                      (toMove.empty() ? ""
+                                      : " (" + std::to_string(toMove.size()) +
+                                            " switch(es) moved)"),
+                  true);
     };
     auto cancelRoute = [&](int pi) {
         routeSet[pi] = 0;
         switchesChanged = true;
         g_mapDirty = true;
-        setMapMsg("Route " + pathName(pi) + " cancelled");
+        setMapMsg("Route " + pathName(pi) + " cancelled", true);
     };
 
     // --- Setting a main-signal route ------------------------------------------------------
@@ -1476,7 +1595,10 @@ int main(int argc, char** argv) {
     auto stationRoutes = [&]() {
         std::vector<int> out;
         if (stationAt.empty()) return out;
-        const glm::vec2 at = mapCenter + g_mapPan;
+        // The route clusters are geometric and the panel's stations are named, so these
+        // are two different lists; the routes offered are the cluster nearest whichever
+        // station is being worked, so both pickers answer about the same place.
+        const glm::vec2 at = tmStationAt();
         int best = 0;
         float bestD = std::numeric_limits<float>::max();
         for (std::size_t i = 0; i < stationAt.size(); ++i) {
@@ -1509,25 +1631,6 @@ int main(int argc, char** argv) {
         }
         if (items.empty()) items.push_back("(no exit routes here)");
         return items;
-    };
-    // The simple entry signals belong to a station by name, so the picker is that
-    // station's list. Which station: whichever real one the map is looking at.
-    auto simpleStationHere = [&]() -> std::string {
-        if (simpleEntries.empty() || stations.empty()) return {};
-        const glm::dvec3 org = data.sceneOrigin();
-        const glm::vec2 at = mapCenter + g_mapPan;
-        const glm::dvec2 world(org.x + at.x, org.y + at.y);
-        std::string best;
-        double bestD = 1e30;
-        for (std::size_t i = 0; i < simpleEntries.size(); ++i) {
-            const std::string& nm = simpleEntryStation[i].name;
-            if (nm.empty()) continue;
-            const Station* st = findStation(stations, nm);
-            if (!st) continue;
-            const double d = std::hypot(st->world.x - world.x, st->world.y - world.y);
-            if (d < bestD) { bestD = d; best = nm; }
-        }
-        return best;
     };
     auto simpleSignalsAt = [&](const std::string& station) {
         std::vector<int> out;
@@ -1906,12 +2009,38 @@ int main(int argc, char** argv) {
         // Traffic-manager map overlay: attach on enter/refresh, clear on leave (so the
         // track lines don't bleed into the 3-D view).
         if (g_mapMode && (g_mapDirty || !mapAttached)) {
+            // Opening the map lands on the station nearest the train - where the work is
+            // - rather than nearest whatever the map was last framed on, and brings the
+            // view with it. Nine times out of ten that is the station meant.
+            if (!mapAttached && !tmStations.empty() && !tmPinned) {
+                tmStation = tmNearest(glm::vec2(g_camera.position()));
+                g_mapPan = glm::clamp(tmStations[tmStation].at, mapMin, mapMax) - mapCenter;
+            }
+            tmPinned = false;
             buildMapOverlay();
             mapAttached = true;
             g_mapDirty = false;
         } else if (!g_mapMode && mapAttached) {
             renderer.attachTrackGraph({}, {});
             mapAttached = false;
+        }
+
+        // Walking to another station brings the map with it: switching to a station and
+        // being left looking at the one before would make the panel and the view disagree
+        // about where the work is.
+        if (g_tmStationStep != 0) {
+            if (tmStations.empty()) {
+                g_tmStationStep = 0;
+            } else {
+                const int n = static_cast<int>(tmStations.size());
+                tmStation = ((tmStation + g_tmStationStep) % n + n) % n;
+                g_tmStationStep = 0;
+                g_mapPan = glm::clamp(tmStations[tmStation].at, mapMin, mapMax) - mapCenter;
+                setMapMsg("Station: " + tmStations[tmStation].name + "  (" +
+                              std::to_string(tmStation + 1) + "/" +
+                              std::to_string(tmStations.size()) + ")",
+                          true);
+            }
         }
 
         // WASD pans the map. Speed scales with the view height so it feels the same on
@@ -2377,15 +2506,27 @@ int main(int argc, char** argv) {
 
             // Camera control only in the cab view; the map uses a fixed ortho
             // projection, so the 3-D camera is left untouched while it's open.
+            // The camera keeps following the train even with the map open. It is not only
+            // where the view is drawn from: it is the reference point for how loud the
+            // train sounds and for where terrain is streamed in. Freezing it while the
+            // map is up leaves the train to roll out of earshot of its own brakes and off
+            // the loaded ground, which is what happened when the traffic manager grew
+            // enough to keep a dispatcher in it for a while.
+            //
+            // Only the free-look movement stays behind the map gate, because there WASD
+            // pans the map instead - and a free camera is meant to stay where it was put.
+            float fwd = 0.0f, right = 0.0f, up = 0.0f;
+            bool fast = false;
             if (!g_mapMode) {
-                float fwd = 0.0f, right = 0.0f, up = 0.0f;
                 if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) fwd += 1.0f;
                 if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) fwd -= 1.0f;
                 if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) right += 1.0f;
                 if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) right -= 1.0f;
                 if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) up += 1.0f;
                 if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) up -= 1.0f;
-                const bool fast = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS;
+                fast = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS;
+            }
+            {
                 glm::vec3 dEye, dFwd;
                 if (g_driverPos >= 0 && drivercam::eyePose(*vehicle, g_driverPos, dEye, dFwd)) {
                     // Seated at the driver's position; the mouse free-looks relative to
@@ -2402,7 +2543,7 @@ int main(int argc, char** argv) {
                     const glm::vec3 dir = glm::normalize(axle - camPos);
                     g_camera.setPose(camPos, std::atan2(dir.y, dir.x),
                                      std::asin(glm::clamp(dir.z, -1.0f, 1.0f)));
-                } else {
+                } else if (!g_mapMode) {
                     if (g_driverPos >= 0) g_driverPos = -1; // no cab here; fall back
                     g_camera.move(fwd, right, up, dt, fast);
                 }
