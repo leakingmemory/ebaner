@@ -370,6 +370,20 @@ clearing and on nothing else, and mirrors the delay: the train's signal drops to
 once, the road opens 5 s later. A crossing armed by a movement that then turned back
 releases itself after a minute of everything being clear.
 
+**Distant signals** repeat the crossing's own train indication far enough back to stop
+from, one each side. The aspects are identical to the crossing's — same red-over-white,
+same flash, same period and phase, so the two agree — except that **the red is violet**,
+which is what tells a driver they are reading the warning and not the crossing itself.
+
+They stand at **four fifths of the braking distance** at the line speed there: a distant is
+a warning to start braking, not the last moment to, and the remaining fifth is the margin.
+That figure is capped so the signal always sits **well inside the approach circuit** — the
+train must already have armed the crossing before it can read the repeat, or it would be
+shown an idle crossing by the very train that is about to close it — and floored so it
+never lands inside the inner circuit at slow line speeds. At 130 km/h that is 745 m
+against a 1473 m approach; at 40 km/h it comes down to 75 m. Nothing to author: they are
+derived from the crossing, and the editor HUD shows where they came out.
+
 Each crossing runs its **own** blink, phased off its id, so two within sight of one
 another are visibly out of step — as real ones are, each having its own oscillator.
 

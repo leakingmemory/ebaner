@@ -479,6 +479,58 @@ int main(int argc, char** argv) {
         check(!r.st.barrierMoving(), "so it never asks for a rebuild");
     }
 
+    // Where the distants stand. A repeat is only worth having if a driver reading it still
+    // has room to stop, and only safe if the train has already armed the crossing before
+    // it can be read - so it is four fifths of the braking distance, but never so far out
+    // that it leaves the approach circuit, and never so close that it is inside the inner
+    // one.
+    {
+        std::puts("\nThe crossing's distant signals:");
+        auto at = [](double kmh) {
+            return distantDistance(kmh, approachDistance(kmh));
+        };
+        auto braking = [](double kmh) {
+            const double v = (kmh > 1.0 ? kmh : 40.0) / 3.6;
+            return v * v / (2.0 * kCrossingBrakeDecel);
+        };
+        // The ordinary case: straight four fifths of the braking distance.
+        for (double kmh : {60.0, 100.0, 130.0}) {
+            const bool ok = std::abs(at(kmh) - kDistantOfBraking * braking(kmh)) < 0.5;
+            check(ok, "at " + std::to_string(static_cast<int>(kmh)) +
+                          " km/h it is four fifths of the braking distance");
+        }
+        // Always inside the approach circuit, by enough to have been detected first.
+        for (double kmh : {20.0, 60.0, 130.0, 210.0}) {
+            const double app = approachDistance(kmh);
+            check(at(kmh) < app - 100.0,
+                  "at " + std::to_string(static_cast<int>(kmh)) +
+                      " km/h it sits well inside the approach circuit");
+        }
+        // The fast end is where the raw braking figure crowds the circuit: the approach
+        // is clamped at kOuterMaxM and the braking distance is not, so above about
+        // 213 km/h it would leave the circuit altogether and below that it still eats the
+        // margin. Either way the cap is what holds it in.
+        check(kDistantOfBraking * braking(210.0) >
+                  kDistantOfApproach * approachDistance(210.0),
+              "at 210 km/h the braking figure alone would eat the margin");
+        check(at(210.0) < approachDistance(210.0) - 100.0, "so it is capped short of it");
+
+        // The slow end is where it would land inside the inner circuit instead.
+        check(kDistantOfBraking * braking(20.0) < innerHalfM(),
+              "at 20 km/h the braking figure alone would be inside the inner circuit");
+        check(at(20.0) > innerHalfM(), "so it is held outside it");
+        check(at(20.0) > kSignalOffsetM,
+              "and clear of the crossing's own head besides");
+
+        // An unknown limit falls back as the approach distance does, rather than to zero.
+        check(std::abs(at(0.0) - at(40.0)) < 0.5,
+              "an unknown line speed falls back to 40 km/h, not to nothing");
+
+        // A crossing whose circuits were shortened by hand brings its repeats in too.
+        check(distantDistance(130.0, 400.0) < distantDistance(130.0, approachDistance(130.0)),
+              "a hand-set shorter approach pulls the distants in with it");
+    }
+
     // A station needs several positions - a TXP at one end of Fauske cannot be seen from
     // the other - and the editor has to draw all of them while the sim draws only the one
     // being signalled. Easy to collapse into a single rule by handing the editor the same

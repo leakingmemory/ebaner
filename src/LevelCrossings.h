@@ -74,6 +74,24 @@ constexpr double kOuterMinM = 200.0;
 constexpr double kOuterMaxM = 2000.0;
 double approachDistance(double lineSpeedKmh);
 
+// How far out the crossing's distant signals stand, each side.
+//
+// A driver who first sees the crossing's own head at kSignalOffsetM has no room left to
+// do anything about it, so the same indication is repeated far enough back to stop from:
+// four fifths of the braking distance at the line speed. Four fifths and not the whole of
+// it because a distant is a warning to start braking, not the last possible moment - the
+// remaining fifth is the margin.
+//
+// It has to sit *inside* the approach circuit, and by a margin: the train must already
+// have armed the crossing before it can read the repeat, or the signal would show idle to
+// a driver who is the reason it is about to close. So the braking figure is capped
+// against the approach distance rather than trusted on its own: the approach is clamped
+// at kOuterMaxM and the braking distance is not, so past about 160 km/h the raw figure
+// starts eating the margin and past about 213 km/h it leaves the circuit altogether.
+constexpr double kDistantOfBraking = 0.8;  // of the braking distance
+constexpr double kDistantOfApproach = 0.8; // but never further out than this of the approach
+double distantDistance(double lineSpeedKmh, double outerM);
+
 // A crossing resolved onto the built paths: which path it sits on and where, plus the
 // circuit extents in that path's arc length. Paths are built once and never rebuilt, so
 // this is worked out once at load.
@@ -82,6 +100,7 @@ struct CrossingSite {
     float s = 0.0f;     // arc length of the crossing along that path
     float innerM = 0.0f;
     float outerM = 0.0f;
+    float distantM = 0.0f;     // where the repeats stand, each side
     float lineSpeedKmh = 0.0f; // what the approach distance was derived from
 };
 // `origin` is the scene origin: the polys are in world coordinates and the paths are

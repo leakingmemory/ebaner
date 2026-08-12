@@ -3269,11 +3269,11 @@ int main(int argc, char** argv) {
                 else
                     std::snprintf(buf, sizeof(buf),
                                   "%s   %.0f km/h -> approach %.0f m%s   inner +/-%.0f m"
-                                  "   %s",
+                                  "   distant +/-%.0f m   %s",
                                   crossings[selCrossing].name.c_str(), st.lineSpeedKmh,
                                   st.outerM,
                                   crossings[selCrossing].outerM > 0.0 ? " (set)" : "",
-                                  st.innerM,
+                                  st.innerM, st.distantM,
                                   crossings[selCrossing].barriers ? "LIGHTS + BARRIERS"
                                                                   : "lights only");
                 appendText(tv, buf, x, 40.0f + 5 * lh, sc,

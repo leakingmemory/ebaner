@@ -106,6 +106,17 @@ double approachDistance(double lineSpeedKmh) {
     return std::clamp(d, kOuterMinM, kOuterMaxM);
 }
 
+double distantDistance(double lineSpeedKmh, double outerM) {
+    const double kmh = lineSpeedKmh > 1.0 ? lineSpeedKmh : 40.0; // as above
+    const double v = kmh / 3.6;
+    const double braking = v * v / (2.0 * kCrossingBrakeDecel);
+    // Inside the approach circuit by a margin, whatever the braking figure says.
+    double d = std::min(kDistantOfBraking * braking, kDistantOfApproach * outerM);
+    // And never so close that it lands on the crossing's own head, or inside the inner
+    // circuit where a train standing at it would be holding the crossing shut.
+    return std::max(d, innerHalfM() + kSignalOffsetM);
+}
+
 std::vector<CrossingSite> resolveCrossings(const std::vector<LevelCrossing>& xs,
                                            const std::vector<TrackPath>& paths,
                                            const std::vector<TrackPoly>& polys,
@@ -142,6 +153,10 @@ std::vector<CrossingSite> resolveCrossings(const std::vector<LevelCrossing>& xs,
         out[i].innerM = static_cast<float>(innerHalfM());
         out[i].outerM = static_cast<float>(
             x.outerM > 0.0 ? x.outerM : approachDistance(out[i].lineSpeedKmh));
+        // Off the resolved approach, not the derived one: a crossing whose circuits were
+        // shortened by hand must bring its repeats in with them.
+        out[i].distantM =
+            static_cast<float>(distantDistance(out[i].lineSpeedKmh, out[i].outerM));
     }
     return out;
 }

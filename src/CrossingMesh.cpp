@@ -26,6 +26,16 @@ const glm::vec3 kRedOn{1.0f, 0.14f, 0.10f};
 const glm::vec3 kRedOff{0.24f, 0.10f, 0.10f};
 const glm::vec3 kWhiteOn{1.0f, 0.97f, 0.88f};
 const glm::vec3 kWhiteOff{0.26f, 0.25f, 0.23f};
+// The distant repeats the crossing's own indication in violet, so a driver can tell at a
+// glance whether they are reading the crossing or the warning for it - the aspects being
+// otherwise identical is the whole point, and identical aspects in the same colour a mile
+// apart would be worse than no repeat.
+//
+// Weighted toward red and kept low in green. Green is what washes a violet out: with much
+// of it in the mix the lens reads as a pale lavender, and at the distance one of these is
+// read from - most of a braking distance - it blends into a bright sky and looks white.
+const glm::vec3 kVioletOn{0.72f, 0.12f, 0.92f};
+const glm::vec3 kVioletOff{0.20f, 0.07f, 0.22f};
 
 constexpr float kMastH = 3.2f;      // shorter than a main signal: this is not one
 constexpr float kRoadOffsetM = 6.0f; // how far the road heads stand off the track
@@ -47,7 +57,8 @@ constexpr int kBoomStripes = 6;      // alternating red and white along its leng
 // looks, so a driver coming the other way sees it face-on.
 void head(std::vector<TrackVertex>& v, std::vector<std::uint32_t>& idx,
           const glm::vec3& base, const glm::vec3& fwd, bool red, bool white, float period,
-          float phase) {
+          float phase, const glm::vec3& onCol = kRedOn,
+          const glm::vec3& offCol = kRedOff) {
     const glm::vec3 UP(0.0f, 0.0f, 1.0f);
     const glm::vec3 F = glm::normalize(glm::vec3(fwd.x, fwd.y, 0.0f));
     const glm::vec3 R(F.y, -F.x, 0.0f);
@@ -63,9 +74,9 @@ void head(std::vector<TrackVertex>& v, std::vector<std::uint32_t>& idx,
 
     const glm::vec3 face = C + F * (hd + 0.04f);
     if (red)
-        lampgeom::lamp(v, idx, face + UP * kLensSp, R, UP, kLensR, kRedOn, period, phase);
+        lampgeom::lamp(v, idx, face + UP * kLensSp, R, UP, kLensR, onCol, period, phase);
     else
-        lampgeom::disc(v, idx, face + UP * kLensSp, F, R, UP, kLensR, kRedOff);
+        lampgeom::disc(v, idx, face + UP * kLensSp, F, R, UP, kLensR, offCol);
     if (white)
         lampgeom::lamp(v, idx, face - UP * kLensSp, R, UP, kLensR, kWhiteOn, period, phase);
     else
@@ -160,6 +171,23 @@ void CrossingMesh::build(const std::vector<LevelCrossing>& xs,
             const glm::vec3 base = q.pos + qa * (side > 0.0f ? -3.2f : 3.2f);
             head(vertices_, indices_, base, qt * side, l.trainRed, l.trainWhite, period,
                  phase);
+        }
+
+        // The distants: the same indication again, far enough back to stop from, in
+        // violet so it cannot be mistaken for the crossing itself. Skipped rather than
+        // clamped where the path is too short to hold one - a repeat standing somewhere
+        // other than its braking distance is worse than none, because a driver reads the
+        // distance off it as much as the aspect.
+        for (const float side : {-1.0f, 1.0f}) {
+            const float s = sites[i].s + side * sites[i].distantM;
+            if (s < 0.0f || s > p.length()) continue;
+            const TrackPose q = p.poseAt(s);
+            const glm::vec3 qt =
+                glm::normalize(glm::vec3(q.tangent.x, q.tangent.y, 0.0f));
+            const glm::vec3 qa(qt.y, -qt.x, 0.0f); // right of +s
+            const glm::vec3 base = q.pos + qa * (side > 0.0f ? -3.2f : 3.2f);
+            head(vertices_, indices_, base, qt * side, l.trainRed, l.trainWhite, period,
+                 phase, kVioletOn, kVioletOff);
         }
 
         // The two the road reads. The head on the +across side looks back along +across
