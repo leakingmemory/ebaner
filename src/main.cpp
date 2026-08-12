@@ -1831,6 +1831,7 @@ int main(int argc, char** argv) {
             const std::vector<VehicleFrame> axles =
                 vehicle ? vehicle->axleFrames() : std::vector<VehicleFrame>{};
             bool anyPhaseMoved = false;
+            bool anyBarrierMoving = false;
             for (std::size_t ci = 0; ci < crossings.size(); ++ci) {
                 const CrossingSite& site = crossingSites[ci];
                 if (site.path < 0) continue;
@@ -1859,10 +1860,16 @@ int main(int argc, char** argv) {
                     else if (rel > 0.0f && rel <= site.outerM) occ.outerB = true;
                 }
                 const CrossingPhase was = crossingStates[ci].phase;
-                stepCrossing(crossingStates[ci], occ, now);
+                stepCrossing(crossings[ci], crossingStates[ci], occ, now);
                 if (crossingStates[ci].phase != was) anyPhaseMoved = true;
+                if (crossingStates[ci].barrierMoving()) anyBarrierMoving = true;
             }
-            if (anyPhaseMoved) {
+            // A moving boom is the one thing here that has to be rebuilt every frame. The
+            // flashing does not: it is a function of the clock in the shader, baked into
+            // the vertices once. A rigid rotation cannot be done that way - it needs a
+            // pivot and an axis per vertex and the vertex has no room for them - so while
+            // a barrier is in motion the geometry is remade.
+            if (anyPhaseMoved || anyBarrierMoving) {
                 rebuildSignalBuffer();
                 renderer.updateSignals(signalVerts, signalIdx);
             }

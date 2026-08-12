@@ -26,6 +26,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <fstream>
 #include <map>
 #include <string>
 
@@ -50,6 +51,7 @@ const char* phaseName(CrossingPhase p) {
 
 // A crossing driven by a clock, with the circuits set by hand.
 struct Rig {
+    LevelCrossing x; // the crossing itself; set x.barriers to test the barrier variant
     CrossingState st;
     CrossingOccupancy occ;
     double now = 0.0;
@@ -59,14 +61,14 @@ struct Rig {
         const double dt = 0.1;
         for (double t = 0.0; t < seconds - 1e-9; t += dt) {
             now += dt;
-            stepCrossing(st, occ, now);
+            stepCrossing(x, st, occ, now);
         }
     }
     // Apply a circuit change and let it be seen, without meaningfully advancing time.
     void set(bool a, bool inner, bool b) {
         occ = {a, inner, b};
         now += 0.01;
-        stepCrossing(st, occ, now);
+        stepCrossing(x, st, occ, now);
     }
     CrossingPhase phase() const { return st.phase; }
 };
@@ -215,20 +217,48 @@ int main(int argc, char** argv) {
         // A name with spaces and Norwegian letters, which is what quoting is for. Not one
         // with a quote in it: quoteName documents that names are filtered on entry, so
         // that cannot arise, and a test for it would only be testing a fiction.
-        xs.push_back({1, "Fauskeveien nord", 0x6d7, 0.30, 0.0});
-        xs.push_back({2, "Røsvikveien", 0x6d9, 0.755, 900.0});
+        xs.push_back({1, "Fauskeveien nord", 0x6d7, 0.30, 0.0, false});
+        xs.push_back({2, "Røsvikveien", 0x6d9, 0.755, 900.0, false});
+        xs.push_back({3, "Leivset", 0x6da, 0.10, 0.0, true});   // barriers, no override
+        xs.push_back({4, "Finneid bru", 0x6db, 0.90, 750.0, true}); // both fields
         check(writeLevelCrossings(argv[1], xs), "write");
         const std::vector<LevelCrossing> back = loadLevelCrossings(argv[1]);
-        check(back.size() == 2, "both records come back");
+        check(back.size() == 4, "every record comes back");
         bool same = back.size() == xs.size();
         for (std::size_t i = 0; same && i < back.size(); ++i)
             same = back[i].id == xs[i].id && back[i].name == xs[i].name &&
                    back[i].trackId == xs[i].trackId &&
                    std::abs(back[i].frac - xs[i].frac) < 1e-9 &&
-                   std::abs(back[i].outerM - xs[i].outerM) < 1e-9;
-        check(same, "ids, names, tracks, fracs and overrides survive");
+                   std::abs(back[i].outerM - xs[i].outerM) < 1e-9 &&
+                   back[i].barriers == xs[i].barriers;
+        check(same, "ids, names, tracks, fracs, overrides and barriers survive");
         check(back.size() > 1 && back[0].outerM == 0.0 && back[1].outerM == 900.0,
               "an absent override stays absent, a set one is kept");
+        check(back.size() > 3 && !back[0].barriers && back[2].barriers && back[3].barriers,
+              "and the two variants are told apart");
+
+        // The two trailing fields are read as keywords, so neither position nor presence
+        // of the other matters - and a file written before barriers existed still loads.
+        {
+            const std::string path =
+                std::string(argv[1]) + "/overlay/level-crossings.txt";
+            std::ofstream f(path, std::ios::trunc);
+            f << "crossing 1 \"old style\" 6d7:0.5\n"          // as it was written before
+                 "crossing 2 \"old with override\" 6d8:0.5 800\n"
+                 "crossing 3 \"barriers only\" 6d9:0.5 barriers\n"
+                 "crossing 4 \"reversed\" 6da:0.5 barriers 650\n"; // keyword first
+            f.close();
+            const std::vector<LevelCrossing> old = loadLevelCrossings(argv[1]);
+            check(old.size() == 4, "all four forms load");
+            check(old.size() > 1 && !old[0].barriers && old[0].outerM == 0.0,
+                  "a line written before barriers existed is unchanged");
+            check(old.size() > 1 && !old[1].barriers && old[1].outerM == 800.0,
+                  "an override on its own still reads");
+            check(old.size() > 2 && old[2].barriers && old[2].outerM == 0.0,
+                  "the keyword on its own does not eat the line");
+            check(old.size() > 3 && old[3].barriers && old[3].outerM == 650.0,
+                  "and the two may come in either order");
+        }
     }
 
     // The TXP's flag. Each post is its own: setting one says nothing about any other,
@@ -312,29 +342,30 @@ int main(int argc, char** argv) {
     // whole point: the lights carry the warning after the bell has had its say.
     {
         std::puts("\nThe crossing's warning bell:");
+        const LevelCrossing x;   // lights only: the bell is the same either way
         CrossingState st;
         CrossingOccupancy occ;
         double now = 100.0;
         check(!crossingBell(st, now), "silent while the crossing is idle");
 
         occ.outerA = true; // a train arms the approach
-        stepCrossing(st, occ, now);
+        stepCrossing(x, st, occ, now);
         check(st.phase == CrossingPhase::Closing, "the sequence starts");
         check(crossingBell(st, now), "the bell starts with it");
 
         // Through the phase change, which is where a bell timed off phaseSince breaks.
         now += kTrainDelayS + 1.0;
         occ.outerA = false;
-        stepCrossing(st, occ, now);
+        stepCrossing(x, st, occ, now);
         check(st.phase == CrossingPhase::Secured, "and reaches Secured");
         check(crossingBell(st, now), "the bell rings on through the phase change");
 
         now = 100.0 + kBellS - 0.5;
-        stepCrossing(st, occ, now);
+        stepCrossing(x, st, occ, now);
         check(crossingBell(st, now), "still ringing just before its time is up");
 
         now = 100.0 + kBellS + 0.5;
-        stepCrossing(st, occ, now);
+        stepCrossing(x, st, occ, now);
         check(!crossingBell(st, now), "silent once kBellS has passed");
         check(st.phase == CrossingPhase::Secured, "while the crossing is still shut");
         check(crossingLights(st.phase).roadRed && crossingLights(st.phase).fast,
@@ -343,18 +374,109 @@ int main(int argc, char** argv) {
         // A later train gets a bell of its own rather than staying silent.
         now += 200.0;
         occ.inner = true;
-        stepCrossing(st, occ, now);   // release
+        stepCrossing(x, st, occ, now);   // release
         occ.inner = false;
         now += kTrainDelayS + 1.0;
-        stepCrossing(st, occ, now);   // Opening -> Idle
+        stepCrossing(x, st, occ, now);   // Opening -> Idle
         while (st.phase != CrossingPhase::Idle && now < 1e5) {
             now += 1.0;
-            stepCrossing(st, occ, now);
+            stepCrossing(x, st, occ, now);
         }
         check(st.phase == CrossingPhase::Idle, "the crossing opens again");
         occ.outerB = true;
-        stepCrossing(st, occ, now);
+        stepCrossing(x, st, occ, now);
         check(crossingBell(st, now), "and the next train rings the bell afresh");
+    }
+
+    // The barriers run on a clock that does not line up with the phases at either end.
+    //
+    // They are still up for the first 2 s of Secured, and still coming up for 3 s after
+    // Opening has handed back to Idle - so anything that read the boom position off the
+    // phase would be wrong twice per train, and would snap rather than sweep.
+    {
+        std::puts("\nA half-barrier crossing, lowering and lifting:");
+        Rig r;
+        r.x.barriers = true;
+        check(r.st.barrier == 0.0f, "the booms start up");
+
+        r.set(true, false, false); // a train arms the approach
+        r.run(kBarrierDelayS - 1.0);
+        check(r.st.barrier == 0.0f, "still up a second before their delay is out");
+        check(r.phase() == CrossingPhase::Secured,
+              "even though the crossing is already secured");
+
+        r.run(2.0); // past the 7 s
+        check(r.st.barrier > 0.0f && r.st.barrier < 1.0f, "on their way down after it");
+        check(r.st.barrierMoving(), "and reported as moving, so the mesh is rebuilt");
+
+        // Fully down at 7 + 8 = 15 s, which is the kSequenceS the approach already allows.
+        r.run(kBarrierTravelS);
+        check(r.st.barrier == 1.0f, "fully down 8 s after they started");
+        check(!r.st.barrierMoving(), "and no longer moving");
+
+        r.set(false, true, false); // the train arrives on the crossing
+        r.run(3.0);
+        check(r.st.barrier == 1.0f, "held down while the train is on it");
+
+        r.set(false, false, true); // off the inner circuit
+        check(r.phase() == CrossingPhase::Opening, "clearing the inner starts the release");
+        r.run(1.0);
+        check(r.st.barrier < 1.0f, "the booms start lifting at once, with the red delay");
+
+        // The part a phase-derived barrier gets wrong: Opening is only 5 s and the lift
+        // takes 8, so the booms are still rising after the crossing has reopened.
+        r.run(4.5);
+        check(r.phase() == CrossingPhase::Idle, "the crossing is back to idle");
+        check(r.st.barrier > 0.0f, "with the booms still on their way up");
+        r.run(3.0);
+        check(r.st.barrier == 0.0f, "fully up 8 s after the lift began");
+    }
+
+    // The booms keep their own 8 s whatever the phases do around them.
+    //
+    // A second train can arm the crossing while they are still coming up - Opening runs
+    // only 5 s of their 8 - and they must go on rising to the top rather than being
+    // yanked by the new sequence. They are moved at a rate toward where they ought to be,
+    // never placed from a timestamp, so this needs no special case and cannot jump.
+    {
+        std::puts("\nA second train while the booms are still coming up:");
+        Rig r;
+        r.x.barriers = true;
+        r.set(true, false, false);
+        r.run(kBarrierDelayS + kBarrierTravelS + 1.0);
+        check(r.st.barrier == 1.0f, "the first train has them fully down");
+
+        r.set(false, true, false);
+        r.set(false, false, true); // and is off the crossing
+        r.run(kTrainDelayS + 0.5);
+        const float caught = r.st.barrier;
+        check(r.phase() == CrossingPhase::Idle, "the crossing reopens after its delay");
+        check(caught > 0.0f && caught < 1.0f, "with the booms still part-way up");
+
+        r.set(false, false, false); // clear, so the next arrival is a fresh edge
+        r.set(true, false, false);
+        check(r.phase() == CrossingPhase::Closing, "the next train arms it again");
+        check(r.st.barrier > 0.0f && r.st.barrier <= caught,
+              "the booms are still where they were, not snapped anywhere");
+
+        r.run(3.0); // the rest of their own 8 s
+        check(r.st.barrier == 0.0f, "they finish coming up on their own clock");
+        r.run(kBarrierDelayS - 3.0 + 1.0);
+        check(r.st.barrier > 0.0f, "and only then start down for the new train");
+        r.run(kBarrierTravelS);
+        check(r.st.barrier == 1.0f, "reaching fully down 8 s after that");
+    }
+
+    // A crossing secured by lights alone has nothing to move, and must be untouched by
+    // any of this.
+    {
+        std::puts("\nA crossing without barriers:");
+        Rig r; // r.x.barriers stays false
+        r.set(true, false, false);
+        r.run(kBarrierDelayS + kBarrierTravelS + 5.0);
+        check(r.phase() == CrossingPhase::Secured, "runs its sequence as before");
+        check(r.st.barrier == 0.0f, "and never moves a boom");
+        check(!r.st.barrierMoving(), "so it never asks for a rebuild");
     }
 
     // A station needs several positions - a TXP at one end of Fauske cannot be seen from

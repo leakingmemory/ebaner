@@ -33,6 +33,16 @@ constexpr float kRoadRightM = 3.0f;  // and to the right of the road traffic the
 constexpr float kLensR = 0.15f;
 constexpr float kLensSp = 0.26f;    // half the vertical lamp spacing
 
+// The boom of a half-barrier. It hangs on the same post as the road head, as most are
+// built, and reaches from there in to about the road's centre line - one lane, the one
+// the traffic on that side arrives on.
+const glm::vec3 kBoomRed{0.85f, 0.10f, 0.09f};
+const glm::vec3 kBoomWhite{0.92f, 0.92f, 0.88f};
+constexpr float kBoomPivotH = 1.05f; // above the road, where the boom is hinged
+constexpr float kBoomLenM = 3.6f;    // post is kRoadRightM from the centre; this clears it
+constexpr float kBoomHalfW = 0.07f;  // half its width and thickness
+constexpr int kBoomStripes = 6;      // alternating red and white along its length
+
 // One head: a mast, a housing, and a red over a white. `fwd` is the direction the head
 // looks, so a driver coming the other way sees it face-on.
 void head(std::vector<TrackVertex>& v, std::vector<std::uint32_t>& idx,
@@ -60,6 +70,43 @@ void head(std::vector<TrackVertex>& v, std::vector<std::uint32_t>& idx,
         lampgeom::lamp(v, idx, face - UP * kLensSp, R, UP, kLensR, kWhiteOn, period, phase);
     else
         lampgeom::disc(v, idx, face - UP * kLensSp, F, R, UP, kLensR, kWhiteOff);
+}
+
+// One boom, hinged at `pivot` and swung by `pos`: 0 stands it upright, 1 lays it across
+// the lane. `in` points from the post toward the road's centre line - the way the boom
+// falls. `lit` flashes the lamp it carries on the crossing's own period and phase.
+void boom(std::vector<TrackVertex>& v, std::vector<std::uint32_t>& idx,
+          const glm::vec3& pivot, const glm::vec3& in, float pos, bool lit, float period,
+          float phase) {
+    const glm::vec3 UP(0.0f, 0.0f, 1.0f);
+    const float a = pos * 1.5707963f; // upright -> horizontal
+    const float ca = std::cos(a), sa = std::sin(a);
+    // Along the boom, and the face that is its top. Upright, that top faces away from the
+    // road; laid down it faces the sky, which is where the lamp has to end up. The two
+    // stay perpendicular at every angle, which is the whole reason for writing them as a
+    // pair rather than rotating a fixed normal and hoping.
+    const glm::vec3 L = UP * ca + in * sa;
+    const glm::vec3 N = UP * sa - in * ca;
+    const glm::vec3 S = glm::cross(L, N); // across the boom
+
+    // The hinge housing, so the boom does not sprout out of bare post.
+    lampgeom::box(v, idx, pivot, S, in, UP, 0.12f, 0.12f, 0.16f, kBody);
+
+    // Striped along its length. Each stripe is its own box: one long box could not be
+    // painted, and the stripes are what make the boom read as a barrier at a distance.
+    const float seg = kBoomLenM / kBoomStripes;
+    for (int i = 0; i < kBoomStripes; ++i) {
+        const glm::vec3 c = pivot + L * (seg * (static_cast<float>(i) + 0.5f));
+        lampgeom::box(v, idx, c, S, L, N, kBoomHalfW, seg * 0.5f, kBoomHalfW,
+                      (i % 2) ? kBoomWhite : kBoomRed);
+    }
+
+    // The lamp, halfway along and sitting on the boom's top face, so it swings with it.
+    const glm::vec3 lc = pivot + L * (kBoomLenM * 0.5f) + N * (kBoomHalfW + 0.05f);
+    if (lit)
+        lampgeom::lamp(v, idx, lc, S, L, kLensR * 0.8f, kRedOn, period, phase);
+    else
+        lampgeom::disc(v, idx, lc, N, S, L, kLensR * 0.8f, kRedOff);
 }
 
 } // namespace
@@ -119,11 +166,18 @@ void CrossingMesh::build(const std::vector<LevelCrossing>& xs,
         // at the traffic coming that way, and stands to the right of it: for traffic
         // running in -across, right is (-across.y, across.x), which is the track's own
         // +s direction. So the offset follows `side` just as the standoff does.
+        const float barrier = i < states.size() ? states[i].barrier : 0.0f;
         for (const float side : {-1.0f, 1.0f}) {
             const glm::vec3 base = at.pos + across * (side * kRoadOffsetM) +
                                    tan * (side * kRoadRightM);
             head(vertices_, indices_, base, across * side, l.roadRed, l.roadWhite, period,
                  phase);
+            // The boom hangs on that same post. The post stands to the right of the
+            // traffic it faces, so the lane to block is the one back toward the road's
+            // centre - the way `-tan * side` points.
+            if (xs[i].barriers)
+                boom(vertices_, indices_, base + glm::vec3(0.0f, 0.0f, kBoomPivotH),
+                     tan * -side, barrier, l.roadRed, period, phase);
         }
     }
 }

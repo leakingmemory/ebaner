@@ -2214,6 +2214,26 @@ int main(int argc, char** argv) {
         } else if (mode == EdMode::Crossings) { // --- Level crossings mode ---
             const bool haveSel =
                 selCrossing >= 0 && selCrossing < static_cast<int>(crossings.size());
+            // B toggles the variant: lights alone, or lights and half-barriers. Both are
+            // real and neither is the odd one out, so this is a toggle rather than a
+            // separate kind of thing to place.
+            if (kB && !prevB) {
+                if (haveSel) {
+                    crossings[selCrossing].barriers = !crossings[selCrossing].barriers;
+                    crossingDirty = true;
+                    pathMsg = crossings[selCrossing].name +
+                              (crossings[selCrossing].barriers ? ": lights and barriers"
+                                                               : ": lights only");
+                    pathMsgUntil = glfwGetTime() + 3.0;
+                    std::printf("[trackedit] crossing %d -> %s (Ctrl+S to save)\n",
+                                crossings[selCrossing].id,
+                                crossings[selCrossing].barriers ? "barriers" : "lights only");
+                    rebuildStructs();
+                } else {
+                    pathMsg = "right-click a crossing first, then B";
+                    pathMsgUntil = glfwGetTime() + 3.0;
+                }
+            }
             // No flip: a crossing faces both ways by construction.
             if (kX && !prevX && haveSel) {
                 crossings.erase(crossings.begin() + selCrossing);
@@ -3248,18 +3268,22 @@ int main(int argc, char** argv) {
                                   crossings[selCrossing].name.c_str());
                 else
                     std::snprintf(buf, sizeof(buf),
-                                  "%s   %.0f km/h -> approach %.0f m%s   inner +/-%.0f m",
+                                  "%s   %.0f km/h -> approach %.0f m%s   inner +/-%.0f m"
+                                  "   %s",
                                   crossings[selCrossing].name.c_str(), st.lineSpeedKmh,
                                   st.outerM,
                                   crossings[selCrossing].outerM > 0.0 ? " (set)" : "",
-                                  st.innerM);
+                                  st.innerM,
+                                  crossings[selCrossing].barriers ? "LIGHTS + BARRIERS"
+                                                                  : "lights only");
                 appendText(tv, buf, x, 40.0f + 5 * lh, sc,
                            st.path < 0 ? glm::vec3(1.0f, 0.55f, 0.3f)
                                        : glm::vec3(0.8f, 0.95f, 0.8f),
                            fbw, fbh);
             }
             appendText(tv,
-                       "click track: place   right-click: select   F2: name   X: delete",
+                       "click track: place   right-click: select   B: barriers   "
+                       "F2: name   X: delete",
                        x, 40.0f + 6 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
           } else if (mode == EdMode::SimpleEntries) { // --- Simple entry signals HUD ---
             appendText(tv, "MODE: SIMPLE ENTRY SIGNALS (Esc menu to switch)", x,

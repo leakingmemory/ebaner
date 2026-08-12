@@ -28,8 +28,12 @@ class TrackPath;
 // all belonging to the crossing rather than to the authored track circuits in
 // TrackCircuits.h - nothing has to be drawn for one of these to work.
 //
+// Some crossings also carry half-barriers - see `barriers` below. Both variants light and
+// ring identically; the barriers are the only difference.
+//
 // File `<datasetRoot>/overlay/level-crossings.txt`:
-//   crossing <id> "<name>" <trackHex>:<frac> [<outerM>]
+//   crossing <id> "<name>" <trackHex>:<frac> [<outerM>] [barriers]
+// Both trailing fields are optional and may come in either order.
 struct LevelCrossing {
     int id = 0;
     std::string name;
@@ -39,6 +43,10 @@ struct LevelCrossing {
     // here, which is what nearly every crossing should do; a value overrules that where
     // the derivation comes out wrong.
     double outerM = 0.0;
+    // Half-barriers as well as lights: one boom each side, each covering the lane its
+    // traffic arrives on. Off by default, and only written when set - a crossing secured
+    // by lights alone is the ordinary kind and its overlay line stays as it was.
+    bool barriers = false;
 };
 
 std::vector<LevelCrossing> loadLevelCrossings(const std::string& datasetRoot);
@@ -103,6 +111,15 @@ constexpr double kStuckTimeoutS = 60.0;
 // attention of someone already at the crossing, which it has either done by now or will
 // not do at all.
 constexpr double kBellS = 30.0;
+// The barriers, on a clock of their own.
+//
+// They start down well after the lights start flashing - the road is warned first and the
+// boom falls into a gap that has already begun to clear - and they are fully down at
+// kBarrierDelayS + kBarrierTravelS = 15 s, which is exactly the kSequenceS the approach
+// distance already reserves for the crossing to run in. So barriers cost no extra warning
+// distance; the circuits do not move.
+constexpr double kBarrierDelayS = 7.0;   // after activating, before the boom starts to fall
+constexpr double kBarrierTravelS = 8.0;  // to travel either way, upright to horizontal
 
 struct CrossingState {
     CrossingPhase phase = CrossingPhase::Idle;
@@ -118,6 +135,17 @@ struct CrossingState {
     // train is still out on the approach, so an unoccupied inner circuit at that moment
     // means "not here yet", not "gone past".
     bool innerSeen = false;
+    // Where the booms are: 0 fully up, 1 fully down. Continuous state of its own rather
+    // than something read off the phase, because it outlives the phases at both ends -
+    // it is still up for the first 2 s of Secured, and still coming up for 3 s after
+    // Opening has handed back to Idle.
+    float barrier = 0.0f;
+    // When this crossing was last stepped, so the barrier can be moved at a rate. 0 means
+    // never, and the first step moves nothing.
+    double lastStepS = 0.0;
+
+    // Whether the booms are in motion - what tells the renderer it must keep rebuilding.
+    bool barrierMoving() const { return barrier > 0.0f && barrier < 1.0f; }
 };
 
 // What the three circuits see this instant.
@@ -135,7 +163,12 @@ struct CrossingOccupancy {
 //    approach circuit as it leaves;
 //  - the inner circuit arms it whenever it is occupied, no edge and no gate, because it is
 //    the fallback for an approach circuit that has failed.
-void stepCrossing(CrossingState& st, const CrossingOccupancy& occ, double now);
+//
+// Takes the crossing itself as well as its state because the barriers are authored, not
+// runtime: whether there are booms to move belongs to the record, and copying it into the
+// state would be two places to keep in step.
+void stepCrossing(const LevelCrossing& x, CrossingState& st, const CrossingOccupancy& occ,
+                  double now);
 
 // What each head shows. Only one lamp of a head is ever lit.
 struct CrossingLights {

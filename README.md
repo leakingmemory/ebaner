@@ -338,10 +338,11 @@ authored at them yet — that is what makes it possible to go and author somethi
 next one. `EBANER_MAP=1` opens the traffic manager straight away, and `EBANER_MAP=<name>`
 opens it at a named station, which is how it is screenshotted headlessly.
 
-**Level crossings.** A crossing secured by lights alone — no barriers. Pick **Level
+**Level crossings.** Secured by lights, and optionally by half-barriers too. Pick **Level
 crossings** from the Esc menu and **click a point on any track**; **right-click** selects,
-**F2** names, **X** deletes, **Ctrl+S** saves to `overlay/level-crossings.txt`. There is
-no flip: a crossing faces both ways.
+**B** toggles the variant between lights alone and lights with barriers, **F2** names,
+**X** deletes, **Ctrl+S** saves to `overlay/level-crossings.txt`. There is no flip: a
+crossing faces both ways.
 
 Four heads, each **red over white** and flashing: two facing the train, one each way along
 the track, and two facing the road across it. Three detection circuits come with the
@@ -371,6 +372,31 @@ releases itself after a minute of everything being clear.
 
 Each crossing runs its **own** blink, phased off its id, so two within sight of one
 another are visibly out of step — as real ones are, each having its own oscillator.
+
+**Barriers**, where a crossing has them, are half-barriers: one boom each side, hanging on
+the same post as that side's road head and covering the lane its traffic arrives on. They
+carry a red lamp halfway along, on the boom's upper face so it swings round with it,
+flashing on the crossing's own period.
+
+They keep a clock of their own, which is deliberately not the phase clock:
+
+- they start down **7 s after the crossing activates** — the road gets its flashing first,
+  and the boom falls into a gap that has already begun to clear — and take **8 s**, so
+  they are fully down at 15 s. That is exactly the running time the approach distance
+  already reserves, so barriers cost no extra warning distance and the circuits do not
+  move;
+- they start up **the moment the train is off the inner circuit**, which is the same
+  moment the road's 5 s red delay starts running.
+
+That second one is why the position is state of its own rather than something read off the
+phase: opening runs 5 s and the lift takes 8, so **the booms are still rising for about
+3 s after the crossing has gone back to idle**. They are moved at a rate toward where they
+ought to be rather than placed from a timestamp, so a second train arriving while they are
+still coming up finds them where they were, and nothing jumps.
+
+Written into the overlay as a trailing `barriers` keyword. Both trailing fields — the
+approach override and this — are optional and may come in either order, so a crossing
+written before barriers existed reads back unchanged.
 
 **Flag posts.** The hand signal a station's TXP hangs out: **red for stop, green for
 pass through, and an empty fixture** when the station is unmanned or neither applies. Pick

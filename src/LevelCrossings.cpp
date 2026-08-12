@@ -58,8 +58,16 @@ std::vector<LevelCrossing> loadLevelCrossings(const std::string& datasetRoot) {
         readName(is, x.name);
         is >> atTok;
         if (atTok.empty() || !parseAt(atTok, x.trackId, x.frac)) continue;
-        double over = 0.0;
-        if (is >> over) x.outerM = over; // optional
+        // The tail is read as keywords rather than by position. `outerM` used to be a
+        // typed extraction, which kills the stream the moment it meets a non-number - so
+        // a bare `barriers` would have eaten the line before anything could read it, and
+        // the two fields would have been locked into one order. Read as tokens they stay
+        // optional, stay in either order, and every file written before this still loads.
+        std::string tok;
+        while (is >> tok) {
+            if (tok == "barriers") x.barriers = true;
+            else x.outerM = std::atof(tok.c_str());
+        }
         out.push_back(std::move(x));
     }
     return out;
@@ -71,15 +79,19 @@ bool writeLevelCrossings(const std::string& datasetRoot,
     fs::create_directories(datasetRoot + "/overlay", ec);
     std::ofstream f(crossingsFile(datasetRoot), std::ios::trunc);
     if (!f) return false;
-    f << "# ebaner level crossings, secured by lights alone (no barriers). Four heads,\n"
-         "# red over white, flashing; three detection circuits of the crossing's own.\n"
-         "# crossing <id> \"<name>\" <trackHex>:<frac> [<outerM>]\n"
-         "# outerM is optional: left out, the approach distance is derived from the line\n"
-         "# speed here, which is what nearly every crossing should do.\n";
+    f << "# ebaner level crossings. Four heads, red over white, flashing; three detection\n"
+         "# circuits of the crossing's own. Secured by lights alone unless `barriers` says\n"
+         "# otherwise, in which case a boom each side covers the lane its traffic arrives\n"
+         "# on. Both variants light and ring the same.\n"
+         "# crossing <id> \"<name>\" <trackHex>:<frac> [<outerM>] [barriers]\n"
+         "# Both trailing fields are optional and may come in either order. outerM left\n"
+         "# out means the approach distance is derived from the line speed here, which is\n"
+         "# what nearly every crossing should do.\n";
     for (const LevelCrossing& x : xs) {
         f << "crossing " << x.id << ' ' << quoteName(x.name) << ' ' << std::hex
           << x.trackId << std::dec << ':' << x.frac;
         if (x.outerM > 0.0) f << ' ' << x.outerM;
+        if (x.barriers) f << " barriers";
         f << '\n';
     }
     return static_cast<bool>(f);
@@ -134,7 +146,8 @@ std::vector<CrossingSite> resolveCrossings(const std::vector<LevelCrossing>& xs,
     return out;
 }
 
-void stepCrossing(CrossingState& st, const CrossingOccupancy& occ, double now) {
+void stepCrossing(const LevelCrossing& x, CrossingState& st, const CrossingOccupancy& occ,
+                  double now) {
     const bool allClear = !occ.outerA && !occ.inner && !occ.outerB;
     st.allClearSince = allClear ? (st.allClearSince == 0.0 ? now : st.allClearSince) : 0.0;
     if (occ.inner) st.innerSeen = true;
@@ -186,6 +199,29 @@ void stepCrossing(CrossingState& st, const CrossingOccupancy& occ, double now) {
                 enter(CrossingPhase::Idle);
             }
             break;
+    }
+
+    // --- The barriers -----------------------------------------------------------
+    // Moved at a rate toward where they ought to be, rather than computed from a
+    // timestamp. That is what makes an interrupted movement come out right for nothing: a
+    // train arriving while the booms are still coming up sends them back down from
+    // wherever they had got to, instead of snapping to the start of a fresh fall.
+    //
+    // Down while the crossing is shut, once the road has had kBarrierDelayS of flashing
+    // first. Up from the moment the train is off the inner circuit - Opening is entered on
+    // that and nothing else, so the booms start lifting exactly as the red delay begins.
+    const double dt = st.lastStepS > 0.0 ? now - st.lastStepS : 0.0;
+    st.lastStepS = now;
+    if (x.barriers) {
+        const bool shut = st.phase == CrossingPhase::Closing ||
+                          st.phase == CrossingPhase::Secured;
+        const float target =
+            (shut && now - st.activeSince >= kBarrierDelayS) ? 1.0f : 0.0f;
+        const float step = static_cast<float>(dt / kBarrierTravelS);
+        if (st.barrier < target) st.barrier = std::min(target, st.barrier + step);
+        else if (st.barrier > target) st.barrier = std::max(target, st.barrier - step);
+    } else {
+        st.barrier = 0.0f; // no booms to move
     }
 }
 
