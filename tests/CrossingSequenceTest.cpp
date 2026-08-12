@@ -21,6 +21,8 @@
 
 #include "FlagPosts.h"
 #include "TxpMesh.h"
+#include "TerrainData.h"
+#include "TrackOverlay.h"
 #include "TxpPositions.h"
 #include "LevelCrossings.h"
 
@@ -617,6 +619,115 @@ int main(int argc, char** argv) {
         check(same, "ids, names, tracks, fracs, sides and overrides survive");
         check(back.size() > 1 && back[0].side == 1 && back[1].side == -1,
               "a flipped side is kept as flipped");
+    }
+
+    // A link connector normally takes the medium of the ends it joins, which is right
+    // until a hole runs through a hill between two *surface* ends: the piece the export
+    // dropped was a tunnel, and carving it instead cuts a trench the depth of the hill.
+    // The keyword says so outright.
+    if (argc > 1) {
+        std::puts("\nA link can name its own medium:");
+        std::vector<TrackEdit> es(3);
+        es[0].kind = TrackEdit::Link;
+        es[0].a = {100.0, 200.0, 10.0}; es[0].b = {150.0, 260.0, 11.0}; // inferred
+        es[1].kind = TrackEdit::Link;
+        es[1].a = {300.0, 400.0, 20.0}; es[1].b = {350.0, 460.0, 21.0};
+        es[1].medium = 0x55; // through a hill
+        es[2].kind = TrackEdit::Link;
+        es[2].a = {500.0, 600.0, 30.0}; es[2].b = {550.0, 660.0, 31.0};
+        es[2].medium = 0x20; // and the other way round, for a hole in the open
+        check(writeTrackOverlay(argv[1], es), "write");
+        const std::vector<TrackEdit> back = loadTrackOverlay(argv[1]);
+        check(back.size() == 3, "all three links come back");
+        check(back.size() > 2 && back[0].medium == 0,
+              "no keyword means take it from the ends, as before");
+        check(back.size() > 2 && back[1].medium == 0x55, "tunnel survives the round trip");
+        check(back.size() > 2 && back[2].medium == 0x20, "and so does surface");
+        bool coords = back.size() == es.size();
+        for (std::size_t i = 0; coords && i < back.size(); ++i)
+            coords = std::abs(back[i].a.x - es[i].a.x) < 1e-3 &&
+                     std::abs(back[i].b.z - es[i].b.z) < 1e-3;
+        check(coords, "the endpoints are unharmed by the extra token");
+    }
+
+    // Two vertices at one spot on one track. The export produces them - a spike is a
+    // duplicated point - and until now they could not be told apart: an elev edit matches
+    // on position, both are equally near it, and the first found always won. So one of
+    // the pair could be corrected and the other could not be reached at all.
+    {
+        std::puts("\nTwo track vertices at the same spot:");
+        std::vector<TrackSegment> segs(1);
+        segs[0].trackId = 0x684;
+        segs[0].medium = 0x20;
+        segs[0].pts = {{0.0, 0.0, 10.0},
+                       {100.0, 0.0, 20.0},   // the spike, duplicated
+                       {100.0, 0.0, 20.0},
+                       {200.0, 0.0, 9.0}};
+
+        // Without the discriminator both edits land on the first of the pair, which is
+        // exactly the trap: it looks as though the second point cannot be edited.
+        std::vector<TrackSegment> a = segs;
+        std::vector<TrackEdit> plain(2);
+        for (TrackEdit& e : plain) {
+            e.kind = TrackEdit::Elev;
+            e.a = {100.0, 0.0, 9.5};
+            e.track = 0x684;
+        }
+        applyTrackOverlay(a, plain);
+        check(std::abs(a[0].pts[1].z - 9.5) < 1e-6, "the first of the pair is corrected");
+        check(std::abs(a[0].pts[2].z - 20.0) < 1e-6,
+              "and the second is untouched however many times it is tried");
+
+        // With it, the first edit moves one out of the way and the second finds the other.
+        std::vector<TrackSegment> b = segs;
+        std::vector<TrackEdit> keyed(2);
+        for (TrackEdit& e : keyed) {
+            e.kind = TrackEdit::Elev;
+            e.a = {100.0, 0.0, 9.5};
+            e.track = 0x684;
+            e.hasFromZ = true;
+            e.fromZ = 20.0;
+        }
+        applyTrackOverlay(b, keyed);
+        check(std::abs(b[0].pts[1].z - 9.5) < 1e-6 && std::abs(b[0].pts[2].z - 9.5) < 1e-6,
+              "naming the height they have now reaches both");
+        check(std::abs(b[0].pts[0].z - 10.0) < 1e-6 &&
+                  std::abs(b[0].pts[3].z - 9.0) < 1e-6,
+              "and nothing either side of them moves");
+
+        // The height names *which* vertex, not what to search near: it must still only
+        // match inside the position tolerance.
+        std::vector<TrackSegment> c = segs;
+        std::vector<TrackEdit> far(1);
+        far[0].kind = TrackEdit::Elev;
+        far[0].a = {160.0, 0.0, 1.0}; // 40 m from any vertex
+        far[0].track = 0x684;
+        far[0].hasFromZ = true;
+        far[0].fromZ = 20.0;
+        applyTrackOverlay(c, far);
+        bool moved = false;
+        for (std::size_t i = 0; i < c[0].pts.size(); ++i)
+            if (std::abs(c[0].pts[i].z - segs[0].pts[i].z) > 1e-6) moved = true;
+        check(!moved, "a height given far from any vertex still matches nothing");
+    }
+
+    if (argc > 1) {
+        std::puts("\nThe elev discriminator round-trips:");
+        std::vector<TrackEdit> es(2);
+        es[0].kind = TrackEdit::Elev;
+        es[0].a = {10.0, 20.0, 30.0};
+        es[0].track = 0x684;
+        es[1] = es[0];
+        es[1].hasFromZ = true;
+        es[1].fromZ = 571.789;
+        check(writeTrackOverlay(argv[1], es), "write");
+        const std::vector<TrackEdit> back = loadTrackOverlay(argv[1]);
+        check(back.size() == 2, "both come back");
+        check(back.size() > 1 && !back[0].hasFromZ, "one without keeps its track id only");
+        check(back.size() > 1 && back[0].track == 0x684, "which survives");
+        check(back.size() > 1 && back[1].hasFromZ &&
+                  std::abs(back[1].fromZ - 571.789) < 1e-6,
+              "and the other keeps the height that names its vertex");
     }
 
     std::printf("\n%s\n", failures ? "FAILED" : "PASSED");

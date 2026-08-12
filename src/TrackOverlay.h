@@ -30,9 +30,20 @@ constexpr std::uint32_t kRailIdBase = 0xE0000000;
 // Manual track edits kept as a drop-in overlay, separate from the generated tiles
 // so a regenerated base dataset can be dropped in without losing the edits. Stored
 // as lines in `<datasetRoot>/overlay/track-edits.txt` (world coords, EPSG:25833):
-//   link ax ay az bx by bz   - connect two track ends across a broken gap
-//   elev x y z [trackid]     - override the elevation of the nearest track vertex
-//                              (optional trackid disambiguates coincident points)
+//   link ax ay az bx by bz [tunnel|surface]
+//                            - connect two track ends across a broken gap. The
+//                              connector takes the medium of what it joins unless a
+//                              keyword says otherwise, which is needed where a hole
+//                              runs through a hill between two *surface* ends: the
+//                              piece the export dropped was a tunnel, and carving it
+//                              instead cuts a trench the depth of the hill.
+//   elev x y z [trackid [fromz]]
+//                            - override the elevation of the nearest track vertex.
+//                              trackid picks between coincident points of different
+//                              tracks; fromz picks between coincident points of the
+//                              *same* track by the height each has now, which is the
+//                              only thing left to tell them apart. The export does
+//                              produce those - a spike is two points at one spot.
 //   move ax ay az bx by bz   - move the nearest track vertex from a to b
 //   rail ax ay az bx by bz   - add a new connecting rail (a-b); its ends land on the
 //                              tracks there, so a switch forms at each (build a
@@ -44,6 +55,13 @@ struct TrackEdit {
     // Elev/Move: restrict the vertex match to this track (0 = any track). Lets
     // coincident points from different sidings be edited independently.
     std::uint32_t track = 0;
+    // Link: force the connector's medium (0 = take it from the ends it joins).
+    std::uint8_t medium = 0;
+    // Elev: which of several vertices at one spot on one track is meant, by the height
+    // it has before the edit. Without it the first found wins and the others can never
+    // be reached.
+    bool hasFromZ = false;
+    double fromZ = 0.0;
 };
 
 // Read the overlay file (empty vector if absent).

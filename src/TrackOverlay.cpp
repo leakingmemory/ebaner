@@ -20,6 +20,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <sstream>
 #include <string>
 
 namespace fs = std::filesystem;
@@ -62,16 +63,22 @@ bool nearestEndpoint(const std::vector<TrackSegment>& segs, const glm::dvec3& q,
 // vertices of that track are considered, so an override can target one of several
 // coincident siding points.
 bool nearestVertex(const std::vector<TrackSegment>& segs, double qx, double qy,
-                   double tol, int& segIdx, int& vertIdx, std::uint32_t trackId = 0) {
-    double best = tol;
+                   double tol, int& segIdx, int& vertIdx, std::uint32_t trackId = 0,
+                   const double* fromZ = nullptr) {
+    // With `fromZ` the match is on height among everything within the tolerance, not on
+    // position: two vertices at one spot are equally near it, so position cannot choose
+    // and whichever came first would always win.
+    double best = fromZ ? 1e30 : tol;
     bool found = false;
     for (int si = 0; si < static_cast<int>(segs.size()); ++si) {
         if (trackId != 0 && segs[si].trackId != trackId) continue;
         const std::vector<glm::dvec3>& p = segs[si].pts;
         for (int vi = 0; vi < static_cast<int>(p.size()); ++vi) {
             const double d = std::hypot(p[vi].x - qx, p[vi].y - qy);
-            if (d < best) {
-                best = d;
+            if (d >= tol) continue;
+            const double score = fromZ ? std::abs(p[vi].z - *fromZ) : d;
+            if (score < best) {
+                best = score;
                 segIdx = si; vertIdx = vi;
                 found = true;
             }
@@ -94,6 +101,16 @@ std::vector<TrackEdit> loadTrackOverlay(const std::string& datasetRoot) {
                                   &e.a.x, &e.a.y, &e.a.z, &e.b.x, &e.b.y, &e.b.z);
         if (n == 7 && std::string(kind) == "link") {
             e.kind = TrackEdit::Link;
+            // Anything after the six numbers names the connector's medium. sscanf stops
+            // at the last one it was asked for and ignores the rest, so the tail is read
+            // separately rather than by widening the format.
+            std::istringstream is(line);
+            std::string tok;
+            for (int k = 0; k < 7 && (is >> tok); ++k) {} // the keyword and six numbers
+            while (is >> tok) {
+                if (tok == "tunnel") e.medium = 0x55;
+                else if (tok == "surface") e.medium = 0x20;
+            }
             edits.push_back(e);
         } else if (n == 7 && std::string(kind) == "move") {
             e.kind = TrackEdit::Move; // a = old pos, b = new pos
@@ -101,11 +118,14 @@ std::vector<TrackEdit> loadTrackOverlay(const std::string& datasetRoot) {
         } else if (n == 7 && std::string(kind) == "rail") {
             e.kind = TrackEdit::Rail; // a, b = the new connecting rail's ends
             edits.push_back(e);
-        } else if ((n == 4 || n == 5) && std::string(kind) == "elev") {
+        } else if (n >= 4 && n <= 6 && std::string(kind) == "elev") {
             e.kind = TrackEdit::Elev; // a = {x, y, newZ}
             // Optional 4th number (parsed into b.x) is the track id to disambiguate
-            // coincident points; absent (legacy) => 0 = match any track.
-            if (n == 5) e.track = static_cast<std::uint32_t>(std::llround(e.b.x));
+            // coincident points; absent (legacy) => 0 = match any track. An optional 5th
+            // (b.y) is the height the vertex has now, which is what separates two of them
+            // at the same spot on the same track.
+            if (n >= 5) e.track = static_cast<std::uint32_t>(std::llround(e.b.x));
+            if (n == 6) { e.hasFromZ = true; e.fromZ = e.b.y; }
             e.b = glm::dvec3(0.0);
             edits.push_back(e);
         }
@@ -139,7 +159,8 @@ void applyTrackOverlay(std::vector<TrackSegment>& segs,
     for (const TrackEdit& e : edits) {
         if (e.kind != TrackEdit::Elev) continue;
         int si = 0, vi = 0;
-        if (nearestVertex(segs, e.a.x, e.a.y, kVertexTol, si, vi, e.track)) {
+        if (nearestVertex(segs, e.a.x, e.a.y, kVertexTol, si, vi, e.track,
+                          e.hasFromZ ? &e.fromZ : nullptr)) {
             segs[si].pts[vi].z = e.a.z;
             ++elev;
         }
@@ -174,7 +195,8 @@ void applyTrackOverlay(std::vector<TrackSegment>& segs,
         TrackSegment c;
         c.trackId = kConnectorIdBase + static_cast<std::uint32_t>(i);
         c.trackType = ta;      // both ends share type (else the join won't chain)
-        c.medium = (underground(ma) || underground(mb)) ? 0x55 : 0x20;
+        c.medium = edits[i].medium ? edits[i].medium
+                                   : ((underground(ma) || underground(mb)) ? 0x55 : 0x20);
         c.pts = {ea, eb};
         segs.push_back(std::move(c));
         ++links;
@@ -194,13 +216,17 @@ void writeEdits(std::ofstream& f, const std::vector<TrackEdit>& edits) {
     for (const TrackEdit& e : edits) {
         if (e.kind == TrackEdit::Elev) {
             f << "elev " << e.a.x << ' ' << e.a.y << ' ' << e.a.z;
-            if (e.track != 0) f << ' ' << e.track; // disambiguate coincident points
+            if (e.track != 0 || e.hasFromZ) f << ' ' << e.track; // coincident points
+            if (e.hasFromZ) f << ' ' << e.fromZ;                 // ...on the same track
             f << '\n';
         } else {
             const char* kw = e.kind == TrackEdit::Move ? "move"
                              : e.kind == TrackEdit::Rail ? "rail" : "link";
             f << kw << ' ' << e.a.x << ' ' << e.a.y << ' ' << e.a.z << ' ' << e.b.x
-              << ' ' << e.b.y << ' ' << e.b.z << '\n';
+              << ' ' << e.b.y << ' ' << e.b.z;
+            if (e.kind == TrackEdit::Link && e.medium == 0x55) f << " tunnel";
+            else if (e.kind == TrackEdit::Link && e.medium == 0x20) f << " surface";
+            f << '\n';
         }
     }
 }
