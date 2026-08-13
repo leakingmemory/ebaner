@@ -20,9 +20,12 @@
 // occupancy dictated rather than simulated, and no dataset in the way.
 
 #include "FlagPosts.h"
+#include "TxpGraph.h"
+#include "TxpNetwork.h"
 #include "TxpMesh.h"
 #include "TerrainData.h"
 #include "TrackOverlay.h"
+#include "TrackPath.h"
 #include "TxpPositions.h"
 #include "LevelCrossings.h"
 
@@ -728,6 +731,186 @@ int main(int argc, char** argv) {
         check(back.size() > 1 && back[1].hasFromZ &&
                   std::abs(back[1].fromZ - 571.789) < 1e-6,
               "and the other keeps the height that names its vertex");
+    }
+
+    // Who may pass a train order to whom. Derived, not authored: a station is a TXP
+    // station because a position was placed at it, and its neighbours are the stations
+    // either side of it on the running line. Driven here over a made-up railway, so what
+    // is being tested is the derivation and not one dataset's geography.
+    {
+        std::puts("\nThe TXP graph derives itself from the positions:");
+        // A 3000 m running line, and a short siding beside the middle station.
+        std::vector<glm::dvec3> main3;
+        for (int i = 0; i <= 30; ++i) main3.push_back({i * 100.0, 0.0, 0.0});
+        std::vector<glm::dvec3> siding = {{1400.0, 20.0, 0.0}, {1600.0, 20.0, 0.0}};
+        // And a second line elsewhere, standing in for one severed from the first.
+        std::vector<glm::dvec3> other;
+        for (int i = 0; i <= 10; ++i) other.push_back({i * 100.0, 9000.0, 0.0});
+
+        std::vector<TrackPoly> polys = {{1, main3}, {2, siding}, {3, other}};
+        auto mkPath = [](std::uint32_t id, const std::vector<glm::dvec3>& w) {
+            std::vector<glm::vec3> p;
+            std::vector<std::uint16_t> spd;
+            for (const glm::dvec3& q : w) {
+                p.push_back({(float)q.x, (float)q.y, (float)q.z});
+                spd.push_back(100);
+            }
+            return TrackPath(id, 0, p, spd);
+        };
+        std::vector<TrackPath> paths;
+        paths.push_back(mkPath(1, main3));
+        paths.push_back(mkPath(2, siding));
+        paths.push_back(mkPath(3, other));
+
+        std::vector<TxpPosition> ps(6);
+        auto at = [&](int i, std::uint32_t t, double f) { ps[i].id = i + 1;
+                                                          ps[i].trackId = t; ps[i].frac = f; };
+        at(0, 1, 0.10);  // Alpha, on the running line
+        at(1, 1, 0.50);  // Beta, likewise
+        at(2, 2, 0.50);  // Beta again, but out on its siding
+        at(3, 1, 0.90);  // Gamma
+        at(4, 3, 0.20);  // Delta, on the other line
+        at(5, 3, 0.80);  // Epsilon, likewise
+        std::vector<SignalStation> att(6);
+        const char* names[6] = {"Alpha", "Beta", "Beta", "Gamma", "Delta", "Epsilon"};
+        for (int i = 0; i < 6; ++i) att[i].name = names[i];
+
+        TxpGraph g;
+        g.build(ps, att, {}, polys, paths, glm::dvec3(0.0));
+
+        check(g.nodes().size() == 5, "one node per station, not one per position");
+        // Beta has a position on a siding as well; it must be ordered by the running
+        // line, which is the only one the next station is reached along.
+        int ib = -1;
+        for (std::size_t i = 0; i < g.nodes().size(); ++i)
+            if (g.nodes()[i].name == "Beta") ib = (int)i;
+        check(ib >= 0 && g.nodes()[ib].path == 0,
+              "a station with a siding is placed on the running line");
+
+        check(g.linked("Alpha", "Beta") && g.linked("Beta", "Gamma"),
+              "consecutive stations on one line are neighbours");
+        check(g.linked("Beta", "Alpha"), "and the link reads the same both ways round");
+        check(!g.linked("Alpha", "Gamma"),
+              "but a station two along is not - there is one between them");
+
+        check(g.neighbours("Beta").size() == 2, "a station in the middle deals with two");
+        check(g.neighbours("Alpha").size() == 1, "one at the end of the line with one");
+        check(g.neighbours("Nowhere").empty(), "and a station with no TXP with nobody");
+
+        check(g.next("Alpha", true) == "Beta" && g.next("Beta", true) == "Gamma",
+              "next walks down the line");
+        check(g.next("Gamma", false) == "Beta", "and back up it");
+        check(g.next("Gamma", true).empty(),
+              "with nobody to offer a train to past the last station");
+
+        // The severed-line case: two stations that cannot reach each other.
+        check(g.linked("Delta", "Epsilon"), "the other line chains on its own");
+        check(!g.linked("Gamma", "Delta"),
+              "and nothing is offered across a break to a station on another line");
+    }
+
+    // Manning a station is not a local act.
+    //
+    // The chain that actually works the line is the *manned* stations and the sections
+    // between them. A station opening between two others takes over a section that was
+    // already theirs, so it has to ask and they have to agree - and they may only agree
+    // if that section is clear, because a station cannot appear in the middle of one with
+    // a train in it and hold a road it was never told about.
+    {
+        std::puts("\nOpening stations onto the train-order network:");
+        // Bodø - Oteråga - Fauske - Rognan along one line, as the export gives them.
+        std::vector<glm::dvec3> line;
+        for (int i = 0; i <= 40; ++i) line.push_back({i * 100.0, 0.0, 0.0});
+        std::vector<TrackPoly> polys = {{1, line}};
+        std::vector<glm::vec3> lp;
+        std::vector<std::uint16_t> spd;
+        for (const glm::dvec3& q : line) { lp.push_back({(float)q.x, 0.0f, 0.0f}); spd.push_back(100); }
+        std::vector<TrackPath> paths;
+        paths.push_back(TrackPath(1, 0, lp, spd));
+
+        const char* names[4] = {"Bodø", "Oteråga", "Fauske", "Rognan"};
+        const double fracs[4] = {0.05, 0.35, 0.65, 0.95};
+        std::vector<TxpPosition> ps(4);
+        std::vector<SignalStation> att(4);
+        for (int i = 0; i < 4; ++i) {
+            ps[i].id = i + 1; ps[i].trackId = 1; ps[i].frac = fracs[i];
+            att[i].name = names[i];
+        }
+        TxpGraph g;
+        g.build(ps, att, {}, polys, paths, glm::dvec3(0.0));
+
+        // The line is clear unless this says otherwise.
+        std::string occupied;
+        auto clear = [&](const std::string& a, const std::string& b) {
+            return occupied.empty() || !(occupied == a + "-" + b || occupied == b + "-" + a);
+        };
+        auto kinds = [](const TxpOpenResult& r) {
+            std::string s;
+            for (const TxpMessage& m : r.exchange)
+                s += (m.kind == TxpMsgKind::Connect ? "C" :
+                      m.kind == TxpMsgKind::Accept ? "A" : "R");
+            return s;
+        };
+
+        TxpNetwork net;
+
+        // Bodø first: nobody to ask.
+        TxpOpenResult r = net.open(g, "Bodø", clear);
+        check(r.accepted, "the first station opens");
+        check(r.exchange.empty(), "with nothing sent - there is nobody to ask");
+        check(net.links().empty(), "and no section is worked yet");
+
+        // Fauske next, two along: one neighbour to ask.
+        r = net.open(g, "Fauske", clear);
+        check(r.accepted && kinds(r) == "CA", "the second sends one connect and is accepted");
+        check(r.exchange.size() > 0 && r.exchange[0].to == "Bodø", "it asks Bodø");
+        check(net.linked("Bodø", "Fauske"), "and the two now work the line between them");
+        check(net.links().size() == 1, "which is the only section");
+
+        // Oteråga sits *between* them: it must ask both, and takes over their section.
+        r = net.open(g, "Oteråga", clear);
+        check(r.accepted && kinds(r) == "CCAA", "opening between two asks both of them");
+        check(net.linked("Bodø", "Oteråga") && net.linked("Oteråga", "Fauske"),
+              "and it works a section with each");
+        check(!net.linked("Bodø", "Fauske"),
+              "the section that spanned it is gone - it did not stay alongside");
+        check(net.links().size() == 2, "one long section has become two");
+
+        // Closing it hands the whole of what it held back to the two either side.
+        net.close(g, "Oteråga");
+        check(net.linked("Bodø", "Fauske") && net.links().size() == 1,
+              "closing it joins the two either side again");
+        check(!net.isOpen("Oteråga"), "and it is out of the network");
+
+        // The same opening, refused: a train stands between Bodø and Fauske.
+        occupied = "Bodø-Fauske";
+        r = net.open(g, "Oteråga", clear);
+        check(!r.accepted && kinds(r) == "CCRR", "an occupied section refuses both connects");
+        check(!r.exchange.empty() && !r.exchange.back().reason.empty(),
+              "and says why");
+        check(!net.isOpen("Oteråga"), "the station does not open");
+        check(net.linked("Bodø", "Fauske") && net.links().size() == 1,
+              "and nothing about the section it asked for moves");
+
+        // Once the train has gone it opens as before.
+        occupied.clear();
+        r = net.open(g, "Oteråga", clear);
+        check(r.accepted && net.links().size() == 2, "with the line clear it opens");
+
+        // Rognan at the far end: only one neighbour, and it is Fauske - not Oteråga,
+        // which is manned but has Fauske between it and Rognan.
+        r = net.open(g, "Rognan", clear);
+        check(r.accepted && kinds(r) == "CA", "the end of the line asks its one neighbour");
+        check(r.exchange.size() > 0 && r.exchange[0].to == "Fauske",
+              "which is the nearest manned station, not the first one opened");
+        check(net.linksOf("Fauske").size() == 2, "Fauske now works a section either side");
+        check(net.linksOf("Rognan").size() == 1, "and Rognan only the one");
+
+        // A station nobody put a TXP at is not part of this, and says nothing.
+        r = net.open(g, "Røkland", clear);
+        check(r.accepted && r.exchange.empty(),
+              "a station with no TXP position opens without asking anyone");
+        check(!net.isOpen("Røkland"), "and works no sections");
     }
 
     std::printf("\n%s\n", failures ? "FAILED" : "PASSED");

@@ -22,6 +22,8 @@
 
 #include "CrossingMesh.h"
 #include "FlagMesh.h"
+#include "TxpGraph.h"
+#include "TxpNetwork.h"
 #include "TxpMesh.h"
 #include "TxpPositions.h"
 #include "FlagPosts.h"
@@ -671,6 +673,14 @@ int main(int argc, char** argv) {
     const std::vector<float> txpLift = txpStandLift(txpPositions, polys, data, paths);
     if (!txpPositions.empty())
         std::printf("[TxpPosition] %zu position(s)\n", txpPositions.size());
+    // Who can pass a train order to whom. Derived from the positions above rather than
+    // authored: a station is a TXP station because one was placed at it, and the next
+    // station along the running line is its neighbour. Nothing to keep in step.
+    TxpGraph txpGraph;
+    txpGraph.build(txpPositions, txpStation, stations, polys, paths, data.sceneOrigin());
+    // Which of them are manned, and the sections they hold between them. Rebuilt as
+    // stations open and close rather than authored anywhere.
+    TxpNetwork txpNet;
 
     SignalMesh signals;
     CrossingMesh crossingMesh;
@@ -1341,6 +1351,72 @@ int main(int argc, char** argv) {
 
     auto setMapMsg = [&](const std::string& m, bool ok = false) {
         g_mapMsg = m; g_mapMsgOk = ok; g_mapMsgUntil = glfwGetTime() + 3.0;
+    };
+    // Whether the line between two TXP stations holds a train. What the neighbours check
+    // before agreeing to a station opening between them.
+    //
+    // Measured from a little way inside each station rather than from the station itself:
+    // the section is the line *between* them, and a train standing at a platform is not
+    // on it. Without that inset a station could never be opened while anything stood at
+    // either of its neighbours.
+    auto txpSectionClear = [&](const std::string& a, const std::string& b) {
+        if (!vehicle) return true; // nothing running, so nothing in the way
+        const TxpStationNode* na = nullptr;
+        const TxpStationNode* nb = nullptr;
+        for (const TxpStationNode& n : txpGraph.nodes()) {
+            if (n.name == a) na = &n;
+            if (n.name == b) nb = &n;
+        }
+        if (!na || !nb || na->path < 0 || na->path != nb->path) return true;
+        constexpr float kStationLimitM = 300.0f; // roughly out to the entry signals
+        const TrackPath& p = paths[na->path];
+        float lo = std::min(na->s, nb->s) + kStationLimitM;
+        float hi = std::max(na->s, nb->s) - kStationLimitM;
+        if (hi <= lo) return true; // stations closer together than their own limits
+        const std::vector<VehicleFrame> bogies = vehicle->bogieFrames();
+        for (float s = lo; s <= hi; s += 25.0f) {
+            const glm::vec3 q = p.poseAt(s).pos;
+            for (const VehicleFrame& bg : bogies)
+                if (glm::distance(q, bg.pos) < 30.0f) return false;
+        }
+        return true;
+    };
+    // Man or unman a station, going through the train-order network. Manning is the one
+    // that can be refused: the neighbours have to agree to hand over part of what they
+    // hold, and they will not while there is a train in it.
+    auto setManned = [&](const std::string& station, bool on) {
+        StationState& st = simpleStationState[station];
+        if (!on) {
+            txpNet.close(txpGraph, station);
+            st.manned = false;
+            st.green = -1; // comes back on in a known state, not still showing a green
+            setMapMsg(station + ": unmanned, signals off", true);
+            return false;
+        }
+        const TxpOpenResult r = txpNet.open(txpGraph, station, txpSectionClear);
+        for (const TxpMessage& m : r.exchange)
+            std::printf("[TXP] %-8s %s -> %s%s%s\n",
+                        m.kind == TxpMsgKind::Connect ? "CONNECT"
+                        : m.kind == TxpMsgKind::Accept ? "ACCEPT" : "REJECT",
+                        m.from.c_str(), m.to.c_str(), m.reason.empty() ? "" : ": ",
+                        m.reason.c_str());
+        if (!r.accepted) {
+            const std::string why = r.exchange.empty() ? "" : r.exchange.back().reason;
+            setMapMsg(station + ": opening refused - " + why);
+            return false;
+        }
+        st.manned = true;
+        st.green = -1;
+        const std::vector<std::string> with = txpNet.linksOf(station);
+        std::string note = station + ": manned, signals at danger";
+        if (!with.empty()) {
+            note += "  (line to ";
+            for (std::size_t i = 0; i < with.size(); ++i)
+                note += (i ? " and " : "") + with[i];
+            note += ")";
+        }
+        setMapMsg(note, true);
+        return true;
     };
     auto pathName = [&](int pi) {
         return signalPaths[pi].name.empty() || signalPaths[pi].name == "-"
@@ -2134,12 +2210,9 @@ int main(int argc, char** argv) {
             if (pE && !prevPickEnter && !station.empty()) {
                 StationState& st = simpleStationState[station];
                 if (g_signalPickSel == 0) {
-                    // Turning a station off clears any green with it: it comes back on in
-                    // a known state rather than resuming whatever it was left showing.
-                    st.manned = !st.manned;
-                    st.green = -1;
-                    setMapMsg(station + (st.manned ? ": manned, signals at danger"
-                                                   : ": unmanned, signals off"));
+                    // Manning goes through the train-order network, which can refuse it -
+                    // the neighbours will not hand over a section with a train in it.
+                    setManned(station, !st.manned);
                 } else if (g_signalPickSel == 1) {
                     st.green = -1;
                     setMapMsg(station + ": all entry signals at danger");
@@ -2149,8 +2222,13 @@ int main(int argc, char** argv) {
                         // one puts every other signal here back to red by construction,
                         // because the station holds a single id rather than a flag per
                         // signal.
+                        // Clearing a signal implies manning, and that is the same act:
+                        // it must be able to be refused for the same reason.
+                        if (!st.manned && !setManned(station, true)) {
+                            prevPickEnter = pE;
+                            continue;
+                        }
                         st.green = ss[g_signalPickSel - L.sigFirst];
-                        if (!st.manned) st.manned = true; // clearing one implies manned
                         setMapMsg(simpleEntries[st.green].name + " cleared (" + station +
                                   ": one green at a time)");
                     }

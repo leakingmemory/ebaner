@@ -452,6 +452,39 @@ standing at one end of Fauske cannot be seen from the other, so anywhere a train
 stopped wants its own spot. **The editor draws a figure at every position**, which is the
 only way to see what a station actually covers while authoring it.
 
+**Which stations can talk to each other** is worked out from these positions rather than
+authored anywhere. A station is a TXP station because a position was placed at it — there
+is no separate way to be one — and its neighbours are the stations either side of it along
+the running line. So the graph follows the positions as they are placed, and there is
+nothing to keep in step with them. Today that gives Bodø — Oteråga — Fauske — Rognan.
+
+**Manning a station puts it on the network**, and that is not a local act. The chain that
+actually works the line is the *manned* stations and the sections between them, so opening
+one sends a connect to the nearest manned station either side, and they have to agree.
+
+- The first station on a line opens with nothing sent — there is nobody to ask.
+- The second sends one connect, and the two then work the line between them.
+- One opening **between** two manned stations asks **both**, and takes over the section
+  they held: the link that spanned it goes, and two shorter ones replace it.
+- They may only agree if that section is **clear**. A station cannot appear in the middle
+  of a section with a train in it, because it would then be holding a road it was never
+  told about — so the opening is refused, and nothing moves. It says which line was
+  occupied.
+- Unmanning hands the whole of what it held back to the two either side, joining them
+  again. That needs nobody's agreement: a longer section under fewer stations takes
+  nothing away from anyone.
+
+Occupancy is measured from a little way inside each station rather than from the station
+itself — the section is the line *between* them, and a train standing at a platform is not
+on it. The exchange is printed as it happens (`[TXP] CONNECT`, `ACCEPT`, `REJECT`).
+
+It is a chain, which is all a line worked by train orders needs: a station deals with the
+one either side and with nobody else. Two things it cannot express, both wanting an
+authored override if they ever turn up — a **junction**, where a station would deal with
+three; and a **break in the line**, where the stations either side land on different
+routes and are chained separately. The second is arguably right, since a severed line
+cannot pass a train order, but it shows as an edge quietly missing rather than as a fault.
+
 Worked from the station panel (`O`, then **E**), one line per position which Enter shows
 or takes down. **Only one shows at a time per station**: showing one stands the TXP down
 wherever they were. That is the one place the "one person" argument really holds — unlike
