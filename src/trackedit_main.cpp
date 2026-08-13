@@ -831,16 +831,28 @@ int main(int argc, char** argv) {
     auto applyEditsLive = [&](const std::vector<TrackEdit>& es,
                               bool keepSelection = false) {
         for (const TrackEdit& e : es) {
-            // De-dupe elevation overrides by (x,y) AND track so repeated nudges keep
-            // one line per point (last write wins), while a coincident point on a
-            // different siding keeps its own edit.
-            if (e.kind == TrackEdit::Elev)
-                pending.erase(std::remove_if(pending.begin(), pending.end(),
-                    [&](const TrackEdit& p) {
-                        return p.kind == TrackEdit::Elev && p.track == e.track &&
-                               std::hypot(p.a.x - e.a.x, p.a.y - e.a.y) < 0.5;
-                    }), pending.end());
-            pending.push_back(e);
+            // De-dupe elevation overrides so repeated nudges keep one line per point
+            // rather than one per keypress. By (x,y) and track - but that is not enough
+            // where two vertices of one track share a spot, because it would fold the
+            // two into one. What ties a nudge to the one before it is that it starts
+            // where that one left the vertex, so the height it names is the link.
+            TrackEdit ne = e;
+            if (e.kind == TrackEdit::Elev) {
+                for (auto it = pending.begin(); it != pending.end();) {
+                    const bool sameSpot = it->kind == TrackEdit::Elev &&
+                                          it->track == e.track &&
+                                          std::hypot(it->a.x - e.a.x, it->a.y - e.a.y) < 0.5;
+                    const bool follows =
+                        sameSpot && (!e.hasFromZ || std::abs(it->a.z - e.fromZ) < 1e-3);
+                    if (!follows) { ++it; continue; }
+                    // Keep the height the *first* nudge named. It is the only one that
+                    // still identifies the vertex once the file is reloaded, the later
+                    // ones naming heights this edit itself produced.
+                    if (it->hasFromZ) { ne.hasFromZ = true; ne.fromZ = it->fromZ; }
+                    it = pending.erase(it);
+                }
+            }
+            pending.push_back(ne);
         }
         data.applyTrackEdits(es);
         graph = buildTrackGraph(data);
@@ -1019,6 +1031,8 @@ int main(int argc, char** argv) {
             const double nz = dtot > 1e-6 ? z0 + (z1 - z0) * (cum[i - lo] / dtot) : z0;
             e.a = glm::dvec3(graph.pointWorld[i].x, graph.pointWorld[i].y, nz);
             e.track = graph.pointTrack[i]; // target this track's vertex specifically
+            e.hasFromZ = true;             // ...and which of them, at a shared spot
+            e.fromZ = graph.pointWorld[i].z;
             es.push_back(e);
         }
         const double grade = dtot > 1e-6 ? (z1 - z0) / dtot * 100.0 : 0.0;
@@ -1124,6 +1138,12 @@ int main(int argc, char** argv) {
             e.a = glm::dvec3(graph.pointWorld[i].x, graph.pointWorld[i].y,
                              graph.pointWorld[i].z + delta);
             e.track = graph.pointTrack[i]; // target this track's vertex specifically
+            // ...and which of that track's vertices, where two share a spot. Position
+            // and track alone cannot separate them, so the edit would always land on
+            // whichever came first however carefully the other was selected - which is
+            // what made a spike of two coincident points impossible to bring down.
+            e.hasFromZ = true;
+            e.fromZ = graph.pointWorld[i].z;
             es.push_back(e);
         }
         applyEditsLive(es, /*keepSelection=*/true);
