@@ -64,6 +64,7 @@
 #include <cstdlib>
 #include <exception>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -87,6 +88,13 @@ bool g_routePick = false;   // traffic manager: the exit-route picker is open
 int g_routePickSel = 0;     // highlighted route in that picker
 bool g_signalPick = false;  // traffic manager: the simple-entry-signal picker is open
 int g_signalPickSel = 0;    // highlighted signal in that picker
+// Asking for a line is three choices - dispatch, where to, what train - so the station
+// panel is the one place that is not a flat list. The step lives out here because Escape
+// is handled in the key callback and has to back out of one step at a time.
+enum class DispatchStep { None, PickDest, PickType };
+DispatchStep g_dispatchStep = DispatchStep::None;
+int g_dispatchSel = 0;      // highlighted line within the current step
+std::string g_dispatchTo;   // the destination, held between the two steps
 // Traffic manager: pending station changes, +1 for the next station and -1 for the
 // previous. An accumulator rather than an index because the key callback cannot see the
 // station list, which lives in main() with everything else the panel works from.
@@ -126,9 +134,21 @@ void keyCallback(GLFWwindow* win, int key, int, int action, int) {
     // Escape closes the route picker if it is open, else toggles the menu overlay; while
     // the menu is open the other hotkeys are inert.
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
-        if (g_signalPick) g_signalPick = false;
-        else if (g_routePick) g_routePick = false;
-        else g_menuOpen = !g_menuOpen;
+        // One step at a time out of the dispatch choices, and only then out of the panel:
+        // choosing the wrong destination should cost the destination, not the whole thing.
+        if (g_dispatchStep == DispatchStep::PickType) {
+            g_dispatchStep = DispatchStep::PickDest;
+            g_dispatchSel = 0;
+        } else if (g_dispatchStep == DispatchStep::PickDest) {
+            g_dispatchStep = DispatchStep::None;
+            g_dispatchTo.clear();
+        } else if (g_signalPick) {
+            g_signalPick = false;
+        } else if (g_routePick) {
+            g_routePick = false;
+        } else {
+            g_menuOpen = !g_menuOpen;
+        }
     }
     if (g_menuOpen) return;
     // Tab toggles mouse capture (handy for debugging).
@@ -172,6 +192,8 @@ void keyCallback(GLFWwindow* win, int key, int, int action, int) {
     if (g_mapMode && key == GLFW_KEY_E && action == GLFW_PRESS) {
         g_signalPick = !g_signalPick;
         g_signalPickSel = 0;
+        g_dispatchStep = DispatchStep::None; // no half-made choice left behind
+        g_dispatchTo.clear();
     }
     // Walk to the next / previous station to work. Only in the map: N is the cab
     // reverser's neutral, which means nothing from a dispatcher's view - the same reason
@@ -1322,6 +1344,9 @@ int main(int argc, char** argv) {
     // Open the traffic manager straight away, and optionally at a named station. The map
     // is otherwise only reachable by pressing keys, which left the one part of the sim
     // that is all panels and no 3-D view impossible to screenshot or check headlessly.
+    // Opens the station panel with the map, so the one part of the dispatcher's UI that
+    // is otherwise reachable only by keypress can be screenshotted and checked.
+
     if (const char* msel = std::getenv("EBANER_MAP")) {
         g_mapMode = true;
         g_mapDirty = true;
@@ -1384,25 +1409,46 @@ int main(int argc, char** argv) {
     // Man or unman a station, going through the train-order network. Manning is the one
     // that can be refused: the neighbours have to agree to hand over part of what they
     // hold, and they will not while there is a train in it.
+    auto logExchange = [&](const TxpExchange& r) {
+        for (const TxpMessage& m : r.exchange) {
+            const char* k = m.kind == TxpMsgKind::Connect     ? "CONNECT"
+                            : m.kind == TxpMsgKind::Accept    ? "ACCEPT"
+                            : m.kind == TxpMsgKind::Reject    ? "REJECT"
+                            : m.kind == TxpMsgKind::Request   ? "REQUEST"
+                            : m.kind == TxpMsgKind::LineClear ? "LINE CLEAR"
+                            : m.kind == TxpMsgKind::OnTrack   ? "ON TRACK"
+                            : m.kind == TxpMsgKind::Arrived   ? "ARRIVED"
+                                                              : "CANCELLED";
+            std::printf("[TXP] %-10s %s -> %s%s%s\n", k, m.from.c_str(), m.to.c_str(),
+                        m.reason.empty() ? "" : ": ", m.reason.c_str());
+        }
+    };
+    // The reason a refusal came back, for the message line.
+    auto refusal = [&](const TxpExchange& r) {
+        for (const TxpMessage& m : r.exchange)
+            if (m.kind == TxpMsgKind::Reject && !m.reason.empty()) return m.reason;
+        return std::string();
+    };
     auto setManned = [&](const std::string& station, bool on) {
         StationState& st = simpleStationState[station];
         if (!on) {
-            txpNet.close(txpGraph, station);
+            // Unmanning can be refused too: a station holding a train order cannot walk
+            // away from it, because the sections either side are about to become one.
+            const TxpExchange c = txpNet.close(txpGraph, station);
+            logExchange(c);
+            if (!c.accepted) {
+                setMapMsg(station + ": cannot close - " + refusal(c));
+                return false;
+            }
             st.manned = false;
             st.green = -1; // comes back on in a known state, not still showing a green
             setMapMsg(station + ": unmanned, signals off", true);
             return false;
         }
-        const TxpOpenResult r = txpNet.open(txpGraph, station, txpSectionClear);
-        for (const TxpMessage& m : r.exchange)
-            std::printf("[TXP] %-8s %s -> %s%s%s\n",
-                        m.kind == TxpMsgKind::Connect ? "CONNECT"
-                        : m.kind == TxpMsgKind::Accept ? "ACCEPT" : "REJECT",
-                        m.from.c_str(), m.to.c_str(), m.reason.empty() ? "" : ": ",
-                        m.reason.c_str());
+        const TxpExchange r = txpNet.open(txpGraph, station, txpSectionClear);
+        logExchange(r);
         if (!r.accepted) {
-            const std::string why = r.exchange.empty() ? "" : r.exchange.back().reason;
-            setMapMsg(station + ": opening refused - " + why);
+            setMapMsg(station + ": opening refused - " + refusal(r));
             return false;
         }
         st.manned = true;
@@ -1418,6 +1464,25 @@ int main(int argc, char** argv) {
         setMapMsg(note, true);
         return true;
     };
+    // Scripted starts for the dispatcher's UI, which is otherwise reachable only by
+    // keypress and so could not be screenshotted or checked at all.
+    //   EBANER_TXP_OPEN=A,B,C   man those stations, through the network as the panel does
+    //   EBANER_PANEL=1|dest|type  open the station panel, optionally at a dispatch step
+    if (const char* names = std::getenv("EBANER_TXP_OPEN")) {
+        std::string all(names), one;
+        std::istringstream is(all);
+        while (std::getline(is, one, ',')) if (!one.empty()) setManned(one, true);
+    }
+    if (const char* panel = std::getenv("EBANER_PANEL")) {
+        g_signalPick = true;
+        const std::string p(panel);
+        if (p == "dest") g_dispatchStep = DispatchStep::PickDest;
+        else if (p == "type") {
+            g_dispatchStep = DispatchStep::PickType;
+            const std::vector<std::string> d = txpNet.linksOf(simpleStationHere());
+            if (!d.empty()) g_dispatchTo = d.front();
+        }
+    }
     auto pathName = [&](int pi) {
         return signalPaths[pi].name.empty() || signalPaths[pi].name == "-"
                    ? "P" + std::to_string(signalPaths[pi].id)
@@ -1730,19 +1795,62 @@ int main(int argc, char** argv) {
             if (txpStation[i].name == station) out.push_back(static_cast<int>(i));
         return out;
     };
+    // What this station can do about a train order right now. One entry per line the
+    // panel will show, derived here so the drawing and the input sides cannot disagree
+    // about which line is which.
+    enum class OrderAct { None, OnTrack, Cancel, Arrived };
+    struct OrderLine {
+        std::string other;   // the station at the far end of the section
+        OrderAct act = OrderAct::None;
+        std::string text;
+    };
+    auto orderLinesAt = [&](const std::string& station) {
+        std::vector<OrderLine> out;
+        for (const TxpSection* s : txpNet.sectionsAt(station)) {
+            if (!s->held()) continue;
+            const std::string other = s->a == station ? s->b : s->a;
+            const std::string what = txpTrainTypeName(s->type);
+            const bool mine = s->from == station;
+            if (s->state == TxpLineState::Prepared && mine) {
+                // The two things the end that asked for the line may do with it.
+                out.push_back({other, OrderAct::OnTrack,
+                               "Train on track: -> " + other + " (" + what + ")"});
+                out.push_back({other, OrderAct::Cancel, "Withdraw order: -> " + other});
+            } else if (s->state == TxpLineState::Prepared) {
+                out.push_back({other, OrderAct::None,
+                               "Expecting " + what + " from " + other});
+            } else if (mine) {
+                out.push_back({other, OrderAct::None,
+                               "On the line -> " + other + " (" + what + ")"});
+            } else {
+                out.push_back({other, OrderAct::Arrived,
+                               "Train arrived: from " + other + " (" + what + ")"});
+            }
+        }
+        return out;
+    };
     // Where each line of the station panel sits. Derived once because the panel is drawn
     // in one place and acted on in another, a few hundred lines apart, and an off-by-one
     // between them would quietly act on a different line from the highlighted one.
     struct PanelLayout {
-        int sigFirst = 2;  // after the manned switch and the all-red line
+        int dispatchLine = 0; // "Request dispatch", always present so index 0 is fixed
+        int orderFirst = 1;   // then whatever this station has booked
+        int orderCount = 0;
+        int mannedLine = 0;
+        int allRedLine = 0;
+        int sigFirst = 0;
         int sigCount = 0;  // lines the signals occupy (1 even when there are none)
         int flagFirst = 0; // then one line per flag post, which Enter cycles
         int txpFirst = 0;  // then one line per TXP position, which Enter toggles
         int count = 0;
     };
     auto panelLayout = [](const std::vector<int>& ss, const std::vector<int>& fp,
-                          const std::vector<int>& tp) {
+                          const std::vector<int>& tp, std::size_t orders) {
         PanelLayout L;
+        L.orderCount = static_cast<int>(orders);
+        L.mannedLine = L.orderFirst + L.orderCount;
+        L.allRedLine = L.mannedLine + 1;
+        L.sigFirst = L.allRedLine + 1;
         L.sigCount = ss.empty() ? 1 : static_cast<int>(ss.size());
         L.flagFirst = L.sigFirst + L.sigCount;
         L.txpFirst = L.flagFirst + static_cast<int>(fp.size());
@@ -1763,10 +1871,18 @@ int main(int argc, char** argv) {
         const auto it = simpleStationState.find(station);
         const bool manned = it != simpleStationState.end() && it->second.manned;
         const int green = manned ? it->second.green : -1;
-        std::vector<std::string> items{
+        // Asking for a line comes first: it is what a dispatcher does most, and keeping
+        // it at index 0 means the line the panel is indexed from is never conditional.
+        std::vector<std::string> items;
+        items.push_back(fit("Request dispatch", kName + 6) + "  >");
+        const std::vector<OrderLine> orders = orderLinesAt(station);
+        for (const OrderLine& o : orders)
+            items.push_back(fit(o.text, kName + 6) +
+                            (o.act == OrderAct::None ? "" : "  >"));
+        items.push_back(
             fit(manned ? "Switch station off (unmanned)" : "Switch station on (manned)",
                 kName + 6) +
-            (manned ? "  ON" : "  OFF")};
+            (manned ? "  ON" : "  OFF"));
         items.push_back(fit("All red", kName + 6) + (manned && green < 0 ? "  *" : ""));
         for (int i : ss)
             items.push_back(fit(simpleEntries[i].name, kName + 6) +
@@ -1791,13 +1907,48 @@ int main(int argc, char** argv) {
             items.push_back(fit("Depart: " + txpPositions[i].name, kName + 6) +
                             (i == showing ? "  SHOWN" : "  -"));
 
-        // The layout the input side indexes by has to be the list actually drawn.
-        assert(static_cast<int>(items.size()) == panelLayout(ss, fp, tp).count);
+        // The layout the input side indexes by has to be the list actually drawn. Said
+        // out loud rather than asserted: the release build is -DNDEBUG, so an assert here
+        // would be compiled out and a mismatch would quietly act on a different line from
+        // the highlighted one - which is the whole failure this guard exists to catch.
+        const int want = panelLayout(ss, fp, tp, orders.size()).count;
+        if (static_cast<int>(items.size()) != want) {
+            static bool told = false;
+            if (!told) {
+                std::fprintf(stderr,
+                             "[Panel] %zu lines drawn but %d indexed - the panel and its "
+                             "layout disagree\n", items.size(), want);
+                told = true;
+            }
+        }
         return items;
+    };
+    // The destinations this station could send a train to: whoever it works a line with.
+    auto dispatchDests = [&](const std::string& station) {
+        return txpNet.linksOf(station);
     };
     auto appendSignalPicker = [&](std::vector<TextVertex>& tv, int fbw, int fbh) {
         if (!g_signalPick) return;
         const std::string station = simpleStationHere();
+        // The two dispatch steps replace the panel rather than stack on it: appendMenu
+        // always centres, so a second panel would sit on top of the first and neither
+        // would be readable.
+        if (g_dispatchStep == DispatchStep::PickDest) {
+            const std::vector<std::string> dests = dispatchDests(station);
+            std::vector<std::string> items = dests;
+            if (items.empty()) items.push_back("(no line is worked from here)");
+            appendMenu(tv, "DISPATCH FROM " + station + " - TO WHERE?  (Esc backs out)",
+                       items,
+                       std::clamp(g_dispatchSel, 0, static_cast<int>(items.size()) - 1),
+                       fbw, fbh);
+            return;
+        }
+        if (g_dispatchStep == DispatchStep::PickType) {
+            appendMenu(tv, station + " -> " + g_dispatchTo + " - WHAT TRAIN?  (Esc backs out)",
+                       {"Passenger", "Cargo", "Other"}, std::clamp(g_dispatchSel, 0, 2),
+                       fbw, fbh);
+            return;
+        }
         const std::vector<int> ss = simpleSignalsAt(station);
         const std::string title =
             "STATION" + (station.empty() ? "" : " - " + station) +
@@ -2194,6 +2345,50 @@ int main(int argc, char** argv) {
                 }
             }
             prevPickUp = pU; prevPickDown = pD; prevPickEnter = pE;
+        } else if (g_mapMode && !g_menuOpen && g_signalPick &&
+                   g_dispatchStep != DispatchStep::None) {
+            // Choosing a destination, then a train type. Escape backs out a step; it is
+            // handled in the key callback so it works whichever step is showing.
+            auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
+            const bool pU = down(GLFW_KEY_UP), pD = down(GLFW_KEY_DOWN),
+                       pE = down(GLFW_KEY_ENTER);
+            const std::string station = simpleStationHere();
+            const std::vector<std::string> dests = dispatchDests(station);
+            const int n = g_dispatchStep == DispatchStep::PickDest
+                              ? std::max<int>(1, static_cast<int>(dests.size()))
+                              : 3;
+            if (pU && !prevPickUp) g_dispatchSel = (g_dispatchSel + n - 1) % n;
+            if (pD && !prevPickDown) g_dispatchSel = (g_dispatchSel + 1) % n;
+            g_dispatchSel = std::clamp(g_dispatchSel, 0, n - 1);
+            if (pE && !prevPickEnter) {
+                if (g_dispatchStep == DispatchStep::PickDest) {
+                    if (dests.empty()) {
+                        setMapMsg(station + ": no line is worked from here");
+                        g_dispatchStep = DispatchStep::None;
+                    } else {
+                        g_dispatchTo = dests[g_dispatchSel];
+                        g_dispatchStep = DispatchStep::PickType;
+                        g_dispatchSel = 0;
+                    }
+                } else {
+                    const TxpTrainType type = g_dispatchSel == 0 ? TxpTrainType::Passenger
+                                              : g_dispatchSel == 1 ? TxpTrainType::Cargo
+                                                                   : TxpTrainType::Other;
+                    const TxpExchange r =
+                        txpNet.requestDispatch(station, g_dispatchTo, type);
+                    logExchange(r);
+                    setMapMsg(r.accepted
+                                  ? station + " -> " + g_dispatchTo + ": line clear for a " +
+                                        txpTrainTypeName(type) + " train"
+                                  : station + " -> " + g_dispatchTo + ": refused - " +
+                                        refusal(r),
+                              r.accepted);
+                    g_dispatchStep = DispatchStep::None;
+                    g_dispatchTo.clear();
+                    g_mapDirty = true;
+                }
+            }
+            prevPickUp = pU; prevPickDown = pD; prevPickEnter = pE;
         } else if (g_mapMode && !g_menuOpen && g_signalPick) {
             auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
             const bool pU = down(GLFW_KEY_UP), pD = down(GLFW_KEY_DOWN),
@@ -2202,18 +2397,49 @@ int main(int argc, char** argv) {
             const std::vector<int> ss = simpleSignalsAt(station);
             const std::vector<int> fp = flagPostsAt(station);
             const std::vector<int> tp = txpPositionsAt(station);
-            const PanelLayout L = panelLayout(ss, fp, tp);
+            const std::vector<OrderLine> orders = orderLinesAt(station);
+            const PanelLayout L = panelLayout(ss, fp, tp, orders.size());
             const int n = L.count;
             if (pU && !prevPickUp) g_signalPickSel = (g_signalPickSel + n - 1) % n;
             if (pD && !prevPickDown) g_signalPickSel = (g_signalPickSel + 1) % n;
             g_signalPickSel = std::clamp(g_signalPickSel, 0, n - 1);
             if (pE && !prevPickEnter && !station.empty()) {
                 StationState& st = simpleStationState[station];
-                if (g_signalPickSel == 0) {
+                if (g_signalPickSel == L.dispatchLine) {
+                    // Asking for a line: the destination and the train type follow, and
+                    // the far end answers automatically once both are chosen.
+                    if (!st.manned) {
+                        setMapMsg(station + ": cannot dispatch from an unmanned station");
+                    } else if (dispatchDests(station).empty()) {
+                        setMapMsg(station + ": no line is worked from here");
+                    } else {
+                        g_dispatchStep = DispatchStep::PickDest;
+                        g_dispatchSel = 0;
+                    }
+                } else if (g_signalPickSel < L.mannedLine) {
+                    const OrderLine& o = orders[g_signalPickSel - L.orderFirst];
+                    TxpExchange r;
+                    if (o.act == OrderAct::OnTrack) r = txpNet.trainOnTrack(station, o.other);
+                    else if (o.act == OrderAct::Cancel) r = txpNet.cancelDispatch(station, o.other);
+                    else if (o.act == OrderAct::Arrived) r = txpNet.trainArrived(station, o.other);
+                    else { setMapMsg(o.text); }
+                    if (o.act != OrderAct::None) {
+                        logExchange(r);
+                        setMapMsg(r.accepted
+                                      ? (o.act == OrderAct::OnTrack
+                                             ? station + ": train on track to " + o.other
+                                         : o.act == OrderAct::Cancel
+                                             ? station + ": order to " + o.other + " withdrawn"
+                                             : station + ": train arrived, line to " +
+                                                   o.other + " clear")
+                                      : station + ": refused - " + refusal(r),
+                                  r.accepted);
+                    }
+                } else if (g_signalPickSel == L.mannedLine) {
                     // Manning goes through the train-order network, which can refuse it -
                     // the neighbours will not hand over a section with a train in it.
                     setManned(station, !st.manned);
-                } else if (g_signalPickSel == 1) {
+                } else if (g_signalPickSel == L.allRedLine) {
                     st.green = -1;
                     setMapMsg(station + ": all entry signals at danger");
                 } else if (g_signalPickSel < L.flagFirst) {

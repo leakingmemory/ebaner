@@ -478,6 +478,26 @@ Occupancy is measured from a little way inside each station rather than from the
 itself — the section is the line *between* them, and a train standing at a platform is not
 on it. The exchange is printed as it happens (`[TXP] CONNECT`, `ACCEPT`, `REJECT`).
 
+**Dispatching a train** is the exchange that uses those sections. From the station panel:
+**Request dispatch** → where to → what kind of train. The far end answers automatically.
+
+| | |
+|---|---|
+| **request** | granted only if the section is clear **in the books** — refused because it is already booked, not because something is standing in it |
+| **line clear** | both ends hold the section: there is one record, not one per station |
+| **train on track** | sent by the end the line was given to, once the train has left |
+| **train arrived** | sent by the **far** end — a station cannot report the arrival of a train it dispatched, which would clear a line the train is still on |
+| **withdraw** | the end that asked may cancel, but only until the train has left; after that only its arrival releases the line |
+
+While a section is held, nothing else may have it: another request is refused from either
+end, a station trying to **open** into it is refused, and the two stations holding it
+cannot **unman** — the sections either side would merge into one line carrying two sets of
+books, with nobody left to report the train arrived.
+
+`EBANER_TXP_OPEN=A,B,C` mans stations at startup through the network, and
+`EBANER_PANEL=1|dest|type` opens the panel, optionally at a dispatch step — the dispatcher's
+UI is otherwise reachable only by keypress and could not be checked at all.
+
 It is a chain, which is all a line worked by train orders needs: a station deals with the
 one either side and with nobody else. Two things it cannot express, both wanting an
 authored override if they ever turn up — a **junction**, where a station would deal with

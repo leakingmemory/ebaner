@@ -844,7 +844,7 @@ int main(int argc, char** argv) {
         auto clear = [&](const std::string& a, const std::string& b) {
             return occupied.empty() || !(occupied == a + "-" + b || occupied == b + "-" + a);
         };
-        auto kinds = [](const TxpOpenResult& r) {
+        auto kinds = [](const TxpExchange& r) {
             std::string s;
             for (const TxpMessage& m : r.exchange)
                 s += (m.kind == TxpMsgKind::Connect ? "C" :
@@ -855,7 +855,7 @@ int main(int argc, char** argv) {
         TxpNetwork net;
 
         // Bodø first: nobody to ask.
-        TxpOpenResult r = net.open(g, "Bodø", clear);
+        TxpExchange r = net.open(g, "Bodø", clear);
         check(r.accepted, "the first station opens");
         check(r.exchange.empty(), "with nothing sent - there is nobody to ask");
         check(net.links().empty(), "and no section is worked yet");
@@ -911,6 +911,149 @@ int main(int argc, char** argv) {
         check(r.accepted && r.exchange.empty(),
               "a station with no TXP position opens without asking anyone");
         check(!net.isOpen("Røkland"), "and works no sections");
+    }
+
+    // Dispatching a train, which is a line being asked for, given, held and released.
+    //
+    // The section is the unit. It belongs to both ends equally, so there is one record and
+    // not one per station - but an order on it runs one way, and that is what decides
+    // which end may report the train onto the line and which may report it arrived.
+    {
+        std::puts("\nDispatching a train between two stations:");
+        std::vector<glm::dvec3> line;
+        for (int i = 0; i <= 40; ++i) line.push_back({i * 100.0, 0.0, 0.0});
+        std::vector<TrackPoly> polys = {{1, line}};
+        std::vector<glm::vec3> lp;
+        std::vector<std::uint16_t> spd;
+        for (const glm::dvec3& q : line) { lp.push_back({(float)q.x, 0.0f, 0.0f}); spd.push_back(100); }
+        std::vector<TrackPath> paths;
+        paths.push_back(TrackPath(1, 0, lp, spd));
+        const char* names[4] = {"Bodø", "Oteråga", "Fauske", "Rognan"};
+        const double fracs[4] = {0.05, 0.35, 0.65, 0.95};
+        std::vector<TxpPosition> ps(4);
+        std::vector<SignalStation> att(4);
+        for (int i = 0; i < 4; ++i) {
+            ps[i].id = i + 1; ps[i].trackId = 1; ps[i].frac = fracs[i];
+            att[i].name = names[i];
+        }
+        TxpGraph g;
+        g.build(ps, att, {}, polys, paths, glm::dvec3(0.0));
+
+        auto kinds = [](const TxpExchange& r) {
+            std::string s;
+            for (const TxpMessage& m : r.exchange)
+                s += m.kind == TxpMsgKind::Connect     ? "C"
+                     : m.kind == TxpMsgKind::Accept    ? "A"
+                     : m.kind == TxpMsgKind::Reject    ? "R"
+                     : m.kind == TxpMsgKind::Request   ? "q"
+                     : m.kind == TxpMsgKind::LineClear ? "c"
+                     : m.kind == TxpMsgKind::OnTrack   ? "t"
+                     : m.kind == TxpMsgKind::Arrived   ? "v"
+                                                       : "x";
+            return s;
+        };
+        TxpNetwork net;
+        net.open(g, "Bodø", {});
+        net.open(g, "Oteråga", {});
+        net.open(g, "Fauske", {});
+        check(net.links().size() == 2, "three manned stations work two sections");
+
+        // The whole sequence, one section at a time.
+        TxpExchange r = net.requestDispatch("Bodø", "Oteråga", TxpTrainType::Passenger);
+        check(r.accepted && kinds(r) == "qc", "a request on a clear line is granted");
+        check(net.state("Bodø", "Oteråga") == TxpLineState::Prepared,
+              "and the line is prepared for the train");
+        check(net.state("Oteråga", "Bodø") == TxpLineState::Prepared,
+              "which both ends see - there is one section, not one record each");
+        check(net.state("Oteråga", "Fauske") == TxpLineState::Clear,
+              "the next section along is untouched");
+
+        r = net.trainOnTrack("Bodø", "Oteråga");
+        check(r.accepted && kinds(r) == "t", "the train is reported onto the line");
+        check(net.state("Bodø", "Oteråga") == TxpLineState::Occupied, "which now holds it");
+
+        r = net.trainArrived("Oteråga", "Bodø");
+        check(r.accepted && kinds(r) == "v", "the far end reports it arrived");
+        check(net.state("Bodø", "Oteråga") == TxpLineState::Clear, "and the line is clear");
+
+        // And is usable again straight away.
+        r = net.requestDispatch("Oteråga", "Bodø", TxpTrainType::Cargo);
+        check(r.accepted, "the line can be given again, and the other way round");
+        check(net.section("Bodø", "Oteråga")->type == TxpTrainType::Cargo,
+              "carrying the type it was asked for");
+        check(net.section("Bodø", "Oteråga")->from == "Oteråga",
+              "and remembering which end it was given to");
+
+        // Nothing else may have it meanwhile.
+        r = net.requestDispatch("Bodø", "Oteråga", TxpTrainType::Passenger);
+        check(!r.accepted && kinds(r) == "qR", "a second request on a held line is refused");
+        r = net.requestDispatch("Oteråga", "Bodø", TxpTrainType::Other);
+        check(!r.accepted, "refused from the end that was given it, too");
+
+        // Only the right end may send each message.
+        check(!net.trainOnTrack("Bodø", "Oteråga").accepted,
+              "the end that was not given the line cannot report a train onto it");
+        net.trainOnTrack("Oteråga", "Bodø");
+        check(net.state("Bodø", "Oteråga") == TxpLineState::Occupied, "the right end can");
+        check(!net.trainArrived("Oteråga", "Bodø").accepted,
+              "and cannot then report the arrival of its own train");
+        check(net.trainArrived("Bodø", "Oteråga").accepted,
+              "which is for the end it is running to");
+        check(net.state("Bodø", "Oteråga") == TxpLineState::Clear, "releasing the line");
+
+        // Nothing works on a line with nothing booked on it.
+        check(!net.trainOnTrack("Bodø", "Oteråga").accepted,
+              "no train can be reported onto a line nobody asked for");
+        check(!net.trainArrived("Bodø", "Oteråga").accepted,
+              "nor can one arrive off it");
+        check(!net.requestDispatch("Bodø", "Rognan", TxpTrainType::Other).accepted,
+              "and no line can be asked for between stations that work none");
+
+        // Cancelling, which is only until the train has left.
+        r = net.requestDispatch("Bodø", "Oteråga", TxpTrainType::Passenger);
+        check(r.accepted, "a line is given");
+        check(!net.cancelDispatch("Oteråga", "Bodø").accepted,
+              "the far end cannot withdraw someone else's train");
+        r = net.cancelDispatch("Bodø", "Oteråga");
+        check(r.accepted && kinds(r) == "x", "the end that asked can withdraw it");
+        check(net.state("Bodø", "Oteråga") == TxpLineState::Clear, "and the line is clear");
+        net.requestDispatch("Bodø", "Oteråga", TxpTrainType::Passenger);
+        net.trainOnTrack("Bodø", "Oteråga");
+        check(!net.cancelDispatch("Bodø", "Oteråga").accepted,
+              "once it has left it cannot be withdrawn - only its arrival clears the line");
+
+        // What a held section blocks, which is the point of holding it.
+        check(!net.close(g, "Bodø").accepted,
+              "a station holding a train order cannot close");
+        check(!net.close(g, "Oteråga").accepted, "nor can the far end of that order");
+        check(net.close(g, "Fauske").accepted, "one clear of it still can");
+        net.open(g, "Fauske", {});
+
+        // Rognan opening would split Fauske - and beyond, which is clear; but opening a
+        // station into the held Bodø - Oteråga section is refused by the books.
+        net.close(g, "Oteråga"); // refused, still open - confirm the order survived
+        check(net.state("Bodø", "Oteråga") == TxpLineState::Occupied,
+              "a refused close leaves the order exactly as it was");
+
+        net.trainArrived("Oteråga", "Bodø"); // clear it down again
+        check(net.close(g, "Oteråga").accepted, "and once clear the station can close");
+        check(net.linked("Bodø", "Fauske"),
+              "the two either side taking the whole of what it held");
+
+        // Now the interaction the user asked for: a held line refuses a station opening
+        // into it.
+        net.requestDispatch("Bodø", "Fauske", TxpTrainType::Cargo);
+        r = net.open(g, "Oteråga", {});
+        check(!r.accepted && kinds(r) == "CCRR",
+              "opening between two stations is refused while their line is booked");
+        check(!net.isOpen("Oteråga"), "so it does not open");
+        check(net.linked("Bodø", "Fauske") && net.links().size() == 1,
+              "and the section stays whole, with its order intact");
+        check(net.state("Bodø", "Fauske") == TxpLineState::Prepared, "still prepared");
+
+        net.cancelDispatch("Bodø", "Fauske");
+        check(net.open(g, "Oteråga", {}).accepted,
+              "withdrawn, the station opens as it would have");
     }
 
     std::printf("\n%s\n", failures ? "FAILED" : "PASSED");
