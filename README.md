@@ -350,6 +350,13 @@ driver is about to act on. An entry signal's authority begins at its own mast, s
 its circuits are beyond it and the whole route must be clear — a train may not be let in to
 an occupied platform.
 
+Two routes may **share road**, which is what lets a train be passed **through** a station
+rather than stopped in it: set the entry route into a platform and the departure out of it
+and the driver gets a green at the entry signal and another at the exit. What is refused is
+a circuit lying beyond **both** signals — each would have authorised a movement onto the
+same rails — or a route running the **other way** over rails we share, which is two
+movements facing each other. Neither test cares which of the two was set first.
+
 **A distant on a main signal's own mast.** A distant signal (*forsignal*) normally stands
 out on the line on its own post, repeating what the first main signal ahead is showing. At
 a short station it hangs instead on the entry signal's mast, on an adapter that carries it
@@ -544,9 +551,10 @@ books, with nobody left to report the train arrived.
 
 `EBANER_TXP_OPEN=A,B,C` mans stations at startup through the network, and
 `EBANER_PANEL=1|dest|type|route` opens the station panel, optionally at a dispatch step, or
-the **R** route picker, and `EBANER_ROUTE=<n>` sets the worked station's nth route (as the
-picker lists it) at startup — the dispatcher's UI is otherwise reachable only by keypress
-and could not be checked at all.
+the **R** route picker, and `EBANER_ROUTE=<n>[,<n>…]` sets the worked station's nth routes
+(as the picker lists them) at startup, in order, so a second one meets the state the first
+left — the dispatcher's UI is otherwise reachable only by keypress and could not be checked
+at all.
 
 It is a chain, which is all a line worked by train orders needs: a station deals with the
 one either side and with nobody else. Two things it cannot express, both wanting an

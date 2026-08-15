@@ -565,6 +565,22 @@ bool routeContains(const SignalPath& whole, const SignalPath& part) {
     return true;
 }
 
+bool routesOppose(const SignalPath& a, const SignalPath& b) {
+    for (const SectionInterval& x : a.parts) {
+        for (const SectionInterval& y : b.parts) {
+            if (x.trackId != y.trackId) continue;
+            const double xlo = std::min(x.from, x.to), xhi = std::max(x.from, x.to);
+            const double ylo = std::min(y.from, y.to), yhi = std::max(y.from, y.to);
+            // Positive overlap only: two routes meeting end to end at a border share a
+            // point, not a length of rail, and that is exactly the join a through move
+            // is made of.
+            if (std::min(xhi, yhi) - std::max(xlo, ylo) <= 1e-6) continue;
+            if ((x.to > x.from) != (y.to > y.from)) return true;
+        }
+    }
+    return false;
+}
+
 namespace {
 bool routeDiverges(const SignalPath& p, const SwitchNetwork& net,
                    const std::vector<TrackPoly>& polys) {

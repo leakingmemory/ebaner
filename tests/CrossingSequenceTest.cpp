@@ -1119,6 +1119,40 @@ int main(int argc, char** argv) {
               "a signal ahead facing the other way is not what it repeats");
     }
 
+    // Two routes over one road: a chain or a head-on.
+    //
+    // Overlapping is not by itself a conflict. An entry route finishes on the platform road
+    // that a departure from it begins on, and both are set at once to let a train through a
+    // station without stopping it. Facing each other over the same rails is the conflict.
+    std::puts("\nTwo routes over the same rails:");
+    {
+        auto leg = [](std::uint32_t track, double from, double to) {
+            SignalPath p;
+            p.parts.push_back({track, from, to});
+            return p;
+        };
+        // The through move: in over 0.2 -> 0.6, out over 0.4 -> 0.9, sharing 0.4 -> 0.6.
+        check(!routesOppose(leg(1, 0.2, 0.6), leg(1, 0.4, 0.9)),
+              "a departure following an arrival is not opposed");
+        check(!routesOppose(leg(1, 0.4, 0.9), leg(1, 0.2, 0.6)),
+              "and it does not matter which is asked about first");
+        check(routesOppose(leg(1, 0.2, 0.6), leg(1, 0.9, 0.4)),
+              "the same rails run the other way is");
+        check(!routesOppose(leg(1, 0.2, 0.6), leg(1, 0.6, 0.9)),
+              "meeting at a border is a join, not an overlap");
+        check(!routesOppose(leg(1, 0.6, 0.2), leg(1, 0.9, 0.6)),
+              "and that holds whichever way the pair runs");
+        check(!routesOppose(leg(1, 0.2, 0.6), leg(2, 0.6, 0.2)),
+              "opposite ways on different tracks never meet");
+
+        // Only one leg of several need face the other way.
+        SignalPath two = leg(1, 0.2, 0.6);
+        two.parts.push_back({2, 0.0, 0.5});
+        check(routesOppose(two, leg(2, 0.4, 0.1)),
+              "one leg facing the other way is enough");
+        check(!routesOppose(two, leg(2, 0.1, 0.4)), "and the same way is still not");
+    }
+
     // How a mast is built is a fact about the mast, and several route records sharing a
     // start border are one mast - so each flag has to survive the file and land on the
     // signal they make up.

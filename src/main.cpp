@@ -1679,13 +1679,37 @@ int main(int argc, char** argv) {
         for (int id : mainCandidates[ri].beyond)
             if (secOccupiedById(id)) occ += (occ.empty() ? "" : ", ") + secName(id);
         if (!occ.empty()) return {"occupied", "occupied: " + occ};
-        // A circuit already held by another departure is the conflicting-route case: two
-        // main signals must never both authorise a movement over the same track.
+        // Where another departure already holds road we want, two things make it a
+        // conflict, and sharing by itself is not one of them.
+        //
+        // A circuit lying beyond *both* signals is: each has authorised a movement onto it,
+        // and two trains would be let at the same rails. But a circuit beyond one signal
+        // and on the other's run-up is the join between two routes set end to end - an
+        // entry route finishes on the platform road that a departure from it begins on, and
+        // setting both is how a train is let *through* a station rather than into it, with
+        // a green at the entry signal and another at the exit. Which of the two you happen
+        // to set first cannot matter, so the test is symmetric in them.
+        //
+        // Running the other way over rails we share is a conflict wherever it happens: that
+        // is two movements facing each other.
+        const std::vector<int> ours = pathSections(dep, circuits);
+        const std::vector<int>& oursBeyond = mainCandidates[ri].beyond;
         for (const MainRoute& mr : mainRoutes) {
             if (mr.route == ri) continue;
-            for (int id : pathSections(dep, circuits))
-                if (std::find(mr.locked.begin(), mr.locked.end(), id) != mr.locked.end())
-                    return {"conflict", "conflicts with " + exitRouteName(mr.route)};
+            auto held = [&](int id) {
+                return std::find(mr.locked.begin(), mr.locked.end(), id) != mr.locked.end();
+            };
+            auto beyondBoth = [&](int id) {
+                return held(id) &&
+                       std::find(oursBeyond.begin(), oursBeyond.end(), id) !=
+                           oursBeyond.end() &&
+                       std::find(mr.beyond.begin(), mr.beyond.end(), id) != mr.beyond.end();
+            };
+            if (std::any_of(ours.begin(), ours.end(), beyondBoth))
+                return {"conflict", "conflicts with " + exitRouteName(mr.route)};
+            if (std::any_of(ours.begin(), ours.end(), held) &&
+                routesOppose(dep, mr.departure))
+                return {"opposed", "faces " + exitRouteName(mr.route)};
         }
         for (const PathSwitch& ps : pathSwitchRequirements(dep, switchNet, polys)) {
             if (switchNet.state(ps.turnout) == ps.need) continue; // already right
@@ -1997,17 +2021,29 @@ int main(int argc, char** argv) {
                    fbw, fbh);
     };
 
-    // Set one of the worked station's routes at startup, named by its place in the picker
-    // (1-based, as it reads on screen). What setting a route does - the switches it moves,
-    // the dwarfs it opens, the signal it clears - is otherwise reachable only by keypress,
+    // Set routes at startup, named by their place in the picker (1-based, as they read on
+    // screen) and separated by commas - in order, so a second one meets the state the first
+    // one left. What setting a route does - the switches it moves, the dwarfs it opens, the
+    // signal it clears, and what it then refuses - is otherwise reachable only by keypress,
     // so none of it could be looked at headlessly.
     if (const char* pick = std::getenv("EBANER_ROUTE")) {
+        // Occupancy is a per-frame reading and no frame has run yet, so take it once here:
+        // a route set from this hook has to meet the same state one set by keypress would,
+        // or it would be granted roads with a train standing on them.
+        computeOccupancy(secOccupied);
         const std::vector<int> rs = stationRoutes();
-        const int n = std::atoi(pick) - 1;
-        if (n >= 0 && n < static_cast<int>(rs.size())) trySetExitRoute(rs[n]);
-        else
-            std::fprintf(stderr, "[Main] EBANER_ROUTE=%s: this station offers %zu route(s)\n",
-                         pick, rs.size());
+        const std::string all(pick);
+        std::istringstream is(all);
+        std::string one;
+        while (std::getline(is, one, ',')) {
+            if (one.empty()) continue;
+            const int n = std::atoi(one.c_str()) - 1;
+            if (n >= 0 && n < static_cast<int>(rs.size())) trySetExitRoute(rs[n]);
+            else
+                std::fprintf(stderr,
+                             "[Main] EBANER_ROUTE=%s: this station offers %zu route(s)\n",
+                             one.c_str(), rs.size());
+        }
     }
 
     // Open the audio device now that the heavy startup work is done, so the audio

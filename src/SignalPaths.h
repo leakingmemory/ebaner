@@ -274,6 +274,16 @@ SignalPath departureRoute(const SignalPath& exitRoute, const SignalPath& exitSig
 // along a departure and so should be opened with it. Compares anchors only.
 bool routeContains(const SignalPath& whole, const SignalPath& part);
 
+// True if the two routes ever run over the same rails in opposite directions.
+//
+// Two authorities overlapping is not by itself a conflict. A train let in to a platform
+// road and then let out of it again is one movement over one road, which is how a station
+// is passed through rather than stopped at, and both routes are set at once to do it. Two
+// routes *facing* each other over the same rails is another matter entirely, and that is
+// what this picks out. Merely meeting at a shared border does not count as running over
+// the same rails.
+bool routesOppose(const SignalPath& a, const SignalPath& b);
+
 // Recompute each signal's aspect: Clear when one of its paths has a route set, else
 // TrainOnTrack when one of its paths has its switches aligned and a train standing in that
 // path's circuits, else Stop. `secOccupied` is indexed like `circuits.sections` and
