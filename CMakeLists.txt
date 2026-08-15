@@ -45,6 +45,15 @@ find_package(PkgConfig QUIET)
 if(PkgConfig_FOUND)
     pkg_check_modules(PULSE QUIET IMPORTED_TARGET libpulse-simple)
     pkg_check_modules(PORTAUDIO QUIET IMPORTED_TARGET portaudio-2.0)
+    # Lua (optional): behaviour authored alongside the data, in overlay/overlay.lua.
+    #
+    # pkg_search_module, not pkg_check_modules: it takes the first module that exists,
+    # where pkg_check_modules would demand all of them. The names have to be versioned -
+    # a distribution may ship lua5.4.pc with no lua.pc, no /usr/include/lua.h and no
+    # liblua.so at all, which is enough to defeat both find_package(Lua) and a search for
+    # a bare "lua". luajit is deliberately not in the list: it would answer a search for
+    # "some Lua" and quietly give 5.1 semantics instead of 5.4.
+    pkg_search_module(LUA QUIET IMPORTED_TARGET lua5.4 lua-5.4 lua54)
 endif()
 
 # ---- Shader compilation ---------------------------------------------------
@@ -112,6 +121,7 @@ add_library(ebaner_engine STATIC
     src/SwitchTypes.cpp
     src/EarClip.cpp
     src/Font.cpp
+    src/Script.cpp
     src/VulkanRenderer.cpp)
 
 add_dependencies(ebaner_engine shaders)
@@ -119,6 +129,15 @@ add_dependencies(ebaner_engine shaders)
 target_link_libraries(ebaner_engine PUBLIC Vulkan::Vulkan ${GLFW_TARGET})
 if(glm_FOUND)
     target_link_libraries(ebaner_engine PUBLIC glm::glm)
+endif()
+# PRIVATE: no Lua header escapes Script.cpp, so nothing that uses the engine needs the
+# include path. CMake still carries the link requirement through for a static library.
+if(LUA_FOUND)
+    target_link_libraries(ebaner_engine PRIVATE PkgConfig::LUA)
+    target_compile_definitions(ebaner_engine PRIVATE HAVE_LUA=1)
+    message(STATUS "Lua found (${LUA_VERSION}): overlay.lua scripting enabled")
+else()
+    message(STATUS "No Lua found: building without overlay.lua scripting")
 endif()
 
 # Directory holding the compiled .spv files, exposed to apps at runtime.

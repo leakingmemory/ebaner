@@ -23,6 +23,7 @@
 #include "TxpGraph.h"
 #include "TxpNetwork.h"
 #include "TxpMesh.h"
+#include "Script.h"
 #include "TerrainData.h"
 #include "TrackOverlay.h"
 #include "TrackPath.h"
@@ -31,6 +32,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <map>
 #include <string>
@@ -1054,6 +1056,61 @@ int main(int argc, char** argv) {
         net.cancelDispatch("Bodø", "Fauske");
         check(net.open(g, "Oteråga", {}).accepted,
               "withdrawn, the station opens as it would have");
+    }
+
+    // The dataset's own script. What is checked here is the host, not any API: that a
+    // script runs, that a bad one is survivable, and that what it defines is still there
+    // afterwards - which is what makes hooks possible later rather than a rewrite.
+    if (argc > 1) {
+        std::puts("\nRunning the dataset's script:");
+        const std::string root = argv[1];
+        std::error_code ec;
+        std::filesystem::create_directories(root + "/overlay", ec);
+        const std::string path = root + "/overlay/overlay.lua";
+        auto put = [&](const char* text) {
+            std::ofstream f(path, std::ios::trunc);
+            f << text;
+        };
+
+        if (!Script::available()) {
+            std::puts("  built without Lua - nothing to check");
+        } else {
+            std::filesystem::remove(path, ec);
+            {
+                Script s;
+                check(!s.run(root), "a dataset with no script runs nothing, and says so"
+                                    " by returning false rather than by complaining");
+            }
+            {
+                put("hello_from_lua = 41 + 1\n");
+                Script s;
+                check(s.run(root), "a script that runs reports that it did");
+                check(s.hasGlobal("hello_from_lua"),
+                      "and what it defined is still there afterwards");
+                check(!s.hasGlobal("never_set_this"), "while what it did not is not");
+            }
+            {
+                // Two runs share one interpreter, which is the point of keeping it open.
+                put("first_pass = true\n");
+                Script s;
+                check(s.run(root), "a first script runs");
+                put("second_saw_first = (first_pass == true)\n");
+                check(s.run(root), "a second runs in the same interpreter");
+                check(s.hasGlobal("second_saw_first"),
+                      "and sees what the first one left behind");
+            }
+            {
+                put("print(\"unterminated\n");
+                Script s;
+                check(!s.run(root), "a script that does not parse fails without throwing");
+            }
+            {
+                put("error('boom')\n");
+                Script s;
+                check(!s.run(root), "and so does one that goes wrong while running");
+            }
+            std::filesystem::remove(path, ec); // leave the scratch dir as it was found
+        }
     }
 
     std::printf("\n%s\n", failures ? "FAILED" : "PASSED");

@@ -133,6 +133,9 @@ System packages (all found via CMake / pkg-config):
 - `glslc` (shader compiler, from shaderc)
 - PulseAudio (`libpulse-simple`) or PortAudio (**optional** — either enables the
   synthesized brake sound, PulseAudio preferred; the build is silent without both)
+- Lua 5.4 (**optional** — enables the dataset's `overlay.lua`; see *Scripting* below.
+  Found as `lua5.4` / `lua-5.4` / `lua54` via pkg-config. LuaJIT is deliberately not
+  accepted: it would answer to "some Lua" and quietly give 5.1 semantics)
 - CMake ≥ 3.20, a C++20 compiler
 
 ## Build
@@ -510,6 +513,41 @@ or takes down. **Only one shows at a time per station**: showing one stands the 
 wherever they were. That is the one place the "one person" argument really holds — unlike
 the flags, which sit in fixtures and can all be out at once. In the sim nothing is drawn
 at a position that is not showing, and nothing depends on the manned switch.
+
+## Scripting
+
+Everything in `overlay/` so far is a *fact*: a crossing is a line in a file, a TXP position
+is a line in a file. Some of what a railway needs is not a fact but a **rule** — a
+timetable, a train that runs itself, when a station is worked — and there was nowhere to
+write a rule down. `<dataset>/overlay/overlay.lua` is that place. The viewer runs it once at
+startup, after the world, the paths, the switches and every other overlay are loaded, so
+that when it is eventually given an API there is already something for it to look at.
+
+```lua
+print("God dag frå Nordlandsbanen!")
+```
+
+| | |
+|---|---|
+| no file | nothing said, like every other overlay |
+| ran | `[Script] ran overlay.lua` |
+| it failed | `[Script] overlay.lua: <the Lua message>`, and the simulator carries on |
+| file present, built without Lua | `script: overlay.lua present but built without Lua; not run` |
+
+A bad script does not stop the simulator: it is authored content, and authored content that
+does not resolve is reported and stepped over. But a script that is *never run* is told
+about — that is the one place this differs from the optional audio, where silence is a fair
+thing to leave unsaid.
+
+The interpreter **stays open** after the chunk returns, so what a script defines is still
+defined afterwards. That is what makes hooks possible later without a rewrite. The full
+standard library is loaded, `io` and `os` included: the script is in the reader's own
+dataset and written by them, so a sandbox would keep nobody out and would rule out the file
+work a scripted authoring task wants to do.
+
+Nothing of the simulator is exposed yet — no trains, no signals, no stations, no TXP
+network, and no `init`/`tick`. Those want designing against a real first script. The editor
+does not run scripts; the host is in the engine library so it can be given them later.
 
 ## Data format
 

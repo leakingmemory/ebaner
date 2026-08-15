@@ -17,6 +17,7 @@
 #include "PlatformMesh.h"
 #include "RoadMesh.h"
 #include "SignalMesh.h"
+#include "Script.h"
 #include "SignalPaths.h"
 #include <cassert>
 
@@ -903,6 +904,13 @@ int main(int argc, char** argv) {
     // Resolve each motor switch's locking set now that circuits + polys exist (from the
     // authored overlay, else the circuits the switch sits within). Gates remote throws.
     applySwitchLocks(switchNet, loadSwitchTypes(datasetRoot), circuits, polys);
+
+    // The dataset's own script, if it has one. Run here, after every authored overlay has
+    // been read and resolved: nothing below this point is world data, so when the script
+    // is eventually given something to look at, all of it already exists. The state is
+    // kept open for the life of the program - what a script defines has to stay defined.
+    Script script;
+    script.run(datasetRoot);
 
     // Squared planar distance from p to segment ab (for occupancy tests).
     auto pointSegDist2 = [](glm::vec2 p, glm::vec2 a, glm::vec2 b) {
@@ -2895,6 +2903,7 @@ int main(int argc, char** argv) {
     g_renderer = nullptr;
     g_audio = nullptr;
     audio.shutdown();
+    script.shutdown();
     glfwDestroyWindow(window);
     glfwTerminate();
     return EXIT_SUCCESS;
