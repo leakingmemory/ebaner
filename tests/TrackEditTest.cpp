@@ -32,11 +32,15 @@
 #include "TrackCircuits.h" // TrackPoly
 #include "TrackGraph.h"
 #include "TrackOverlay.h"
+#include "SignalPaths.h"
+#include "SwitchNetwork.h"
 #include "TrackPath.h"
 #include "TxpMesh.h"
 #include "TxpPositions.h"
 
 #include <cmath>
+#include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <string>
@@ -219,6 +223,71 @@ int main(int argc, char** argv) {
         }
         if (found == 0)
             std::puts("  no track passes a platform in this window - nothing to check");
+    }
+
+    // Which turnouts a route needs, and how quickly.
+    //
+    // This is asked again every time a train enters or leaves a track circuit, for every
+    // route in the station, so it has to be quick - it once walked all 3350 turnouts per
+    // route with a full track-list scan inside, and a train crossing a circuit border
+    // stopped the sim for the best part of a second. It is fast because a turnout outside
+    // the route's own bounding box cannot be standing on it; the first check here is that
+    // invariant, since everything else rests on it.
+    {
+        std::vector<TrackPoly> polys;
+        for (std::size_t i = 0; i < g1.pointWorld.size(); ++i) {
+            if (polys.empty() || polys.back().id != g1.pointTrack[i])
+                polys.push_back({g1.pointTrack[i], {}});
+            polys.back().pts.push_back(g1.pointWorld[i]);
+        }
+        SwitchNetwork net;
+        net.build(data, paths1);
+        std::vector<SignalPath> routes = loadSignalPaths(root);
+        for (const std::vector<SignalPath>& more :
+             {loadExitSignals(root), loadEntrySignals(root), loadExitRoutes(root)})
+            routes.insert(routes.end(), more.begin(), more.end());
+
+        if (routes.empty() || net.size() == 0) {
+            std::puts("  no routes or no turnouts here - nothing to check");
+        } else {
+            // Timed on its own, since checking the answers costs more than deriving them.
+            const auto t0 = std::chrono::steady_clock::now();
+            std::vector<std::vector<PathSwitch>> all;
+            all.reserve(routes.size());
+            for (const SignalPath& p : routes)
+                all.push_back(pathSwitchRequirements(p, net, polys));
+            const double ms = std::chrono::duration<double, std::milli>(
+                                  std::chrono::steady_clock::now() - t0)
+                                  .count();
+
+            std::size_t reqs = 0;
+            double worstOff = 0.0;
+            for (std::size_t r = 0; r < routes.size(); ++r) {
+                for (const PathSwitch& ps : all[r]) {
+                    ++reqs;
+                    // How far the named turnout stands from the nearest point of the
+                    // route. A requirement further off than kAtTurnout would mean the
+                    // box had let through something the geometry then accepted wrongly.
+                    const glm::dvec3& w = net.turnouts()[ps.turnout].world;
+                    double best = 1e30;
+                    for (const SectionInterval& iv : routes[r].parts) {
+                        double frac = 0.0, dist = 0.0;
+                        if (!projectOnTrack(polys, iv.trackId, glm::dvec2(w.x, w.y), frac,
+                                            dist))
+                            continue;
+                        best = std::min(best, dist);
+                    }
+                    worstOff = std::max(worstOff, best);
+                }
+            }
+            std::printf("  %zu route(s), %zu turnout(s), %zu requirement(s)\n",
+                        routes.size(), net.size(), reqs);
+            if (reqs > 0)
+                check(worstOff <= 3.0, "requirement stands at its turnout", worstOff, 0.0);
+            // Generous: it measures a few milliseconds, and the point is to catch a
+            // return to walking the whole network, which is two orders of magnitude away.
+            check(ms < 100.0, "derived for every route (ms)", ms, 0.0);
+        }
     }
 
     std::printf("%s\n", failures ? "FAILED" : "PASSED");

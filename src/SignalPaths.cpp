@@ -423,16 +423,67 @@ std::vector<PathSwitch> pathSwitchRequirements(const SignalPath& p, const Switch
                                                const std::vector<TrackPoly>& polys) {
     std::vector<PathSwitch> reqs;
     const std::vector<Turnout>& tos = net.turnouts();
+
+    // What each of the route's legs needs, worked out once. Every lookup here walks the
+    // whole track list, and there are thousands of turnouts to test below - doing this
+    // inside that loop is what made a train entering a circuit stall the sim for the best
+    // part of a second.
+    struct Leg {
+        const std::vector<glm::dvec3>* pts = nullptr; // the track's polyline, or null
+        double lo = 0.0, hi = 1.0;                    // the interval, ordered
+        double eps = 1e-6;                            // rounding margin at its own ends
+        glm::dvec3 endWorld{0.0};                     // where `to` lands, for case (a)
+        bool haveEnd = false;
+    };
+    std::vector<Leg> legs(p.parts.size());
+    // The box the route occupies. A turnout outside it, by more than the distance that
+    // counts as standing at one, cannot satisfy either test below - so it can be rejected
+    // before any of the expensive geometry. The box is over the surveyed points *inside*
+    // each interval as well as its two ends, since a polyline's extent is its vertices'
+    // and a curve may bulge well outside the chord between them.
+    double bx0 = 1e30, by0 = 1e30, bx1 = -1e30, by1 = -1e30;
+    auto cover = [&](const glm::dvec3& w) {
+        bx0 = std::min(bx0, w.x); bx1 = std::max(bx1, w.x);
+        by0 = std::min(by0, w.y); by1 = std::max(by1, w.y);
+    };
+    for (std::size_t k = 0; k < p.parts.size(); ++k) {
+        const SectionInterval& iv = p.parts[k];
+        Leg& leg = legs[k];
+        leg.lo = std::min(iv.from, iv.to);
+        leg.hi = std::max(iv.from, iv.to);
+        for (const TrackPoly& tp : polys)
+            if (tp.id == iv.trackId) { leg.pts = &tp.pts; break; }
+        if (!leg.pts || leg.pts->size() < 2) continue; // stale overlay: no such track
+        const double len = polyLength(*leg.pts);
+        leg.eps = len > 1.0 ? kEdgeSlack / len : 1e-6;
+        const glm::dvec3 a = fracToWorld(polys, iv.trackId, iv.from);
+        const glm::dvec3 b = fracToWorld(polys, iv.trackId, iv.to);
+        leg.endWorld = b;
+        leg.haveEnd = !(b.x == 0.0 && b.y == 0.0);
+        cover(a);
+        cover(b);
+        double acc = 0.0;
+        for (std::size_t j = 0; j < leg.pts->size(); ++j) {
+            if (j) acc += std::hypot((*leg.pts)[j].x - (*leg.pts)[j - 1].x,
+                                     (*leg.pts)[j].y - (*leg.pts)[j - 1].y);
+            const double f = len > 1e-9 ? acc / len : 0.0;
+            if (f > leg.lo && f < leg.hi) cover((*leg.pts)[j]);
+        }
+    }
+    if (bx0 > bx1) return reqs; // nothing locatable in the route at all
+    bx0 -= kAtTurnout; by0 -= kAtTurnout; bx1 += kAtTurnout; by1 += kAtTurnout;
+
     for (std::size_t i = 0; i < tos.size(); ++i) {
         if (tos[i].mainPath < 0) continue; // inert crossing: nothing to set
+        const glm::dvec3& tw = tos[i].world;
+        if (tw.x < bx0 || tw.x > bx1 || tw.y < by0 || tw.y > by1) continue; // not on the road
         bool needSet = false;
         SwitchState need = SwitchState::Straight;
         // (a) The route crosses from one track to another at this turnout: diverging if
         // either side is the branch, else it runs straight over a joint here.
         for (std::size_t k = 0; k + 1 < p.parts.size(); ++k) {
-            const glm::dvec3 w = fracToWorld(polys, p.parts[k].trackId, p.parts[k].to);
-            if (w.x == 0.0 && w.y == 0.0) continue;
-            if (planarDist(w, tos[i].world) > kAtTurnout) continue;
+            if (!legs[k].haveEnd) continue;
+            if (planarDist(legs[k].endWorld, tw) > kAtTurnout) continue;
             need = (p.parts[k].trackId == tos[i].sidingTrack ||
                     p.parts[k + 1].trackId == tos[i].sidingTrack)
                        ? SwitchState::Diverging
@@ -441,23 +492,19 @@ std::vector<PathSwitch> pathSwitchRequirements(const SignalPath& p, const Switch
         }
         // (b) Otherwise the route may run straight through the turnout inside one leg.
         if (!needSet) {
-            for (const SectionInterval& iv : p.parts) {
+            for (std::size_t k = 0; k < p.parts.size(); ++k) {
+                const Leg& leg = legs[k];
+                if (!leg.pts) continue;
                 double frac = 0.0, dist = 0.0;
-                if (!projectOnTrack(polys, iv.trackId,
-                                    glm::dvec2(tos[i].world.x, tos[i].world.y), frac, dist))
+                if (!projectOnTrack(polys, p.parts[k].trackId, glm::dvec2(tw.x, tw.y), frac,
+                                    dist))
                     continue;
                 if (dist > kAtTurnout) continue; // this leg doesn't reach the turnout
-                const double lo = std::min(iv.from, iv.to), hi = std::max(iv.from, iv.to);
                 // Only an interior crossing counts, so a route that merely ends at the
                 // turnout imposes no requirement. The margin has to stay well under a
                 // border-to-turnout spacing (which can be ~1 m), so it is only wide
                 // enough to absorb rounding, not to swallow a real crossing.
-                const std::vector<glm::dvec3>* pts = nullptr;
-                for (const TrackPoly& tp : polys)
-                    if (tp.id == iv.trackId) { pts = &tp.pts; break; }
-                const double len = pts ? polyLength(*pts) : 0.0;
-                const double eps = len > 1.0 ? kEdgeSlack / len : 1e-6;
-                if (frac > lo + eps && frac < hi - eps) {
+                if (frac > leg.lo + leg.eps && frac < leg.hi - leg.eps) {
                     need = SwitchState::Straight;
                     needSet = true;
                     break;
