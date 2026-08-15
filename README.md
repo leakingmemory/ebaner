@@ -341,6 +341,15 @@ authored at them yet — that is what makes it possible to go and author somethi
 next one. `EBANER_MAP=1` opens the traffic manager straight away, and `EBANER_MAP=<name>`
 opens it at a named station, which is how it is screenshotted headlessly.
 
+**Setting a route** (`R`) asks only that the road **beyond the signal** is clear. The
+run-up to it — the platform road the departure starts from — is where the train being
+cleared is standing, so a train there is the ordinary case and not a reason to refuse. It
+is the same division the release makes at the other end: only a circuit beyond the signal
+puts it back to danger, because running up to a signal must not cancel the authority the
+driver is about to act on. An entry signal's authority begins at its own mast, so all of
+its circuits are beyond it and the whole route must be clear — a train may not be let in to
+an occupied platform.
+
 **A distant on a main signal's own mast.** A distant signal (*forsignal*) normally stands
 out on the line on its own post, repeating what the first main signal ahead is showing. At
 a short station it hangs instead on the entry signal's mast, on an adapter that carries it
@@ -534,8 +543,10 @@ cannot **unman** — the sections either side would merge into one line carrying
 books, with nobody left to report the train arrived.
 
 `EBANER_TXP_OPEN=A,B,C` mans stations at startup through the network, and
-`EBANER_PANEL=1|dest|type` opens the panel, optionally at a dispatch step — the dispatcher's
-UI is otherwise reachable only by keypress and could not be checked at all.
+`EBANER_PANEL=1|dest|type|route` opens the station panel, optionally at a dispatch step, or
+the **R** route picker, and `EBANER_ROUTE=<n>` sets the worked station's nth route (as the
+picker lists it) at startup — the dispatcher's UI is otherwise reachable only by keypress
+and could not be checked at all.
 
 It is a chain, which is all a line worked by train orders needs: a station deals with the
 one either side and with nobody else. Two things it cannot express, both wanting an

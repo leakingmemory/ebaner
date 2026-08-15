@@ -1482,8 +1482,15 @@ int main(int argc, char** argv) {
         while (std::getline(is, one, ',')) if (!one.empty()) setManned(one, true);
     }
     if (const char* panel = std::getenv("EBANER_PANEL")) {
-        g_signalPick = true;
         const std::string p(panel);
+        // `route` is the other picker the map offers (R), which like the dispatcher's own
+        // panel is reachable only by keypress and so could not be looked at headlessly.
+        if (p == "route") {
+            g_routePick = true;
+            g_routePickSel = 0;
+        } else {
+            g_signalPick = true;
+        }
         if (p == "dest") g_dispatchStep = DispatchStep::PickDest;
         else if (p == "type") {
             g_dispatchStep = DispatchStep::PickType;
@@ -1659,8 +1666,17 @@ int main(int argc, char** argv) {
     auto exitRouteBlocked = [&](int ri) -> RouteBlock {
         if (mainCandidates[ri].placement < 0) return {"no signal", "no signal stands there"};
         const SignalPath& dep = mainCandidates[ri].departure;
+        // Only the road *beyond* the signal has to be clear. The run-up to it is where the
+        // train being cleared is standing, and refusing a departure on that account would
+        // refuse very nearly every departure anyone wanted to set. It is the same division
+        // the release below already makes: a circuit beyond the signal is the safety one,
+        // the approach is not.
+        //
+        // An entry signal's authority begins at its own mast, so all of its circuits are
+        // beyond it and this asks about the whole route - which is right, since a train
+        // may not be let in to a platform that is occupied.
         std::string occ;
-        for (int id : pathSections(dep, circuits))
+        for (int id : mainCandidates[ri].beyond)
             if (secOccupiedById(id)) occ += (occ.empty() ? "" : ", ") + secName(id);
         if (!occ.empty()) return {"occupied", "occupied: " + occ};
         // A circuit already held by another departure is the conflicting-route case: two
@@ -1980,6 +1996,19 @@ int main(int argc, char** argv) {
                                            static_cast<int>(rs.size()) - 1),
                    fbw, fbh);
     };
+
+    // Set one of the worked station's routes at startup, named by its place in the picker
+    // (1-based, as it reads on screen). What setting a route does - the switches it moves,
+    // the dwarfs it opens, the signal it clears - is otherwise reachable only by keypress,
+    // so none of it could be looked at headlessly.
+    if (const char* pick = std::getenv("EBANER_ROUTE")) {
+        const std::vector<int> rs = stationRoutes();
+        const int n = std::atoi(pick) - 1;
+        if (n >= 0 && n < static_cast<int>(rs.size())) trySetExitRoute(rs[n]);
+        else
+            std::fprintf(stderr, "[Main] EBANER_ROUTE=%s: this station offers %zu route(s)\n",
+                         pick, rs.size());
+    }
 
     // Open the audio device now that the heavy startup work is done, so the audio
     // thread isn't starved (which causes ALSA under-runs) during loading.

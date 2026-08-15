@@ -159,6 +159,9 @@ private:
                               const std::vector<std::uint32_t>& indices,
                               std::uint32_t glassFirstIndex);
     void createTextResources();
+    // (Re)allocate the per-frame overlay-text buffers to hold `bytes`. Called at startup
+    // and again whenever the overlay outgrows them - see setOverlayText.
+    void allocateTextBuffers(VkDeviceSize bytes);
     void createTextPipeline();
 
 public:

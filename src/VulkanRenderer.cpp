@@ -1518,10 +1518,19 @@ void VulkanRenderer::createTextPipeline() {
     vkDestroyShaderModule(device_, frag, nullptr);
 }
 
-void VulkanRenderer::createTextResources() {
-    createTextPipeline();
-    // Fixed-capacity host-visible mapped vertex buffer per in-flight frame.
-    textCapacityBytes_ = sizeof(TextVertex) * 60000u;
+void VulkanRenderer::allocateTextBuffers(VkDeviceSize bytes) {
+    // Host-visible and permanently mapped, one per in-flight frame. Anything already
+    // recorded is still reading the old buffers, so wait before pulling them out.
+    if (textCapacityBytes_ > 0) vkDeviceWaitIdle(device_);
+    for (int i = 0; i < kMaxFramesInFlight; ++i) {
+        if (textVertexMemories_[i]) vkUnmapMemory(device_, textVertexMemories_[i]);
+        vkDestroyBuffer(device_, textVertexBuffers_[i], nullptr);
+        vkFreeMemory(device_, textVertexMemories_[i], nullptr);
+        textVertexBuffers_[i] = VK_NULL_HANDLE;
+        textVertexMemories_[i] = VK_NULL_HANDLE;
+        textVertexMapped_[i] = nullptr;
+    }
+    textCapacityBytes_ = bytes;
     for (int i = 0; i < kMaxFramesInFlight; ++i) {
         createBuffer(textCapacityBytes_, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
@@ -1532,11 +1541,30 @@ void VulkanRenderer::createTextResources() {
     }
 }
 
+void VulkanRenderer::createTextResources() {
+    createTextPipeline();
+    // Enough for an ordinary cab HUD; the traffic-manager map wants several times this,
+    // and grows it on the frame it first needs to.
+    allocateTextBuffers(sizeof(TextVertex) * 60000u);
+}
+
 void VulkanRenderer::setOverlayText(const std::vector<TextVertex>& vertices) {
     pendingTextVertices_ = vertices;
-    const VkDeviceSize maxVerts = textCapacityBytes_ / sizeof(TextVertex);
-    if (pendingTextVertices_.size() > maxVerts)
-        pendingTextVertices_.resize(maxVerts);
+    // The overlay is built back to front, so running out of room drops what goes over the
+    // top - the menu the operator is reading - and drops it mid-word rather than visibly.
+    // How much text there is depends on how much has been authored around the station
+    // being worked, which is not something a fixed capacity can be picked for, so the
+    // buffer grows to whatever the frame asks for instead. Doubling, so an overlay that
+    // creeps upward does not reallocate every frame.
+    const VkDeviceSize need = sizeof(TextVertex) * pendingTextVertices_.size();
+    if (need > textCapacityBytes_) {
+        VkDeviceSize want = textCapacityBytes_;
+        while (want < need) want *= 2;
+        std::printf("[Renderer] overlay text: %zu vertices; buffer grown to %llu\n",
+                    pendingTextVertices_.size(),
+                    static_cast<unsigned long long>(want / sizeof(TextVertex)));
+        allocateTextBuffers(want);
+    }
 }
 
 void VulkanRenderer::createCommandBuffers() {
