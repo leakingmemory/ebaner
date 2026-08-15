@@ -1523,7 +1523,7 @@ int main(int argc, char** argv) {
          prevG = false, prevS = false, prevUp = false, prevDown = false,
          prevJ = false, prevN = false, prevR = false, prevK = false, prevC = false,
          prevP = false, prevF2 = false, prevMR = false, prevM = false,
-         prevV = false, prevB = false, prevT = false, prevF = false;
+         prevV = false, prevB = false, prevT = false, prevF = false, prev2 = false;
     bool prevNameEnter = false, prevNameEsc = false, prevNameBs = false;
     bool prevMenuEnter = false, prevMenuUp = false, prevMenuDown = false;
     const std::vector<std::string> kMenuItems = {"Geometry edit", "Track circuits",
@@ -2036,6 +2036,7 @@ int main(int argc, char** argv) {
         const bool kB = glfwGetKey(window, GLFW_KEY_B) == GLFW_PRESS;
         const bool kT = glfwGetKey(window, GLFW_KEY_T) == GLFW_PRESS;
         const bool kF = glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS;
+        const bool k2 = glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS;
         // Save is Ctrl+S (plain S is the backward-movement key).
         const bool kSave = ctrl && glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS;
         const bool kLeft = glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS;
@@ -2410,6 +2411,50 @@ int main(int argc, char** argv) {
                 pathMsgUntil = glfwGetTime() + 3.0;
                 rebuildOverlay();
             }
+            // How a mast is built: whether a distant hangs on it, and whether its head has
+            // two lamps or three. Both are facts about the mast rather than about one road
+            // into the station, so both are set on every record sharing this signal's start
+            // border - which is exactly the set that makes up the one signal.
+            auto toggleMastFlag = [&](bool SignalPath::*flag, const char* on,
+                                      const char* off, char key) {
+                // `selRoute` is the signal's own record in both modes - in exit mode that
+                // is the exit signal, never the approach route, which starts inside the
+                // station where no mast stands.
+                const int sel = selRoute;
+                if (sel < 0 || sel >= static_cast<int>(routes.size())) {
+                    pathMsg = std::string(exitMode ? "right-click an exit signal first, then "
+                                                   : "right-click an entry route first, then ") +
+                              key;
+                } else {
+                    const Border& b = routes[sel].start;
+                    const bool want = !(routes[sel].*flag);
+                    int touched = 0;
+                    for (SignalPath& r : routes) {
+                        if (r.start.trackId != b.trackId ||
+                            std::abs(r.start.frac - b.frac) > 1e-9)
+                            continue;
+                        r.*flag = want;
+                        ++touched;
+                    }
+                    routesDirty = true;
+                    pathMsg = want ? on : off;
+                    std::printf("[trackedit] %s %d -> %s (%d record(s)) (Ctrl+S to save)\n",
+                                exitMode ? "exit signal" : "entry signal", routes[sel].id,
+                                want ? on : off, touched);
+                    rebuildStructs(); // the mast changes shape
+                }
+                pathMsgUntil = glfwGetTime() + 3.0;
+                rebuildOverlay();
+            };
+            // F: a distant (forsignal) on the mast, showing what the next main signal ahead
+            // is displaying and switched off entirely while this one is at danger.
+            if (kF && !prevF && (exitMode || entryMode))
+                toggleMastFlag(&SignalPath::distant, "distant on the mast", "no distant", 'F');
+            // 2: two lamps on the head rather than three - red over green, the head a
+            // siding's own signal carries. It changes nothing but what the mast can show:
+            // one green, lit for any clearance.
+            if (k2 && !prev2 && (exitMode || entryMode))
+                toggleMastFlag(&SignalPath::twoLamp, "two-lamp head", "three-lamp head", '2');
             // X: cancel whatever is in progress, else delete the selected thing.
             if (kX && !prevX) {
                 if (armed() || pathStart >= 0) {
@@ -2661,6 +2706,7 @@ int main(int argc, char** argv) {
         prevEnter = kEnter; prevL = kL; prevX = kX; prevG = kG; prevS = kSave;
         prevJ = kJ; prevN = kN; prevR = kR; prevK = kK; prevC = kC; prevP = kP;
         prevF2 = kF2; prevM = kM; prevV = kV; prevB = kB; prevT = kT; prevF = kF;
+        prev2 = k2;
 
         // Click to select (cursor freed only). Ctrl+click toggles for multi-select;
         // plain click selects one; clicking empty space clears.
@@ -3433,6 +3479,12 @@ int main(int argc, char** argv) {
             appendText(tv, buf, x, 40.0f + 4 * lh, sc,
                        selR ? glm::vec3(1.0f, 0.9f, 0.3f) : glm::vec3(0.9f, 0.85f, 0.7f),
                        fbw, fbh);
+            // How a mast is built, in the width the panel has for it: the head it carries,
+            // and the distant if there is one.
+            auto mastBuild = [](const SignalPath& p) {
+                return std::string(p.twoLamp ? "2-lamp" : "3-lamp") +
+                       (p.distant ? " +distant" : "");
+            };
             // Exit mode says what the selection *is*, since a signal and a route look alike
             // in a name alone: a signal plus how many routes reach it, or a route plus the
             // signal it serves and the authority it grants.
@@ -3450,7 +3502,8 @@ int main(int argc, char** argv) {
                     int lead = 0;
                     for (const SignalPath& r : exitRoutes)
                         if (r.exitId == selR->id) ++lead;
-                    std::snprintf(buf, sizeof(buf), "SIGNAL   %d route(s) lead here", lead);
+                    std::snprintf(buf, sizeof(buf), "SIGNAL   %d route(s) lead here   %s",
+                                  lead, mastBuild(*selR).c_str());
                 } else {
                     std::snprintf(buf, sizeof(buf),
                                   "right-click a signal or a route to select it");
@@ -3462,10 +3515,12 @@ int main(int argc, char** argv) {
             // does - it is the same question, just answered by one record instead of two.
             if (entryMode) {
                 if (selR)
-                    std::snprintf(buf, sizeof(buf), "ROUTE   type %s   %zu circuit(s)",
-                                  selR->type == RouteType::C2 ? "C2 (deviation)"
-                                                              : "C1 (no restriction)",
-                                  pathSections(*selR, tc).size());
+                    // The short C1/C2 here, not the spelt-out wording the exit routes get:
+                    // this line also has to carry how the mast is built, and the panel is
+                    // only about 56 characters wide. T says the long form when it toggles.
+                    std::snprintf(buf, sizeof(buf), "ROUTE  type %s  %zu circuit(s)  %s",
+                                  selR->type == RouteType::C2 ? "C2" : "C1",
+                                  pathSections(*selR, tc).size(), mastBuild(*selR).c_str());
                 else
                     std::snprintf(buf, sizeof(buf),
                                   "several routes from one border are one signal");
@@ -3510,7 +3565,7 @@ int main(int argc, char** argv) {
             } else if (entryMode) {
                 appendText(tv, "ENTRY SIGNALS: click the signal border, then the",
                            x, 40.0f + hl * lh, sc, hintCol, fbw, fbh);
-                appendText(tv, "destination   T=C1/C2  V=via  F2=rename  X=cancel/del",
+                appendText(tv, "destination  T=C1/C2  F=distant  2=head  V=via  F2/X",
                            x, 40.0f + (hl + 1) * lh, sc, hintCol, fbw, fbh);
             } else if (!exitMode) {
                 appendText(tv, "SIGNAL PATHS: click the start border, then the end",
@@ -3522,7 +3577,7 @@ int main(int argc, char** argv) {
                            x, 40.0f + hl * lh, sc, hintCol, fbw, fbh);
                 const char* second =
                     selExitRoute >= 0 ? "T=C1/C2  B=another route  F2=rename  X=delete"
-                    : selExit >= 0    ? "B=add a route up to this signal  F2/X  V=via"
+                    : selExit >= 0    ? "B=add route  F=distant  2=head  F2/X  V=via"
                                       : "ROUTE UP TO A SIGNAL: right-click it, then B";
                 appendText(tv, second, x, 40.0f + (hl + 1) * lh, sc,
                            selR ? glm::vec3(1.0f, 0.9f, 0.5f) : hintCol, fbw, fbh);

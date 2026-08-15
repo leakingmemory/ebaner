@@ -48,6 +48,15 @@ struct SignalPath {
     // --- exit routes only (left at these defaults by mini paths and exit signals) ---
     int exitId = 0;                  // >0: the exit signal this route leads up to
     RouteType type = RouteType::C1;  // the authority it grants
+    // --- main signals only (entry and exit signals) ---
+    // A distant hangs on this signal's mast, repeating the next main signal ahead. It is a
+    // fact about the *mast*, not about this one route: several records sharing a start
+    // border are one signal, so any of them carrying the flag means the mast carries the
+    // distant. The editor sets it on all of them at once; a file edited by hand need not.
+    bool distant = false;
+    // This signal is built with two lamps rather than three - red over green, the head a
+    // siding's own signal carries. A fact about the mast in the same way `distant` is.
+    bool twoLamp = false;
 };
 
 // --- Moving a border (see canMoveBorder/moveBorderFrac in TrackCircuits.h) ---
@@ -156,6 +165,16 @@ struct SignalPlacement {
     bool withDwarf = false;
     SignalAspect dwarfAspect = SignalAspect::Stop;
     std::vector<int> dwarfPaths; // the mini paths of the dwarf sharing this pole
+    // A main signal whose routes are flagged `distant` carries one on its own mast, on an
+    // adapter in front of and below the main head. Its indication is kept apart from the
+    // main's for the same reason the dwarf's is: two signals, one pole.
+    bool withDistant = false;
+    SignalAspect distantAspect = SignalAspect::Stop;
+    // Two lamps on the head instead of three - red over green - which is what a siding's
+    // own signal carries. It changes nothing but the drawing: the aspect here is still
+    // whatever the interlocking granted, and a head with one green lights it for any
+    // clearance, C1 and C2 alike, because it has no way to tell them apart.
+    bool twoLamp = false;
 };
 
 // Where a route begins and which way it sets off: the world point of its first interval's
@@ -227,9 +246,15 @@ int firstMainSignalAhead(const std::vector<TrackPoly>& polys, const TrackJunctio
                          std::uint32_t trackId, double frac, int dir, double maxM,
                          std::vector<SectionInterval>* walked = nullptr);
 
-// Point every distant placement at what it can see. Nothing reachable reads as Stop - the
-// same warning as a main at danger, which is the whole point of the rule. Returns true if
-// any aspect changed. Call it after the main aspects have settled.
+// Point every distant at what it can see - the free-standing ones out on the line, and the
+// ones hanging on a main signal's mast. Nothing reachable reads as Stop - the same warning
+// as a main at danger, which is the whole point of the rule. Returns true if any aspect
+// changed. Call it after the main aspects have settled.
+//
+// A mounted one is switched off entirely (Dark) whenever the main under it is at danger:
+// there is nothing to warn about ahead of a signal you have to stop at. Otherwise it looks
+// forward from its own mast exactly as a free-standing one does, and steps over the main it
+// hangs on - that signal stands at the point the walk starts from, which the walk excludes.
 bool updateDistantAspects(std::vector<SignalPlacement>& placements,
                           const std::vector<TrackPoly>& polys,
                           const TrackJunctions& junctions, const SwitchNetwork& net,

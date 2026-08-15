@@ -24,6 +24,7 @@
 #include "TxpNetwork.h"
 #include "TxpMesh.h"
 #include "Script.h"
+#include "SignalPaths.h"
 #include "TerrainData.h"
 #include "TrackOverlay.h"
 #include "TrackPath.h"
@@ -1056,6 +1057,143 @@ int main(int argc, char** argv) {
         net.cancelDispatch("Bodø", "Fauske");
         check(net.open(g, "Oteråga", {}).accepted,
               "withdrawn, the station opens as it would have");
+    }
+
+    // A distant on a main signal's own mast, rather than out on the line on its own post.
+    // Two mains on one straight track, the first carrying the distant: what it shows is
+    // decided by the second, and by whether the first is at danger.
+    std::puts("\nA distant hanging on a main signal's mast:");
+    {
+        std::vector<TrackPoly> polys(1);
+        polys[0].id = 1;
+        for (int i = 0; i <= 20; ++i) polys[0].pts.push_back({i * 100.0, 0.0, 0.0}); // 2 km
+        const TrackJunctions junctions; // one track, so nothing joins it
+        const SwitchNetwork net;        // and no turnout the walk has to resolve
+
+        auto mast = [&](double frac, int dir) {
+            SignalPlacement p;
+            p.kind = SignalKind::Entry;
+            p.at = {1, frac};
+            p.forward = trackTangent(polys, 1, frac, dir);
+            p.world = fracToWorld(polys, 1, frac);
+            return p;
+        };
+        std::vector<SignalPlacement> ps{mast(0.1, +1), mast(0.5, +1)};
+        ps[0].withDistant = true; // the mast with the distant; the other is 800 m ahead
+        auto settle = [&](SignalAspect here, SignalAspect ahead) {
+            ps[0].aspect = here;
+            ps[1].aspect = ahead;
+            updateDistantAspects(ps, polys, junctions, net);
+            return ps[0].distantAspect;
+        };
+
+        check(settle(SignalAspect::Stop, SignalAspect::Clear) == SignalAspect::Dark,
+              "switched off entirely while its own main is at danger");
+        check(settle(SignalAspect::Clear, SignalAspect::Clear) == SignalAspect::Clear,
+              "expect clear once the main lets you by and the road ahead is clear");
+        check(settle(SignalAspect::Clear, SignalAspect::ClearReduced) ==
+                  SignalAspect::ClearReduced,
+              "and expect a clear over a deviation when that is what is ahead");
+        check(settle(SignalAspect::Clear, SignalAspect::Stop) == SignalAspect::Stop,
+              "expect stop when the signal ahead is at danger");
+        check(ps[0].aspect == SignalAspect::Clear,
+              "none of which touches what the main under it is showing");
+
+        // It must not read the signal it hangs on - that would have it repeat the very
+        // aspect the driver is looking at, and a clear main would show expect-clear at a
+        // station with nothing beyond it.
+        std::vector<SignalPlacement> alone{ps[0]};
+        alone[0].aspect = SignalAspect::Clear;
+        updateDistantAspects(alone, polys, junctions, net);
+        check(alone[0].distantAspect == SignalAspect::Stop,
+              "a mast with nothing ahead of it warns of a stop, and never reads itself");
+
+        // A main facing the other way protects opposing moves; the walk steps over its
+        // back, exactly as it does for a distant on its own post.
+        std::vector<SignalPlacement> facing{mast(0.1, +1), mast(0.5, -1)};
+        facing[0].withDistant = true;
+        facing[0].aspect = SignalAspect::Clear;
+        facing[1].aspect = SignalAspect::Clear;
+        updateDistantAspects(facing, polys, junctions, net);
+        check(facing[0].distantAspect == SignalAspect::Stop,
+              "a signal ahead facing the other way is not what it repeats");
+    }
+
+    // How a mast is built is a fact about the mast, and several route records sharing a
+    // start border are one mast - so each flag has to survive the file and land on the
+    // signal they make up.
+    if (argc > 1) {
+        std::puts("\nSaying in the overlay how a mast is built:");
+        const std::string root = argv[1];
+        std::error_code ec;
+        std::filesystem::create_directories(root + "/overlay", ec);
+
+        std::vector<TrackPoly> polys(1);
+        polys[0].id = 1;
+        for (int i = 0; i <= 20; ++i) polys[0].pts.push_back({i * 100.0, 0.0, 0.0});
+
+        auto route = [](int id, double from, double to) {
+            SignalPath p;
+            p.id = id;
+            p.name = "R" + std::to_string(id);
+            p.start = {1, from};
+            p.end = {1, to};
+            p.parts.push_back({1, from, to});
+            return p;
+        };
+        std::vector<SignalPath> es{route(1, 0.1, 0.6), route(2, 0.1, 0.7),
+                                   route(3, 0.9, 0.6)};
+        es[1].distant = true; // one of the two sharing the border says so; that is enough
+        check(writeEntrySignals(root, es), "the entry signals write");
+
+        const std::vector<SignalPath> back = loadEntrySignals(root);
+        check(back.size() == 3, "and read back");
+        check(back.size() == 3 && !back[0].distant && back[1].distant && !back[2].distant,
+              "with the flag on the record that carried it and no other");
+
+        const std::vector<SignalPlacement> ps =
+            signalPlacements(back, polys, SignalKind::Entry);
+        check(ps.size() == 2, "two borders, so two masts");
+        if (ps.size() == 2) {
+            check(ps[0].paths.size() == 2 && ps[0].withDistant,
+                  "the mast the two routes share carries the distant");
+            check(!ps[1].withDistant, "and the one at the other end does not");
+        }
+
+        // The two-lamp head is the other thing a record can say about its mast, and the two
+        // are independent: a mast may carry either, both or neither. Through the exit
+        // signals this time, since both files take both keywords.
+        {
+            std::vector<SignalPath> xs{route(1, 0.1, 0.6), route(2, 0.1, 0.7),
+                                       route(3, 0.9, 0.6)};
+            xs[0].twoLamp = true;  // the shared mast: two lamps, no distant
+            xs[2].twoLamp = true;  // the far mast: two lamps and a distant
+            xs[2].distant = true;
+            check(writeExitSignals(root, xs), "the exit signals write");
+            const std::vector<SignalPath> r = loadExitSignals(root);
+            check(r.size() == 3 && r[0].twoLamp && !r[1].twoLamp && r[2].twoLamp,
+                  "the head flag comes back on the records that carried it");
+            check(r.size() == 3 && !r[0].distant && r[2].distant,
+                  "and the two flags do not stand in for one another");
+            const std::vector<SignalPlacement> xp =
+                signalPlacements(r, polys, SignalKind::Exit);
+            check(xp.size() == 2 && xp[0].twoLamp && !xp[0].withDistant,
+                  "a mast with two lamps and no distant");
+            check(xp.size() == 2 && xp[1].twoLamp && xp[1].withDistant,
+                  "and one with both");
+            std::filesystem::remove(root + "/overlay/exit-signals.txt", ec);
+        }
+
+        // A file written before the keywords existed has to go on loading unchanged.
+        {
+            std::ofstream f(root + "/overlay/entry-signals.txt", std::ios::trunc);
+            f << "entry 9 \"OLD\" 1:0.2 1:0.8 type C2 1:0.2:0.8\n";
+        }
+        const std::vector<SignalPath> old = loadEntrySignals(root);
+        check(old.size() == 1 && !old[0].distant && !old[0].twoLamp &&
+                  old[0].type == RouteType::C2,
+              "a record written before the keywords loads, without either");
+        std::filesystem::remove(root + "/overlay/entry-signals.txt", ec);
     }
 
     // The dataset's own script. What is checked here is the host, not any API: that a

@@ -341,6 +341,42 @@ authored at them yet — that is what makes it possible to go and author somethi
 next one. `EBANER_MAP=1` opens the traffic manager straight away, and `EBANER_MAP=<name>`
 opens it at a named station, which is how it is screenshotted headlessly.
 
+**A distant on a main signal's own mast.** A distant signal (*forsignal*) normally stands
+out on the line on its own post, repeating what the first main signal ahead is showing. At
+a short station it hangs instead on the entry signal's mast, on an adapter that carries it
+**0.20 m in front of the main head and 0.40 m below it** — one pole, two separate signals.
+An entry signal built that way repeats the exit signal for whichever road the points are
+set for, so a driver reads both the authority to enter and what waits at the far end.
+
+Select a main signal in **Entry signals** or **Exit signals** mode and press **F**. It is a
+fact about the *mast*, not about one road into the station: several route records sharing a
+start border are one signal, so the flag goes on all of them at once, written as a `distant`
+keyword on each line of `overlay/entry-signals.txt` or `overlay/exit-signals.txt`.
+
+**A two-lamp head for the siding roads.** The main signal's head carries three lamps — top
+green, middle red, bottom green — and says all three things it can: stop, proceed over a
+deviation (C2, the upper green alone), proceed with no restriction (C1, both greens). A
+siding with its own signal does not get one. Its mast carries **two lamps, red over
+green**: stop, or go.
+
+Press **2** on a selected signal, in either mode; it is written as a `twolamp` keyword and
+set across the mast exactly as `distant` is. Everything else about the signal is unchanged —
+same mast, same routes, same interlocking, and it may still share a pole with a dwarf or
+carry a distant.
+
+It does not touch what a route authorises. A C1 route over such a mast stays C1 wherever it
+is named; the head simply lights its one green for **any** clearance, C1 and C2 alike,
+because it has no second lamp to tell them apart. You would not normally put one where a C1
+route runs, but nothing stops you.
+
+What it shows is the ordinary distant rule — walk forward along the road the points are
+actually set for and repeat the first main signal facing the same way — with one addition:
+**it is switched off entirely while the main under it is at danger.** There is nothing to
+warn about ahead of a signal you have to stop at, and a lit repeat under a red would be
+read as permission the main is not giving. It never reads the signal it hangs on, and where
+there is no main signal ahead within reach it warns of a stop, which is what a station with
+no exit signal means for a train being let into it.
+
 **Level crossings.** Secured by lights, and optionally by half-barriers too. Pick **Level
 crossings** from the Esc menu and **click a point on any track**; **right-click** selects,
 **B** toggles the variant between lights alone and lights with barriers, **F2** names,

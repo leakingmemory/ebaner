@@ -138,6 +138,14 @@ std::vector<SignalPath> loadRoutes(const std::string& file, const char* keyword)
                 if (is >> tt) p.type = tt == "C2" ? RouteType::C2 : RouteType::C1;
                 continue;
             }
+            if (tok == "distant") { // main signals: a distant hangs on this mast
+                p.distant = true;
+                continue;
+            }
+            if (tok == "twolamp") { // main signals: red over green, no second green
+                p.twoLamp = true;
+                continue;
+            }
             const auto c1 = tok.find(':');
             const auto c2 = tok.rfind(':');
             if (c1 == std::string::npos || c2 == c1) continue;
@@ -154,17 +162,23 @@ std::vector<SignalPath> loadRoutes(const std::string& file, const char* keyword)
 }
 
 // `withType` writes the C1/C2 token: a main-signal route always carries one, while a mini
-// path has no such thing to say.
+// path has no such thing to say. `withMastFlags` is the same for the keywords that describe
+// how a mast is *built* - the distant hanging on it and the two-lamp head - which only a
+// main *signal* can have: not a mini path, and not an exit route, whose start is inside the
+// station where no mast stands.
 bool writeRoutes(const std::string& datasetRoot, const std::string& file,
                  const char* keyword, const char* header,
-                 const std::vector<SignalPath>& routes, bool withType = false) {
+                 const std::vector<SignalPath>& routes, bool withType = false,
+                 bool withMastFlags = false) {
     std::error_code ec;
     fs::create_directories(datasetRoot + "/overlay", ec);
     std::ofstream f(file, std::ios::trunc);
     if (!f) return false;
     f << header << "# " << keyword
       << " <id> \"<name>\" <startTrackHex>:<frac> <endTrackHex>:<frac> "
-         "[signal <exitId> type <C1|C2>] [via <trackHex>:<frac>]... "
+         "[signal <exitId> type <C1|C2>] "
+      << (withMastFlags ? "[distant] [twolamp] " : "")
+      << "[via <trackHex>:<frac>]... "
          "<trackHex>:<from>:<to> ...\n";
     for (const SignalPath& p : routes) {
         f << keyword << ' ' << p.id << ' ' << quoteName(p.name) << ' '
@@ -175,6 +189,8 @@ bool writeRoutes(const std::string& datasetRoot, const std::string& file,
         // C1 default.
         if (p.exitId != 0) f << " signal " << p.exitId;
         if (withType) f << " type " << (p.type == RouteType::C2 ? "C2" : "C1");
+        if (withMastFlags && p.distant) f << " distant";
+        if (withMastFlags && p.twoLamp) f << " twolamp";
         for (const Border& v : p.vias)
             f << " via " << std::hex << v.trackId << std::dec << ':' << v.frac;
         for (const SectionInterval& iv : p.parts)
@@ -218,7 +234,7 @@ bool writeEntrySignals(const std::string& datasetRoot,
                        "# ebaner entry signals (main signals). The signal stands on the start\n"
                        "# border and the record is the whole route into the station; several\n"
                        "# sharing a start border are one signal governing them all.\n",
-                       entries, true);
+                       entries, true, true);
 }
 
 std::vector<SignalPath> loadExitSignals(const std::string& datasetRoot) {
@@ -230,7 +246,7 @@ bool writeExitSignals(const std::string& datasetRoot,
     return writeRoutes(datasetRoot, exitsFile(datasetRoot), "exit",
                        "# ebaner exit signals (main signals). The signal stands on the start\n"
                        "# border and protects the route to the destination border.\n",
-                       exits);
+                       exits, false, true);
 }
 
 bool routeStartPose(const SignalPath& p, const std::vector<TrackPoly>& polys,
@@ -348,6 +364,10 @@ std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& pat
         const auto it = seen.find(key);
         if (it != seen.end()) {
             out[it->second].paths.push_back(static_cast<int>(pi));
+            // A mast is built one way or the other, so any one record saying how settles it
+            // for the signal all of them share.
+            if (p.distant) out[it->second].withDistant = true;
+            if (p.twoLamp) out[it->second].twoLamp = true;
             continue;
         }
         seen.emplace(key, static_cast<int>(out.size()));
@@ -356,6 +376,8 @@ std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& pat
         sp.world = a;
         sp.forward = fwd;
         sp.at = p.start;
+        sp.withDistant = p.distant;
+        sp.twoLamp = p.twoLamp;
         sp.paths.push_back(static_cast<int>(pi));
         out.push_back(std::move(sp));
     }
@@ -655,17 +677,26 @@ bool updateDistantAspects(std::vector<SignalPlacement>& placements,
                           const TrackJunctions& junctions, const SwitchNetwork& net,
                           double maxM) {
     bool changed = false;
-    for (SignalPlacement& sp : placements) {
-        if (sp.kind != SignalKind::Distant) continue;
-        const int dir = glm::dot(sp.forward, trackTangent(polys, sp.at.trackId, sp.at.frac, +1))
-                                >= 0.0
-                            ? +1
-                            : -1;
-        const int hit = firstMainSignalAhead(polys, junctions, net, placements, sp.at.trackId,
-                                             sp.at.frac, dir, maxM);
-        // Nothing reachable warns exactly as a signal at danger does.
-        const SignalAspect want = hit < 0 ? SignalAspect::Stop : placements[hit].aspect;
-        if (sp.aspect != want) { sp.aspect = want; changed = true; }
+    for (std::size_t k = 0; k < placements.size(); ++k) {
+        SignalPlacement& sp = placements[k];
+        const bool onItsOwnPost = sp.kind == SignalKind::Distant;
+        if (!onItsOwnPost && !sp.withDistant) continue;
+        // A distant on a main's mast goes out with that main: under a signal at danger
+        // there is nothing ahead worth warning about, and a lit repeat would be read as
+        // permission the main is not giving.
+        SignalAspect want = SignalAspect::Dark;
+        if (onItsOwnPost || sp.aspect != SignalAspect::Stop) {
+            const int dir =
+                glm::dot(sp.forward, trackTangent(polys, sp.at.trackId, sp.at.frac, +1)) >= 0.0
+                    ? +1
+                    : -1;
+            const int hit = firstMainSignalAhead(polys, junctions, net, placements,
+                                                 sp.at.trackId, sp.at.frac, dir, maxM);
+            // Nothing reachable warns exactly as a signal at danger does.
+            want = hit < 0 ? SignalAspect::Stop : placements[hit].aspect;
+        }
+        SignalAspect& shows = onItsOwnPost ? sp.aspect : sp.distantAspect;
+        if (shows != want) { shows = want; changed = true; }
     }
     return changed;
 }
