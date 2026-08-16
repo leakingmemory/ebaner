@@ -13,6 +13,7 @@
 
 #pragma once
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -235,11 +236,24 @@ RouteType defaultRouteType(const SignalPath& route, const SwitchNetwork& net,
 // signal rather than by running out of range.
 inline constexpr double kDistantReach = 4000.0; // m
 
-// Walk forward from a point, taking each turnout the way it is *currently* set, and report
-// the first main signal facing the same way within `maxM` (an index into `placements`, else
-// -1). Junctions where the switches cannot say which way the road lies end the walk: if the
-// interlocking does not know, a distant promising a clear ahead would be lying.
-// `walked` optionally collects the road taken, so the editor can draw what a signal sees.
+// Walk the road ahead, taking each turnout the way it is *currently* set.
+//
+// `onSpan(track, from, to, dir)` is handed each stretch traversed, in order, and returns
+// true to stop the walk - it has found whatever it was looking for. The walk also stops at
+// `maxM`, at a dead end, and at any junction where the switches cannot say which way the
+// road lies: if the interlocking does not know, nothing reading down the line may guess.
+//
+// Two quite different questions are asked through this - which signal a distant repeats,
+// and which road of a station a crossing's repeat is warning about - and the part they
+// share is the awkward part: which leg of a turnout is the one the points are set to.
+using WalkSpan = std::function<bool(std::uint32_t track, double from, double to, int dir)>;
+void walkAhead(const std::vector<TrackPoly>& polys, const TrackJunctions& junctions,
+               const SwitchNetwork& net, std::uint32_t trackId, double frac, int dir,
+               double maxM, const WalkSpan& onSpan);
+
+// The first main signal facing the same way within `maxM` (an index into `placements`, else
+// -1). `walked` optionally collects the road taken, so the editor can draw what a signal
+// sees.
 int firstMainSignalAhead(const std::vector<TrackPoly>& polys, const TrackJunctions& junctions,
                          const SwitchNetwork& net,
                          const std::vector<SignalPlacement>& placements,
