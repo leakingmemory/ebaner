@@ -344,6 +344,16 @@ bool writeDistantSignals(const std::string& datasetRoot,
     return static_cast<bool>(f);
 }
 
+bool signalGivesAuthority(const SignalPlacement& sp) {
+    auto proceed = [](SignalAspect a) {
+        return a == SignalAspect::Clear || a == SignalAspect::ClearReduced;
+    };
+    if (proceed(sp.aspect)) return true;
+    // A dwarf on the same pole is a separate signal with a separate authority: a shunt
+    // move over the same rails is authorised by the dwarf whatever the main head shows.
+    return sp.withDwarf && proceed(sp.dwarfAspect);
+}
+
 std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& paths,
                                               const std::vector<TrackPoly>& polys,
                                               SignalKind kind) {

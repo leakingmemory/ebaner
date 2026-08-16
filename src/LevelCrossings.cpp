@@ -224,6 +224,27 @@ int crossingTrackUnder(const CrossingSite& site, const std::vector<TrackPath>& p
     return on;
 }
 
+std::vector<float> crossingReach(const CrossingSite& site,
+                                 const std::vector<CrossingGuard>& guards,
+                                 const std::vector<char>& open) {
+    std::vector<float> reach(2 * site.tracks.size(), site.outerM);
+    for (const CrossingGuard& g : guards) {
+        if (g.track < 0) continue;
+        if (g.placement >= 0 && g.placement < static_cast<int>(open.size()) &&
+            open[g.placement])
+            continue; // it is giving an authority: the circuit runs through it
+        const std::size_t slot =
+            2 * static_cast<std::size_t>(g.track) + (g.atM < 0.0f ? 0u : 1u);
+        if (slot >= reach.size()) continue;
+        // The nearest one wins: it is the first a train meets coming in, and nothing
+        // beyond it is on the road to here at all.
+        reach[slot] = std::min(reach[slot], std::abs(g.atM));
+    }
+    // Never inside the inner circuit, which is at the crossing itself.
+    for (float& r : reach) r = std::max(r, site.innerM);
+    return reach;
+}
+
 int crossingRoadAtPoints(const CrossingSite& site, const SwitchNetwork& net, int on,
                          float s) {
     if (on < 0 || on >= static_cast<int>(site.tracks.size())) return on;

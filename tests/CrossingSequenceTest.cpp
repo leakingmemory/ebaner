@@ -430,6 +430,103 @@ int main(int argc, char** argv) {
         check(onRoad(30.0f, 500.0f) < 0, "a point on neither road is on neither");
     }
 
+    // A signal at danger breaks the approach circuit at itself.
+    //
+    // Nothing beyond one can reach the crossing without first passing it, so detecting out
+    // there shuts the road for a train that is not coming - and inside a station, for as
+    // long as it stands at the red.
+    std::puts("\nA signal at danger breaks the approach:");
+    {
+        CrossingSite site;
+        site.tracks.push_back({0, 1000.0f});
+        site.innerM = 50.0f;
+        site.outerM = 800.0f;
+        // Three signals facing the crossing: two on the -s approach, one on the +s.
+        const std::vector<CrossingGuard> guards{{0, 0, -300.0f}, {0, 1, -600.0f},
+                                                {0, 2, +400.0f}};
+        auto reach = [&](bool a, bool b, bool c) {
+            const std::vector<char> open{static_cast<char>(a), static_cast<char>(b),
+                                         static_cast<char>(c)};
+            return crossingReach(site, guards, open);
+        };
+
+        const std::vector<float> allOpen = reach(true, true, true);
+        check(allOpen.size() == 2 && allOpen[0] == 800.0f && allOpen[1] == 800.0f,
+              "every signal clear: the circuits reach their full length");
+
+        const std::vector<float> near = reach(false, true, true);
+        check(near[0] == 300.0f, "one at danger cuts its side at itself");
+        check(near[1] == 800.0f, "and leaves the other side alone");
+
+        const std::vector<float> both = reach(false, false, true);
+        check(both[0] == 300.0f, "with two at danger the nearer one wins");
+        const std::vector<float> far = reach(true, false, true);
+        check(far[0] == 600.0f, "and the far one cuts it when the near one is clear");
+
+        const std::vector<float> other = reach(true, true, false);
+        check(other[0] == 800.0f && other[1] == 400.0f,
+              "a signal on the +s side cuts only the +s approach");
+
+        // Nothing may cut into the inner circuit: that one is at the crossing and belongs
+        // to no signal.
+        const std::vector<CrossingGuard> tooClose{{0, 0, -20.0f}};
+        const std::vector<float> clamped = crossingReach(site, tooClose, {0});
+        check(clamped[0] == site.innerM, "and none of it reaches inside the inner circuit");
+
+        // A crossing with no signals in its approach is the ordinary case and unchanged.
+        const std::vector<float> bare = crossingReach(site, {}, {});
+        check(bare.size() == 2 && bare[0] == 800.0f && bare[1] == 800.0f,
+              "a crossing with nothing in its approach is untouched");
+    }
+
+    std::puts("\nWhat counts as a signal giving authority:");
+    {
+        auto mk = [](SignalKind k, SignalAspect a) {
+            SignalPlacement p;
+            p.kind = k;
+            p.aspect = a;
+            return p;
+        };
+        check(signalGivesAuthority(mk(SignalKind::Exit, SignalAspect::Clear)),
+              "a main showing C1 does");
+        check(signalGivesAuthority(mk(SignalKind::Exit, SignalAspect::ClearReduced)),
+              "and so does one showing C2");
+        check(!signalGivesAuthority(mk(SignalKind::Exit, SignalAspect::Stop)),
+              "one at danger does not");
+        check(signalGivesAuthority(mk(SignalKind::Dwarf, SignalAspect::Clear)),
+              "a dwarf showing clear does");
+        check(!signalGivesAuthority(mk(SignalKind::Dwarf, SignalAspect::TrainOnTrack)),
+              "one saying a train stands in the road ahead does not - it is not authority");
+        check(!signalGivesAuthority(mk(SignalKind::StationEntry, SignalAspect::Dark)),
+              "and a dark signal is a station switched off, not a road offered");
+        // The shared pole: either head clearing is authority to pass.
+        SignalPlacement shared = mk(SignalKind::Exit, SignalAspect::Stop);
+        shared.withDwarf = true;
+        shared.dwarfAspect = SignalAspect::Clear;
+        check(signalGivesAuthority(shared),
+              "a dwarf clear under a main at danger is still an authority");
+        shared.dwarfAspect = SignalAspect::Stop;
+        check(!signalGivesAuthority(shared), "both at danger is not");
+    }
+
+    // What that does to the sequence: the crossing must not arm for a train beyond the
+    // signal, and must arm the moment the signal lets it come on.
+    std::puts("\nA train held at a signal in the approach:");
+    {
+        Rig r;
+        // The approach reaches 300 m: everything beyond is behind a signal at danger.
+        r.setOn(0, false, false, false);
+        expectPhase(r, CrossingPhase::Idle, "starts idle");
+        // A train at 400 m is beyond the cut, so its circuit reads clear - which is what
+        // the caller passes in, and the sequence never hears about it.
+        r.run(30.0);
+        expectPhase(r, CrossingPhase::Idle, "and stays idle while the train waits beyond it");
+        // The signal clears and the train comes on: the circuit goes clear -> occupied in
+        // one step, which is exactly the edge the gate is looking for.
+        r.set(true, false, false);
+        expectPhase(r, CrossingPhase::Closing, "and arms the moment the road is given");
+    }
+
     std::puts("\nThe approach distance follows the line speed:");
     {
         const double fast = approachDistance(130.0);

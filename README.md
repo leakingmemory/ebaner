@@ -454,6 +454,28 @@ clearing and on nothing else, and mirrors the delay: the train's signal drops to
 once, the road opens 5 s later. A crossing armed by a movement that then turned back
 releases itself after a minute of everything being clear.
 
+**A signal at danger breaks the approach circuit.** Nothing beyond one can reach the
+crossing without first passing it, so the circuit is cut there and sees nothing further out.
+Inside a station that is the difference between a crossing that shuts for the traffic
+actually coming and one that shuts for a train standing at a red signal for as long as it
+stands there. When the signal clears the circuit is whole again, and the train arms the
+crossing as it comes on — the clear-to-occupied edge the gate is looking for.
+
+Only the **circuit-driven** signals do this: the dwarfs and the two mains. A simple station
+signal has no circuits behind it and goes dark when its station is unmanned, when trains run
+past it without reference to it at all — reading one as a barrier would break a crossing's
+detection every time a station was switched off. A signal counts if it stands inside the
+approach and **faces** the crossing, whatever its own routes lead to: an entry signal's
+authority commonly ends at the platform, short of the crossing, and it protects the approach
+to it none the less. Open means a proceed aspect — C1 or C2 on a main, clear on a dwarf; a
+dwarf saying a train stands in the road ahead is not an authority to move, and where a dwarf
+shares a main's pole either head clearing opens it.
+
+At Skonseng the two entry signals stand 782 m and 528 m from the crossing inside its 821 m
+approach, so with both at danger those circuits reach only that far, and with a route set
+they reach the whole way. The crossings out on the line have no signals in their approaches
+and are untouched.
+
 **Distant signals** repeat the crossing's own train indication far enough back to stop
 from, one each side. The aspects are identical to the crossing's — same red-over-white,
 same flash, same period and phase, so the two agree — except that **the red is violet**,

@@ -236,6 +236,33 @@ int crossingTrackUnder(const CrossingSite& site, const std::vector<TrackPath>& p
 int crossingRoadAtPoints(const CrossingSite& site, const SwitchNetwork& net, int on,
                          float s);
 
+// A signal standing in one of a crossing's approach circuits, facing it.
+//
+// Where a signal stands never changes; only what it is showing does. So these are worked
+// out once, at load, and read every frame against the aspects.
+struct CrossingGuard {
+    int track = 0;      // which of the crossing's roads it stands on
+    int placement = -1; // into the caller's signal placements
+    float atM = 0.0f;   // where it stands, signed from the crossing as an axle's rel is
+};
+
+// How far each approach circuit reaches this instant: its full length, or the nearest
+// signal at danger facing the crossing on that side. Indexed [2 * track + side], side 0
+// being the approach on the -s side.
+//
+// A signal at danger breaks the circuit at itself, because nothing beyond one can reach the
+// crossing without first passing it. Inside a station that is the difference between a
+// crossing that shuts for the traffic that is coming and one that shuts for a train
+// standing at a red signal for as long as it stands there.
+//
+// `open` says which placements are giving an authority to move, parallel to whatever list
+// the guards index - filled by the caller, which is what keeps signals out of this header.
+// Never shorter than the inner circuit: that one is at the crossing and belongs to no
+// signal.
+std::vector<float> crossingReach(const CrossingSite& site,
+                                 const std::vector<CrossingGuard>& guards,
+                                 const std::vector<char>& open);
+
 // What the three circuits see this instant.
 struct CrossingOccupancy {
     bool outerA = false; // approach on the -s side

@@ -178,6 +178,15 @@ struct SignalPlacement {
     bool twoLamp = false;
 };
 
+// Whether this signal is giving an authority to move: a proceed aspect on its own head, or
+// on the dwarf sharing its pole - either of them clearing is authority to pass.
+//
+// A dwarf showing that a train stands in the road ahead is not one. Nor is a dark simple
+// station signal, which is a station switched off rather than a road offered: an unmanned
+// station's trains run past its signals without reference to them, and nothing here should
+// read that as permission.
+bool signalGivesAuthority(const SignalPlacement& sp);
+
 // Where a route begins and which way it sets off: the world point of its first interval's
 // `from` and the unit direction leaving it. False if the track is missing or degenerate.
 bool routeStartPose(const SignalPath& p, const std::vector<TrackPoly>& polys,

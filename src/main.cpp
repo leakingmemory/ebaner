@@ -678,6 +678,44 @@ int main(int argc, char** argv) {
                                  " path - stale overlay?\n",
                          crossings[i].name.c_str(), crossings[i].tracks.size() - on);
     }
+    // Which signals stand in each crossing's approach circuits, facing it. Worked out once:
+    // where a signal stands never changes, only what it is showing.
+    //
+    // Only the circuit-driven signals - the dwarfs and the two mains. A simple station
+    // signal has no circuits behind it and goes dark when its station is unmanned, when
+    // trains run past it without reference to it at all; reading one as a barrier would
+    // break a crossing's detection every time a station was switched off.
+    std::vector<std::vector<CrossingGuard>> crossingGuards(crossings.size());
+    for (std::size_t ci = 0; ci < crossings.size(); ++ci) {
+        const CrossingSite& site = crossingSites[ci];
+        if (!site.resolved()) continue;
+        const glm::dvec3 org = data.sceneOrigin();
+        for (std::size_t k = 0; k < sigPlacements.size(); ++k) {
+            const SignalPlacement& sp = sigPlacements[k];
+            if (sp.kind != SignalKind::Dwarf && sp.kind != SignalKind::Entry &&
+                sp.kind != SignalKind::Exit)
+                continue;
+            float s = 0.0f;
+            const int road = crossingTrackUnder(
+                site, paths,
+                glm::vec2(static_cast<float>(sp.world.x - org.x),
+                          static_cast<float>(sp.world.y - org.y)),
+                s);
+            if (road < 0) continue; // not standing on any of this crossing's roads
+            const float rel = s - site.tracks[road].s;
+            if (std::abs(rel) <= site.innerM || std::abs(rel) > site.outerM) continue;
+            // Facing the crossing: a train passing it carries on toward the crossing rather
+            // than away from it. One facing the other way protects the opposite direction
+            // and has nothing to say about anything coming here.
+            const glm::vec3 t = paths[site.tracks[road].path].poseAt(s).tangent;
+            const double toward = rel < 0.0f ? 1.0 : -1.0;
+            if ((sp.forward.x * t.x + sp.forward.y * t.y) * toward <= 0.0) continue;
+            crossingGuards[ci].push_back({road, static_cast<int>(k), rel});
+        }
+        if (!crossingGuards[ci].empty())
+            std::printf("[Crossing] %-16s %zu signal(s) can break its approach\n",
+                        crossings[ci].name.c_str(), crossingGuards[ci].size());
+    }
 
     // Flag posts: the hand signal the station's TXP hangs out.
     const std::vector<FlagPost> flagPosts = loadFlagPosts(datasetRoot);
@@ -2188,6 +2226,13 @@ int main(int argc, char** argv) {
                 vehicle ? vehicle->axleFrames() : std::vector<VehicleFrame>{};
             bool anyPhaseMoved = false;
             bool anyBarrierMoving = false;
+            // Which signals are giving an authority to move, which is what decides how far
+            // each crossing's approach circuits reach. The aspects are last frame's - they
+            // settle further down the loop - and one frame is nothing against a sequence
+            // measured in seconds.
+            std::vector<char> signalOpen(sigPlacements.size(), 0);
+            for (std::size_t k = 0; k < sigPlacements.size(); ++k)
+                signalOpen[k] = signalGivesAuthority(sigPlacements[k]) ? 1 : 0;
             for (std::size_t ci = 0; ci < crossings.size(); ++ci) {
                 const CrossingSite& site = crossingSites[ci];
                 if (!site.resolved()) continue;
@@ -2201,6 +2246,11 @@ int main(int argc, char** argv) {
                 // claim a train passing the points and a departure on the main line armed
                 // the loop as it went by. An axle is on one road - the nearest - and on
                 // no other.
+                // How far the approach circuits reach this instant: a signal at danger
+                // facing the crossing breaks its circuit there, because nothing beyond one
+                // can reach the crossing without first passing it.
+                const std::vector<float> reach =
+                    crossingReach(site, crossingGuards[ci], signalOpen);
                 std::vector<CrossingOccupancy> occ(site.tracks.size());
                 for (const VehicleFrame& ax : axles) {
                     float onS = 0.0f;
@@ -2211,9 +2261,15 @@ int main(int argc, char** argv) {
                     // Where it is, and then where the points are taking it - out on the
                     // approach the roads have not divided and only the second can answer.
                     const int on = crossingRoadAtPoints(site, switchNet, under, onS);
+                    // The limit is the road it is physically on, the occupancy the road
+                    // the points are taking it to: where a circuit is cut is geometry,
+                    // which road's sequence it arms is the points.
+                    const std::size_t lim =
+                        2 * static_cast<std::size_t>(under) + (rel < 0.0f ? 0u : 1u);
+                    const float far = lim < reach.size() ? reach[lim] : site.outerM;
                     if (std::abs(rel) <= site.innerM) occ[on].inner = true;
-                    else if (rel < 0.0f && rel >= -site.outerM) occ[on].outerA = true;
-                    else if (rel > 0.0f && rel <= site.outerM) occ[on].outerB = true;
+                    else if (rel < 0.0f && rel >= -far) occ[on].outerA = true;
+                    else if (rel > 0.0f && rel <= far) occ[on].outerB = true;
                 }
                 std::vector<CrossingPhase> was;
                 for (const CrossingTrackState& ts : crossingStates[ci].tracks)
