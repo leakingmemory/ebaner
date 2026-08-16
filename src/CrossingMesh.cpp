@@ -137,75 +137,137 @@ float crossingPhase(int id) {
 void CrossingMesh::build(const std::vector<LevelCrossing>& xs,
                          const std::vector<CrossingSite>& sites,
                          const std::vector<CrossingState>& states,
-                         const std::vector<TrackPath>& paths, const glm::dvec3& origin) {
+                         const std::vector<TrackPath>& paths, const glm::dvec3& origin,
+                         const DistantFor& distantFor) {
     vertices_.clear();
     indices_.clear();
     (void)origin; // paths are already scene-relative
 
     for (std::size_t i = 0; i < xs.size(); ++i) {
-        if (i >= sites.size() || sites[i].path < 0) continue;
-        if (sites[i].path >= static_cast<int>(paths.size())) continue;
-        const TrackPath& p = paths[sites[i].path];
-        const CrossingPhase ph =
-            i < states.size() ? states[i].phase : CrossingPhase::Idle;
-        const CrossingLights l = crossingLights(ph);
-        const float period = l.fast ? kCrossingFastS : kCrossingSlowS;
+        if (i >= sites.size() || !sites[i].resolved()) continue;
+        const CrossingSite& site = sites[i];
+        const CrossingState empty;
+        const CrossingState& st = i < states.size() ? states[i] : empty;
+        // One pulse for the whole crossing: a track sitting idle beside one that is arming
+        // still flashes fast, because a driver reading either head is reading the same
+        // crossing. Only the lamps are the track's own.
+        const bool fast = st.shut();
+        const float period = fast ? kCrossingFastS : kCrossingSlowS;
         const float phase = crossingPhase(xs[i].id);
 
-        const TrackPose at = p.poseAt(sites[i].s);
+        // Where the crossing meets each of its tracks, and the frame of the first one -
+        // the road runs across all of them, so one frame serves for the road heads.
+        int lead = -1;
+        for (std::size_t t = 0; t < site.tracks.size() && lead < 0; ++t)
+            if (site.tracks[t].path >= 0 &&
+                site.tracks[t].path < static_cast<int>(paths.size()))
+                lead = static_cast<int>(t);
+        if (lead < 0) continue;
+        const TrackPath& lp = paths[site.tracks[lead].path];
+        const TrackPose at = lp.poseAt(site.tracks[lead].s);
         // Across the track, level: `right` is banked by the cant and would tilt the masts.
         const glm::vec3 tan = glm::normalize(glm::vec3(at.tangent.x, at.tangent.y, 0.0f));
         const glm::vec3 across(tan.y, -tan.x, 0.0f);
 
-        // The two heads the train reads. The one before the crossing on the -s side
-        // serves trains running in +s, so it has to look back down the line at them -
-        // a head that looked the way the train is going would only ever show its back.
-        for (const float side : {-1.0f, 1.0f}) {
-            const float s = sites[i].s + side * static_cast<float>(kSignalOffsetM);
-            const TrackPose q = p.poseAt(std::clamp(s, 0.0f, p.length()));
-            const glm::vec3 qt =
-                glm::normalize(glm::vec3(q.tangent.x, q.tangent.y, 0.0f));
-            const glm::vec3 qa(qt.y, -qt.x, 0.0f); // right of +s
-            // Standing to the right of the direction of travel it governs, as a signal
-            // does: that is -qa for a train running in -s.
-            const glm::vec3 base = q.pos + qa * (side > 0.0f ? -3.2f : 3.2f);
-            head(vertices_, indices_, base, qt * side, l.trainRed, l.trainWhite, period,
-                 phase);
+        // Each track its own pair of heads, showing that track's own sequence.
+        float farNeg = 0.0f, farPos = 0.0f; // how far the tracks reach either way across
+        for (std::size_t t = 0; t < site.tracks.size(); ++t) {
+            const CrossingSite::On& on = site.tracks[t];
+            if (on.path < 0 || on.path >= static_cast<int>(paths.size())) continue;
+            const TrackPath& p = paths[on.path];
+            const CrossingLights l = crossingLights(st.phase(t), fast);
+
+            // How far this track sits across the road from the one the road heads are
+            // measured off, so those heads can be put beyond every rail rather than
+            // between two of them.
+            const float off = glm::dot(p.poseAt(on.s).pos - at.pos, across);
+            farNeg = std::min(farNeg, off);
+            farPos = std::max(farPos, off);
+
+            // The two heads the train reads. The one before the crossing on the -s side
+            // serves trains running in +s, so it has to look back down the line at them -
+            // a head that looked the way the train is going would only ever show its back.
+            for (const float side : {-1.0f, 1.0f}) {
+                const float s = on.s + side * static_cast<float>(kSignalOffsetM);
+                const TrackPose q = p.poseAt(std::clamp(s, 0.0f, p.length()));
+                const glm::vec3 qt =
+                    glm::normalize(glm::vec3(q.tangent.x, q.tangent.y, 0.0f));
+                const glm::vec3 qa(qt.y, -qt.x, 0.0f); // right of +s
+                // Standing to the right of the direction of travel it governs, as a signal
+                // does: that is -qa for a train running in -s.
+                const glm::vec3 base = q.pos + qa * (side > 0.0f ? -3.2f : 3.2f);
+                head(vertices_, indices_, base, qt * side, l.trainRed, l.trainWhite, period,
+                     phase);
+            }
+
+            // The repeats: the same indication again, far enough back to stop from, in
+            // violet so it cannot be mistaken for the crossing itself. Skipped rather than
+            // clamped where the path is too short to hold one - a repeat standing somewhere
+            // other than its braking distance is worse than none, because a driver reads
+            // the distance off it as much as the aspect.
+            //
+            // What it repeats is not always its own track. Out on the single track beyond a
+            // station the points decide which road a train is taken to, and the repeat
+            // stands for that one; where they cannot say, it warns.
+            for (int sideIdx = 0; sideIdx < 2; ++sideIdx) {
+                const float side = sideIdx == 0 ? -1.0f : 1.0f;
+                const float s = on.s + side * site.distantM;
+                if (s < 0.0f || s > p.length()) continue;
+                // Two repeats landing at the same spot are one mast: on the single track
+                // both roads' repeats resolve to the same place, and a station does not
+                // grow a second post there.
+                const TrackPose q = p.poseAt(s);
+                bool dup = false;
+                for (std::size_t u = 0; u < t && !dup; ++u) {
+                    const CrossingSite::On& other = site.tracks[u];
+                    if (other.path < 0 || other.path >= static_cast<int>(paths.size()))
+                        continue;
+                    const float os = other.s + side * site.distantM;
+                    if (os < 0.0f || os > paths[other.path].length()) continue;
+                    dup = glm::distance(paths[other.path].poseAt(os).pos, q.pos) <= 3.0f;
+                }
+                if (dup) continue;
+
+                const std::size_t slot = 2 * t + static_cast<std::size_t>(sideIdx);
+                int repeats = static_cast<int>(t); // its own track, unless told otherwise
+                if (i < distantFor.size() && slot < distantFor[i].size())
+                    repeats = distantFor[i][slot];
+                const CrossingLights rl =
+                    repeats < 0 ? crossingLights(CrossingPhase::Closing, fast)
+                                : crossingLights(st.phase(static_cast<std::size_t>(repeats)),
+                                                 fast);
+                const glm::vec3 qt =
+                    glm::normalize(glm::vec3(q.tangent.x, q.tangent.y, 0.0f));
+                const glm::vec3 qa(qt.y, -qt.x, 0.0f); // right of +s
+                const glm::vec3 base = q.pos + qa * (side > 0.0f ? -3.2f : 3.2f);
+                head(vertices_, indices_, base, qt * side, rl.trainRed, rl.trainWhite,
+                     period, phase, kVioletOn, kVioletOff);
+            }
         }
 
-        // The distants: the same indication again, far enough back to stop from, in
-        // violet so it cannot be mistaken for the crossing itself. Skipped rather than
-        // clamped where the path is too short to hold one - a repeat standing somewhere
-        // other than its braking distance is worse than none, because a driver reads the
-        // distance off it as much as the aspect.
+        // The two the road reads, which belong to the crossing rather than to a track: red
+        // while any track is running its sequence. The head on the +across side looks back
+        // along +across at the traffic coming that way, and stands to the right of it: for
+        // traffic running in -across, right is (-across.y, across.x), which is the track's
+        // own +s direction. So the offset follows `side` just as the standoff does.
+        //
+        // The standoff is measured from the outermost rail on that side, not from the first
+        // track: on a crossing spanning two roads a post six metres from one of them would
+        // stand between the rails of the other.
+        const CrossingLights rd = crossingLights(st.shut() ? CrossingPhase::Closing
+                                                           : CrossingPhase::Idle, fast);
         for (const float side : {-1.0f, 1.0f}) {
-            const float s = sites[i].s + side * sites[i].distantM;
-            if (s < 0.0f || s > p.length()) continue;
-            const TrackPose q = p.poseAt(s);
-            const glm::vec3 qt =
-                glm::normalize(glm::vec3(q.tangent.x, q.tangent.y, 0.0f));
-            const glm::vec3 qa(qt.y, -qt.x, 0.0f); // right of +s
-            const glm::vec3 base = q.pos + qa * (side > 0.0f ? -3.2f : 3.2f);
-            head(vertices_, indices_, base, qt * side, l.trainRed, l.trainWhite, period,
-                 phase, kVioletOn, kVioletOff);
-        }
-
-        // The two the road reads. The head on the +across side looks back along +across
-        // at the traffic coming that way, and stands to the right of it: for traffic
-        // running in -across, right is (-across.y, across.x), which is the track's own
-        // +s direction. So the offset follows `side` just as the standoff does.
-        const float barrier = i < states.size() ? states[i].barrier : 0.0f;
-        for (const float side : {-1.0f, 1.0f}) {
-            const glm::vec3 base = at.pos + across * (side * kRoadOffsetM) +
+            const float reach = side > 0.0f ? farPos : farNeg;
+            const glm::vec3 base = at.pos + across * (reach + side * kRoadOffsetM) +
                                    tan * (side * kRoadRightM);
-            head(vertices_, indices_, base, across * side, l.roadRed, l.roadWhite, period,
+            head(vertices_, indices_, base, across * side, rd.roadRed, rd.roadWhite, period,
                  phase);
             // The boom hangs on that same post. The post stands to the right of the
             // traffic it faces, so the lane to block is the one back toward the road's
             // centre - the way `-tan * side` points.
             if (xs[i].barriers)
                 boom(vertices_, indices_, base + glm::vec3(0.0f, 0.0f, kBoomPivotH),
-                     tan * -side, barrier, l.roadRed, period, phase);
+                     tan * -side, st.barrier, rd.roadRed, period, phase);
         }
     }
 }

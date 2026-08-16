@@ -13,7 +13,8 @@
 
 #pragma once
 
-#include "TrackCircuits.h" // TrackPoly, fracToWorld
+#include "SwitchNetwork.h"  // SwitchNetwork (which road the points lead to)
+#include "TrackCircuits.h"  // TrackPoly, TrackJunctions, fracToWorld
 
 #include <cstdint>
 #include <string>
@@ -31,14 +32,23 @@ class TrackPath;
 // Some crossings also carry half-barriers - see `barriers` below. Both variants light and
 // ring identically; the barriers are the only difference.
 //
+// A crossing may span more than one track. Inside a station the road crosses both roads at
+// once, and that is one crossing - one road shut, one bell - with a set of circuits per
+// track, so that a train on one of them runs the sequence while the other is left alone and
+// two trains, one on each, are each seen for themselves.
+struct CrossingTrack {
+    std::uint32_t trackId = 0;
+    double frac = 0.0;
+};
 // File `<datasetRoot>/overlay/level-crossings.txt`:
-//   crossing <id> "<name>" <trackHex>:<frac> [<outerM>] [barriers]
-// Both trailing fields are optional and may come in either order.
+//   crossing <id> "<name>" <trackHex>:<frac> [also <trackHex>:<frac>]... [<outerM>] [barriers]
+// Every trailing field is optional and they may come in any order.
 struct LevelCrossing {
     int id = 0;
     std::string name;
-    std::uint32_t trackId = 0;
-    double frac = 0.0;
+    // One entry for an ordinary crossing, two where it spans both roads of a station. The
+    // first is the one the record leads with; the rest arrive as `also`.
+    std::vector<CrossingTrack> tracks;
     // How far out the approach circuits reach. 0 means derive it from the line speed
     // here, which is what nearly every crossing should do; a value overrules that where
     // the derivation comes out wrong.
@@ -92,16 +102,32 @@ constexpr double kDistantOfBraking = 0.8;  // of the braking distance
 constexpr double kDistantOfApproach = 0.8; // but never further out than this of the approach
 double distantDistance(double lineSpeedKmh, double outerM);
 
-// A crossing resolved onto the built paths: which path it sits on and where, plus the
-// circuit extents in that path's arc length. Paths are built once and never rebuilt, so
-// this is worked out once at load.
+// A crossing resolved onto the built paths: which path each of its tracks sits on and
+// where, plus the circuit extents in that path's arc length. Paths are built once and never
+// rebuilt, so this is worked out once at load.
+//
+// The distances belong to the crossing rather than to a track. One crossing arming its two
+// tracks at two different distances would be two crossings sharing a road, so they are
+// derived once from the fastest track it carries - the warning time a crossing needs is set
+// by the fastest train that can reach it.
 struct CrossingSite {
-    int path = -1;      // index into the path list, -1 = not on any (stale overlay)
-    float s = 0.0f;     // arc length of the crossing along that path
+    // Parallel to LevelCrossing::tracks; `path < 0` is one that did not resolve.
+    struct On {
+        int path = -1;  // index into the path list, -1 = not on any (stale overlay)
+        float s = 0.0f; // arc length of the crossing along that path
+    };
+    std::vector<On> tracks;
     float innerM = 0.0f;
     float outerM = 0.0f;
     float distantM = 0.0f;     // where the repeats stand, each side
     float lineSpeedKmh = 0.0f; // what the approach distance was derived from
+
+    // Whether anything resolved at all - what the single `path < 0` guard used to ask.
+    bool resolved() const {
+        for (const On& o : tracks)
+            if (o.path >= 0) return true;
+        return false;
+    }
 };
 // `origin` is the scene origin: the polys are in world coordinates and the paths are
 // scene-relative, so resolving one onto the other has to cross between them.
@@ -140,32 +166,75 @@ constexpr double kBellS = 30.0;
 constexpr double kBarrierDelayS = 7.0;   // after activating, before the boom starts to fall
 constexpr double kBarrierTravelS = 8.0;  // to travel either way, upright to horizontal
 
-struct CrossingState {
+// The sequence one track of a crossing is running. A crossing with two tracks runs two of
+// these, independently: the whole point is that a train on one road does not make the other
+// road's circuits say anything.
+struct CrossingTrackState {
     CrossingPhase phase = CrossingPhase::Idle;
-    double phaseSince = 0.0; // when the current phase began
-    // When the crossing last left Idle. Distinct from phaseSince, which restarts at every
-    // phase change: the bell has to run across Closing into Secured without being
-    // retriggered halfway by the change between them.
-    double activeSince = 0.0;
-    double allClearSince = 0.0; // when every circuit last became clear (0 = not clear)
+    double phaseSince = 0.0;    // when the current phase began
+    double allClearSince = 0.0; // when this track's circuits last became clear (0 = not)
     bool prevOuterA = false, prevOuterB = false; // for the edge gate
     // Whether the train has actually reached the crossing this cycle. Without it,
     // Secured would release the instant it was entered: the sequence starts while the
     // train is still out on the approach, so an unoccupied inner circuit at that moment
     // means "not here yet", not "gone past".
     bool innerSeen = false;
+};
+
+struct CrossingState {
+    // One per track of the crossing, parallel to LevelCrossing::tracks.
+    std::vector<CrossingTrackState> tracks;
+    // When the crossing as a whole last left Idle. Distinct from a track's phaseSince,
+    // which restarts at every phase change: the bell has to run across Closing into
+    // Secured without being retriggered halfway by the change between them - and, now,
+    // without being restarted by the second track arming. One crossing, one bell.
+    double activeSince = 0.0;
     // Where the booms are: 0 fully up, 1 fully down. Continuous state of its own rather
     // than something read off the phase, because it outlives the phases at both ends -
     // it is still up for the first 2 s of Secured, and still coming up for 3 s after
-    // Opening has handed back to Idle.
+    // Opening has handed back to Idle. One road, one pair of booms, however many tracks.
     float barrier = 0.0f;
     // When this crossing was last stepped, so the barrier can be moved at a rate. 0 means
     // never, and the first step moves nothing.
     double lastStepS = 0.0;
 
+    // Shut to the road while *any* track is running its sequence.
+    bool shut() const {
+        for (const CrossingTrackState& t : tracks)
+            if (t.phase != CrossingPhase::Idle) return true;
+        return false;
+    }
+    // What one track is showing. Idle for a track that does not exist, so a caller need
+    // not carry the count around.
+    CrossingPhase phase(std::size_t track) const {
+        return track < tracks.size() ? tracks[track].phase : CrossingPhase::Idle;
+    }
     // Whether the booms are in motion - what tells the renderer it must keep rebuilding.
     bool barrierMoving() const { return barrier > 0.0f && barrier < 1.0f; }
 };
+
+// Which of the crossing's tracks a point on the rails is on: an index into its tracks, or
+// -1 for a point that is on none of them. `s` gets the arc length along that track's path.
+//
+// Decided once, for the point, rather than by each track asking whether the point is near
+// enough to be its own. The two roads of a station converge at their turnouts and run about
+// a metre apart there, so both would answer yes to that - and a train leaving on the main
+// line armed the loop's circuits as it passed the points. A train is on one road.
+//
+int crossingTrackUnder(const CrossingSite& site, const std::vector<TrackPath>& paths,
+                       const glm::vec2& at, float& s);
+
+// Which road a train standing at `s` on the crossing's road `on` is actually *for*: `on`
+// itself, or another of the crossing's roads if a turnout between it and the crossing is
+// facing it and set to that road.
+//
+// Out on the approach the roads have not divided yet, so geometry cannot answer this: a
+// train on the rails that lead to both is on the main line by position and bound for the
+// loop by the points. Arming the road it will not take would run the sequence on the wrong
+// side - clearing that road's heads to white and leaving the train to pass the other's at
+// red. Between the turnouts nothing is in the way and this changes nothing.
+int crossingRoadAtPoints(const CrossingSite& site, const SwitchNetwork& net, int on,
+                         float s);
 
 // What the three circuits see this instant.
 struct CrossingOccupancy {
@@ -186,16 +255,38 @@ struct CrossingOccupancy {
 // Takes the crossing itself as well as its state because the barriers are authored, not
 // runtime: whether there are booms to move belongs to the record, and copying it into the
 // state would be two places to keep in step.
-void stepCrossing(const LevelCrossing& x, CrossingState& st, const CrossingOccupancy& occ,
-                  double now);
+//
+// `occ` carries one reading per track, in the record's order; a short list leaves the rest
+// clear. The tracks are stepped independently and only then do the things that belong to
+// the road - the bell's clock and the booms - look at all of them together.
+void stepCrossing(const LevelCrossing& x, CrossingState& st,
+                  const std::vector<CrossingOccupancy>& occ, double now);
 
 // What each head shows. Only one lamp of a head is ever lit.
+//
+// `fast` is the crossing's own pulse, not this phase's: every head on a crossing flashes
+// together, so a track sitting idle beside one that is arming shows red on the *fast*
+// pulse. Its lamps are still its own - only the track the train is on goes white.
 struct CrossingLights {
     bool trainRed = false, trainWhite = false;
     bool roadRed = false, roadWhite = false;
     bool fast = false; // the active pulse; idle is the slow one
 };
-CrossingLights crossingLights(CrossingPhase phase);
+CrossingLights crossingLights(CrossingPhase phase, bool fast);
+
+// Which of the crossing's tracks a train at (`trackId`, `frac`) running in `dir` would be
+// carried onto, taking every turnout the way it is currently set: an index into
+// `x.tracks`, or -1.
+//
+// -1 is not a failure to be papered over. It means the points cannot say which road the
+// train will take - a broken switch, or a fan the interlocking does not know - and a repeat
+// that cannot know what it is repeating warns rather than guesses.
+//
+// This is what lets one mast out on the single track stand for both roads of a station: the
+// mast does not move when the points are thrown, but what it is warning about does.
+int crossingTrackAhead(const LevelCrossing& x, const std::vector<TrackPoly>& polys,
+                       const TrackJunctions& junctions, const SwitchNetwork& net,
+                       std::uint32_t trackId, double frac, int dir, double maxM);
 
 // Whether the warning bell is sounding. Silent while idle, and silent again kBellS after
 // the sequence started even though the crossing is still shut and still flashing.

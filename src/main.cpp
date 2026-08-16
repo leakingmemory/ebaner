@@ -661,14 +661,22 @@ int main(int argc, char** argv) {
         resolveCrossings(crossings, paths, polys, data.sceneOrigin());
     std::vector<CrossingState> crossingStates(crossings.size());
     for (std::size_t i = 0; i < crossings.size(); ++i) {
-        if (crossingSites[i].path < 0) {
+        if (!crossingSites[i].resolved()) {
             std::fprintf(stderr, "[Crossing] \"%s\" is not on any path - stale overlay?\n",
                          crossings[i].name.c_str());
             continue;
         }
-        std::printf("[Crossing] %-16s %5.0f km/h -> approach %.0f m, inner +/-%.0f m\n",
+        std::size_t on = 0;
+        for (const CrossingSite::On& o : crossingSites[i].tracks)
+            if (o.path >= 0) ++on;
+        std::printf("[Crossing] %-16s %5.0f km/h -> approach %.0f m, inner +/-%.0f m,"
+                    " %zu track(s)\n",
                     crossings[i].name.c_str(), crossingSites[i].lineSpeedKmh,
-                    crossingSites[i].outerM, crossingSites[i].innerM);
+                    crossingSites[i].outerM, crossingSites[i].innerM, on);
+        if (on < crossings[i].tracks.size())
+            std::fprintf(stderr, "[Crossing] \"%s\": %zu of its track(s) resolved to no"
+                                 " path - stale overlay?\n",
+                         crossings[i].name.c_str(), crossings[i].tracks.size() - on);
     }
 
     // Flag posts: the hand signal the station's TXP hangs out.
@@ -713,10 +721,58 @@ int main(int argc, char** argv) {
     // renderer already has an update path for that one. Merged as the struct bucket is.
     std::vector<TrackVertex> signalVerts;
     std::vector<std::uint32_t> signalIdx;
+    // What each crossing repeat is standing for: the road the points lead to from where it
+    // is, worked out here because this is where the junctions and the switch states are.
+    // Re-derived with the mesh, so it follows a thrown switch as well as a phase change.
+    auto crossingDistantFor = [&]() {
+        CrossingMesh::DistantFor out(crossings.size());
+        for (std::size_t ci = 0; ci < crossings.size(); ++ci) {
+            const CrossingSite& site = crossingSites[ci];
+            // Nothing to resolve where the crossing has one track: a repeat there can only
+            // ever be about the road it stands on.
+            if (crossings[ci].tracks.size() < 2) continue;
+            out[ci].assign(2 * site.tracks.size(), -1);
+            for (std::size_t t = 0; t < site.tracks.size(); ++t) {
+                if (site.tracks[t].path < 0) continue;
+                const TrackPath& p = paths[site.tracks[t].path];
+                for (int sideIdx = 0; sideIdx < 2; ++sideIdx) {
+                    const float side = sideIdx == 0 ? -1.0f : 1.0f;
+                    const float s = site.tracks[t].s + side * site.distantM;
+                    if (s < 0.0f || s > p.length()) continue;
+                    // The mast is placed in path space; the walk runs in track space, so
+                    // the point has to be put back onto a track to start from.
+                    const glm::vec3 at = p.poseAt(s).pos;
+                    const glm::dvec3 w(at.x + data.sceneOrigin().x,
+                                       at.y + data.sceneOrigin().y, 0.0);
+                    std::uint32_t bestTrack = 0;
+                    double bestFrac = 0.0, bestD = 6.0;
+                    for (const TrackPoly& tp : polys) {
+                        double frac = 0.0, dist = 0.0;
+                        if (!projectOnTrack(polys, tp.id, glm::dvec2(w.x, w.y), frac, dist))
+                            continue;
+                        if (dist < bestD) { bestD = dist; bestTrack = tp.id; bestFrac = frac; }
+                    }
+                    if (bestD >= 6.0) continue;
+                    // Heading toward the crossing: the repeat on the -s side reads a train
+                    // running in +s, and the walk goes the way that train is going.
+                    const glm::dvec2 tang = trackTangent(polys, bestTrack, bestFrac, +1);
+                    const glm::vec3 fwd = p.poseAt(s).tangent;
+                    const int dir =
+                        (tang.x * fwd.x + tang.y * fwd.y) * side >= 0.0 ? -1 : +1;
+                    out[ci][2 * t + static_cast<std::size_t>(sideIdx)] =
+                        crossingTrackAhead(crossings[ci], polys, junctions, switchNet,
+                                           bestTrack, bestFrac, dir,
+                                           site.distantM + 200.0);
+                }
+            }
+        }
+        return out;
+    };
+
     auto rebuildSignalBuffer = [&]() {
         signals.build(sigPlacements, data.sceneOrigin());
         crossingMesh.build(crossings, crossingSites, crossingStates, paths,
-                           data.sceneOrigin());
+                           data.sceneOrigin(), crossingDistantFor());
         signalVerts = signals.vertices();
         signalIdx = signals.indices();
         const std::uint32_t base = static_cast<std::uint32_t>(signalVerts.size());
@@ -2134,34 +2190,39 @@ int main(int argc, char** argv) {
             bool anyBarrierMoving = false;
             for (std::size_t ci = 0; ci < crossings.size(); ++ci) {
                 const CrossingSite& site = crossingSites[ci];
-                if (site.path < 0) continue;
-                // Where each axle sits along this crossing's own path, as a signed
-                // distance from the crossing. An axle on some other path is simply not on
-                // this crossing's road, which is the deferred branching case behaving
-                // sanely rather than accidentally.
-                CrossingOccupancy occ;
-                const TrackPath& p = paths[site.path];
+                if (!site.resolved()) continue;
+                // The circuits are per track and read independently: a train on one road
+                // says nothing about the other, which is what lets two trains be at one
+                // crossing on separate roads.
+                //
+                // Which road an axle is on is decided once, for the axle, rather than by
+                // each track asking whether it is near enough. The two roads of a station
+                // converge at their turnouts and run a metre apart there, so both would
+                // claim a train passing the points and a departure on the main line armed
+                // the loop as it went by. An axle is on one road - the nearest - and on
+                // no other.
+                std::vector<CrossingOccupancy> occ(site.tracks.size());
                 for (const VehicleFrame& ax : axles) {
-                    // Project the axle onto the path near the crossing rather than
-                    // searching the whole of it: a path can be tens of kilometres long.
-                    float bestS = 0.0f;
-                    double bestD = 1e30;
-                    const float lo = std::max(0.0f, site.s - site.outerM - 200.0f);
-                    const float hi = std::min(p.length(), site.s + site.outerM + 200.0f);
-                    for (float t = lo; t <= hi; t += 5.0f) {
-                        const glm::vec3 q = p.poseAt(t).pos;
-                        const double d = std::hypot(q.x - ax.pos.x, q.y - ax.pos.y);
-                        if (d < bestD) { bestD = d; bestS = t; }
-                    }
-                    if (bestD > 4.0) continue; // not on this road at all
-                    const float rel = bestS - site.s;
-                    if (std::abs(rel) <= site.innerM) occ.inner = true;
-                    else if (rel < 0.0f && rel >= -site.outerM) occ.outerA = true;
-                    else if (rel > 0.0f && rel <= site.outerM) occ.outerB = true;
+                    float onS = 0.0f;
+                    const int under =
+                        crossingTrackUnder(site, paths, glm::vec2(ax.pos), onS);
+                    if (under < 0) continue; // not on this crossing at all
+                    const float rel = onS - site.tracks[under].s;
+                    // Where it is, and then where the points are taking it - out on the
+                    // approach the roads have not divided and only the second can answer.
+                    const int on = crossingRoadAtPoints(site, switchNet, under, onS);
+                    if (std::abs(rel) <= site.innerM) occ[on].inner = true;
+                    else if (rel < 0.0f && rel >= -site.outerM) occ[on].outerA = true;
+                    else if (rel > 0.0f && rel <= site.outerM) occ[on].outerB = true;
                 }
-                const CrossingPhase was = crossingStates[ci].phase;
+                std::vector<CrossingPhase> was;
+                for (const CrossingTrackState& ts : crossingStates[ci].tracks)
+                    was.push_back(ts.phase);
                 stepCrossing(crossings[ci], crossingStates[ci], occ, now);
-                if (crossingStates[ci].phase != was) anyPhaseMoved = true;
+                if (crossingStates[ci].tracks.size() != was.size()) anyPhaseMoved = true;
+                for (std::size_t t = 0; t < was.size() &&
+                                        t < crossingStates[ci].tracks.size(); ++t)
+                    if (crossingStates[ci].tracks[t].phase != was[t]) anyPhaseMoved = true;
                 if (crossingStates[ci].barrierMoving()) anyBarrierMoving = true;
             }
             // A moving boom is the one thing here that has to be rebuilt every frame. The
@@ -2758,9 +2819,13 @@ int main(int argc, char** argv) {
             float bellGain = 0.0f;
             for (std::size_t ci = 0; ci < crossings.size(); ++ci) {
                 const CrossingSite& site = crossingSites[ci];
-                if (site.path < 0) continue;
+                if (!site.resolved()) continue;
                 if (!crossingBell(crossingStates[ci], now)) continue;
-                const glm::vec3 at = paths[site.path].poseAt(site.s).pos;
+                int on = -1;
+                for (std::size_t t = 0; t < site.tracks.size() && on < 0; ++t)
+                    if (site.tracks[t].path >= 0) on = static_cast<int>(t);
+                const glm::vec3 at =
+                    paths[site.tracks[on].path].poseAt(site.tracks[on].s).pos;
                 bellGain = std::max(bellGain,
                                     glm::clamp((250.0f - glm::distance(camPos, at)) / 200.0f,
                                                0.0f, 1.0f));

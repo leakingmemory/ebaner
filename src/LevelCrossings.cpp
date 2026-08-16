@@ -13,6 +13,7 @@
 
 #include "LevelCrossings.h"
 
+#include "SignalPaths.h" // walkAhead: one copy of "which leg are the points set to"
 #include "TrackPath.h"
 
 #include <algorithm>
@@ -57,7 +58,9 @@ std::vector<LevelCrossing> loadLevelCrossings(const std::string& datasetRoot) {
         if (kind != "crossing") continue;
         readName(is, x.name);
         is >> atTok;
-        if (atTok.empty() || !parseAt(atTok, x.trackId, x.frac)) continue;
+        CrossingTrack first;
+        if (atTok.empty() || !parseAt(atTok, first.trackId, first.frac)) continue;
+        x.tracks.push_back(first);
         // The tail is read as keywords rather than by position. `outerM` used to be a
         // typed extraction, which kills the stream the moment it meets a non-number - so
         // a bare `barriers` would have eaten the line before anything could read it, and
@@ -65,8 +68,14 @@ std::vector<LevelCrossing> loadLevelCrossings(const std::string& datasetRoot) {
         // optional, stay in either order, and every file written before this still loads.
         std::string tok;
         while (is >> tok) {
-            if (tok == "barriers") x.barriers = true;
-            else x.outerM = std::atof(tok.c_str());
+            if (tok == "barriers") { x.barriers = true; continue; }
+            if (tok == "also") { // another track of the same crossing
+                std::string more;
+                CrossingTrack t;
+                if ((is >> more) && parseAt(more, t.trackId, t.frac)) x.tracks.push_back(t);
+                continue;
+            }
+            x.outerM = std::atof(tok.c_str());
         }
         out.push_back(std::move(x));
     }
@@ -79,17 +88,25 @@ bool writeLevelCrossings(const std::string& datasetRoot,
     fs::create_directories(datasetRoot + "/overlay", ec);
     std::ofstream f(crossingsFile(datasetRoot), std::ios::trunc);
     if (!f) return false;
-    f << "# ebaner level crossings. Four heads, red over white, flashing; three detection\n"
-         "# circuits of the crossing's own. Secured by lights alone unless `barriers` says\n"
-         "# otherwise, in which case a boom each side covers the lane its traffic arrives\n"
-         "# on. Both variants light and ring the same.\n"
-         "# crossing <id> \"<name>\" <trackHex>:<frac> [<outerM>] [barriers]\n"
-         "# Both trailing fields are optional and may come in either order. outerM left\n"
-         "# out means the approach distance is derived from the line speed here, which is\n"
-         "# what nearly every crossing should do.\n";
+    f << "# ebaner level crossings. Heads red over white, flashing, a pair facing the\n"
+         "# trains on each track it spans and a pair facing the road; three detection\n"
+         "# circuits per track, of the crossing's own. Secured by lights alone unless\n"
+         "# `barriers` says otherwise, in which case a boom each side covers the lane its\n"
+         "# traffic arrives on. Both variants light and ring the same.\n"
+         "# crossing <id> \"<name>\" <trackHex>:<frac> [also <trackHex>:<frac>]... "
+         "[<outerM>] [barriers]\n"
+         "# Every trailing field is optional and they may come in any order. `also` names\n"
+         "# another track of the *same* crossing - one road shut and one bell, with its\n"
+         "# own circuits per track - which is what a crossing inside a station needs.\n"
+         "# outerM left out means the approach distance is derived from the line speed\n"
+         "# here, which is what nearly every crossing should do.\n";
     for (const LevelCrossing& x : xs) {
+        if (x.tracks.empty()) continue; // a crossing on no track is not a record
         f << "crossing " << x.id << ' ' << quoteName(x.name) << ' ' << std::hex
-          << x.trackId << std::dec << ':' << x.frac;
+          << x.tracks.front().trackId << std::dec << ':' << x.tracks.front().frac;
+        for (std::size_t t = 1; t < x.tracks.size(); ++t)
+            f << " also " << std::hex << x.tracks[t].trackId << std::dec << ':'
+              << x.tracks[t].frac;
         if (x.outerM > 0.0) f << ' ' << x.outerM;
         if (x.barriers) f << " barriers";
         f << '\n';
@@ -124,32 +141,44 @@ std::vector<CrossingSite> resolveCrossings(const std::vector<LevelCrossing>& xs,
     std::vector<CrossingSite> out(xs.size());
     for (std::size_t i = 0; i < xs.size(); ++i) {
         const LevelCrossing& x = xs[i];
-        const glm::dvec3 w = fracToWorld(polys, x.trackId, x.frac);
-        if (w.x == 0.0 && w.y == 0.0) continue; // stale/missing track
+        out[i].tracks.assign(x.tracks.size(), CrossingSite::On{});
+        for (std::size_t t = 0; t < x.tracks.size(); ++t) {
+            const glm::dvec3 w = fracToWorld(polys, x.tracks[t].trackId, x.tracks[t].frac);
+            if (w.x == 0.0 && w.y == 0.0) continue; // stale/missing track
 
-        // Which path carries this point, and where along it. A path chains several
-        // trackIds, so the crossing's own track id is not enough to find it - the
-        // position is. Bounding box first, as everything else here does.
-        const glm::vec2 target(static_cast<float>(w.x - origin.x),
-                               static_cast<float>(w.y - origin.y));
-        double best = 25.0; // m; beyond this it is not on that path at all
-        for (std::size_t pi = 0; pi < paths.size(); ++pi) {
-            const TrackPath& p = paths[pi];
-            if (!p.nearXY(target, static_cast<float>(best))) continue;
-            for (float s = 0.0f; s <= p.length(); s += 2.0f) {
-                const glm::vec3 q = p.poseAt(std::min(s, p.length())).pos;
-                const double d = std::hypot(q.x - target.x, q.y - target.y);
-                if (d < best) {
-                    best = d;
-                    out[i].path = static_cast<int>(pi);
-                    out[i].s = std::min(s, p.length());
+            // Which path carries this point, and where along it. A path chains several
+            // trackIds, so the crossing's own track id is not enough to find it - the
+            // position is. Bounding box first, as everything else here does.
+            const glm::vec2 target(static_cast<float>(w.x - origin.x),
+                                   static_cast<float>(w.y - origin.y));
+            double best = 25.0; // m; beyond this it is not on that path at all
+            for (std::size_t pi = 0; pi < paths.size(); ++pi) {
+                const TrackPath& p = paths[pi];
+                if (!p.nearXY(target, static_cast<float>(best))) continue;
+                for (float s = 0.0f; s <= p.length(); s += 2.0f) {
+                    const glm::vec3 q = p.poseAt(std::min(s, p.length())).pos;
+                    const double d = std::hypot(q.x - target.x, q.y - target.y);
+                    if (d < best) {
+                        best = d;
+                        out[i].tracks[t].path = static_cast<int>(pi);
+                        out[i].tracks[t].s = std::min(s, p.length());
+                    }
                 }
             }
         }
-        if (out[i].path < 0) continue;
+        if (!out[i].resolved()) continue;
 
-        const TrackPath& p = paths[out[i].path];
-        out[i].lineSpeedKmh = p.speedLimitAt(out[i].s);
+        // The distances are the crossing's, not a track's, and come off the fastest track
+        // it spans: the warning time a crossing needs is set by the fastest train that can
+        // reach it, and two tracks arming one road at two distances would be two crossings.
+        // A loop whose limit the export does not carry reads 0 here and falls back inside
+        // approachDistance, which is exactly why the *highest* is taken rather than the
+        // first.
+        for (const CrossingSite::On& o : out[i].tracks) {
+            if (o.path < 0) continue;
+            out[i].lineSpeedKmh =
+                std::max(out[i].lineSpeedKmh, paths[o.path].speedLimitAt(o.s));
+        }
         out[i].innerM = static_cast<float>(innerHalfM());
         out[i].outerM = static_cast<float>(
             x.outerM > 0.0 ? x.outerM : approachDistance(out[i].lineSpeedKmh));
@@ -161,8 +190,79 @@ std::vector<CrossingSite> resolveCrossings(const std::vector<LevelCrossing>& xs,
     return out;
 }
 
-void stepCrossing(const LevelCrossing& x, CrossingState& st, const CrossingOccupancy& occ,
-                  double now) {
+int crossingTrackUnder(const CrossingSite& site, const std::vector<TrackPath>& paths,
+                       const glm::vec2& at, float& s) {
+    constexpr double kOnIt = 4.0; // m; beyond this the point is on none of these roads
+    int on = -1;
+    double onD = kOnIt;
+    for (std::size_t t = 0; t < site.tracks.size(); ++t) {
+        const int pi = site.tracks[t].path;
+        if (pi < 0 || pi >= static_cast<int>(paths.size())) continue;
+        const TrackPath& p = paths[pi];
+        const float sAt = site.tracks[t].s;
+        // Search near the crossing rather than along the whole path: a path can be tens of
+        // kilometres long, and nothing outside the circuits can be on this crossing.
+        const float lo = std::max(0.0f, sAt - site.outerM - 200.0f);
+        const float hi = std::min(p.length(), sAt + site.outerM + 200.0f);
+        float bestS = lo;
+        double bestD = 1e30;
+        for (float u = lo; u <= hi; u += 5.0f) {
+            const glm::vec3 q = p.poseAt(u).pos;
+            const double d = std::hypot(q.x - at.x, q.y - at.y);
+            if (d < bestD) { bestD = d; bestS = u; }
+        }
+        // Refine: the coarse step is wider than the gap between two roads at a turnout,
+        // and which of them is nearer is the whole question here.
+        for (float u = std::max(lo, bestS - 5.0f); u <= std::min(hi, bestS + 5.0f);
+             u += 0.5f) {
+            const glm::vec3 q = p.poseAt(u).pos;
+            const double d = std::hypot(q.x - at.x, q.y - at.y);
+            if (d < bestD) { bestD = d; bestS = u; }
+        }
+        if (bestD < onD) { onD = bestD; on = static_cast<int>(t); s = bestS; }
+    }
+    return on;
+}
+
+int crossingRoadAtPoints(const CrossingSite& site, const SwitchNetwork& net, int on,
+                         float s) {
+    if (on < 0 || on >= static_cast<int>(site.tracks.size())) return on;
+    const int path = site.tracks[on].path;
+    if (path < 0) return on;
+    const float sx = site.tracks[on].s;
+    if (std::abs(sx - s) < 1e-3f) return on; // standing on the crossing itself
+    const int dir = s < sx ? +1 : -1;        // the way it must run to reach the crossing
+
+    // The nearest turnout between the train and the crossing that is *facing* it and set
+    // away from this road. Nearest, because that is the one it meets first: anything beyond
+    // it is on a road this train will not be taking.
+    int road = on;
+    float nearest = 1e30f;
+    const std::vector<Turnout>& tos = net.turnouts();
+    for (std::size_t i = 0; i < tos.size(); ++i) {
+        if (tos[i].mainPath != path) continue;
+        const float ts = tos[i].sMain;
+        if (dir * (ts - s) <= 0.0f || dir * (sx - ts) <= 0.0f) continue; // not in the way
+        // Trailing points do not divert anything: a train running into the heel takes the
+        // road it is already on (and forces the switch), whichever way they are set.
+        if (tos[i].facingS != dir) continue;
+        if (net.state(static_cast<int>(i)) != SwitchState::Diverging) continue;
+        for (std::size_t t = 0; t < site.tracks.size(); ++t) {
+            if (static_cast<int>(t) == on) continue;
+            if (site.tracks[t].path != tos[i].sidingPath) continue;
+            if (dir * (ts - s) < nearest) { nearest = dir * (ts - s); road = static_cast<int>(t); }
+        }
+    }
+    return road;
+}
+
+namespace {
+
+// One track's sequence. Everything here is about that track alone: its own circuits, its
+// own timers, its own phase. Whether the road is shut, when the bell started and where the
+// booms are belong to the crossing and are settled by the caller once all the tracks have
+// been stepped.
+void stepTrack(CrossingTrackState& st, const CrossingOccupancy& occ, double now) {
     const bool allClear = !occ.outerA && !occ.inner && !occ.outerB;
     st.allClearSince = allClear ? (st.allClearSince == 0.0 ? now : st.allClearSince) : 0.0;
     if (occ.inner) st.innerSeen = true;
@@ -175,8 +275,6 @@ void stepCrossing(const LevelCrossing& x, CrossingState& st, const CrossingOccup
     st.prevOuterB = occ.outerB;
 
     const auto enter = [&](CrossingPhase p) {
-        // Leaving Idle is the crossing activating, and what the bell is timed from.
-        if (st.phase == CrossingPhase::Idle && p != CrossingPhase::Idle) st.activeSince = now;
         st.phase = p;
         st.phaseSince = now;
     };
@@ -215,6 +313,21 @@ void stepCrossing(const LevelCrossing& x, CrossingState& st, const CrossingOccup
             }
             break;
     }
+}
+
+} // namespace
+
+void stepCrossing(const LevelCrossing& x, CrossingState& st,
+                  const std::vector<CrossingOccupancy>& occ, double now) {
+    st.tracks.resize(std::max<std::size_t>(x.tracks.size(), 1));
+    const bool wasShut = st.shut();
+    for (std::size_t t = 0; t < st.tracks.size(); ++t)
+        stepTrack(st.tracks[t], t < occ.size() ? occ[t] : CrossingOccupancy{}, now);
+
+    // The crossing activating is the *first* of its tracks leaving Idle, and the bell is
+    // timed from that. The second track arming ten seconds later does not restart it: one
+    // crossing, one bell, however many roads it carries.
+    if (!wasShut && st.shut()) st.activeSince = now;
 
     // --- The barriers -----------------------------------------------------------
     // Moved at a rate toward where they ought to be, rather than computed from a
@@ -228,10 +341,13 @@ void stepCrossing(const LevelCrossing& x, CrossingState& st, const CrossingOccup
     const double dt = st.lastStepS > 0.0 ? now - st.lastStepS : 0.0;
     st.lastStepS = now;
     if (x.barriers) {
-        const bool shut = st.phase == CrossingPhase::Closing ||
-                          st.phase == CrossingPhase::Secured;
+        // Down while *any* track is still closing or secured, and starting up only once
+        // every one of them has released: one road, one pair of booms.
+        bool closing = false;
+        for (const CrossingTrackState& t : st.tracks)
+            closing |= t.phase == CrossingPhase::Closing || t.phase == CrossingPhase::Secured;
         const float target =
-            (shut && now - st.activeSince >= kBarrierDelayS) ? 1.0f : 0.0f;
+            (closing && now - st.activeSince >= kBarrierDelayS) ? 1.0f : 0.0f;
         const float step = static_cast<float>(dt / kBarrierTravelS);
         if (st.barrier < target) st.barrier = std::min(target, st.barrier + step);
         else if (st.barrier > target) st.barrier = std::max(target, st.barrier - step);
@@ -240,30 +356,50 @@ void stepCrossing(const LevelCrossing& x, CrossingState& st, const CrossingOccup
     }
 }
 
-CrossingLights crossingLights(CrossingPhase phase) {
+CrossingLights crossingLights(CrossingPhase phase, bool fast) {
     CrossingLights l;
+    l.fast = fast;
     switch (phase) {
         case CrossingPhase::Idle:
             l.roadWhite = true;
             l.trainRed = true;
-            l.fast = false;
             break;
         case CrossingPhase::Closing:
         case CrossingPhase::Opening:
             l.roadRed = true;
             l.trainRed = true;
-            l.fast = true;
             break;
         case CrossingPhase::Secured:
             l.roadRed = true;
             l.trainWhite = true;
-            l.fast = true;
             break;
     }
     return l;
 }
 
 bool crossingBell(const CrossingState& st, double now) {
-    if (st.phase == CrossingPhase::Idle) return false;
+    if (!st.shut()) return false;
     return now - st.activeSince < kBellS;
+}
+
+int crossingTrackAhead(const LevelCrossing& x, const std::vector<TrackPoly>& polys,
+                       const TrackJunctions& junctions, const SwitchNetwork& net,
+                       std::uint32_t trackId, double frac, int dir, double maxM) {
+    int found = -1;
+    // The walk itself - and the awkward business of which leg of a turnout the points are
+    // set to - is the one in SignalPaths.h that the distant signals read the line with.
+    // All this asks of it is a different question about each stretch: is the crossing on
+    // it, and if so which of its tracks.
+    walkAhead(polys, junctions, net, trackId, frac, dir, maxM,
+              [&](std::uint32_t track, double from, double to, int d) {
+                  for (std::size_t t = 0; t < x.tracks.size(); ++t) {
+                      if (x.tracks[t].trackId != track) continue;
+                      const double f = x.tracks[t].frac;
+                      if (d * (f - from) < -1e-9 || d * (to - f) < -1e-9) continue;
+                      found = static_cast<int>(t);
+                      return true;
+                  }
+                  return false;
+              });
+    return found;
 }

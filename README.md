@@ -395,9 +395,38 @@ no exit signal means for a train being let into it.
 
 **Level crossings.** Secured by lights, and optionally by half-barriers too. Pick **Level
 crossings** from the Esc menu and **click a point on any track**; **right-click** selects,
-**B** toggles the variant between lights alone and lights with barriers, **F2** names,
-**X** deletes, **Ctrl+S** saves to `overlay/level-crossings.txt`. There is no flip: a
-crossing faces both ways.
+**T** then a click adds another track the same crossing spans, **B** toggles the variant
+between lights alone and lights with barriers, **F2** names, **X** deletes, **Ctrl+S** saves
+to `overlay/level-crossings.txt`. There is no flip: a crossing faces both ways.
+
+**A crossing inside a station spans both roads**, and that is one crossing rather than two:
+one road shut, one bell, one pair of booms. What it is *not* is one set of circuits. Each
+track it spans has its own three, read independently, so a train on one road runs the
+sequence while the other road is left alone — and two trains, one on each, are each seen
+for themselves. Each track gets its own pair of train heads, so "which road is this warning
+about" has an answer.
+
+**A train is on one road**, and out on the approach it is on neither. Which road is decided
+in two steps, because geometry can only answer the first.
+
+*Where it is*: the nearest road takes it, and no other. Asking each road "is this train
+near enough to be mine" gets this wrong, because the two roads of a station converge at
+their turnouts and run about a metre apart there — both say yes, and a departure on the
+main line arms the loop's circuits as it passes the points.
+
+*Where it is going*: out beyond the turnouts the roads have not divided, so a train there is
+on the rails that lead to both, and which road it is **for** is a question about the points.
+A facing turnout between it and the crossing, set to the other road, is what settles it.
+Arm the road it will not take and the sequence runs on the wrong side — that road's heads
+clear to white while the train passes the other's at red. Between the turnouts nothing is in
+the way and the geometry stands.
+
+The pulse belongs to the crossing and the lamps to the track. Either track arming puts
+**every** head on the crossing onto the fast flash, but only the track the train is on goes
+white: a track standing idle beside one that is closing shows **red on the fast pulse**. The
+approach and repeat distances are the crossing's too, derived once from the **fastest** track
+it spans — the warning time a crossing needs is set by the fastest train that can reach it,
+and two roads arming one crossing at two distances would be two crossings sharing a road.
 
 Four heads, each **red over white** and flashing: two facing the train, one each way along
 the track, and two facing the road across it. Three detection circuits come with the
@@ -438,6 +467,16 @@ shown an idle crossing by the very train that is about to close it — and floor
 never lands inside the inner circuit at slow line speeds. At 130 km/h that is 745 m
 against a 1473 m approach; at 40 km/h it comes down to 75 m. Nothing to author: they are
 derived from the crossing, and the editor HUD shows where they came out.
+
+Where a crossing spans two roads, **a repeat stands for the road the points lead to**. Out
+on the single track beyond a station a driver does not yet know which road they will be
+taken to, and the mast does not move when the points are thrown — so what it is warning
+about is resolved by walking the road ahead, taking each turnout as it is currently set.
+Where the points cannot say — a broken switch, or a fan the interlocking does not know — it
+**warns**, rather than picking a road it cannot know. Two repeats that would stand at the
+same spot are one mast, and a repeat that cannot be placed at its braking distance at all
+(a loop is short, and past its turnout is another road) simply is not there: the one on the
+road the points select covers both.
 
 Each crossing runs its **own** blink, phased off its id, so two within sight of one
 another are visibly out of step — as real ones are, each having its own oscillator.

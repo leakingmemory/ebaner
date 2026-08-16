@@ -30,11 +30,21 @@ class TrackPath;
 // update path that already exists for geometry that changes while the sim runs.
 class CrossingMesh {
 public:
+    // What each of a crossing's repeats is warning about: the track the points lead to from
+    // where that mast stands, as `crossingTrackAhead` reports it, or -1 where they cannot
+    // say - which is drawn as the shut indication rather than guessed at.
+    //
+    // Indexed [crossing][2 * track + side], side 0 being the -s repeat. Empty, or short,
+    // leaves every repeat standing for its own track, which is what a crossing spanning one
+    // track means.
+    using DistantFor = std::vector<std::vector<int>>;
+
     // `states` is parallel to `xs`; a crossing whose site did not resolve is skipped.
     void build(const std::vector<LevelCrossing>& xs,
                const std::vector<CrossingSite>& sites,
                const std::vector<CrossingState>& states,
-               const std::vector<TrackPath>& paths, const glm::dvec3& origin);
+               const std::vector<TrackPath>& paths, const glm::dvec3& origin,
+               const DistantFor& distantFor = {});
 
     const std::vector<TrackVertex>& vertices() const { return vertices_; }
     const std::vector<std::uint32_t>& indices() const { return indices_; }

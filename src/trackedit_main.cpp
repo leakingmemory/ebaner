@@ -337,6 +337,8 @@ int main(int argc, char** argv) {
     std::vector<CrossingSite> crossingSites;
     bool crossingDirty = false;
     int selCrossing = -1;
+    // A crossing waiting for the next click to name another of its tracks (A), or -1.
+    int armedCrossing = -1;
     int nextCrossingId = 1;
     for (const LevelCrossing& x : crossings)
         nextCrossingId = std::max(nextCrossingId, x.id + 1);
@@ -2235,6 +2237,25 @@ int main(int argc, char** argv) {
         } else if (mode == EdMode::Crossings) { // --- Level crossings mode ---
             const bool haveSel =
                 selCrossing >= 0 && selCrossing < static_cast<int>(crossings.size());
+            // T: the next click names another track of this crossing rather than placing
+            // a new one. A crossing inside a station spans both roads and is one crossing
+            // - one road shut, one bell - with its own circuits on each.
+            //
+            // Not A, which is the strafe key: pressing it flew the camera sideways and did
+            // nothing else, which is a poor way to learn that nothing was selected.
+            if (kT && !prevT) {
+                if (armedCrossing >= 0) {
+                    armedCrossing = -1;
+                    pathMsg = "cancelled";
+                } else if (haveSel) {
+                    armedCrossing = selCrossing;
+                    pathMsg = "click the other track this crossing spans";
+                } else {
+                    pathMsg = "right-click a crossing first, then T";
+                }
+                pathMsgUntil = glfwGetTime() + 3.0;
+                rebuildOverlay();
+            }
             // B toggles the variant: lights alone, or lights and half-barriers. Both are
             // real and neither is the odd one out, so this is a toggle rather than a
             // separate kind of thing to place.
@@ -2838,12 +2859,28 @@ int main(int argc, char** argv) {
             }
             rebuildOverlay();
         } else if (!g_mouseCaptured && mL && !prevML && mode == EdMode::Crossings) {
-            if (circHit) {
+            if (circHit && armedCrossing >= 0 &&
+                armedCrossing < static_cast<int>(crossings.size())) {
+                // Arming with A means the next click adds a track to that crossing rather
+                // than placing a new one: a crossing inside a station spans both roads and
+                // is one crossing, not two that have to be kept in step.
+                crossings[armedCrossing].tracks.push_back({circTrack, circFrac});
+                selCrossing = armedCrossing;
+                armedCrossing = -1;
+                crossingDirty = true;
+                pathMsg = crossings[selCrossing].name + ": " +
+                          std::to_string(crossings[selCrossing].tracks.size()) + " track(s)";
+                pathMsgUntil = glfwGetTime() + 3.0;
+                std::printf("[trackedit] crossing %d -> %zu track(s) (Ctrl+S to save)\n",
+                            crossings[selCrossing].id,
+                            crossings[selCrossing].tracks.size());
+                rebuildStructs();
+                rebuildOverlay();
+            } else if (circHit) {
                 LevelCrossing x;
                 x.id = nextCrossingId++;
                 x.name = "X" + std::to_string(x.id);
-                x.trackId = circTrack;
-                x.frac = circFrac;
+                x.tracks.push_back({circTrack, circFrac});
                 crossings.push_back(std::move(x));
                 selCrossing = static_cast<int>(crossings.size()) - 1;
                 crossingDirty = true;
@@ -3028,8 +3065,8 @@ int main(int argc, char** argv) {
             float best = 24.0f; // px
             selCrossing = -1;
             for (std::size_t i = 0; i < crossings.size(); ++i) {
-                const glm::dvec3 w =
-                    fracToWorld(polys, crossings[i].trackId, crossings[i].frac);
+              for (const CrossingTrack& ct : crossings[i].tracks) {
+                const glm::dvec3 w = fracToWorld(polys, ct.trackId, ct.frac);
                 if (w.x == 0.0 && w.y == 0.0) continue;
                 const glm::vec4 clip = viewProj * glm::vec4(
                     float(w.x - o.x), float(w.y - o.y), float(w.z - o.z) + 2.0f, 1.0f);
@@ -3038,6 +3075,7 @@ int main(int argc, char** argv) {
                                    (clip.y / clip.w * 0.5f + 0.5f) * fbh);
                 const float dpx = glm::length(px - cur);
                 if (dpx < best) { best = dpx; selCrossing = static_cast<int>(i); }
+              }
             }
             rebuildOverlay();
         } else if (!g_mouseCaptured && mR && !prevMR && mode == EdMode::SimpleEntries) {
@@ -3329,28 +3367,38 @@ int main(int argc, char** argv) {
                 // The circuit extents are the whole configuration of a crossing and are
                 // invisible from the masts, so they are worked out live and shown.
                 const CrossingSite& st = crossingSites[selCrossing];
-                if (st.path < 0)
+                if (!st.resolved())
                     std::snprintf(buf, sizeof(buf), "%s   NOT ON ANY PATH",
                                   crossings[selCrossing].name.c_str());
                 else
                     std::snprintf(buf, sizeof(buf),
-                                  "%s   %.0f km/h -> approach %.0f m%s   inner +/-%.0f m"
-                                  "   distant +/-%.0f m   %s",
-                                  crossings[selCrossing].name.c_str(), st.lineSpeedKmh,
+                                  "%s  %zu track(s)  %.0f km/h -> approach %.0f m%s"
+                                  "  inner +/-%.0f m  distant +/-%.0f m  %s",
+                                  crossings[selCrossing].name.c_str(),
+                                  crossings[selCrossing].tracks.size(), st.lineSpeedKmh,
                                   st.outerM,
                                   crossings[selCrossing].outerM > 0.0 ? " (set)" : "",
                                   st.innerM, st.distantM,
                                   crossings[selCrossing].barriers ? "LIGHTS + BARRIERS"
                                                                   : "lights only");
                 appendText(tv, buf, x, 40.0f + 5 * lh, sc,
-                           st.path < 0 ? glm::vec3(1.0f, 0.55f, 0.3f)
-                                       : glm::vec3(0.8f, 0.95f, 0.8f),
+                           !st.resolved() ? glm::vec3(1.0f, 0.55f, 0.3f)
+                                          : glm::vec3(0.8f, 0.95f, 0.8f),
                            fbw, fbh);
             }
+            // What was just done, or what is being waited for. This mode had no message
+            // line at all, so a key whose only effect is to arm something looked broken.
+            if (armedCrossing >= 0 && armedCrossing < static_cast<int>(crossings.size()))
+                appendText(tv,
+                           "ADDING A TRACK TO " + crossings[armedCrossing].name +
+                               ": click it  (T cancels)",
+                           x, 40.0f + 6 * lh, sc, glm::vec3(1.0f, 0.9f, 0.5f), fbw, fbh);
+            else if (glfwGetTime() < pathMsgUntil && !pathMsg.empty())
+                appendText(tv, pathMsg, x, 40.0f + 6 * lh, sc, glm::vec3(1.0f, 0.55f, 0.4f),
+                           fbw, fbh);
             appendText(tv,
-                       "click track: place   right-click: select   B: barriers   "
-                       "F2: name   X: delete",
-                       x, 40.0f + 6 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
+                       "click: place  right-click: select  T: +track  B: barriers  F2/X",
+                       x, 40.0f + 7 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
           } else if (mode == EdMode::SimpleEntries) { // --- Simple entry signals HUD ---
             appendText(tv, "MODE: SIMPLE ENTRY SIGNALS (Esc menu to switch)", x,
                        40.0f + 3 * lh, sc, glm::vec3(1.0f, 0.75f, 0.3f), fbw, fbh);

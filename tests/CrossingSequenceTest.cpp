@@ -29,8 +29,10 @@
 #include "TrackOverlay.h"
 #include "TrackPath.h"
 #include "TxpPositions.h"
+#include "CrossingMesh.h"
 #include "LevelCrossings.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -57,12 +59,18 @@ const char* phaseName(CrossingPhase p) {
     return "?";
 }
 
-// A crossing driven by a clock, with the circuits set by hand.
+// A crossing driven by a clock, with the circuits set by hand. `tracks` is how many roads
+// it spans - one for the ordinary kind, two for a crossing inside a station.
 struct Rig {
     LevelCrossing x; // the crossing itself; set x.barriers to test the barrier variant
     CrossingState st;
-    CrossingOccupancy occ;
+    std::vector<CrossingOccupancy> occ;
     double now = 0.0;
+
+    explicit Rig(std::size_t tracks = 1) : occ(tracks) {
+        for (std::size_t t = 0; t < tracks; ++t)
+            x.tracks.push_back({static_cast<std::uint32_t>(t + 1), 0.5});
+    }
 
     // Advance `seconds`, stepping finely enough that a 5 s phase cannot be stepped over.
     void run(double seconds) {
@@ -73,12 +81,22 @@ struct Rig {
         }
     }
     // Apply a circuit change and let it be seen, without meaningfully advancing time.
-    void set(bool a, bool inner, bool b) {
-        occ = {a, inner, b};
+    void set(bool a, bool inner, bool b) { setOn(0, a, inner, b); }
+    void setOn(std::size_t track, bool a, bool inner, bool b) {
+        occ[track] = {a, inner, b};
         now += 0.01;
         stepCrossing(x, st, occ, now);
     }
-    CrossingPhase phase() const { return st.phase; }
+    CrossingPhase phase(std::size_t track = 0) const { return st.phase(track); }
+    // What a head on `track` shows, on the crossing's own pulse.
+    CrossingLights lights(std::size_t track = 0) const {
+        return crossingLights(st.phase(track), st.shut());
+    }
+    // What the road sees: the crossing as a whole, not one of its tracks.
+    CrossingLights road() const {
+        return crossingLights(st.shut() ? CrossingPhase::Closing : CrossingPhase::Idle,
+                              st.shut());
+    }
 };
 
 void expectPhase(Rig& r, CrossingPhase want, const std::string& what) {
@@ -86,6 +104,15 @@ void expectPhase(Rig& r, CrossingPhase want, const std::string& what) {
     std::printf("  %-56s %s%s\n", what.c_str(), ok ? "ok" : "FAILED",
                 ok ? "" : (std::string("  (was ") + phaseName(r.phase()) + ", wanted " +
                            phaseName(want) + ")")
+                              .c_str());
+    if (!ok) ++failures;
+}
+
+void expectPhaseOn(Rig& r, std::size_t track, CrossingPhase want, const std::string& what) {
+    const bool ok = r.phase(track) == want;
+    std::printf("  %-56s %s%s\n", what.c_str(), ok ? "ok" : "FAILED",
+                ok ? "" : (std::string("  (was ") + phaseName(r.phase(track)) +
+                           ", wanted " + phaseName(want) + ")")
                               .c_str());
     if (!ok) ++failures;
 }
@@ -104,8 +131,9 @@ int main(int argc, char** argv) {
         r.run(4.0);
         expectPhase(r, CrossingPhase::Closing, "still closing before the delay is up");
         {
-            const CrossingLights l = crossingLights(r.phase());
-            check(l.roadRed && !l.roadWhite, "road is red at once, from the first moment");
+            const CrossingLights l = r.lights();
+            check(r.road().roadRed && !r.road().roadWhite,
+                  "road is red at once, from the first moment");
             check(l.trainRed && !l.trainWhite, "train is still red through the delay");
             check(l.fast, "and on the fast pulse");
         }
@@ -113,9 +141,9 @@ int main(int argc, char** argv) {
         r.run(2.0); // past 5 s
         expectPhase(r, CrossingPhase::Secured, "goes secured after the delay");
         {
-            const CrossingLights l = crossingLights(r.phase());
+            const CrossingLights l = r.lights();
             check(l.trainWhite && !l.trainRed, "train goes white");
-            check(l.roadRed, "road stays red");
+            check(r.road().roadRed, "road stays red");
         }
 
         r.set(false, true, false); // now over the crossing
@@ -125,9 +153,10 @@ int main(int argc, char** argv) {
         r.set(false, false, true); // off the crossing, into the far approach circuit
         expectPhase(r, CrossingPhase::Opening, "inner clearing starts the release");
         {
-            const CrossingLights l = crossingLights(r.phase());
+            const CrossingLights l = r.lights();
             check(l.trainRed && !l.trainWhite, "train drops to red at once");
-            check(l.roadRed && !l.roadWhite, "road is still held for the delay");
+            check(r.road().roadRed && !r.road().roadWhite,
+                  "road is still held for the delay");
         }
 
         r.run(4.0);
@@ -135,8 +164,8 @@ int main(int argc, char** argv) {
         r.run(2.0);
         expectPhase(r, CrossingPhase::Idle, "back to idle after the mirrored delay");
         {
-            const CrossingLights l = crossingLights(r.phase());
-            check(l.roadWhite && !l.roadRed, "road opens white");
+            const CrossingLights l = r.lights();
+            check(r.road().roadWhite && !r.road().roadRed, "road opens white");
             check(l.trainRed, "train shows red");
             check(!l.fast, "and everything is back on the slow pulse");
         }
@@ -202,6 +231,205 @@ int main(int argc, char** argv) {
         expectPhase(r, CrossingPhase::Closing, "a fresh approach edge arms it again");
     }
 
+    // A crossing spanning both roads of a station. One road shut and one bell, but a set of
+    // circuits per track: a train on one of them must not make the other say anything.
+    std::puts("\nA crossing over two tracks, with a train on one of them:");
+    {
+        Rig r(2);
+        r.setOn(0, true, false, false); // a train on track 1 arms the crossing
+        expectPhaseOn(r, 0, CrossingPhase::Closing, "the track it is on arms");
+        expectPhaseOn(r, 1, CrossingPhase::Idle, "the other track is left alone");
+        check(r.road().roadRed, "the road is shut regardless of which track it was");
+
+        // The pulse belongs to the crossing, the lamps to the track.
+        check(r.lights(0).fast && r.lights(1).fast,
+              "both tracks flash fast - it is one crossing");
+        check(r.lights(1).trainRed && !r.lights(1).trainWhite,
+              "and the idle track shows red on that fast pulse");
+
+        r.run(6.0);
+        expectPhaseOn(r, 0, CrossingPhase::Secured, "the train's track goes secured");
+        expectPhaseOn(r, 1, CrossingPhase::Idle, "the other still idle");
+        check(r.lights(0).trainWhite && !r.lights(0).trainRed,
+              "only the track with the train on it goes white");
+        check(r.lights(1).trainRed && !r.lights(1).trainWhite, "the other stays red");
+        check(r.lights(1).fast, "still on the crossing's fast pulse");
+
+        r.setOn(0, false, true, false);
+        r.run(2.0);
+        r.setOn(0, false, false, true); // over and gone
+        r.run(6.0);
+        expectPhaseOn(r, 0, CrossingPhase::Idle, "back to idle when it has gone");
+        check(r.road().roadWhite && !r.road().roadRed, "and the road opens");
+        check(!r.lights(0).fast && !r.lights(1).fast, "everything back on the slow pulse");
+    }
+
+    std::puts("\nTwo trains, one on each track:");
+    {
+        Rig r(2);
+        r.setOn(0, true, false, false);
+        r.run(3.0);
+        r.setOn(1, true, false, false); // the second arms 3 s later
+        expectPhaseOn(r, 0, CrossingPhase::Closing, "the first is still closing");
+        expectPhaseOn(r, 1, CrossingPhase::Closing, "and the second starts its own");
+
+        r.run(3.0); // past the first's delay, not the second's
+        expectPhaseOn(r, 0, CrossingPhase::Secured, "the first goes secured on its clock");
+        expectPhaseOn(r, 1, CrossingPhase::Closing, "the second on its own");
+        check(r.lights(0).trainWhite && r.lights(1).trainRed,
+              "so one shows white while the other still shows red");
+
+        r.run(3.0);
+        expectPhaseOn(r, 1, CrossingPhase::Secured, "then the second goes secured too");
+
+        // The first train goes; the second is still standing on the crossing.
+        r.setOn(0, false, true, false);
+        r.run(1.0);
+        r.setOn(0, false, false, false);
+        r.setOn(1, false, true, false);
+        r.run(6.0);
+        expectPhaseOn(r, 0, CrossingPhase::Idle, "the first track releases and opens");
+        check(r.road().roadRed, "but the road stays shut - the other train is still on it");
+
+        r.setOn(1, false, false, false);
+        r.run(6.0);
+        expectPhaseOn(r, 1, CrossingPhase::Idle, "the second releases in its turn");
+        check(r.road().roadWhite, "and only then does the road open");
+    }
+
+    std::puts("\nOne crossing, one bell, however many tracks:");
+    {
+        Rig r(2);
+        r.setOn(0, true, false, false);
+        check(crossingBell(r.st, r.now), "the bell starts with the first track");
+        const double started = r.now;
+        r.run(10.0);
+        r.setOn(1, true, false, false); // the second track arms well into the ringing
+        check(crossingBell(r.st, r.now), "still ringing when the second track arms");
+        r.now = started + kBellS + 0.5;
+        stepCrossing(r.x, r.st, r.occ, r.now);
+        check(!crossingBell(r.st, r.now),
+              "and it stops kBellS after the *first* - the second does not restart it");
+        check(r.st.shut(), "while the crossing is still shut");
+    }
+
+    std::puts("\nOne road, one pair of booms:");
+    {
+        Rig r(2);
+        r.x.barriers = true;
+        r.setOn(0, true, false, false);
+        r.run(kBarrierDelayS + kBarrierTravelS + 1.0);
+        check(r.st.barrier >= 0.999f, "down once a train on either track has armed it");
+
+        // The other track arms while the booms are down, and the first train leaves.
+        r.setOn(1, true, false, false);
+        r.setOn(0, false, true, false);
+        r.run(1.0);
+        r.setOn(0, false, false, false);
+        r.run(kTrainDelayS + 1.0);
+        expectPhaseOn(r, 0, CrossingPhase::Idle, "the first track is done");
+        check(r.st.barrier >= 0.999f, "the booms stay down for the other train");
+
+        r.setOn(1, false, true, false); // the second train reaches the crossing
+        r.run(1.0);
+        r.setOn(1, false, false, false); // and is off it again
+        r.run(kTrainDelayS + kBarrierTravelS + 2.0);
+        check(r.st.barrier <= 0.001f, "and come up only when both tracks are clear");
+    }
+
+    // The road heads have to clear every rail the crossing spans, not just the first one.
+    // Six metres off one track is between the rails of another seven metres away.
+    std::puts("\nThe road heads stand clear of every track:");
+    {
+        // Two straight tracks running north, seven metres apart, and a crossing on both.
+        auto straight = [](std::uint32_t id, float xOff) {
+            std::vector<glm::vec3> pts;
+            for (int i = 0; i <= 20; ++i)
+                pts.push_back({xOff, static_cast<float>(i) * 50.0f, 0.0f});
+            return TrackPath(id, 0, pts, std::vector<std::uint16_t>(pts.size(), 80));
+        };
+        const std::vector<TrackPath> paths{straight(1, 0.0f), straight(2, 7.0f)};
+
+        auto spanOf = [&](std::size_t tracks) {
+            std::vector<LevelCrossing> xs(1);
+            xs[0].id = 1;
+            xs[0].barriers = true;
+            CrossingSite site;
+            for (std::size_t t = 0; t < tracks; ++t) {
+                xs[0].tracks.push_back({static_cast<std::uint32_t>(t + 1), 0.5});
+                site.tracks.push_back({static_cast<int>(t), 500.0f});
+            }
+            site.innerM = 50.0f;
+            site.outerM = 400.0f;
+            site.distantM = 300.0f;
+            CrossingMesh m;
+            m.build(xs, {site}, std::vector<CrossingState>(1), paths, glm::dvec3(0.0));
+            // How far the mesh reaches across the road, near the crossing itself. `across`
+            // for a track running north is +x, which is where the second track sits.
+            float lo = 1e9f, hi = -1e9f;
+            for (const TrackVertex& v : m.vertices()) {
+                if (std::abs(v.pos.y - 500.0f) > 30.0f) continue; // a repeat, not the site
+                lo = std::min(lo, v.pos.x);
+                hi = std::max(hi, v.pos.x);
+            }
+            return std::pair<float, float>{lo, hi};
+        };
+
+        const auto one = spanOf(1);
+        const auto two = spanOf(2);
+        std::printf("     one track: %+.2f .. %+.2f m   two tracks: %+.2f .. %+.2f m\n",
+                    one.first, one.second, two.first, two.second);
+        // The far post moves out by exactly the second track's offset; the near one does
+        // not move at all, since nothing was added on that side.
+        check(std::abs(two.first - one.first) < 0.01f,
+              "the near post stands where it did");
+        check(std::abs((two.second - one.second) - 7.0f) < 0.01f,
+              "and the far one moves out by the width of what was added");
+        check(two.first < 0.0f && two.second > 7.0f,
+              "so both posts are outside both tracks rather than between them");
+    }
+
+    // Which road a train is on, where the two of them converge.
+    //
+    // This is what a per-track circuit gets wrong if each track asks "is it near me": the
+    // roads of a station meet at their turnouts and run about a metre apart there, so both
+    // say yes, and a train leaving on the main line arms the loop's circuits as it passes
+    // the points. It is on one road.
+    std::puts("\nWhich road a train is on where the two converge:");
+    {
+        // A main line running north, and a loop that leaves it, holds seven metres off,
+        // and comes back - the shape of a station, in the small.
+        std::vector<glm::vec3> mainPts, loopPts;
+        for (int i = 0; i <= 40; ++i) mainPts.push_back({0.0f, i * 25.0f, 0.0f});
+        for (int i = 0; i <= 40; ++i) {
+            const float y = i * 25.0f;
+            // 0 at either end, 7 m out in the middle, over a 250 m transition each way.
+            const float off = std::clamp(std::min(y, 1000.0f - y) / 250.0f, 0.0f, 1.0f);
+            loopPts.push_back({7.0f * off, y, 0.0f});
+        }
+        const std::vector<TrackPath> paths{
+            TrackPath(1, 0, mainPts, std::vector<std::uint16_t>(mainPts.size(), 80)),
+            TrackPath(2, 0, loopPts, std::vector<std::uint16_t>(loopPts.size(), 40))};
+
+        CrossingSite site;
+        site.tracks.push_back({0, 500.0f}); // the crossing, halfway along both
+        site.tracks.push_back({1, 500.0f});
+        site.innerM = 50.0f;
+        site.outerM = 400.0f;
+
+        auto onRoad = [&](float x, float y) {
+            float s = 0.0f;
+            return crossingTrackUnder(site, paths, glm::vec2(x, y), s);
+        };
+        check(onRoad(0.0f, 500.0f) == 0, "on the main line at the crossing: the main line");
+        check(onRoad(7.0f, 500.0f) == 1, "on the loop at the crossing: the loop");
+        // The ends, where the two are a metre apart or less - the case that bit.
+        check(onRoad(0.0f, 40.0f) == 0, "on the main line at the points: still the main");
+        check(onRoad(1.1f, 40.0f) == 1, "and a metre across at the points: the loop");
+        check(onRoad(0.0f, 960.0f) == 0, "the same at the other end");
+        check(onRoad(30.0f, 500.0f) < 0, "a point on neither road is on neither");
+    }
+
     std::puts("\nThe approach distance follows the line speed:");
     {
         const double fast = approachDistance(130.0);
@@ -225,21 +453,36 @@ int main(int argc, char** argv) {
         // A name with spaces and Norwegian letters, which is what quoting is for. Not one
         // with a quote in it: quoteName documents that names are filtered on entry, so
         // that cannot arise, and a test for it would only be testing a fiction.
-        xs.push_back({1, "Fauskeveien nord", 0x6d7, 0.30, 0.0, false});
-        xs.push_back({2, "Røsvikveien", 0x6d9, 0.755, 900.0, false});
-        xs.push_back({3, "Leivset", 0x6da, 0.10, 0.0, true});   // barriers, no override
-        xs.push_back({4, "Finneid bru", 0x6db, 0.90, 750.0, true}); // both fields
+        auto one = [](int id, const char* name, std::uint32_t track, double frac,
+                      double outer, bool barriers) {
+            LevelCrossing x;
+            x.id = id; x.name = name; x.outerM = outer; x.barriers = barriers;
+            x.tracks.push_back({track, frac});
+            return x;
+        };
+        xs.push_back(one(1, "Fauskeveien nord", 0x6d7, 0.30, 0.0, false));
+        xs.push_back(one(2, "Røsvikveien", 0x6d9, 0.755, 900.0, false));
+        xs.push_back(one(3, "Leivset", 0x6da, 0.10, 0.0, true));   // barriers, no override
+        xs.push_back(one(4, "Finneid bru", 0x6db, 0.90, 750.0, true)); // both fields
+        // A crossing spanning both roads of a station, which is what `also` is for.
+        xs.push_back(one(5, "Skonseng", 0x650, 0.42, 0.0, true));
+        xs.back().tracks.push_back({0x37db, 0.31});
         check(writeLevelCrossings(argv[1], xs), "write");
         const std::vector<LevelCrossing> back = loadLevelCrossings(argv[1]);
-        check(back.size() == 4, "every record comes back");
+        check(back.size() == 5, "every record comes back");
         bool same = back.size() == xs.size();
-        for (std::size_t i = 0; same && i < back.size(); ++i)
+        for (std::size_t i = 0; same && i < back.size(); ++i) {
             same = back[i].id == xs[i].id && back[i].name == xs[i].name &&
-                   back[i].trackId == xs[i].trackId &&
-                   std::abs(back[i].frac - xs[i].frac) < 1e-9 &&
+                   back[i].tracks.size() == xs[i].tracks.size() &&
                    std::abs(back[i].outerM - xs[i].outerM) < 1e-9 &&
                    back[i].barriers == xs[i].barriers;
+            for (std::size_t t = 0; same && t < back[i].tracks.size(); ++t)
+                same = back[i].tracks[t].trackId == xs[i].tracks[t].trackId &&
+                       std::abs(back[i].tracks[t].frac - xs[i].tracks[t].frac) < 1e-9;
+        }
         check(same, "ids, names, tracks, fracs, overrides and barriers survive");
+        check(back.size() > 4 && back[4].tracks.size() == 2 && back[0].tracks.size() == 1,
+              "a crossing that spans two tracks comes back spanning two");
         check(back.size() > 1 && back[0].outerM == 0.0 && back[1].outerM == 900.0,
               "an absent override stays absent, a set one is kept");
         check(back.size() > 3 && !back[0].barriers && back[2].barriers && back[3].barriers,
@@ -254,10 +497,14 @@ int main(int argc, char** argv) {
             f << "crossing 1 \"old style\" 6d7:0.5\n"          // as it was written before
                  "crossing 2 \"old with override\" 6d8:0.5 800\n"
                  "crossing 3 \"barriers only\" 6d9:0.5 barriers\n"
-                 "crossing 4 \"reversed\" 6da:0.5 barriers 650\n"; // keyword first
+                 "crossing 4 \"reversed\" 6da:0.5 barriers 650\n" // keyword first
+                 "crossing 5 \"two roads\" 650:0.42 also 37db:0.31 barriers\n";
             f.close();
             const std::vector<LevelCrossing> old = loadLevelCrossings(argv[1]);
-            check(old.size() == 4, "all four forms load");
+            check(old.size() == 5, "all five forms load");
+            check(old.size() > 4 && old[0].tracks.size() == 1 && old[4].tracks.size() == 2 &&
+                      old[4].tracks[1].trackId == 0x37db && old[4].barriers,
+                  "a record written before `also` loads with one track, a new one with two");
             check(old.size() > 1 && !old[0].barriers && old[0].outerM == 0.0,
                   "a line written before barriers existed is unchanged");
             check(old.size() > 1 && !old[1].barriers && old[1].outerM == 800.0,
@@ -350,22 +597,23 @@ int main(int argc, char** argv) {
     // whole point: the lights carry the warning after the bell has had its say.
     {
         std::puts("\nThe crossing's warning bell:");
-        const LevelCrossing x;   // lights only: the bell is the same either way
+        LevelCrossing x;   // lights only: the bell is the same either way
+        x.tracks.push_back({1, 0.5});
         CrossingState st;
-        CrossingOccupancy occ;
+        std::vector<CrossingOccupancy> occ(1);
         double now = 100.0;
         check(!crossingBell(st, now), "silent while the crossing is idle");
 
-        occ.outerA = true; // a train arms the approach
+        occ[0].outerA = true; // a train arms the approach
         stepCrossing(x, st, occ, now);
-        check(st.phase == CrossingPhase::Closing, "the sequence starts");
+        check(st.phase(0) == CrossingPhase::Closing, "the sequence starts");
         check(crossingBell(st, now), "the bell starts with it");
 
         // Through the phase change, which is where a bell timed off phaseSince breaks.
         now += kTrainDelayS + 1.0;
-        occ.outerA = false;
+        occ[0].outerA = false;
         stepCrossing(x, st, occ, now);
-        check(st.phase == CrossingPhase::Secured, "and reaches Secured");
+        check(st.phase(0) == CrossingPhase::Secured, "and reaches Secured");
         check(crossingBell(st, now), "the bell rings on through the phase change");
 
         now = 100.0 + kBellS - 0.5;
@@ -375,23 +623,24 @@ int main(int argc, char** argv) {
         now = 100.0 + kBellS + 0.5;
         stepCrossing(x, st, occ, now);
         check(!crossingBell(st, now), "silent once kBellS has passed");
-        check(st.phase == CrossingPhase::Secured, "while the crossing is still shut");
-        check(crossingLights(st.phase).roadRed && crossingLights(st.phase).fast,
+        check(st.phase(0) == CrossingPhase::Secured, "while the crossing is still shut");
+        check(crossingLights(st.phase(0), st.shut()).roadRed &&
+                  crossingLights(st.phase(0), st.shut()).fast,
               "and the road lights are still flashing red");
 
         // A later train gets a bell of its own rather than staying silent.
         now += 200.0;
-        occ.inner = true;
+        occ[0].inner = true;
         stepCrossing(x, st, occ, now);   // release
-        occ.inner = false;
+        occ[0].inner = false;
         now += kTrainDelayS + 1.0;
         stepCrossing(x, st, occ, now);   // Opening -> Idle
-        while (st.phase != CrossingPhase::Idle && now < 1e5) {
+        while (st.phase(0) != CrossingPhase::Idle && now < 1e5) {
             now += 1.0;
             stepCrossing(x, st, occ, now);
         }
-        check(st.phase == CrossingPhase::Idle, "the crossing opens again");
-        occ.outerB = true;
+        check(st.phase(0) == CrossingPhase::Idle, "the crossing opens again");
+        occ[0].outerB = true;
         stepCrossing(x, st, occ, now);
         check(crossingBell(st, now), "and the next train rings the bell afresh");
     }
