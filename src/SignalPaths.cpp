@@ -40,6 +40,10 @@ std::string entriesFile(const std::string& root) {
     return root + "/overlay/entry-signals.txt";
 }
 
+std::string entryApproachesFile(const std::string& root) {
+    return root + "/overlay/entry-approaches.txt";
+}
+
 std::string distantsFile(const std::string& root) {
     return root + "/overlay/distant-signals.txt";
 }
@@ -224,6 +228,22 @@ bool writeExitRoutes(const std::string& datasetRoot,
                        routes, true);
 }
 
+std::vector<SignalPath> loadEntryApproaches(const std::string& datasetRoot) {
+    return loadRoutes(entryApproachesFile(datasetRoot), "approach");
+}
+
+bool writeEntryApproaches(const std::string& datasetRoot,
+                          const std::vector<SignalPath>& approaches) {
+    return writeRoutes(datasetRoot, entryApproachesFile(datasetRoot), "approach",
+                       "# ebaner entry approaches: the road leading up to an entry signal,\n"
+                       "# which is what an exit route is on the other side of the station.\n"
+                       "# It names no signal - it ends on the mast's own border, facing the\n"
+                       "# way the mast faces, and that is what says which mast it is for.\n"
+                       "# An entry signal with no approach begins its authority at the mast,\n"
+                       "# which is what nearly all of them do.\n",
+                       approaches);
+}
+
 std::vector<SignalPath> loadEntrySignals(const std::string& datasetRoot) {
     return loadRoutes(entriesFile(datasetRoot), "entry");
 }
@@ -286,13 +306,13 @@ bool routeEndPose(const SignalPath& p, const std::vector<TrackPoly>& polys,
 }
 } // namespace
 
-int exitRouteTarget(const SignalPath& route, const std::vector<SignalPath>& exits,
-                    const std::vector<TrackPoly>& polys) {
+int routeTargetSignal(const SignalPath& route, const std::vector<SignalPath>& signals,
+                      const std::vector<TrackPoly>& polys) {
     glm::dvec3 endW(0.0);
     glm::dvec2 arrive(0.0);
     if (!routeEndPose(route, polys, endW, arrive)) return -1;
-    for (std::size_t i = 0; i < exits.size(); ++i) {
-        const SignalPath& e = exits[i];
+    for (std::size_t i = 0; i < signals.size(); ++i) {
+        const SignalPath& e = signals[i];
         if (e.start.trackId != route.end.trackId) continue;
         if (std::abs(e.start.frac - route.end.frac) > sameFracTol(polys, e.start.trackId))
             continue;

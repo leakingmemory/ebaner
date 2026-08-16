@@ -1499,6 +1499,46 @@ int main(int argc, char** argv) {
         check(!routesOppose(two, leg(2, 0.1, 0.4)), "and the same way is still not");
     }
 
+    // The road leading up to a signal, which is what an exit route is and what an entry
+    // approach now is on the other side of the station.
+    std::puts("\nThe road up to a mast:");
+    {
+        // One straight track running east; a mast at 0.5 facing the way frac increases.
+        std::vector<TrackPoly> polys(1);
+        polys[0].id = 1;
+        for (int i = 0; i <= 20; ++i) polys[0].pts.push_back({i * 100.0, 0.0, 0.0});
+
+        auto leg = [](int id, double from, double to) {
+            SignalPath p;
+            p.id = id;
+            p.name = "R" + std::to_string(id);
+            p.start = {1, from};
+            p.end = {1, to};
+            p.parts.push_back({1, from, to});
+            return p;
+        };
+        // Two records from the mast at 0.5, the way an entry mast has one per platform.
+        const std::vector<SignalPath> masts{leg(1, 0.5, 0.8), leg(2, 0.5, 0.9)};
+
+        // A road arriving at the mast from behind is not authority to pass it.
+        check(routeTargetSignal(leg(9, 0.2, 0.5), masts, polys) == 0,
+              "a road arriving in front of the mast leads to it");
+        check(routeTargetSignal(leg(9, 0.8, 0.5), masts, polys) < 0,
+              "one arriving behind it does not");
+        check(routeTargetSignal(leg(9, 0.2, 0.4), masts, polys) < 0,
+              "and one that stops short of it does not either");
+
+        // The join: the approach's intervals come first and the pair meeting at the mast
+        // becomes one, which is what makes the departure a single movement.
+        const SignalPath dep = departureRoute(leg(9, 0.2, 0.5), masts[0]);
+        check(dep.parts.size() == 1, "the two halves meeting at the mast merge into one");
+        check(dep.parts.size() == 1 && std::abs(dep.parts[0].from - 0.2) < 1e-9 &&
+                  std::abs(dep.parts[0].to - 0.8) < 1e-9,
+              "and the movement runs from the road in to the destination");
+        check(dep.start.frac == 0.2 && dep.end.frac == 0.8,
+              "with the ends to match");
+    }
+
     // How a mast is built is a fact about the mast, and several route records sharing a
     // start border are one mast - so each flag has to survive the file and land on the
     // signal they make up.
@@ -1562,6 +1602,26 @@ int main(int argc, char** argv) {
             check(xp.size() == 2 && xp[1].twoLamp && xp[1].withDistant,
                   "and one with both");
             std::filesystem::remove(root + "/overlay/exit-signals.txt", ec);
+        }
+
+        // The approaches round-trip through their own file, and a dataset with none of
+        // them - which is every dataset until one is authored - reads back empty rather
+        // than as anything else.
+        {
+            check(loadEntryApproaches(root).empty(),
+                  "a dataset with no approaches has no approaches");
+            std::vector<SignalPath> ap{route(1, 0.1, 0.5), route(2, 0.3, 0.5)};
+            ap[1].vias.push_back({1, 0.4});
+            check(writeEntryApproaches(root, ap), "the approaches write");
+            const std::vector<SignalPath> back2 = loadEntryApproaches(root);
+            check(back2.size() == 2 && back2[0].id == 1 && back2[1].id == 2,
+                  "and read back");
+            check(back2.size() == 2 && back2[1].vias.size() == 1 &&
+                      std::abs(back2[1].vias[0].frac - 0.4) < 1e-9,
+                  "with their vias");
+            check(back2.size() == 2 && back2[0].exitId == 0,
+                  "and naming no signal - the mast is the border they end on");
+            std::filesystem::remove(root + "/overlay/entry-approaches.txt", ec);
         }
 
         // A file written before the keywords existed has to go on loading unchanged.

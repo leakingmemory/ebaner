@@ -350,6 +350,27 @@ driver is about to act on. An entry signal's authority begins at its own mast, s
 its circuits are beyond it and the whole route must be clear — a train may not be let in to
 an occupied platform.
 
+**An approach in front of an entry signal.** An exit signal is authored in two parts: the
+signal and the road beyond it in `overlay/exit-signals.txt`, and the roads leading **up to**
+it in `overlay/exit-routes.txt`, many-to-one, one line in the picker each. An entry signal
+needs the same where several roads converge on one mast, and `overlay/entry-approaches.txt`
+is where those are written. In the editor: right-click an entry route, press **B**, click
+the start border out on the approach — the gesture the exit routes already use.
+
+An approach names no signal. An exit route can, because an exit signal is a single record;
+an entry mast is several records sharing a start border, so there is no id to name — the
+approach ends **on** the mast's border, facing the way the mast faces, and that is what says
+which mast it belongs to. It carries no C1/C2 either: what the driver is authorised to do is
+settled by where they are being let in to, so the entry record decides and the approach
+only says which road they came in on. The picker then offers one line per pair, named
+`approach > destination`.
+
+An entry signal with **no** approach is unchanged, which is nearly all of them: its
+authority begins at the mast, its record is the whole movement, and nothing about it moves.
+Where there is one, the approach's circuits are locked with the route and its points are
+held — and, as at an exit signal, a train standing on it is the train being let in rather
+than one in the way.
+
 Two routes may **share road**, which is what lets a train be passed **through** a station
 rather than stopped in it: set the entry route into a platform and the departure out of it
 and the driver gets a green at the entry signal and another at the exit. What is refused is
@@ -611,6 +632,10 @@ cannot **unman** — the sections either side would merge into one line carrying
 books, with nobody left to report the train arrived.
 
 `EBANER_TXP_OPEN=A,B,C` mans stations at startup through the network, and
+`EBANER_ROUTES=1` prints every movement the interlocking knows at load — the road it
+covers, what it holds beyond the signal and which mast it lights, which is otherwise only
+visible a line at a time through the picker.
+
 `EBANER_PANEL=1|dest|type|route` opens the station panel, optionally at a dispatch step, or
 the **R** route picker, and `EBANER_ROUTE=<n>[,<n>…]` sets the worked station's nth routes
 (as the picker lists them) at startup, in order, so a second one meets the state the first

@@ -858,6 +858,10 @@ int main(int argc, char** argv) {
     // so its record is already the whole movement - and every one of its circuits is past
     // the signal.
     const std::vector<SignalPath> exitRoutes = loadExitRoutes(datasetRoot);
+    // The roads leading up to an entry mast, where any are authored. Absent - which is the
+    // usual case and the whole line as it stands - an entry signal's authority begins at
+    // the mast, exactly as it always has.
+    const std::vector<SignalPath> entryApproaches = loadEntryApproaches(datasetRoot);
     struct MainCandidate {
         std::string name;
         RouteType type = RouteType::C1;
@@ -910,14 +914,44 @@ int main(int argc, char** argv) {
             mainCandidates.push_back(std::move(c));
         }
         for (std::size_t ei = 0; ei < entrySignals.size(); ++ei) {
-            MainCandidate c;
-            c.name = named(entrySignals[ei], "E");
-            c.type = entrySignals[ei].type;
-            c.placement = mastOf(SignalKind::Entry, static_cast<int>(ei));
-            c.departure = entrySignals[ei];
-            c.beyond = pathSections(c.departure, circuits); // all of it is past the signal
-            c.anchor = sceneAt(c.departure.end);            // the platform end
-            mainCandidates.push_back(std::move(c));
+            // Which roads lead up to this record's mast, if any are authored. Nearly no
+            // mast has one: an entry signal's authority begins where it stands, and only
+            // where several roads converge on one mast is there a choice to be made.
+            std::vector<int> upTo;
+            for (std::size_t ai = 0; ai < entryApproaches.size(); ++ai)
+                if (routeTargetSignal(entryApproaches[ai], entrySignals, polys) >= 0 &&
+                    entryApproaches[ai].end.trackId == entrySignals[ei].start.trackId &&
+                    std::abs(entryApproaches[ai].end.frac - entrySignals[ei].start.frac) <=
+                        sameFracTol(polys, entrySignals[ei].start.trackId))
+                    upTo.push_back(static_cast<int>(ai));
+
+            if (upTo.empty()) {
+                // Untouched, and it must stay so: every entry signal on the line takes this
+                // path, and an approach is an addition for the few masts that need one.
+                MainCandidate c;
+                c.name = named(entrySignals[ei], "E");
+                c.type = entrySignals[ei].type;
+                c.placement = mastOf(SignalKind::Entry, static_cast<int>(ei));
+                c.departure = entrySignals[ei];
+                c.beyond = pathSections(c.departure, circuits); // all of it is past the mast
+                c.anchor = sceneAt(c.departure.end);            // the platform end
+                mainCandidates.push_back(std::move(c));
+                continue;
+            }
+            for (const int ai : upTo) {
+                MainCandidate c;
+                // Both halves in the name: which road the train comes in on, and which
+                // road it is being let in to. Neither alone says what the operator picked.
+                c.name = named(entryApproaches[ai], "A") + " > " + named(entrySignals[ei], "E");
+                c.type = entrySignals[ei].type; // the destination decides, not the approach
+                c.placement = mastOf(SignalKind::Entry, static_cast<int>(ei));
+                c.departure = departureRoute(entryApproaches[ai], entrySignals[ei]);
+                // Still only what is past the mast: the approach is the run-up, and a train
+                // standing on it is the train being let in rather than one in the way.
+                c.beyond = pathSections(entrySignals[ei], circuits);
+                c.anchor = sceneAt(c.departure.end); // the platform end
+                mainCandidates.push_back(std::move(c));
+            }
         }
     }
     // Stations: routes whose in-station ends lie within kStationSpan of one another work one
@@ -950,9 +984,34 @@ int main(int argc, char** argv) {
             }
             stationAt.push_back(sum / static_cast<float>(std::max(n, 1)));
         }
-        std::printf("[Route] %zu exit route(s), %zu entry route(s) -> %zu main route(s) "
+        std::printf("[Route] %zu exit route(s), %zu entry route(s)%s -> %zu main route(s) "
                     "in %zu station(s)\n", exitRoutes.size(), entrySignals.size(),
+                    entryApproaches.empty()
+                        ? ""
+                        : (", " + std::to_string(entryApproaches.size()) +
+                           " entry approach(es)").c_str(),
                     mainCandidates.size(), stationAt.size());
+        for (const SignalPath& a : entryApproaches)
+            if (routeTargetSignal(a, entrySignals, polys) < 0)
+                std::fprintf(stderr, "[Route] entry approach %d ends at no entry mast\n",
+                             a.id);
+        // Every movement the interlocking knows, in full. What a route *is* - the road it
+        // covers, what it holds beyond the signal, which mast it lights - is otherwise only
+        // visible a line at a time through the picker, so a change meant to leave the
+        // existing routes alone could not be shown to have done so.
+        if (std::getenv("EBANER_ROUTES")) {
+            for (std::size_t ri = 0; ri < mainCandidates.size(); ++ri) {
+                const MainCandidate& c = mainCandidates[ri];
+                std::printf("[Route] %2zu \"%s\" %s mast=%d station=%d anchor=%.1f,%.1f",
+                            ri, c.name.c_str(), c.type == RouteType::C2 ? "C2" : "C1",
+                            c.placement, c.station, c.anchor.x, c.anchor.y);
+                for (const SectionInterval& iv : c.departure.parts)
+                    std::printf(" %x:%.6f:%.6f", iv.trackId, iv.from, iv.to);
+                std::printf(" beyond");
+                for (const int id : c.beyond) std::printf(" %d", id);
+                std::printf("\n");
+            }
+        }
     }
     // A departure the interlocking is holding. Its circuits are locked so no other main
     // route can take them; each is released as a train enters it, so the route unwinds

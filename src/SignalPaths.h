@@ -103,6 +103,27 @@ std::vector<SignalPath> loadExitRoutes(const std::string& datasetRoot);
 bool writeExitRoutes(const std::string& datasetRoot,
                      const std::vector<SignalPath>& routes);
 
+// Entry approaches: the road leading *up to* an entry signal, which is the other half of
+// what an exit route is. An entry signal's authority is taken to begin at its mast, and for
+// nearly every one of them that is right; where several roads lead up to one mast, though,
+// which of them a train is coming in on is a choice, and this is where those roads are
+// written down. Stored in `overlay/entry-approaches.txt`.
+//
+// Called an approach rather than an entry route because this codebase already calls the
+// entry signal's own record an entry route - in the file, in the editor and in the load
+// report - and one word for two things in an interlocking is how a mistake gets made.
+//
+// It names no signal. An exit route can name one because an exit signal is a single record;
+// an entry mast is several records sharing a start border, so there is no id to name. The
+// approach identifies its mast geometrically, as `routeTargetSignal` reads it: its `end` is
+// the mast's border, and it must arrive facing the way the mast faces.
+//
+// An entry signal with no approach behaves exactly as it did before there were any - the
+// authority begins at the mast - which is what every one of them on the line does.
+std::vector<SignalPath> loadEntryApproaches(const std::string& datasetRoot);
+bool writeEntryApproaches(const std::string& datasetRoot,
+                          const std::vector<SignalPath>& approaches);
+
 // A distant signal: a point anywhere along a track, facing one way, that shows what the
 // first main signal ahead is displaying. It sits on no border, belongs to no route and is
 // not interlocked - it only looks. Stored in `overlay/distant-signals.txt`:
@@ -201,12 +222,16 @@ std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& pat
                                               const std::vector<TrackPoly>& polys,
                                               SignalKind kind = SignalKind::Dwarf);
 
-// Which exit signal a candidate exit route may attach to (index into `exits`, else -1). The
-// route must end on that signal's own border *and* arrive facing the way the signal faces:
-// findSignalRoute only knows the route reached the border, not which side of the signal it
-// came from, and arriving from behind is not authority to pass it.
-int exitRouteTarget(const SignalPath& route, const std::vector<SignalPath>& exits,
-                    const std::vector<TrackPoly>& polys);
+// Which signal record a route leads up to (an index into `signals`, else -1). The route must
+// end on that signal's own border *and* arrive facing the way the signal faces: findSignalRoute
+// only knows the route reached the border, not which side of the signal it came from, and
+// arriving from behind is not authority to pass it.
+//
+// Asked of the exit signals for an exit route, and of the entry signals for an entry
+// approach. Where several records share a border - as an entry mast's do - it answers with
+// the first, which is enough to say "this road leads to that mast".
+int routeTargetSignal(const SignalPath& route, const std::vector<SignalPath>& signals,
+                      const std::vector<TrackPoly>& polys);
 
 // One list holding dwarfs and main signals. Where a main signal and a dwarf stand at the
 // same border facing the same way they are folded into a single placement (`withDwarf`), so
