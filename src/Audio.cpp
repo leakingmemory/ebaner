@@ -52,6 +52,28 @@ constexpr float kBellRatio[7] = {0.5f, 1.0f, 1.19f, 1.5f, 2.0f, 2.66f, 4.14f};
 // The high partials start loudest and die first, which is the shape of a clang.
 constexpr float kBellAmp[7] = {0.10f, 0.26f, 0.20f, 0.22f, 0.34f, 0.20f, 0.11f};
 constexpr float kBellDecayS[7] = {1.40f, 0.85f, 0.55f, 0.40f, 0.30f, 0.16f, 0.10f};
+
+// --- Wheel on rail ----------------------------------------------------------------
+constexpr float kGravity = 9.81f;
+// Wheel/rail adhesion, the ceiling everything through the contact patch works against.
+// Vehicle.cpp splits this into a braking and a powering value; one number is enough to
+// normalise a loudness by, and it is not part of the physics here.
+constexpr float kRailAdhesionMu = 0.25f;
+// Standard jointed rail: Norway laid 25 m lengths. Much of the running line is welded
+// now and would be silent between the joints, but the beat over them is what a train
+// sounds like, so every road here is treated as jointed.
+constexpr float kRailLengthM = 25.0f;
+// Tighter than about a 300 m radius before a curve can squeal at all.
+constexpr float kSquealCurvature = 1.0f / 300.0f;
+// Rolling noise runs with the 30*log10(v) law measured on real track, which is an
+// amplitude proportional to v^1.5. Referenced to a brisk line speed so that is ~1.
+constexpr float kRollRefSpeed = 33.0f; // m/s (~120 km/h)
+// Below a walking pace there is nothing to hear; faded rather than switched, or
+// stopping would click.
+constexpr float kRollFloorSpeed = 0.6f; // m/s
+// Axle load the timbre is normalised against - about what a loaded Class 93 axle
+// carries, and the heaviest of the vehicles on offer.
+constexpr float kRefAxleLoad = 11500.0f * kGravity; // N
 } // namespace
 
 #if HAVE_PORTAUDIO
@@ -132,6 +154,18 @@ void Audio::render(float* out, int n) {
                                engGain_[1].load(std::memory_order_relaxed)};
     const float compTarget = compActive_.load(std::memory_order_relaxed) ? 1.0f : 0.0f;
     const float bellTarget = bellGain_.load(std::memory_order_relaxed);
+    const bool railborne = railborne_.load(std::memory_order_relaxed);
+    const float rollSpeedT = railborne ? rollSpeed_.load(std::memory_order_relaxed) : 0.0f;
+    const float rollLoadT = rollAxleLoad_.load(std::memory_order_relaxed);
+    const float rollWorkT = rollWork_.load(std::memory_order_relaxed);
+    const float brakeWorkT = brakeWork_.load(std::memory_order_relaxed);
+    const float flangeT = railborne ? flangeLoad_.load(std::memory_order_relaxed) : 0.0f;
+    const float rollGainT = rollGain_.load(std::memory_order_relaxed);
+    const float jointHz = railborne ? jointHz_.load(std::memory_order_relaxed) : 0.0f;
+    const int axles = std::min(axleCount_.load(std::memory_order_relaxed), kMaxAxles);
+    float axlePh[kMaxAxles];
+    for (int k = 0; k < axles; ++k)
+        axlePh[k] = axlePhase_[k].load(std::memory_order_relaxed);
     const unsigned ev = valveEvents_.load(std::memory_order_relaxed);
     if (ev != lastEvents_) { // a valve just operated -> click
         lastEvents_ = ev;
@@ -139,6 +173,8 @@ void Audio::render(float* out, int n) {
         clickPhase_ = 0.0f;
     }
     const float fs = sampleRate_;
+    // The band-pass width the roar's level is referenced to (see `bw` below).
+    const float rollBandRef = 2.0f * std::sin(kPi * 800.0f / fs);
     for (int i = 0; i < n; ++i) {
         // Smooth the control signals (fast attack, slower release) to avoid clicks.
         ampEnv_ += (targetAmp - ampEnv_) * (targetAmp > ampEnv_ ? 0.004f : 0.0015f);
@@ -274,17 +310,172 @@ void Audio::render(float* out, int n) {
             bell *= bellGainEnv_;
         }
 
+        // --- Wheel on rail --------------------------------------------------------
+        // The roar is roughness on both surfaces exciting both into vibration, so it
+        // starts as noise; what makes it a train rather than a hiss is the shape put
+        // on it by how fast, how heavy and how hard-worked the contact is.
+        rollSpeedEnv_ += (rollSpeedT - rollSpeedEnv_) * 0.0012f;
+        rollLoadEnv_ += (rollLoadT - rollLoadEnv_) * 0.0008f;
+        rollWorkEnv_ += (rollWorkT - rollWorkEnv_) * 0.0008f;
+        brakeWorkEnv_ += (brakeWorkT - brakeWorkEnv_) * 0.0010f;
+        flangeEnv_ += (flangeT - flangeEnv_) * 0.0008f;
+        rollGainEnv_ += (rollGainT - rollGainEnv_) * 0.0010f;
+
+        const float vv = rollSpeedEnv_;
+        // The measured law: 30*log10(v) in level, so v^1.5 in amplitude. Nothing else
+        // in this file has anything like the range - a factor of eight between 36 and
+        // 144 km/h - and that range is the feature.
+        const float vN = vv / kRollRefSpeed;
+        const float speedLevel = vN * std::sqrt(std::max(vN, 0.0f));
+        // Fade in off the floor rather than switch, or coming to a stand would click.
+        const float moving = std::clamp((vv - kRollFloorSpeed) / kRollFloorSpeed,
+                                        0.0f, 1.0f);
+        // How heavily each axle presses. A big contact patch cannot be excited by the
+        // short-wavelength roughness a small one can, and heavier wheels radiate lower:
+        // weight darkens the sound as much as it loudens it, which is also how the ear
+        // tells a loaded vehicle from an empty one.
+        const float loadN = std::clamp(rollLoadEnv_ / kRefAxleLoad, 0.0f, 1.2f);
+        const float rollLvl = speedLevel * moving * rollGainEnv_ *
+                              (0.55f + 0.45f * loadN) * (1.0f + 0.25f * rollWorkEnv_);
+
+        float roll = 0.0f;
+        if (rollLvl > 1e-5f) {
+            rng_ = rng_ * 1664525u + 1013904223u;
+            const float rn = static_cast<float>(rng_ >> 8) / 8388608.0f - 1.0f;
+            // The dominant roughness wavelength passes at a rate that goes with speed,
+            // so the band climbs as the train accelerates; weight pulls it back down.
+            const float rfc = (350.0f + 26.0f * vv) * (1.0f - 0.35f * loadN);
+            const float rf = 2.0f * std::sin(kPi * std::min(rfc, 0.45f * fs) / fs);
+            rollLow_ += rf * rollBand_;
+            rollBand_ += rf * (rn - rollLow_ - 0.9f * rollBand_);
+            // A state-variable band-pass gets wider as its centre rises, so the same
+            // noise through it comes out louder - which would lay a second speed law
+            // on top of the measured one and make the level climb far too steeply.
+            // Normalise it away: speed and weight move the band, the law sets the level.
+            const float bw = std::sqrt(rollBandRef / std::max(rf, 1e-6f));
+            // The rumble underneath, which is almost all of what "heavy" sounds like.
+            const float lfc = 90.0f + 40.0f * loadN;
+            const float lf = 2.0f * std::sin(kPi * lfc / fs);
+            rumbLow_ += lf * rumbBand_;
+            rumbBand_ += lf * (rn - rumbLow_ - 0.5f * rumbBand_);
+            // Working hard puts a gritty edge on top, wandering slowly so it is a
+            // texture and not a tone.
+            rng_ = rng_ * 1664525u + 1013904223u;
+            const float gn = static_cast<float>(rng_ >> 8) / 8388608.0f - 1.0f;
+            gritLp_ += (gn - gritLp_) * 0.6f;
+            gritAm_ += (-gritAm_ * 0.0004f) + gn * 0.004f;
+            const float grit = (gn - gritLp_) * rollWorkEnv_ * (0.7f + 0.3f * gritAm_);
+            roll = (rollBand_ * bw + rumbLow_ * (0.35f + 0.65f * loadN) + grit * 0.5f) *
+                   rollLvl;
+        }
+
+        // Rail joints. The rhythm is clocked here and not in the sim for the same
+        // reason the bell's is: at the frame rate it would stutter and change tempo
+        // with the graphics. One turn of the phase is one rail length; each axle
+        // strikes as the phase passes where that axle sits, so a bogie's double-thump
+        // and a carriage's four-beat come out of the real axle spacing for free.
+        float joints = 0.0f;
+        if (axles > 0 && jointHz > 1e-4f && rollGainEnv_ > 1e-4f) {
+            const float before = jointPhase_;
+            jointPhase_ += jointHz / fs;
+            const bool wrapped = jointPhase_ >= 1.0f;
+            if (wrapped) jointPhase_ -= 1.0f;
+            for (int k = 0; k < axles; ++k) {
+                // Passed this axle's offset since the last sample (allowing for the wrap).
+                const bool hit = wrapped ? (axlePh[k] > before || axlePh[k] <= jointPhase_)
+                                         : (axlePh[k] > before && axlePh[k] <= jointPhase_);
+                if (hit) { jointEnv_[k] = 1.0f; jointThud_[k] = 0.0f; }
+                if (jointEnv_[k] <= 1e-4f) continue;
+                // Impact energy climbs with both the speed it is struck at and the
+                // weight behind it, which is why a loaded train is heard from further
+                // off than a light one at the same speed.
+                rng_ = rng_ * 1664525u + 1013904223u;
+                const float jn = static_cast<float>(rng_ >> 8) / 8388608.0f - 1.0f;
+                jointLp_[k] += (jn - jointLp_[k]) * 0.35f;
+                const float thud = std::sin(2.0f * kPi * jointThud_[k]);
+                jointThud_[k] += 70.0f / fs;
+                joints += (jointLp_[k] * 0.8f + thud * 0.6f) * jointEnv_[k];
+                jointEnv_[k] *= std::exp(-1.0f / (0.020f * fs)); // ~20 ms knock
+            }
+            joints *= std::clamp(vv / kRollRefSpeed, 0.0f, 1.3f) *
+                      (0.35f + 0.65f * loadN) * rollGainEnv_;
+        }
+
+        // Curve squeal: stick-slip as the flange is dragged across the railhead. A
+        // near-tone, because it is one wheel mode ringing, and gated hard - the sim
+        // hands over a zero unless the curve is genuinely tight and unbalanced, and a
+        // squeal on straight track would be worse than none at all.
+        float squeal = 0.0f;
+        if (flangeEnv_ > 1e-3f && vv > 1.5f) {
+            rng_ = rng_ * 1664525u + 1013904223u;
+            const float sn = static_cast<float>(rng_ >> 8) / 8388608.0f - 1.0f;
+            const float sfc = 2100.0f;
+            const float sf = 2.0f * std::sin(kPi * sfc / fs);
+            sqLow_ += sf * sqBand_;
+            sqBand_ += sf * (sn - sqLow_ - 0.02f * sqBand_); // high Q: a ringing band
+            sqPhase_ += sfc / fs;
+            if (sqPhase_ > 1.0f) sqPhase_ -= 1.0f;
+            sqSlip_ += 23.0f / fs;                            // the slip cycle itself
+            if (sqSlip_ > 1.0f) sqSlip_ -= 1.0f;
+            const float am = 0.55f + 0.45f * std::sin(2.0f * kPi * sqSlip_);
+            squeal = (sqBand_ * 0.5f + std::sin(2.0f * kPi * sqPhase_) * 0.5f) * am *
+                     flangeEnv_ * std::clamp((vv - 1.5f) / 8.0f, 0.0f, 1.0f) *
+                     rollGainEnv_;
+        }
+
+        // The friction brake. Discs, not shoes on the tread: on a Class 93 there is
+        // very little to hear and what there is sits low, so this is a soft rumble
+        // that follows the brake force and nothing above it. It is not the air hiss
+        // above, which is the valve and the pipe rather than the friction surfaces.
+        float brakeRub = 0.0f;
+        if (brakeWorkEnv_ > 1e-3f && vv > 0.3f) {
+            rng_ = rng_ * 1664525u + 1013904223u;
+            const float bn = static_cast<float>(rng_ >> 8) / 8388608.0f - 1.0f;
+            const float bfc = 60.0f + 90.0f * std::clamp(vv / kRollRefSpeed, 0.0f, 1.0f);
+            const float bf = 2.0f * std::sin(kPi * bfc / fs);
+            brkLow_ += bf * brkBand_;
+            brkBand_ += bf * (bn - brkLow_ - 0.35f * brkBand_);
+            brakeRub = brkLow_ * brakeWorkEnv_ *
+                       std::clamp((vv - 0.3f) / 4.0f, 0.0f, 1.0f) * rollGainEnv_;
+        }
+
         float s = muted ? 0.0f
                         : (hiss * 1.2f + click * 0.9f) * envEnv_ + engine * 0.30f +
-                              comp * 0.22f + bell * 0.34f;
+                              comp * 0.22f + bell * 0.34f + roll * 0.45f +
+                              joints * 0.30f + squeal * 0.16f + brakeRub * 0.16f;
         s = std::clamp(s, -1.0f, 1.0f);
         out[i] = s;
     }
     cbFrames_.fetch_add(static_cast<unsigned long>(n), std::memory_order_relaxed);
 }
 
+void Audio::setRolling(const RollingSample& r) {
+    const bool on = r.railborne;
+    rollSpeed_.store(on ? std::max(r.speed, 0.0f) : 0.0f, std::memory_order_relaxed);
+    rollAxleLoad_.store(std::max(r.axleLoadN, 0.0f), std::memory_order_relaxed);
+    rollWork_.store(std::clamp(r.work, 0.0f, 1.0f), std::memory_order_relaxed);
+    brakeWork_.store(std::clamp(r.brake, 0.0f, 1.0f), std::memory_order_relaxed);
+    // The squeal is gated on the way in, not in the synth: off the rails, or on track
+    // that is not being worked across, there is nothing for a flange to grind on.
+    flangeLoad_.store(on ? std::clamp(r.flange, 0.0f, 1.0f) : 0.0f,
+                      std::memory_order_relaxed);
+    railborne_.store(on, std::memory_order_relaxed);
+    rollGain_.store(std::clamp(r.gain, 0.0f, 1.0f), std::memory_order_relaxed);
+    jointHz_.store(on ? std::max(r.speed, 0.0f) / kRailLengthM : 0.0f,
+                   std::memory_order_relaxed);
+    const int n = std::min(static_cast<int>(r.axleOffsets.size()), kMaxAxles);
+    for (int i = 0; i < n; ++i) {
+        // Where this axle sits within a rail length. Wrapped into [0,1) so a trailing
+        // axle's negative offset lands where it belongs rather than off the end.
+        float ph = std::fmod(r.axleOffsets[i] / kRailLengthM, 1.0f);
+        if (ph < 0.0f) ph += 1.0f;
+        axlePhase_[i].store(ph, std::memory_order_relaxed);
+    }
+    axleCount_.store(n, std::memory_order_relaxed);
+}
+
 void Audio::update(const Vehicle& v, float /*dt*/, float brakeGain, float engGain0,
-                   float engGain1) {
+                   float engGain1, float rollGain) {
     const float rate = v.bcRate();
     // The release (venting to atmosphere) is the prominent sound; the filling
     // (charging the cylinders) is quieter, as in reality.
@@ -299,6 +490,36 @@ void Audio::update(const Vehicle& v, float /*dt*/, float brakeGain, float engGai
     engGain_[0].store(std::clamp(engGain0, 0.0f, 1.0f), std::memory_order_relaxed);
     engGain_[1].store(std::clamp(engGain1, 0.0f, 1.0f), std::memory_order_relaxed);
     compActive_.store(v.compressorRunning(), std::memory_order_relaxed);
+
+    // --- Wheel on rail ------------------------------------------------------------
+    // Four things the contact is doing, kept apart rather than summed into one number,
+    // because each drives a different sound: how fast, how heavily loaded, how hard it
+    // is being worked along the rail, and how hard it is being pushed across it.
+    RollingSample r;
+    r.speed = v.speed();
+    r.railborne = v.state() == VehicleState::OnRail;
+    r.gain = rollGain;
+    r.axleOffsets = v.axleOffsets();
+    const float weight = v.mass() * kGravity;
+    r.axleLoadN = weight / static_cast<float>(std::max<std::size_t>(r.axleOffsets.size(), 1));
+
+    // Work along the rail: what the wheels are pulling or pushing through the contact
+    // patch, against what the contact patch can hold. The running resistance belongs
+    // here too - it is the same surfaces, just always present.
+    const float adhesion = std::max(kRailAdhesionMu * weight, 1.0f);
+    r.work = (std::fabs(v.tractiveEffort()) + v.rollingResistance(r.speed)) / adhesion;
+    r.brake = v.brakeForce() / adhesion;
+
+    // Work across the rail: the lateral acceleration the cant does *not* take out is
+    // what the flange has to. On a well canted curve at line speed that is near zero
+    // and there is nothing to hear, which is right - a curve only squeals when it is
+    // not being taken the way it was built to be.
+    const TrackPose pose = v.pose();
+    if (std::fabs(pose.curvature) > kSquealCurvature)
+        r.flange = (r.speed * r.speed * std::fabs(pose.curvature) -
+                    kGravity * std::sin(std::fabs(pose.cant))) / kGravity;
+    setRolling(r);
+
     // Valve operates whenever the effective brake command changes (handle or the
     // low-reservoir safety).
     const int cmd = v.effectiveNotch();
@@ -527,6 +748,56 @@ void Audio::dumpEngineTest(const std::string& wavPath) {
         a.engGain_[0].store(1.0f);
         a.engGain_[1].store(1.0f);
         a.compActive_.store(s.comp);
+        const int total = static_cast<int>(s.dur * fs);
+        float buf[256];
+        for (int done = 0; done < total; done += 256) {
+            const int n = std::min(256, total - done);
+            a.render(buf, n);
+            for (int i = 0; i < n; ++i)
+                pcm.push_back(static_cast<std::int16_t>(
+                    std::clamp(buf[i], -1.0f, 1.0f) * 32767.0f));
+        }
+    }
+    writeWav(wavPath, pcm, static_cast<int>(fs));
+    std::fprintf(stderr, "audio: wrote %s (%zu samples)\n", wavPath.c_str(), pcm.size());
+}
+
+void Audio::dumpRollingTest(const std::string& wavPath) {
+    const float fs = 44100.0f;
+    Audio a;
+    a.sampleRate_ = fs;
+    // A Class 93's running gear: three bogies, six axles, 2.5 m within a bogie and
+    // 30 m end to end. The pattern is what the joints beat out, so it is the real one.
+    const float bogie = 0.5f * 30.0f, half = 0.5f * 2.5f;
+    RollingSample r;
+    r.gain = 1.0f;
+    r.axleOffsets = {-bogie - half, -bogie + half, -half, half, bogie - half, bogie + half};
+    // One control moves at a time, so each is audible on its own rather than as part
+    // of a mixture that could hide any of them.
+    struct Seg { float dur, speed, axleTonnes, work, brake, flange; const char* what; };
+    const Seg segs[] = {
+        {1.5f, 0.0f, 11.5f, 0.0f, 0.0f, 0.0f, "standing"},
+        {6.0f, 6.0f, 11.5f, 0.5f, 0.0f, 0.0f, "moving off"},
+        {6.0f, 16.0f, 11.5f, 0.4f, 0.0f, 0.0f, "60 km/h"},
+        {6.0f, 33.0f, 11.5f, 0.3f, 0.0f, 0.0f, "120 km/h"},
+        {5.0f, 22.0f, 1.3f, 0.1f, 0.0f, 0.0f, "80 km/h, a light wheelset"},
+        {5.0f, 22.0f, 5.0f, 0.1f, 0.0f, 0.0f, "80 km/h, half loaded"},
+        {5.0f, 22.0f, 11.5f, 0.1f, 0.0f, 0.0f, "80 km/h, fully loaded"},
+        {4.0f, 12.0f, 11.5f, 0.2f, 0.0f, 0.0f, "into a curve..."},
+        {6.0f, 12.0f, 11.5f, 0.2f, 0.0f, 0.55f, "...squealing round it"},
+        {4.0f, 12.0f, 11.5f, 0.2f, 0.0f, 0.0f, "...and out"},
+        {5.0f, 20.0f, 11.5f, 0.0f, 0.8f, 0.0f, "braking (discs: very little to hear)"},
+        {5.0f, 6.0f, 11.5f, 0.0f, 0.9f, 0.0f, "nearly stopped"},
+        {2.5f, 0.0f, 11.5f, 0.0f, 0.0f, 0.0f, "stood"},
+    };
+    std::vector<std::int16_t> pcm;
+    for (const Seg& s : segs) {
+        r.speed = s.speed;
+        r.axleLoadN = s.axleTonnes * 1000.0f * kGravity;
+        r.work = s.work;
+        r.brake = s.brake;
+        r.flange = s.flange;
+        a.setRolling(r);
         const int total = static_cast<int>(s.dur * fs);
         float buf[256];
         for (int done = 0; done < total; done += 256) {

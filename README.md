@@ -121,7 +121,42 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   insulated character, the two ends slightly detuned so they beat), following each
   engine's rpm and faded by distance to its end. While a compressor charges the
   reservoir it adds a higher, muffled **pump hum** and loads its engine down a touch
-  (a small, audible idle droop) (`src/Audio.cpp`).
+  (a small, audible idle droop). Under all of it is the **wheel on the rail** — see
+  below (`src/Audio.cpp`).
+
+### Rolling noise
+
+The loudest thing a running train makes, and above about 60 km/h it buries the engines.
+It is synthesised from what the sim already knows about the contact patch, and every part
+of it is measured rather than tuned by ear (`ctest -R rolling-noise`).
+
+**Speed** sets the level by the law measured on real track — 30·log₁₀(v), an amplitude
+proportional to v^1.5, so four times the speed is eight times the level. It also raises the
+band: the roughness wavelength that dominates passes faster, so the roar climbs from a low
+grumble at a crawl to a full rush at line speed. Below walking pace it is gated to exact
+silence.
+
+**Weight** — axle load, so a bare wheelset (1.3 t) and a loaded Class 93 (11.7 t/axle) are
+worlds apart — makes it **darker as well as louder**. A heavier axle spreads its contact
+patch, and a patch that wide cannot be excited by the short-wavelength roughness a small one
+can; heavier wheels also radiate lower. Measured, the centroid drops from ~950 Hz to ~690 Hz
+and the energy below 250 Hz nearly triples. That is the difference between a clatter and a
+rumble, and it is why weight does not just sound like moving the camera closer.
+
+**Friction load** comes from four places, kept apart because each drives a different sound:
+traction and the Davis running resistance put a gritty edge on the roar; the **friction
+brake** adds a soft low rumble and nothing above it — the Class 93 brakes on discs and there
+is very little to hear; and the **lateral load the cant does not take out** drives a
+**curve squeal**, a stick-slip howl in the wheel-mode band around 2.1 kHz, gated to curves
+tighter than ~300 m so it can never leak onto straight track.
+
+**Rail joints** beat out the vehicle's own axle spacing over 25 m rails — a bogie's
+double-thump, a carriage's four-beat — clocked in the synth from speed and the axle offsets
+rather than from sim events, so the rhythm cannot stutter with the frame rate. Impact noise
+grows with speed more slowly than rolling noise does, so the joints are most of what is
+heard at low speed and the roar has swallowed them by line speed.
+
+Off the rails there is none of it: a derailed vehicle is sliding on ballast.
 
 ## Requirements
 
@@ -751,6 +786,8 @@ the corresponding sources (national rail register + NVDB roads + OSM enrichment)
 | `EBANER_VEHICLE`    | Skip the start screen and preselect a vehicle (`0` or `1`).   |
 | `EBANER_AUDIO_DUMP` | Render a scripted brake sequence to the given WAV and exit.   |
 | `EBANER_AUDIO_DUMP_ENGINE` | Render an engine start/idle/stop to the given WAV, exit. |
+| `EBANER_AUDIO_DUMP_CROSSING` | Render a crossing bell activating/falling silent, exit. |
+| `EBANER_AUDIO_DUMP_ROLLING` | Render rolling noise sweeping speed, weight, curve and brake, exit. |
 
 ## Not yet implemented
 

@@ -578,6 +578,10 @@ void Vehicle::update(float dt, float pushInput) {
     const bool reverse = activeC >= 0 && reverser_[activeC] < 0; // reverser in R
     const bool powering =
         engineOn_ && demand > 0.0f && enginesRunning() && state_ == VehicleState::OnRail;
+    // Off the rails there are no friction surfaces doing anything; only the on-rail
+    // branch below sets this, so clear it or a derailed vehicle reports the last
+    // brake force it had for ever.
+    brakeForce_ = 0.0f;
 
     // Engines crank up to / spin down from idle, independent of motion; a running
     // compressor loads its engine down a little (compActive_ is last frame's value).
@@ -655,6 +659,7 @@ void Vehicle::update(float dt, float pushInput) {
         // vehicle at rest, up to the grade the brakes can hold).
         const float brake = std::min((bcPres_ / kBCFullService) * mass_ * kFullServiceDecel,
                                      kAdhesionMu * mass_ * kG);
+        brakeForce_ = brake; // what the friction surfaces are actually doing (the sound)
         const float resistDecel = brake / mass_ + rollingResistance(v_) / mass_;
         const float resist = std::min(resistDecel * dt, std::abs(v_));
         v_ -= std::copysign(resist, v_);

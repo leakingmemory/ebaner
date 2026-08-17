@@ -116,6 +116,10 @@ public:
     // Pivot frame of each bogie (0 for a bare axle, up to 3), each chording its
     // own axles.
     std::vector<VehicleFrame> bogieFrames() const;
+    // Arc-length offsets of each axle from the body centre. A description of where
+    // the wheels are and nothing more - axleFrames() already publishes the same
+    // thing in world space - and it is what says when each axle meets a rail joint.
+    std::vector<float> axleOffsets() const;
     // Frame of each underframe body section (0 when <2 bogies, 1 for a carriage,
     // 2 for a 3-bogie module), each oriented by its bogie pair so an articulated
     // module flexes at the middle bogie.
@@ -185,6 +189,12 @@ public:
     // Signed traction demand in [-1,1]: direction * effectivePowerNotch/max.
     float tractionDemand() const;
     float tractiveEffort() const { return tractiveEffort_; } // N, + in +s (for HUD)
+    // Friction-brake force actually applied last step (N, always >= 0), after the
+    // brake-cylinder pressure is turned into shoe force and capped by wheel/rail
+    // adhesion. The pressure alone does not say this - the cap bites in emergency -
+    // and the rolling-noise synth needs the force at the friction surfaces, not the
+    // pressure behind them.
+    float brakeForce() const { return brakeForce_; }
     float mrPressure() const { return mrPres_; } // main reservoir (bar)
     float bcPressure() const { return bcPres_; } // brake cylinder (bar)
     // Rate of brake-cylinder pressure change (bar/s): + charging (apply), −
@@ -226,8 +236,6 @@ private:
                         float dt);
     // Arc-length offsets of each bogie centre from the body centre (s_).
     std::vector<float> bogieCentres() const;
-    // Arc-length offsets of each axle from the body centre (s_).
-    std::vector<float> axleOffsets() const;
     // Half the span between the body's two support points (the two end bogies for
     // a carriage/module, the two axles for a lone bogie, 0 for a single axle).
     float supportHalf() const;
@@ -276,6 +284,7 @@ private:
     int gear_ = 1;                      // current automatic gear (1..5)
     float shiftTimer_ = 0.0f;           // s remaining in an upshift dwell (TE cut)
     float tractiveEffort_ = 0.0f;       // N applied this step (+ in +s), for the HUD
+    float brakeForce_ = 0.0f;           // N of friction brake this step, for the sound
     bool compOn_ = false;               // compressor state (cut-in/cut-out governor)
     bool safetyBrake_ = false;          // low-reservoir automatic emergency (latched)
     int engineCount_ = 0;               // diesel engines (2 for a Class 93, else 0)

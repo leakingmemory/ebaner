@@ -241,6 +241,10 @@ int main(int argc, char** argv) {
         Audio::dumpCrossingTest(dump);
         return EXIT_SUCCESS;
     }
+    if (const char* dump = std::getenv("EBANER_AUDIO_DUMP_ROLLING")) {
+        Audio::dumpRollingTest(dump);
+        return EXIT_SUCCESS;
+    }
 
     // Which station to start at. The dataset carries them - name, position, and
     // whether it is a station or a stop - so this is a lookup, not a table of ours.
@@ -2919,10 +2923,24 @@ int main(int argc, char** argv) {
             // engine). Full when close, silent far away.
             const glm::vec3 camPos = g_camera.position();
             float distGain = 0.0f;
-            for (const VehicleFrame& b : vehicle->bogieFrames())
-                distGain = std::max(distGain,
-                                    glm::clamp((60.0f - glm::distance(camPos, b.pos)) / 55.0f,
-                                               0.0f, 1.0f));
+            // Wheel on rail comes from the same wheels as the brake does, but it is the
+            // loudest thing a running train makes and carries far further than a brake
+            // valve: a train is heard passing long before its air is.
+            float rollGain = 0.0f;
+            {
+                // A bare wheelset has no bogie at all, so its own frame stands in -
+                // without that the single-axle vehicle was silent at any distance,
+                // including nose to nose with it.
+                std::vector<VehicleFrame> at = vehicle->bogieFrames();
+                if (at.empty()) at.push_back(vehicle->frame());
+                for (const VehicleFrame& b : at) {
+                    const float d = glm::distance(camPos, b.pos);
+                    distGain = std::max(distGain,
+                                        glm::clamp((60.0f - d) / 55.0f, 0.0f, 1.0f));
+                    rollGain = std::max(rollGain,
+                                        glm::clamp((160.0f - d) / 140.0f, 0.0f, 1.0f));
+                }
+            }
             float engGain[2] = {0.0f, 0.0f};
             const std::vector<VehicleFrame> secs = vehicle->bodySectionFrames();
             for (int k = 0; k < 2 && k < static_cast<int>(secs.size()); ++k)
@@ -2946,7 +2964,7 @@ int main(int argc, char** argv) {
                                                0.0f, 1.0f));
             }
             audio.setCrossingBell(bellGain);
-            audio.update(*vehicle, simDt, distGain, engGain[0], engGain[1]);
+            audio.update(*vehicle, simDt, distGain, engGain[0], engGain[1], rollGain);
             vmesh.build(*vehicle);
             renderer.updateVehicleVertices(vmesh.vertices());
 

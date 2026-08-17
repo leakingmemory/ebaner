@@ -197,3 +197,15 @@ target_include_directories(CrossingSequenceTest PRIVATE src)
 # the test still runs, just without that part.
 add_test(NAME crossing-sequence
          COMMAND CrossingSequenceTest "${CMAKE_CURRENT_BINARY_DIR}/crossing-test")
+
+# The rolling-noise synth. Audio.cpp builds into the viewer rather than the engine
+# library, so it is compiled in here directly - and deliberately without HAVE_PULSE /
+# HAVE_PORTAUDIO, which leaves it pure DSP that opens no device. What the test measures
+# is the shipped synth, not a copy of it. Needs no export.
+# Vehicle.cpp comes along because Audio::update reads the vehicle; the test drives the
+# synth through setRolling and never builds one, but the symbols have to resolve.
+add_executable(RollingNoiseTest tests/RollingNoiseTest.cpp src/Audio.cpp src/Vehicle.cpp)
+add_dependencies(RollingNoiseTest shaders)
+target_link_libraries(RollingNoiseTest PRIVATE ebaner_engine)
+target_include_directories(RollingNoiseTest PRIVATE src)
+add_test(NAME rolling-noise COMMAND RollingNoiseTest)
