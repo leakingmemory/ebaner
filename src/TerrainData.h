@@ -150,6 +150,11 @@ public:
     // overlay file is already applied during load().
     void applyTrackEdits(const std::vector<TrackEdit>& edits);
 
+    // Drop a whole track from the network by id, for the editor to take back a road it
+    // has just drawn. Every other edit changes points that were already there, so this
+    // is the only removal there is. Returns false if no track carries that id.
+    bool removeTrack(std::uint32_t trackId);
+
     // Re-carve the terrain cuttings from the pristine (pre-carve) heightfield using
     // the current (possibly edited) track geometry. Lets the editor preview how an
     // edit re-shapes the terrain without double-carving the already-carved heights.

@@ -64,3 +64,35 @@ glm::mat4 Camera::projMatrix(float aspect) const {
     proj[1][1] *= -1.0f; // flip Y for Vulkan's clip space
     return proj;
 }
+
+bool screenRayToPlane(const glm::mat4& proj, const glm::vec3& camPos, const glm::vec3& fwd,
+                      const glm::vec2& cursorPx, const glm::vec2& fb, float planeZ,
+                      glm::vec3& hit) {
+    if (fb.x < 1.0f || fb.y < 1.0f) return false;
+    const float p00 = proj[0][0], p11 = proj[1][1];
+    if (std::abs(p00) < 1e-6f || std::abs(p11) < 1e-6f) return false;
+
+    // Rebuild the ray from the camera's own basis rather than by unprojecting a depth:
+    // this build defines no GLM_FORCE_DEPTH_ZERO_TO_ONE and flips Y by hand, so the depth
+    // convention is not something to lean on, while the basis is the same either way.
+    // lookAt's rows are (right, up, -forward), so a view-space direction (x, y, -1) is
+    // right*x + up*y + forward in the world.
+    const glm::vec3 f = glm::normalize(fwd);
+    const glm::vec3 right = glm::normalize(glm::cross(f, kWorldUp));
+    const glm::vec3 up = glm::cross(right, f);
+    const float ndcX = cursorPx.x / fb.x * 2.0f - 1.0f;
+    const float ndcY = cursorPx.y / fb.y * 2.0f - 1.0f;
+    const glm::vec3 dir = f + right * (ndcX / p00) + up * (ndcY / p11);
+
+    const float len = glm::length(dir);
+    if (len < 1e-9f) return false;
+    // The sine of the ray's angle to the plane. Below ~3 deg the answer is both far away
+    // and wildly sensitive to a pixel, so it is no answer at all.
+    constexpr float kMinSlope = 0.0523f; // sin(3 deg)
+    if (std::abs(dir.z) < kMinSlope * len) return false;
+
+    const float t = (planeZ - camPos.z) / dir.z;
+    if (t <= 0.0f) return false; // the plane is behind the camera
+    hit = camPos + dir * t;
+    return true;
+}

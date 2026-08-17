@@ -304,6 +304,31 @@ at a red dead-end and **Enter** to pick end **A**, aim at the other loose end an
 clears the pick). The two segments join into one continuous route and the train runs
 across the former gap.
 
+**Drawing a new siding.** The export carries the roads that were surveyed, and a station
+can want one that was not — Mo i Rana's industrial trackage is not in it at all. Pick **New
+sidings** from the Esc menu and **click a spot on an existing track**: that fixes where the
+road starts, and its rail-head height becomes the height of the whole thing. Then **click on**
+to lay it out point by point. A click that lands on another track **finishes** the road
+there, taking that track's height, so a switch forms at that end too; **Enter** finishes it
+where it stands, leaving a buffer stop. **X** takes back the last point (and on the first,
+gives up on the road); **Y** makes it a **yard** track rather than a siding; **right-click**
+selects one already drawn, for **Y** or **X**. Ctrl+S writes them as `track …` lines in the
+same `overlay/track-edits.txt` as every other track edit.
+
+Only x and y come from a click, because a click is a **ray**: it meets one horizontal plane
+in exactly one point, and nothing else about it says how far away the ground is. So the road
+is drawn flat, at the height it started from, and the elevation is geometry mode's job
+afterwards — select it and use Up/Down or **G**, exactly as for any other track. (The HUD
+shows the ground height under the cursor while drawing, so how far the road is running off
+the hillside is visible as it is laid. A camera looking level has no answer to give and the
+mode says so rather than placing a point on the horizon.)
+
+A drawn road is an **ordinary track** everywhere: it takes a `trackId` of its own, written
+into the record so the circuits, signal paths and crossings anchored to it by `<trackHex>:
+<frac>` stay put whatever else is added to the file. Its turnout has to earn itself the way
+any other does — between **8° and 35°** of divergence — so the HUD shows the angle the road
+leaves its parent track at, and says when it is outside that window and no switch will form.
+
 **Simple entry signals.** The entry signals proper are routes between track-circuit
 borders, with C1/C2 authorities and full interlocking — which needs circuits drawn
 through the station, so they exist at Bodø and nowhere else. These are the plain

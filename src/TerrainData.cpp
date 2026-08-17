@@ -54,6 +54,16 @@ void TerrainData::applyTrackEdits(const std::vector<TrackEdit>& edits) {
     applyTrackOverlay(networkTracks_, edits);
 }
 
+bool TerrainData::removeTrack(std::uint32_t trackId) {
+    const std::size_t before = networkTracks_.size();
+    networkTracks_.erase(std::remove_if(networkTracks_.begin(), networkTracks_.end(),
+                                        [&](const TrackSegment& s) {
+                                            return s.trackId == trackId;
+                                        }),
+                         networkTracks_.end());
+    return networkTracks_.size() != before;
+}
+
 // The loaded tiles as a plain list, for the passes that walk all of them.
 std::vector<Tile*> TerrainData::tileList() {
     std::vector<Tile*> out;

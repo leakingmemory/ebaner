@@ -277,10 +277,25 @@ int main(int argc, char** argv) {
     // switch (turnout) properties, mini signal paths and exit (main) signals, switched
     // from the Escape menu. ---
     enum class EdMode {
-        Geometry, Circuits, Switches, SignalPaths, ExitSignals, EntrySignals,
+        Geometry, NewSidings, Circuits, Switches, SignalPaths, ExitSignals, EntrySignals,
         DistantSignals, SimpleEntries, Crossings, FlagPosts, TxpPositions
     };
     EdMode mode = EdMode::Geometry;
+    // New sidings: whole roads the export does not carry, drawn point by point. The first
+    // click lands on an existing track and fixes the height for the whole thing; after
+    // that a click gives x and y only, because a click is a ray and a ray meets one
+    // horizontal plane in exactly one point. Elevation afterwards is geometry mode's job,
+    // as it is for every other track.
+    std::vector<glm::dvec3> drawPts;  // the road being drawn; empty = not drawing
+    double drawZ = 0.0;               // the height it was started at, locked
+    std::uint8_t drawType = 1;        // 1 siding, 2 yard
+    std::uint32_t drawFromTrack = 0;  // the track the first point sits on...
+    double drawFromFrac = 0.0;        // ...and where, for the divergence angle
+    std::uint32_t selNewTrack = 0;    // selected finished road, by its id (0 = none)
+    bool newTracksDirty = false;      // a type toggle: no new record, but the file changed
+    glm::dvec3 drawBandTo(0.0);       // where the rubber band currently reaches
+    glm::vec2 lastDrawCur(0.0f);      // and the cursor it was last drawn for...
+    double lastDrawBand = 0.0;        // ...and when, so it is not rebuilt every frame
     int selTurnout = -1;             // selected turnout (index into switchNet.turnouts())
     bool switchTypesDirty = false;   // unsaved switch-type changes
     // Mini signal paths (own overlay): directional routes between two circuit borders.
@@ -512,6 +527,26 @@ int main(int argc, char** argv) {
                              "removal (Ctrl+S to apply)\n", amb);
     }
 
+    // Every drawn road the session knows about: the ones already on disk and the ones
+    // added since. Both are `track` records in the same overlay file, and the save writes
+    // the two lists back out as one, so the mode treats them alike.
+    auto newTrackRecords = [&]() {
+        std::vector<TrackEdit*> out;
+        for (std::size_t k = 0; k < existing.size(); ++k)
+            if (existing[k].kind == TrackEdit::Track && !removeExisting[k])
+                out.push_back(&existing[k]);
+        for (TrackEdit& e : pending)
+            if (e.kind == TrackEdit::Track) out.push_back(&e);
+        return out;
+    };
+    // The next free id. Taken from what is in the file rather than from a counter, so a
+    // session opening a dataset that already has roads drawn in it carries on from there.
+    auto nextNewTrackId = [&]() {
+        std::uint32_t id = kNewTrackIdBase;
+        for (const TrackEdit* e : newTrackRecords()) id = std::max(id, e->track + 1);
+        return id;
+    };
+
     auto rebuildOverlay = [&]() {
         std::vector<LineVertex> lns = graph.lines;
         const glm::vec3 yellow(1.0f, 0.95f, 0.2f), white(1.0f, 1.0f, 1.0f);
@@ -520,7 +555,45 @@ int main(int argc, char** argv) {
         if (selA >= 0) pts.push_back({graph.deadEnds[selA].pos, yellow});
         if (selB >= 0) pts.push_back({graph.deadEnds[selB].pos, yellow});
         for (int i : selected) pts.push_back({graph.points[i].pos, white}); // on top
-        if (mode == EdMode::Circuits) {
+        if (mode == EdMode::NewSidings) {
+            const glm::dvec3 o = data.sceneOrigin();
+            auto scv = [&](glm::dvec3 w, float lift) {
+                return glm::vec3(float(w.x - o.x), float(w.y - o.y), float(w.z - o.z) + lift);
+            };
+            // The road being drawn, with a marker at every point put down so far and a
+            // band running on to the cursor. Drawn above the rails so it reads against
+            // the track it branches from.
+            const glm::vec3 draw(0.3f, 1.0f, 0.9f);
+            for (std::size_t i = 0; i < drawPts.size(); ++i) {
+                pts.push_back({scv(drawPts[i], 1.2f), draw});
+                lns.push_back({scv(drawPts[i], 0.2f), draw});
+                lns.push_back({scv(drawPts[i], 2.5f), draw});
+                if (i) {
+                    lns.push_back({scv(drawPts[i - 1], 1.2f), draw});
+                    lns.push_back({scv(drawPts[i], 1.2f), draw});
+                }
+            }
+            if (!drawPts.empty() && (drawBandTo.x != 0.0 || drawBandTo.y != 0.0)) {
+                const glm::vec3 band(0.9f, 0.9f, 0.4f);
+                lns.push_back({scv(drawPts.back(), 1.2f), band});
+                lns.push_back({scv(drawBandTo, 1.2f), band});
+            }
+            // What is already drawn, so a road can be found again and picked. The
+            // selected one goes white, as everywhere else in the editor.
+            for (const TrackEdit* e : newTrackRecords()) {
+                const glm::vec3 col = e->track == selNewTrack
+                                          ? white
+                                          : (e->trackType == 2 ? glm::vec3(1.0f, 0.6f, 0.9f)
+                                                               : glm::vec3(0.4f, 0.9f, 1.0f));
+                for (std::size_t i = 0; i < e->pts.size(); ++i) {
+                    pts.push_back({scv(e->pts[i], 1.0f), col});
+                    if (i) {
+                        lns.push_back({scv(e->pts[i - 1], 1.0f), col});
+                        lns.push_back({scv(e->pts[i], 1.0f), col});
+                    }
+                }
+            }
+        } else if (mode == EdMode::Circuits) {
             const glm::dvec3 o = data.sceneOrigin();
             auto sc = [&](glm::dvec3 w, float lift) {
                 return glm::vec3(float(w.x - o.x), float(w.y - o.y), float(w.z - o.z) + lift);
@@ -886,6 +959,74 @@ int main(int argc, char** argv) {
         // The selection is gone, so the walk along the line has nowhere to resume from.
         if (!keepSelection) { selected.clear(); selA = selB = -1; growFwd = growBack = {}; }
         rebuildOverlay();
+    };
+    // Turn the road being drawn into a record. It goes into `pending` through the same
+    // path every other edit takes, so one save owns track-edits.txt and the two modes
+    // that write it cannot clobber each other.
+    auto commitDrawnTrack = [&]() {
+        if (drawPts.size() < 2) return;
+        TrackEdit e;
+        e.kind = TrackEdit::Track;
+        e.track = nextNewTrackId();
+        e.trackType = drawType;
+        e.pts = drawPts;
+        applyEditsLive({e});
+        std::printf("[trackedit] new %s %#x: %zu point(s), %.0f m (Ctrl+S to save)\n",
+                    drawType == 2 ? "yard track" : "siding", e.track, e.pts.size(),
+                    polyLength(e.pts));
+        selNewTrack = e.track;
+        drawPts.clear();
+        drawBandTo = glm::dvec3(0.0);
+        rebuildOverlay();
+    };
+    // Take a drawn road back. One from disk is staged for removal the way an ambiguous
+    // override is; one drawn this session is simply dropped. Either way the segment has
+    // to leave the network too, or it stays on screen until the editor is restarted.
+    auto removeDrawnTrack = [&](std::uint32_t id) {
+        bool found = false;
+        for (std::size_t k = 0; k < existing.size(); ++k)
+            if (existing[k].kind == TrackEdit::Track && existing[k].track == id &&
+                !removeExisting[k]) {
+                removeExisting[k] = 1;
+                found = true;
+            }
+        for (auto it = pending.begin(); it != pending.end();) {
+            if (it->kind == TrackEdit::Track && it->track == id) {
+                it = pending.erase(it);
+                found = true;
+            } else {
+                ++it;
+            }
+        }
+        if (!found) return;
+        data.removeTrack(id);
+        graph = buildTrackGraph(data);
+        buildPolys();
+        selected.clear(); selA = selB = -1; growFwd = growBack = {};
+        selNewTrack = 0;
+        newTracksDirty = true;
+        std::printf("[trackedit] road %#x removed (Ctrl+S to save)\n", id);
+        rebuildOverlay();
+    };
+    // Siding <-> yard on a road already drawn. The record changes and the segment is laid
+    // down again with the new type; nothing else about it moves.
+    auto retypeDrawnTrack = [&](std::uint32_t id) {
+        for (TrackEdit* e : newTrackRecords()) {
+            if (e->track != id) continue;
+            e->trackType = e->trackType == 2 ? 1 : 2;
+            data.removeTrack(id);
+            data.applyTrackEdits({*e});
+            graph = buildTrackGraph(data);
+            buildPolys();
+            selected.clear(); selA = selB = -1; growFwd = growBack = {};
+            newTracksDirty = true;
+            pathMsg = e->trackType == 2 ? "yard track" : "siding";
+            pathMsgUntil = glfwGetTime() + 3.0;
+            std::printf("[trackedit] road %#x -> %s (Ctrl+S to save)\n", id,
+                        e->trackType == 2 ? "yard" : "siding");
+            rebuildOverlay();
+            return;
+        }
     };
     // Rebuild the *rendered* world (rails/sleepers, carved terrain, switch stands) from
     // the current edited data, so the preview shows how an edit actually renders — not
@@ -1572,10 +1713,12 @@ int main(int argc, char** argv) {
          prevG = false, prevS = false, prevUp = false, prevDown = false,
          prevJ = false, prevN = false, prevR = false, prevK = false, prevC = false,
          prevP = false, prevF2 = false, prevMR = false, prevM = false,
-         prevV = false, prevB = false, prevT = false, prevF = false, prev2 = false;
+         prevV = false, prevB = false, prevT = false, prevF = false, prev2 = false,
+         prevY = false;
     bool prevNameEnter = false, prevNameEsc = false, prevNameBs = false;
     bool prevMenuEnter = false, prevMenuUp = false, prevMenuDown = false;
-    const std::vector<std::string> kMenuItems = {"Geometry edit", "Track circuits",
+    const std::vector<std::string> kMenuItems = {"Geometry edit", "New sidings",
+                                                 "Track circuits",
                                                  "Switches", "Signal paths",
                                                  "Exit signals", "Entry signals",
                                                  "Distant signals",
@@ -1615,7 +1758,8 @@ int main(int argc, char** argv) {
                 if (sel == "Exit") {
                     glfwSetWindowShouldClose(window, GLFW_TRUE);
                 } else { // pick a mode and close the menu
-                    mode = sel == "Track circuits" ? EdMode::Circuits
+                    mode = sel == "New sidings"    ? EdMode::NewSidings
+                           : sel == "Track circuits" ? EdMode::Circuits
                            : sel == "Switches"      ? EdMode::Switches
                            : sel == "Signal paths"  ? EdMode::SignalPaths
                            : sel == "Exit signals"  ? EdMode::ExitSignals
@@ -1632,6 +1776,9 @@ int main(int argc, char** argv) {
                     selExitRoute = -1; armedExit = -1; selEntry = -1; selDistant = -1;
                     selEntryApproach = -1; armedEntry = -1;
                     selSimple = -1; selCrossing = -1; selFlag = -1; selTxp = -1;
+                    // A half-drawn road is abandoned rather than carried between modes:
+                    // it is not a record yet and nothing outside this mode can see it.
+                    drawPts.clear(); drawBandTo = glm::dvec3(0.0); selNewTrack = 0;
                     showPending = false;
                     rebuildOverlay();
                     g_menuOpen = false;
@@ -1876,7 +2023,8 @@ int main(int argc, char** argv) {
              mode == EdMode::SignalPaths || mode == EdMode::ExitSignals ||
              mode == EdMode::EntrySignals || mode == EdMode::DistantSignals ||
              mode == EdMode::SimpleEntries || mode == EdMode::Crossings ||
-             mode == EdMode::FlagPosts || mode == EdMode::TxpPositions) &&
+             mode == EdMode::FlagPosts || mode == EdMode::TxpPositions ||
+             mode == EdMode::NewSidings) &&
             !g_mouseCaptured) {
             double mx = 0.0, my = 0.0;
             glfwGetCursorPos(window, &mx, &my);
@@ -1956,6 +2104,39 @@ int main(int argc, char** argv) {
                         if (iv.trackId == circTrack && circFrac >= iv.from - 1e-4 &&
                             circFrac <= iv.to + 1e-4)
                             sectionHover = static_cast<int>(si);
+        }
+
+        // New sidings: where the cursor's ray meets the plane the road is being drawn on.
+        // Worked out once a frame - the click places a point there, the HUD reads it out
+        // and the rubber band is drawn to it.
+        bool drawHit = false;
+        glm::dvec3 drawWorld(0.0);
+        if (mode == EdMode::NewSidings && !g_mouseCaptured && !drawPts.empty()) {
+            double mx = 0.0, my = 0.0;
+            glfwGetCursorPos(window, &mx, &my);
+            int winw = fbw, winh = fbh;
+            glfwGetWindowSize(window, &winw, &winh);
+            const glm::vec2 cur(static_cast<float>(mx) * fbw / std::max(winw, 1),
+                                static_cast<float>(my) * fbh / std::max(winh, 1));
+            const glm::dvec3 o = data.sceneOrigin();
+            glm::vec3 hit(0.0f);
+            if (screenRayToPlane(g_camera.projMatrix(aspect), g_camera.position(),
+                                 g_camera.forward(), cur, glm::vec2(fbw, fbh),
+                                 static_cast<float>(drawZ - o.z), hit)) {
+                drawHit = true;
+                drawWorld = glm::dvec3(hit) + o;
+            }
+            // The rubber band lives in the overlay buffer, which is torn down and
+            // re-uploaded whole on every rebuild - far too heavy to follow the mouse
+            // frame by frame. So it is throttled: a rebuild only once the cursor has
+            // moved enough to see and only so often. The HUD readout below is live.
+            if (drawHit && (glm::length(cur - lastDrawCur) > 6.0f) &&
+                now - lastDrawBand > 0.1) {
+                lastDrawCur = cur;
+                lastDrawBand = now;
+                drawBandTo = drawWorld;
+                rebuildOverlay();
+            }
         }
 
         // Switches mode: pick the nearest working turnout by its world position
@@ -2099,6 +2280,7 @@ int main(int argc, char** argv) {
         const bool kT = glfwGetKey(window, GLFW_KEY_T) == GLFW_PRESS;
         const bool kF = glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS;
         const bool k2 = glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS;
+        const bool kY = glfwGetKey(window, GLFW_KEY_Y) == GLFW_PRESS;
         // Save is Ctrl+S (plain S is the backward-movement key).
         const bool kSave = ctrl && glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS;
         const bool kLeft = glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS;
@@ -2148,6 +2330,45 @@ int main(int argc, char** argv) {
             if (kK && !prevK) doAutoDiamond();
             // C: build a scissors (double) crossover between 2 selected tracks' points.
             if (kC && !prevC) doScissors();
+        } else if (mode == EdMode::NewSidings) { // --- New sidings mode ---
+            // Enter finishes the road where it stands, leaving a buffer stop. (A click on
+            // another track finishes it there instead, with a switch at that end too.)
+            if (kEnter && !prevEnter && !drawPts.empty()) {
+                if (drawPts.size() >= 2) commitDrawnTrack();
+                else {
+                    pathMsg = "a road needs a second point";
+                    pathMsgUntil = glfwGetTime() + 3.0;
+                }
+            }
+            // X: take back the last point, and on the first that means giving up on the
+            // road altogether. With nothing being drawn it deletes the selected one.
+            if (kX && !prevX) {
+                if (!drawPts.empty()) {
+                    drawPts.pop_back();
+                    drawBandTo = glm::dvec3(0.0);
+                    if (drawPts.empty()) {
+                        pathMsg = "cancelled";
+                        pathMsgUntil = glfwGetTime() + 3.0;
+                    }
+                    rebuildOverlay();
+                } else if (selNewTrack != 0) {
+                    removeDrawnTrack(selNewTrack);
+                }
+            }
+            // Y: siding or yard. Sidings are the running roads a train is signalled into;
+            // the industrial roads this mode was built for are yard track.
+            if (kY && !prevY) {
+                if (!drawPts.empty()) {
+                    drawType = drawType == 1 ? 2 : 1;
+                    pathMsg = drawType == 2 ? "drawing a yard track" : "drawing a siding";
+                    pathMsgUntil = glfwGetTime() + 3.0;
+                } else if (selNewTrack != 0) {
+                    retypeDrawnTrack(selNewTrack);
+                } else {
+                    pathMsg = "right-click a road first, then Y";
+                    pathMsgUntil = glfwGetTime() + 3.0;
+                }
+            }
         } else if (mode == EdMode::Circuits) { // --- Circuits mode ---
             // Enter: seed a section at the hovered track spot and flood-fill it.
             if (kEnter && !prevEnter && circHit) {
@@ -2708,8 +2929,12 @@ int main(int argc, char** argv) {
                     std::fprintf(stderr, "[trackedit] failed to write entry approaches\n");
                 }
             }
-        } else if (kSave && !prevS && mode == EdMode::Geometry &&
-                   (!pending.empty() || removals > 0)) {
+        } else if (kSave && !prevS &&
+                   (mode == EdMode::Geometry || mode == EdMode::NewSidings) &&
+                   (!pending.empty() || removals > 0 || newTracksDirty)) {
+            // One file, one save path: the drawn roads go into `pending` like every other
+            // track edit, so the two modes that write track-edits.txt cannot clobber each
+            // other's work by each keeping their own idea of what is in it.
             std::vector<TrackEdit> out;
             for (std::size_t k = 0; k < existing.size(); ++k)
                 if (!removeExisting[k]) out.push_back(existing[k]);
@@ -2721,6 +2946,7 @@ int main(int argc, char** argv) {
                 existing = std::move(out);            // new on-disk baseline
                 removeExisting.assign(existing.size(), 0);
                 pending.clear();
+                newTracksDirty = false;
             } else {
                 std::fprintf(stderr, "[trackedit] failed to write overlay file\n");
             }
@@ -2848,6 +3074,7 @@ int main(int argc, char** argv) {
         prevLeft = kLeft; prevRight = kRight;
         prevEnter = kEnter; prevL = kL; prevX = kX; prevG = kG; prevS = kSave;
         prevJ = kJ; prevN = kN; prevR = kR; prevK = kK; prevC = kC; prevP = kP;
+        prevY = kY;
         prevF2 = kF2; prevM = kM; prevV = kV; prevB = kB; prevT = kT; prevF = kF;
         prev2 = k2;
 
@@ -2867,6 +3094,45 @@ int main(int argc, char** argv) {
             }
             resetGrow(); // a fresh pick starts the walk over
             rebuildOverlay();
+        } else if (!g_mouseCaptured && mL && !prevML && mode == EdMode::NewSidings) {
+            if (drawPts.empty()) {
+                // The first point has to sit on an existing track: it is what fixes the
+                // height for the whole road, and it is the end that becomes a switch.
+                if (circHit) {
+                    drawPts.push_back(circWorld);
+                    drawZ = circWorld.z;
+                    drawFromTrack = circTrack;
+                    drawFromFrac = circFrac;
+                    drawBandTo = glm::dvec3(0.0);
+                    char started[80];
+                    std::snprintf(started, sizeof(started),
+                                  "started on %#x at %.1f m - click on to draw",
+                                  circTrack, circWorld.z);
+                    pathMsg = started;
+                    pathMsgUntil = glfwGetTime() + 3.0;
+                    rebuildOverlay();
+                } else {
+                    pathMsg = "start on an existing track: its height sets the road's";
+                    pathMsgUntil = glfwGetTime() + 3.0;
+                }
+            } else if (circHit && std::hypot(circWorld.x - drawPts.front().x,
+                                             circWorld.y - drawPts.front().y) > 20.0) {
+                // Landed on a track: finish there, taking that track's height, so the far
+                // end is flush and forms a switch of its own. The distance guard is what
+                // makes the second click work at all - the road starts *on* a track, so
+                // the cursor is still within the pick radius of it for the first few
+                // metres, and it also lets a loop come back onto the road it left.
+                drawPts.push_back(circWorld);
+                commitDrawnTrack();
+            } else if (drawHit) {
+                drawPts.push_back(glm::dvec3(drawWorld.x, drawWorld.y, drawZ));
+                rebuildOverlay();
+            } else {
+                // The only way to be here is a camera looking too near level for the ray
+                // to meet the plane anywhere useful.
+                pathMsg = "look down at the ground to place a point";
+                pathMsgUntil = glfwGetTime() + 3.0;
+            }
         } else if (!g_mouseCaptured && mL && !prevML && mode == EdMode::Circuits) {
             // A move is armed: this click relocates the selected border (and everything
             // anchored to it) rather than dropping a new one.
@@ -3109,7 +3375,20 @@ int main(int argc, char** argv) {
         prevML = mL;
         // Right-click selects: a section (circuits) or a signal path (signal-paths mode).
         const bool mR = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
-        if (!g_mouseCaptured && mR && !prevMR && mode == EdMode::Circuits) {
+        if (!g_mouseCaptured && mR && !prevMR && mode == EdMode::NewSidings) {
+            // The track pick already answers "which road is under the cursor" for every
+            // track there is; only a drawn one can be selected here, so the id decides.
+            std::uint32_t hit = 0;
+            if (circHit)
+                for (const TrackEdit* e : newTrackRecords())
+                    if (e->track == circTrack) hit = circTrack;
+            selNewTrack = hit;
+            if (hit == 0) {
+                pathMsg = "right-click one of the roads drawn here";
+                pathMsgUntil = glfwGetTime() + 3.0;
+            }
+            rebuildOverlay();
+        } else if (!g_mouseCaptured && mR && !prevMR && mode == EdMode::Circuits) {
             selSection = sectionHover;
             rebuildOverlay();
         } else if (!g_mouseCaptured && mR && !prevMR && mode == EdMode::DistantSignals) {
@@ -3257,6 +3536,7 @@ int main(int argc, char** argv) {
                     40.0f + (mode == EdMode::ExitSignals    ? 10.0f
                              : mode == EdMode::SignalPaths  ? 9.0f
                              : mode == EdMode::EntrySignals ? 10.0f
+                             : mode == EdMode::NewSidings   ? 9.0f
                                                             : 8.0f) * lh;
                 const glm::vec3 bg(0.04f, 0.05f, 0.09f);
                 const glm::vec2 a = ndc(20.0f, 20.0f), b = ndc(x1, 20.0f),
@@ -3343,6 +3623,89 @@ int main(int argc, char** argv) {
                                        : "SELECT: click point, Ctrl+click multi, "
                                          "click empty to clear",
                        x, 40.0f + 7 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
+          } else if (mode == EdMode::NewSidings) { // --- New sidings HUD ---
+            appendText(tv, "MODE: NEW SIDINGS (Esc menu to switch)", x, 40.0f + 3 * lh, sc,
+                       glm::vec3(0.4f, 1.0f, 0.9f), fbw, fbh);
+            const std::vector<TrackEdit*> roads = newTrackRecords();
+            char selbuf[64] = "";
+            for (const TrackEdit* e : roads)
+                if (e->track == selNewTrack)
+                    std::snprintf(selbuf, sizeof(selbuf), "   sel %#x %s  %.0f m",
+                                  e->track, e->trackType == 2 ? "yard" : "siding",
+                                  polyLength(e->pts));
+            std::snprintf(buf, sizeof(buf), "ROADS DRAWN %zu%s", roads.size(), selbuf);
+            appendText(tv, buf, x, 40.0f + 4 * lh, sc,
+                       selNewTrack ? glm::vec3(1.0f, 0.9f, 0.3f)
+                                   : glm::vec3(0.9f, 0.85f, 0.7f),
+                       fbw, fbh);
+            if (drawPts.empty()) {
+                appendText(tv, "click a spot on an existing track to start a road there",
+                           x, 40.0f + 5 * lh, sc, glm::vec3(0.8f, 0.95f, 0.8f), fbw, fbh);
+                appendText(tv, "", x, 40.0f + 6 * lh, sc, glm::vec3(0.7f), fbw, fbh);
+            } else {
+                double run = polyLength(drawPts);
+                char at[72] = "";
+                if (drawHit) {
+                    // The ground under the cursor as well as the plane: a road drawn
+                    // level runs further and further off the hillside, and that is
+                    // invisible from above until it is regraded.
+                    float g = 0.0f;
+                    const bool haveG = data.sampleGround(drawWorld.x, drawWorld.y, g);
+                    std::snprintf(at, sizeof(at), "  next +%.0f m  ground %s%.1f m",
+                                  std::hypot(drawWorld.x - drawPts.back().x,
+                                             drawWorld.y - drawPts.back().y),
+                                  haveG ? "" : "n/a ", haveG ? double(g) : 0.0);
+                }
+                std::snprintf(buf, sizeof(buf), "DRAWING %s  %zu pt  %.0f m  z=%.1f%s",
+                              drawType == 2 ? "YARD" : "SIDING", drawPts.size(), run,
+                              drawZ, at);
+                appendText(tv, buf, x, 40.0f + 5 * lh, sc, glm::vec3(0.4f, 1.0f, 0.9f),
+                           fbw, fbh);
+                // The angle the road leaves its parent track at. A turnout only forms
+                // between 8 and 35 degrees, and nothing else in the editor would say why
+                // a switch failed to appear - the road would simply sit there inert.
+                if (drawPts.size() >= 2) {
+                    const glm::dvec2 t = trackTangent(polys, drawFromTrack, drawFromFrac, +1);
+                    glm::dvec2 d(drawPts[1].x - drawPts[0].x, drawPts[1].y - drawPts[0].y);
+                    const double L = glm::length(d);
+                    if (L > 1e-6) {
+                        d /= L;
+                        // Either sense of the parent counts: the road may face the other
+                        // way along it, and the turnout is the same turnout.
+                        const double dot = std::abs(glm::dot(t, d));
+                        const double deg =
+                            glm::degrees(std::acos(std::min(1.0, dot)));
+                        const bool ok = deg >= 8.0 && deg <= 35.0;
+                        std::snprintf(buf, sizeof(buf),
+                                      "LEAVES %#x AT %.1f deg  %s", drawFromTrack, deg,
+                                      ok ? "(a switch will form here)"
+                                         : "OUTSIDE 8-35 deg: NO SWITCH");
+                        appendText(tv, buf, x, 40.0f + 6 * lh, sc,
+                                   ok ? glm::vec3(0.6f, 1.0f, 0.6f)
+                                      : glm::vec3(1.0f, 0.55f, 0.3f),
+                                   fbw, fbh);
+                    }
+                } else {
+                    appendText(tv, "click again to lay the first length of it", x,
+                               40.0f + 6 * lh, sc, glm::vec3(0.8f, 0.95f, 0.8f), fbw, fbh);
+                }
+            }
+            if (glfwGetTime() < pathMsgUntil && !pathMsg.empty())
+                appendText(tv, pathMsg, x, 40.0f + 7 * lh, sc, glm::vec3(1.0f, 0.8f, 0.4f),
+                           fbw, fbh);
+            else {
+                const bool dirty = !pending.empty() || newTracksDirty || removals > 0;
+                std::snprintf(buf, sizeof(buf), "UNSAVED %zu   %s", pending.size(),
+                              dirty ? "Ctrl+S to save" : "");
+                appendText(tv, buf, x, 40.0f + 7 * lh, sc,
+                           dirty ? glm::vec3(1.0f, 0.6f, 0.3f)
+                                 : glm::vec3(0.6f, 0.9f, 0.6f),
+                           fbw, fbh);
+            }
+            appendText(tv,
+                       "click: point (on a track: start/finish)  Enter: buffer stop  "
+                       "X: undo  Y: siding/yard  right-click: select",
+                       x, 40.0f + 8 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
           } else if (mode == EdMode::Circuits) { // --- Circuits mode HUD ---
             appendText(tv, "MODE: TRACK CIRCUITS (Esc menu to switch)", x, 40.0f + 3 * lh,
                        sc, glm::vec3(1.0f, 0.6f, 0.6f), fbw, fbh);

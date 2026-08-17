@@ -19,6 +19,7 @@
 // be left shut by a train that turned back. So it is driven here directly, with the
 // occupancy dictated rather than simulated, and no dataset in the way.
 
+#include "Camera.h"
 #include "FlagPosts.h"
 #include "TxpGraph.h"
 #include "TxpNetwork.h"
@@ -1634,6 +1635,181 @@ int main(int argc, char** argv) {
                   old[0].type == RouteType::C2,
               "a record written before the keywords loads, without either");
         std::filesystem::remove(root + "/overlay/entry-signals.txt", ec);
+    }
+
+    // Where a click lands. The editor projects world geometry to the screen to pick;
+    // drawing a new track needs the reverse, so the two have to agree exactly. Project a
+    // known point through the real viewProj, feed the pixel back at that point's own
+    // height, and require the point back.
+    {
+        std::puts("\nA click on a plane:");
+        Camera cam;
+        struct Pose { glm::vec3 pos; float yaw, pitch; };
+        const Pose poses[] = {
+            {{0.0f, 0.0f, 120.0f}, 0.0f, glm::radians(-40.0f)},
+            {{-300.0f, 210.0f, 45.0f}, glm::radians(115.0f), glm::radians(-12.0f)},
+            {{80.0f, -60.0f, 400.0f}, glm::radians(-70.0f), glm::radians(-80.0f)},
+        };
+        const glm::vec2 fb(1920.0f, 1080.0f); // deliberately not square
+        const float aspect = fb.x / fb.y;
+        double worst = 0.0;
+        int tried = 0, refused = 0;
+        for (const Pose& p : poses) {
+            cam.setPose(p.pos, p.yaw, p.pitch);
+            const glm::mat4 proj = cam.projMatrix(aspect);
+            const glm::mat4 viewProj = proj * cam.viewMatrix();
+            for (float u = 0.1f; u < 0.95f; u += 0.2f) {
+                for (float v = 0.1f; v < 0.95f; v += 0.2f) {
+                    const glm::vec2 px(u * fb.x, v * fb.y);
+                    glm::vec3 hit(0.0f);
+                    if (!screenRayToPlane(proj, cam.position(), cam.forward(), px, fb,
+                                          0.0f, hit)) { ++refused; continue; }
+                    ++tried;
+                    const glm::vec4 clip = viewProj * glm::vec4(hit, 1.0f);
+                    if (clip.w <= 0.0f) { ++refused; continue; }
+                    const glm::vec2 back((clip.x / clip.w * 0.5f + 0.5f) * fb.x,
+                                         (clip.y / clip.w * 0.5f + 0.5f) * fb.y);
+                    // A pixel of error at this range is centimetres of ground, so the
+                    // comparison is where it started: the screen.
+                    worst = std::max(worst, double(glm::length(back - px)));
+                }
+            }
+        }
+        check(tried > 40, "the poses give points to check");
+        // A twentieth of a pixel: what is left is float rounding through the projection
+        // of a point a kilometre away, not an error in the arithmetic.
+        check(worst < 0.05, "and every one projects back to the pixel it came from");
+        std::printf("  worst round-trip %.4f px over %d points (%d refused)\n", worst,
+                    tried, refused);
+
+        // A distance is worth one direct check too, not only a pixel: put a known world
+        // point on the plane, project it, and ask for it back.
+        cam.setPose({0.0f, 0.0f, 90.0f}, glm::radians(30.0f), glm::radians(-25.0f));
+        const glm::mat4 proj = cam.projMatrix(aspect);
+        const glm::vec3 want(150.0f, 86.6f, 4.0f);
+        const glm::vec4 c = proj * cam.viewMatrix() * glm::vec4(want, 1.0f);
+        const glm::vec2 px((c.x / c.w * 0.5f + 0.5f) * fb.x,
+                           (c.y / c.w * 0.5f + 0.5f) * fb.y);
+        glm::vec3 hit(0.0f);
+        check(screenRayToPlane(proj, cam.position(), cam.forward(), px, fb, want.z, hit),
+              "a point on the plane comes back from its own pixel");
+        std::printf("  %.4f m from where it started\n", double(glm::length(hit - want)));
+        check(glm::length(hit - want) < 0.005f, "in the same place");
+
+        // The refusals. A level camera has no answer to give - the point runs off to the
+        // horizon - and neither has a plane behind the camera.
+        cam.setPose({0.0f, 0.0f, 20.0f}, 0.0f, 0.0f);
+        const glm::mat4 flat = cam.projMatrix(aspect);
+        check(!screenRayToPlane(flat, cam.position(), cam.forward(),
+                                glm::vec2(fb.x * 0.5f, fb.y * 0.5f), fb, 0.0f, hit),
+              "a level camera is refused rather than answered from the horizon");
+        check(screenRayToPlane(flat, cam.position(), cam.forward(),
+                               glm::vec2(fb.x * 0.5f, fb.y * 0.95f), fb, 0.0f, hit),
+              "while lower down the same screen still answers");
+        cam.setPose({0.0f, 0.0f, 20.0f}, 0.0f, glm::radians(-40.0f));
+        check(!screenRayToPlane(cam.projMatrix(aspect), cam.position(), cam.forward(),
+                                glm::vec2(fb.x * 0.5f, fb.y * 0.5f), fb, 60.0f, hit),
+              "and a plane behind the camera is refused");
+    }
+
+    // A drawn track round-trips through the overlay, and a file without one loads as it
+    // always did - that second half is the whole risk of adding a keyword.
+    if (argc > 1) {
+        std::puts("\nA drawn track in the overlay:");
+        const std::string root = argv[1];
+        std::error_code ec;
+        std::filesystem::create_directories(root + "/overlay", ec);
+        const std::string path = root + "/overlay/track-edits.txt";
+
+        std::vector<TrackEdit> es;
+        TrackEdit two;
+        two.kind = TrackEdit::Track;
+        two.track = kNewTrackIdBase + 3;
+        two.trackType = 1;
+        two.pts = {{455123.25, 7350044.5, 41.125}, {455180.5, 7350090.75, 41.125}};
+        es.push_back(two);
+        TrackEdit many;
+        many.kind = TrackEdit::Track;
+        many.track = kNewTrackIdBase + 4;
+        many.trackType = 2; // yard
+        for (int i = 0; i < 10; ++i)
+            many.pts.push_back({455000.0 + i * 17.5, 7350000.0 + i * i * 0.25, 39.5});
+        es.push_back(many);
+        // Mixed in with the kinds that were there before, since they share the file.
+        TrackEdit el;
+        el.kind = TrackEdit::Elev;
+        el.a = {455123.25, 7350044.5, 42.0};
+        el.track = kNewTrackIdBase + 3;
+        es.push_back(el);
+
+        check(writeTrackOverlay(root, es), "the edits write");
+        const std::vector<TrackEdit> back = loadTrackOverlay(root);
+        check(back.size() == 3, "and read back, all three of them");
+        if (back.size() == 3) {
+            check(back[0].kind == TrackEdit::Track && back[1].kind == TrackEdit::Track &&
+                      back[2].kind == TrackEdit::Elev,
+                  "in the order and of the kinds they were written");
+            check(back[0].track == kNewTrackIdBase + 3 &&
+                      back[1].track == kNewTrackIdBase + 4,
+                  "keeping the ids they were given, not ones derived from where they sit");
+            check(back[0].trackType == 1 && back[1].trackType == 2,
+                  "and the siding is a siding, the yard a yard");
+            check(back[0].pts.size() == 2 && back[1].pts.size() == 10,
+                  "with every point");
+            double worst = 0.0;
+            for (int t = 0; t < 2; ++t)
+                for (std::size_t i = 0; i < es[t].pts.size() && i < back[t].pts.size(); ++i)
+                    worst = std::max(worst,
+                                     glm::length(es[t].pts[i] - back[t].pts[i]));
+            check(worst < 0.002, "at the coordinates they were drawn at");
+            std::printf("  worst coordinate drift %.4f m\n", worst);
+            check(back[2].track == kNewTrackIdBase + 3,
+                  "and the elev edit that follows still names its track");
+        }
+
+        // Applied, it becomes an ordinary track: its own id, its own type, and below
+        // kRailIdBase, where a track is a road rather than a slip link.
+        {
+            std::vector<TrackSegment> segs;
+            applyTrackOverlay(segs, back);
+            check(segs.size() == 2, "applying the edits adds the two tracks");
+            if (segs.size() == 2) {
+                check(segs[0].trackId == kNewTrackIdBase + 3 && segs[0].trackType == 1 &&
+                          segs[0].medium == 0x20,
+                      "the siding, on the surface");
+                check(segs[1].trackId == kNewTrackIdBase + 4 && segs[1].trackType == 2,
+                      "and the yard track");
+                check(segs[0].trackId < kRailIdBase,
+                      "both below the connector base, so a route over one is a route");
+                check(std::abs(segs[0].pts[0].z - 42.0) < 1e-9,
+                      "and the elev edit reached it afterwards, which is how a drawn"
+                      " track gets regraded in geometry mode");
+            }
+        }
+
+        // The half that matters most: nothing that was loading before changes.
+        {
+            std::ofstream f(path, std::ios::trunc);
+            f << "link 1.0 2.0 3.0 4.0 5.0 6.0 tunnel\n"
+                 "elev 7.0 8.0 9.0 305419896 10.5\n"
+                 "rail 11.0 12.0 13.0 14.0 15.0 16.0\n"
+                 "move 17.0 18.0 19.0 20.0 21.0 22.0\n";
+        }
+        const std::vector<TrackEdit> plain = loadTrackOverlay(root);
+        check(plain.size() == 4, "a file with no drawn track loads all of its edits");
+        if (plain.size() == 4) {
+            check(plain[0].kind == TrackEdit::Link && plain[0].medium == 0x55 &&
+                      plain[0].b.z == 6.0,
+                  "the link, with its medium");
+            check(plain[1].kind == TrackEdit::Elev && plain[1].track == 0x12345678 &&
+                      plain[1].hasFromZ && plain[1].fromZ == 10.5,
+                  "the elev, with its track and its fromZ");
+            check(plain[2].kind == TrackEdit::Rail && plain[3].kind == TrackEdit::Move,
+                  "the rail and the move");
+            check(plain[0].pts.empty() && plain[2].pts.empty(),
+                  "and none of them carries points");
+        }
+        std::filesystem::remove(path, ec);
     }
 
     // The dataset's own script. What is checked here is the host, not any API: that a

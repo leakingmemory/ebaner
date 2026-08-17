@@ -17,6 +17,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -97,6 +98,22 @@ std::vector<TrackEdit> loadTrackOverlay(const std::string& datasetRoot) {
         if (line.empty() || line[0] == '#') continue;
         char kind[32] = {};
         TrackEdit e;
+        // A drawn track carries a point list of no fixed length, so it is read off a
+        // token stream rather than through the shared sscanf below.
+        if (line.compare(0, 6, "track ") == 0) {
+            std::istringstream is(line);
+            std::string tok, idTok, typeTok;
+            is >> tok >> idTok >> typeTok;
+            if (!is) continue;
+            e.kind = TrackEdit::Track;
+            e.track = static_cast<std::uint32_t>(
+                std::strtoul(idTok.c_str(), nullptr, 16)); // strtoul: a bad id is 0, not a throw
+            e.trackType = typeTok == "yard" ? 2 : 1;
+            glm::dvec3 p(0.0);
+            while (is >> p.x >> p.y >> p.z) e.pts.push_back(p);
+            if (e.pts.size() >= 2) edits.push_back(e);
+            continue;
+        }
         const int n = std::sscanf(line.c_str(), "%31s %lf %lf %lf %lf %lf %lf", kind,
                                   &e.a.x, &e.a.y, &e.a.z, &e.b.x, &e.b.y, &e.b.z);
         if (n == 7 && std::string(kind) == "link") {
@@ -137,9 +154,22 @@ void applyTrackOverlay(std::vector<TrackSegment>& segs,
                        const std::vector<TrackEdit>& edits) {
     if (edits.empty()) return;
     constexpr double kVertexTol = 2.0; // m; snap an elev override to a real vertex
-    int elev = 0, links = 0, rails = 0;
+    int elev = 0, links = 0, rails = 0, tracks = 0;
 
     int moves = 0;
+    // Whole drawn roads. Added before the elev and move edits so those can regrade and
+    // nudge their points afterwards, which is how a drawn siding gets its elevation:
+    // the mode that draws it lays it out flat at one height on purpose.
+    for (const TrackEdit& e : edits) {
+        if (e.kind != TrackEdit::Track || e.pts.size() < 2) continue;
+        TrackSegment t;
+        t.trackId = e.track;
+        t.trackType = e.trackType;
+        t.medium = 0x20; // surface
+        t.pts = e.pts;
+        segs.push_back(std::move(t));
+        ++tracks;
+    }
     // Added connecting rails: a new surface segment whose ends sit on the tracks
     // there, so the turnout detection makes a switch at each end (a crossover the
     // export omitted). Added first, so elev/move can target it too if needed.
@@ -201,9 +231,10 @@ void applyTrackOverlay(std::vector<TrackSegment>& segs,
         segs.push_back(std::move(c));
         ++links;
     }
-    if (elev > 0 || links > 0 || moves > 0 || rails > 0)
-        std::printf("[TrackOverlay] applied %d elev + %d move + %d link + %d rail edit(s)\n",
-                    elev, moves, links, rails);
+    if (elev > 0 || links > 0 || moves > 0 || rails > 0 || tracks > 0)
+        std::printf("[TrackOverlay] applied %d elev + %d move + %d link + %d rail + "
+                    "%d track edit(s)\n",
+                    elev, moves, links, rails, tracks);
 }
 
 namespace {
@@ -218,6 +249,12 @@ void writeEdits(std::ofstream& f, const std::vector<TrackEdit>& edits) {
             f << "elev " << e.a.x << ' ' << e.a.y << ' ' << e.a.z;
             if (e.track != 0 || e.hasFromZ) f << ' ' << e.track; // coincident points
             if (e.hasFromZ) f << ' ' << e.fromZ;                 // ...on the same track
+            f << '\n';
+        } else if (e.kind == TrackEdit::Track) {
+            f << "track " << std::hex << e.track << std::dec << ' '
+              << (e.trackType == 2 ? "yard" : "siding");
+            for (const glm::dvec3& p : e.pts)
+                f << ' ' << p.x << ' ' << p.y << ' ' << p.z;
             f << '\n';
         } else {
             const char* kw = e.kind == TrackEdit::Move ? "move"

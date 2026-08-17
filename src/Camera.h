@@ -47,3 +47,18 @@ private:
     float nearZ_ = 0.5f;
     float farZ_ = 60000.0f;
 };
+
+// Where the ray through `cursorPx` meets the horizontal plane at `planeZ`, in scene
+// coordinates. The editor never casts rays - it picks by projecting world geometry to the
+// screen and comparing pixel distance - but drawing a new track needs the other direction,
+// and a ray meets a plane in exactly one point, which is what makes a click answerable at
+// all once the height is fixed.
+//
+// `cursorPx` and `fb` are framebuffer pixels with y down, the convention the picks above
+// use (proj[1][1] is flipped for Vulkan, so the projection already lands that way).
+//
+// False when the ray runs too near parallel to the plane to answer - a camera looking
+// level, where the point would race off to the horizon - or when the plane is behind it.
+bool screenRayToPlane(const glm::mat4& proj, const glm::vec3& camPos, const glm::vec3& fwd,
+                      const glm::vec2& cursorPx, const glm::vec2& fb, float planeZ,
+                      glm::vec3& hit);

@@ -27,6 +27,17 @@ struct TrackSegment;
 // very shallowly, yet each end is a real switch the user asked for).
 constexpr std::uint32_t kRailIdBase = 0xE0000000;
 
+// Whole tracks drawn in the editor get ids from here, written into their own record rather
+// than derived from where they sit in the file: the other overlays anchor to a track by
+// `<trackHex>:<frac>` - circuits, signal paths, crossings, TXP positions - so an id that
+// shifted when an earlier edit was inserted would silently move all of them.
+//
+// Deliberately *below* kRailIdBase. That base does not only mean "the editor made this": a
+// track at or above it is also dropped from a route's signature as "a slip link, not a
+// road" (TrackCircuits.cpp). A siding is a road, and routes over it have to be told apart
+// from routes that go elsewhere, so a drawn track must not land in that range.
+constexpr std::uint32_t kNewTrackIdBase = 0xD0000000;
+
 // Manual track edits kept as a drop-in overlay, separate from the generated tiles
 // so a regenerated base dataset can be dropped in without losing the edits. Stored
 // as lines in `<datasetRoot>/overlay/track-edits.txt` (world coords, EPSG:25833):
@@ -48,12 +59,23 @@ constexpr std::uint32_t kRailIdBase = 0xE0000000;
 //   rail ax ay az bx by bz   - add a new connecting rail (a-b); its ends land on the
 //                              tracks there, so a switch forms at each (build a
 //                              crossover/slip the export omitted)
+//   track <idhex> <siding|yard> x1 y1 z1 x2 y2 z2 ...
+//                            - a whole new road the export does not carry, drawn point
+//                              by point in the editor. Unlike `rail` it keeps its own
+//                              id, because the other overlay files anchor to a track by
+//                              `<trackHex>:<frac>` and a derived id would shift under
+//                              them the moment an earlier edit was inserted.
 struct TrackEdit {
-    enum Kind { Link, Elev, Move, Rail } kind = Link;
+    enum Kind { Link, Elev, Move, Rail, Track } kind = Link;
     // Link/Rail: the two endpoints. Elev: a = {x, y, newZ}. Move: a = old, b = new pos.
     glm::dvec3 a{0.0}, b{0.0};
+    // Track: the drawn polyline, two points or more.
+    std::vector<glm::dvec3> pts;
+    // Track: 1 = siding, 2 = yard.
+    std::uint8_t trackType = 1;
     // Elev/Move: restrict the vertex match to this track (0 = any track). Lets
     // coincident points from different sidings be edited independently.
+    // Track: the new track's own id.
     std::uint32_t track = 0;
     // Link: force the connector's medium (0 = take it from the ends it joins).
     std::uint8_t medium = 0;
