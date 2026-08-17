@@ -37,6 +37,7 @@
 #include "TrackPath.h"
 #include "TxpMesh.h"
 #include "TxpPositions.h"
+#include "Vehicle.h"
 
 #include <cmath>
 #include <algorithm>
@@ -287,6 +288,59 @@ int main(int argc, char** argv) {
             // Generous: it measures a few milliseconds, and the point is to catch a
             // return to walking the whole network, which is two orders of magnitude away.
             check(ms < 100.0, "derived for every route (ms)", ms, 0.0);
+        }
+    }
+
+    // A train running over a turnout knocks once per axle. Modern rail is welded and
+    // has no joints to beat against, so the points are the only place a wheel meets a
+    // gap - and how many knocks there are is an integer the sim can be asked for
+    // directly, rather than something to be picked back out of a waveform.
+    {
+        std::puts("\n  Wheels over the points:");
+        SwitchNetwork net;
+        net.build(data, paths1);
+        // A turnout with room either side of it on its own path, so the whole train can
+        // be run past it without reaching either end and derailing.
+        int found = -1;
+        for (std::size_t i = 0; i < net.turnouts().size() && found < 0; ++i) {
+            const Turnout& to = net.turnouts()[i];
+            if (to.mainPath < 0) continue;
+            const float len = paths1[to.mainPath].length();
+            if (to.sMain > 200.0f && to.sMain < len - 200.0f) found = static_cast<int>(i);
+        }
+        if (found < 0) {
+            std::puts("  no turnout with room to run past - nothing to check");
+        } else {
+            const Turnout& to = net.turnouts()[found];
+            // The Class 93: three bogies, six axles.
+            const VehicleSpec& spec = kVehicleSpecs[4];
+            Vehicle v(&paths1[to.mainPath], spec, to.sMain - 120.0f, 20.0f);
+            v.attachNetwork(&paths1, &net);
+            v.setReverser(0, 1);      // one cab in gear, so the handle rules...
+            v.setBrakeNotch(0, 0);    // ...and release the brakes it starts held with
+            const std::size_t axles = v.axleOffsets().size();
+            const float from = v.s();
+            // Long enough to carry every axle past: 120 m up to it plus the train's own
+            // length, at 20 m/s, with the rolling resistance shaving a little off.
+            for (int step = 0; step < 1200; ++step) v.update(1.0f / 60.0f);
+            const float ran = std::abs(v.s() - from);
+            std::printf("  %zu axles, ran %.0f m over turnout %d, %u knock(s)\n", axles,
+                        ran, found, v.railImpacts());
+            // The count only means anything if the train really did run the whole way
+            // past on the rails: derailed or stalled short of it, zero knocks would
+            // "pass" a test that had checked nothing.
+            check(v.state() == VehicleState::OnRail, "still on the rails",
+                  double(static_cast<int>(v.state())), 0.0);
+            check(ran > 120.0f + spec.bogieSpacing + spec.wheelbase,
+                  "and ran the whole train past it (m)", double(ran), 120.0);
+            check(v.railImpacts() == axles, "one knock per axle over one turnout",
+                  double(v.railImpacts()), double(axles));
+            // And none at all standing still on plain line: welded rail is silent.
+            Vehicle still(&paths1[to.mainPath], spec, 20.0f, 0.0f);
+            still.attachNetwork(&paths1, &net);
+            for (int step = 0; step < 120; ++step) still.update(1.0f / 60.0f);
+            check(still.railImpacts() == 0, "and none standing on plain line",
+                  double(still.railImpacts()), 0.0);
         }
     }
 

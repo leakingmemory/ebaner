@@ -181,7 +181,8 @@ set(EBANER_TEST_DATASET "${CMAKE_SOURCE_DIR}/../norway-rails"
     CACHE PATH "terrainmapper export the tests run against")
 
 enable_testing()
-add_executable(TrackEditTest tests/TrackEditTest.cpp)
+# Vehicle.cpp: the turnout-knock check runs a real train over a real turnout.
+add_executable(TrackEditTest tests/TrackEditTest.cpp src/Vehicle.cpp)
 add_dependencies(TrackEditTest shaders)
 target_link_libraries(TrackEditTest PRIVATE ebaner_engine)
 target_include_directories(TrackEditTest PRIVATE src)

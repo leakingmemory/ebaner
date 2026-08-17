@@ -59,10 +59,6 @@ constexpr float kGravity = 9.81f;
 // Vehicle.cpp splits this into a braking and a powering value; one number is enough to
 // normalise a loudness by, and it is not part of the physics here.
 constexpr float kRailAdhesionMu = 0.25f;
-// Standard jointed rail: Norway laid 25 m lengths. Much of the running line is welded
-// now and would be silent between the joints, but the beat over them is what a train
-// sounds like, so every road here is treated as jointed.
-constexpr float kRailLengthM = 25.0f;
 // Tighter than about a 300 m radius before a curve can squeal at all.
 constexpr float kSquealCurvature = 1.0f / 300.0f;
 // Rolling noise runs with the 30*log10(v) law measured on real track, which is an
@@ -161,11 +157,11 @@ void Audio::render(float* out, int n) {
     const float brakeWorkT = brakeWork_.load(std::memory_order_relaxed);
     const float flangeT = railborne ? flangeLoad_.load(std::memory_order_relaxed) : 0.0f;
     const float rollGainT = rollGain_.load(std::memory_order_relaxed);
-    const float jointHz = railborne ? jointHz_.load(std::memory_order_relaxed) : 0.0f;
-    const int axles = std::min(axleCount_.load(std::memory_order_relaxed), kMaxAxles);
-    float axlePh[kMaxAxles];
-    for (int k = 0; k < axles; ++k)
-        axlePh[k] = axlePhase_[k].load(std::memory_order_relaxed);
+    const unsigned impacts = impacts_.load(std::memory_order_relaxed);
+    if (impacts != lastImpacts_) { // wheels have crossed a frog since the last block
+        impactQueue_ += static_cast<int>(impacts - lastImpacts_);
+        lastImpacts_ = impacts;
+    }
     const unsigned ev = valveEvents_.load(std::memory_order_relaxed);
     if (ev != lastEvents_) { // a valve just operated -> click
         lastEvents_ = ev;
@@ -369,36 +365,37 @@ void Audio::render(float* out, int n) {
                    rollLvl;
         }
 
-        // Rail joints. The rhythm is clocked here and not in the sim for the same
-        // reason the bell's is: at the frame rate it would stutter and change tempo
-        // with the graphics. One turn of the phase is one rail length; each axle
-        // strikes as the phase passes where that axle sits, so a bogie's double-thump
-        // and a carriage's four-beat come out of the real axle spacing for free.
+        // Wheels over the points. Welded rail has nothing to knock against between
+        // them, so these are not a rhythm to be clocked but events at places: the sim
+        // says an axle has crossed a frog and one knock is sounded for it. A bogie's
+        // pair, a carriage's four, the spacing between them - all of that is the train
+        // going over the switch, and none of it has to be described here.
         float joints = 0.0f;
-        if (axles > 0 && jointHz > 1e-4f && rollGainEnv_ > 1e-4f) {
-            const float before = jointPhase_;
-            jointPhase_ += jointHz / fs;
-            const bool wrapped = jointPhase_ >= 1.0f;
-            if (wrapped) jointPhase_ -= 1.0f;
-            for (int k = 0; k < axles; ++k) {
-                // Passed this axle's offset since the last sample (allowing for the wrap).
-                const bool hit = wrapped ? (axlePh[k] > before || axlePh[k] <= jointPhase_)
-                                         : (axlePh[k] > before && axlePh[k] <= jointPhase_);
-                if (hit) { jointEnv_[k] = 1.0f; jointThud_[k] = 0.0f; }
-                if (jointEnv_[k] <= 1e-4f) continue;
-                // Impact energy climbs with both the speed it is struck at and the
-                // weight behind it, which is why a loaded train is heard from further
-                // off than a light one at the same speed.
-                rng_ = rng_ * 1664525u + 1013904223u;
-                const float jn = static_cast<float>(rng_ >> 8) / 8388608.0f - 1.0f;
-                jointLp_[k] += (jn - jointLp_[k]) * 0.35f;
-                const float thud = std::sin(2.0f * kPi * jointThud_[k]);
-                jointThud_[k] += 70.0f / fs;
-                joints += (jointLp_[k] * 0.8f + thud * 0.6f) * jointEnv_[k];
-                jointEnv_[k] *= std::exp(-1.0f / (0.020f * fs)); // ~20 ms knock
+        {
+            // Several arriving in one block are spread rather than collapsed into one
+            // knock; at line speed a bogie's two axles are 60 ms apart, so this only
+            // ever bites after a dropped frame.
+            if (impactWait_ > 0.0f) impactWait_ -= 1.0f / fs;
+            if (impactQueue_ > 0 && impactWait_ <= 0.0f) {
+                --impactQueue_;
+                impactWait_ = 0.012f;
+                jointEnv_ = 1.0f;
+                jointThud_ = 0.0f;
             }
-            joints *= std::clamp(vv / kRollRefSpeed, 0.0f, 1.3f) *
-                      (0.35f + 0.65f * loadN) * rollGainEnv_;
+            if (jointEnv_ > 1e-4f) {
+                // Impact energy climbs with both the speed it is struck at and the
+                // weight behind it, which is why a loaded train is heard over the
+                // points from further off than a light one at the same speed.
+                jointRng_ = jointRng_ * 1664525u + 1013904223u;
+                const float jn = static_cast<float>(jointRng_ >> 8) / 8388608.0f - 1.0f;
+                jointLp_ += (jn - jointLp_) * 0.35f;
+                const float thud = std::sin(2.0f * kPi * jointThud_);
+                jointThud_ += 70.0f / fs;
+                joints = (jointLp_ * 0.8f + thud * 0.6f) * jointEnv_ *
+                         std::clamp(vv / kRollRefSpeed, 0.0f, 1.3f) *
+                         (0.35f + 0.65f * loadN) * rollGainEnv_;
+                jointEnv_ *= std::exp(-1.0f / (0.020f * fs)); // ~20 ms knock
+            }
         }
 
         // Curve squeal: stick-slip as the flange is dragged across the railhead. A
@@ -461,17 +458,7 @@ void Audio::setRolling(const RollingSample& r) {
                       std::memory_order_relaxed);
     railborne_.store(on, std::memory_order_relaxed);
     rollGain_.store(std::clamp(r.gain, 0.0f, 1.0f), std::memory_order_relaxed);
-    jointHz_.store(on ? std::max(r.speed, 0.0f) / kRailLengthM : 0.0f,
-                   std::memory_order_relaxed);
-    const int n = std::min(static_cast<int>(r.axleOffsets.size()), kMaxAxles);
-    for (int i = 0; i < n; ++i) {
-        // Where this axle sits within a rail length. Wrapped into [0,1) so a trailing
-        // axle's negative offset lands where it belongs rather than off the end.
-        float ph = std::fmod(r.axleOffsets[i] / kRailLengthM, 1.0f);
-        if (ph < 0.0f) ph += 1.0f;
-        axlePhase_[i].store(ph, std::memory_order_relaxed);
-    }
-    axleCount_.store(n, std::memory_order_relaxed);
+    impacts_.store(r.impacts, std::memory_order_relaxed);
 }
 
 void Audio::update(const Vehicle& v, float /*dt*/, float brakeGain, float engGain0,
@@ -499,9 +486,9 @@ void Audio::update(const Vehicle& v, float /*dt*/, float brakeGain, float engGai
     r.speed = v.speed();
     r.railborne = v.state() == VehicleState::OnRail;
     r.gain = rollGain;
-    r.axleOffsets = v.axleOffsets();
+    r.impacts = v.railImpacts();
     const float weight = v.mass() * kGravity;
-    r.axleLoadN = weight / static_cast<float>(std::max<std::size_t>(r.axleOffsets.size(), 1));
+    r.axleLoadN = weight / static_cast<float>(std::max<std::size_t>(v.axleOffsets().size(), 1));
 
     // Work along the rail: what the wheels are pulling or pushing through the contact
     // patch, against what the contact patch can hold. The running resistance belongs
@@ -767,28 +754,33 @@ void Audio::dumpRollingTest(const std::string& wavPath) {
     Audio a;
     a.sampleRate_ = fs;
     // A Class 93's running gear: three bogies, six axles, 2.5 m within a bogie and
-    // 30 m end to end. The pattern is what the joints beat out, so it is the real one.
+    // 30 m end to end. Where the wheels are is what a switch beats out, so passing one
+    // is scripted here from the real spacing, exactly as the sim would deliver it.
     const float bogie = 0.5f * 30.0f, half = 0.5f * 2.5f;
+    const float axles[6] = {bogie + half,  bogie - half,  half,
+                            -half,         -bogie + half, -bogie - half};
     RollingSample r;
     r.gain = 1.0f;
-    r.axleOffsets = {-bogie - half, -bogie + half, -half, half, bogie - half, bogie + half};
     // One control moves at a time, so each is audible on its own rather than as part
-    // of a mixture that could hide any of them.
-    struct Seg { float dur, speed, axleTonnes, work, brake, flange; const char* what; };
+    // of a mixture that could hide any of them. `points` is how many turnouts are run
+    // over during the segment, spread evenly through it.
+    struct Seg { float dur, speed, axleTonnes, work, brake, flange; int points;
+                 const char* what; };
     const Seg segs[] = {
-        {1.5f, 0.0f, 11.5f, 0.0f, 0.0f, 0.0f, "standing"},
-        {6.0f, 6.0f, 11.5f, 0.5f, 0.0f, 0.0f, "moving off"},
-        {6.0f, 16.0f, 11.5f, 0.4f, 0.0f, 0.0f, "60 km/h"},
-        {6.0f, 33.0f, 11.5f, 0.3f, 0.0f, 0.0f, "120 km/h"},
-        {5.0f, 22.0f, 1.3f, 0.1f, 0.0f, 0.0f, "80 km/h, a light wheelset"},
-        {5.0f, 22.0f, 5.0f, 0.1f, 0.0f, 0.0f, "80 km/h, half loaded"},
-        {5.0f, 22.0f, 11.5f, 0.1f, 0.0f, 0.0f, "80 km/h, fully loaded"},
-        {4.0f, 12.0f, 11.5f, 0.2f, 0.0f, 0.0f, "into a curve..."},
-        {6.0f, 12.0f, 11.5f, 0.2f, 0.0f, 0.55f, "...squealing round it"},
-        {4.0f, 12.0f, 11.5f, 0.2f, 0.0f, 0.0f, "...and out"},
-        {5.0f, 20.0f, 11.5f, 0.0f, 0.8f, 0.0f, "braking (discs: very little to hear)"},
-        {5.0f, 6.0f, 11.5f, 0.0f, 0.9f, 0.0f, "nearly stopped"},
-        {2.5f, 0.0f, 11.5f, 0.0f, 0.0f, 0.0f, "stood"},
+        {1.5f, 0.0f, 11.5f, 0.0f, 0.0f, 0.0f, 0, "standing"},
+        {6.0f, 6.0f, 11.5f, 0.5f, 0.0f, 0.0f, 1, "moving off, over the points"},
+        {6.0f, 16.0f, 11.5f, 0.4f, 0.0f, 0.0f, 1, "60 km/h, over the points"},
+        {6.0f, 33.0f, 11.5f, 0.3f, 0.0f, 0.0f, 1, "120 km/h, over the points"},
+        {6.0f, 20.0f, 11.5f, 0.2f, 0.0f, 0.0f, 3, "through a station throat"},
+        {5.0f, 22.0f, 1.3f, 0.1f, 0.0f, 0.0f, 0, "80 km/h, a light wheelset"},
+        {5.0f, 22.0f, 5.0f, 0.1f, 0.0f, 0.0f, 0, "80 km/h, half loaded"},
+        {5.0f, 22.0f, 11.5f, 0.1f, 0.0f, 0.0f, 0, "80 km/h, fully loaded"},
+        {4.0f, 12.0f, 11.5f, 0.2f, 0.0f, 0.0f, 0, "into a curve..."},
+        {6.0f, 12.0f, 11.5f, 0.2f, 0.0f, 0.55f, 0, "...squealing round it"},
+        {4.0f, 12.0f, 11.5f, 0.2f, 0.0f, 0.0f, 0, "...and out"},
+        {5.0f, 20.0f, 11.5f, 0.0f, 0.8f, 0.0f, 0, "braking (discs: very little to hear)"},
+        {5.0f, 6.0f, 11.5f, 0.0f, 0.9f, 0.0f, 0, "nearly stopped"},
+        {2.5f, 0.0f, 11.5f, 0.0f, 0.0f, 0.0f, 0, "stood"},
     };
     std::vector<std::int16_t> pcm;
     for (const Seg& s : segs) {
@@ -797,11 +789,23 @@ void Audio::dumpRollingTest(const std::string& wavPath) {
         r.work = s.work;
         r.brake = s.brake;
         r.flange = s.flange;
-        a.setRolling(r);
         const int total = static_cast<int>(s.dur * fs);
+        // When each axle reaches each turnout: the nose axle first, the rest as far
+        // behind it as they are down the train, which at 33 m/s is a bogie's two 76 ms
+        // apart and the next bogie a second later.
+        std::vector<int> when;
+        for (int p = 0; p < s.points && s.speed > 0.1f; ++p) {
+            const float t0 = s.dur * (p + 0.5f) / static_cast<float>(s.points);
+            for (const float o : axles)
+                when.push_back(static_cast<int>((t0 + (axles[0] - o) / s.speed) * fs));
+        }
+        std::sort(when.begin(), when.end());
+        std::size_t next = 0;
         float buf[256];
         for (int done = 0; done < total; done += 256) {
             const int n = std::min(256, total - done);
+            while (next < when.size() && when[next] < done + n) { ++r.impacts; ++next; }
+            a.setRolling(r);
             a.render(buf, n);
             for (int i = 0; i < n; ++i)
                 pcm.push_back(static_cast<std::int16_t>(

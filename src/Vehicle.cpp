@@ -142,6 +142,29 @@ void Vehicle::swapPath(int newIdx, float newS) {
     s_ = newS;
 }
 
+void Vehicle::countRailImpacts(float sBefore) {
+    if (!net_ || state_ != VehicleState::OnRail) return;
+    if (s_ == sBefore) return;
+    // Called before crossTurnouts, so sBefore and s_ are always on the same path: a
+    // divert or a merge resets s_ onto another one, and comparing across that would be
+    // meaningless. Nothing is lost by going first - a diverting train's leading axles
+    // cross the point on the path it is leaving, and its trailing axles cross the same
+    // point on the path it has joined, each on the frames where they actually do.
+    const std::vector<float> offs = axleOffsets(); // hoisted: this is a per-frame path
+    for (const Turnout& to : net_->turnouts()) {
+        float sT = 0.0f;
+        if (pathIdx_ == to.mainPath) sT = to.sMain;
+        else if (pathIdx_ == to.sidingPath) sT = to.sSiding;
+        else continue;
+        for (const float o : offs) {
+            // Half-open, so an axle sitting exactly on a turnout at the end of one frame
+            // and the start of the next is one crossing rather than two.
+            const float a0 = sBefore + o, a1 = s_ + o;
+            if ((a0 < sT && sT <= a1) || (a1 < sT && sT <= a0)) ++railImpacts_;
+        }
+    }
+}
+
 bool Vehicle::crossTurnouts(float sBefore) {
     const std::vector<Turnout>& tos = net_->turnouts();
     if (sBefore == s_) return false;
@@ -666,6 +689,10 @@ void Vehicle::update(float dt, float pushInput) {
 
         const float sBefore = s_;
         s_ += v_ * dt;
+
+        // The wheels crossing the points, for the sound. Before crossTurnouts, which may
+        // swap the path out from under the comparison.
+        countRailImpacts(sBefore);
 
         // Turnouts first: a divert/merge swaps the path (so the end-of-path check
         // below sees the new one); a facing move into a broken switch derails here.

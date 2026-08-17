@@ -22,9 +22,7 @@
 class Vehicle;
 
 // Everything the wheel-on-rail voices run on: how fast, how heavily each axle presses,
-// and how hard the contact is being worked along and across the rail. Set as a block
-// rather than as events - the rhythm of the joints is clocked in the synth, from
-// `speed` and the axle spacing, so it cannot stutter with the frame rate.
+// and how hard the contact is being worked along and across the rail.
 struct RollingSample {
     float speed = 0.0f;      // m/s
     float axleLoadN = 0.0f;  // N carried by one axle
@@ -33,7 +31,10 @@ struct RollingSample {
     float flange = 0.0f;     // [0,1] lateral acceleration the cant does not take out
     float gain = 0.0f;       // [0,1] camera distance attenuation
     bool railborne = true;   // false when derailed: no rail to roar on
-    std::vector<float> axleOffsets; // m from the body centre; the joints beat this out
+    // Wheels that have crossed a turnout, counted from the start of the run: the synth
+    // knocks once for each new one. A count and not a rate, because these are events
+    // at places and not a rhythm - continuous welded rail has nothing to beat against.
+    unsigned impacts = 0;
 };
 
 // Synthesised air-brake sound. Procedurally generates a hiss whose loudness tracks
@@ -109,12 +110,7 @@ private:
     std::atomic<float> rollWork_{0.0f};     // traction + running resistance, [0,1]
     std::atomic<float> brakeWork_{0.0f};    // friction-brake force / adhesion cap, [0,1]
     std::atomic<float> flangeLoad_{0.0f};   // unbalanced lateral accel / g, [0,1]
-    std::atomic<float> jointHz_{0.0f};      // rail joints passing per second (one axle)
-    std::atomic<int> axleCount_{0};         // axles, for the joint pattern
-    // Where each axle sits within a rail length, in [0,1). The bogie's double-thump
-    // and a carriage's four-beat are these offsets and nothing else.
-    static constexpr int kMaxAxles = 8;
-    std::atomic<float> axlePhase_[kMaxAxles]{};
+    std::atomic<unsigned> impacts_{0};      // wheels over a frog, counted since the start
     std::atomic<float> rollGain_{0.0f};     // camera distance attenuation [0,1]
     std::atomic<bool> railborne_{true};     // false when derailed: no rail to roar on
 
@@ -162,10 +158,17 @@ private:
     float rumbLow_ = 0.0f, rumbBand_ = 0.0f;     // the low band weight brings up
     float gritLp_ = 0.0f, gritAm_ = 0.0f;        // working-hard edge + its modulation
     float brkLow_ = 0.0f, brkBand_ = 0.0f;       // the quiet low brake rumble
-    float jointPhase_ = 0.0f;                    // position within one rail length
-    float jointEnv_[kMaxAxles] = {};             // one impact envelope per axle
-    float jointLp_[kMaxAxles] = {};
-    float jointThud_[kMaxAxles] = {};            // phase of each impact's low thud
+    unsigned lastImpacts_ = 0;                   // impacts already sounded
+    int impactQueue_ = 0;                        // knocks still to sound
+    float impactWait_ = 0.0f;                    // s until the next of them
+    float jointEnv_ = 0.0f;                      // the knock's envelope...
+    float jointLp_ = 0.0f;                       // ...its noise...
+    float jointThud_ = 0.0f;                     // ...and the phase of its low thud
+    // The knock draws from its own noise generator rather than the shared one. It only
+    // draws while a knock is sounding, so sharing would shift every other voice's noise
+    // depending on whether a wheel had just crossed a switch - which makes the roar
+    // unrepeatable and two renders impossible to compare.
+    std::uint32_t jointRng_ = 0x9e3779b9u;
     float sqLow_ = 0.0f, sqBand_ = 0.0f;         // squeal resonance
     float sqPhase_ = 0.0f, sqSlip_ = 0.0f;       // its tone and the stick-slip cycle
     unsigned lastEvents_ = 0;

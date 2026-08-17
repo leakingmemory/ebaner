@@ -150,11 +150,13 @@ is very little to hear; and the **lateral load the cant does not take out** driv
 **curve squeal**, a stick-slip howl in the wheel-mode band around 2.1 kHz, gated to curves
 tighter than ~300 m so it can never leak onto straight track.
 
-**Rail joints** beat out the vehicle's own axle spacing over 25 m rails — a bogie's
-double-thump, a carriage's four-beat — clocked in the synth from speed and the axle offsets
-rather than from sim events, so the rhythm cannot stutter with the frame rate. Impact noise
-grows with speed more slowly than rolling noise does, so the joints are most of what is
-heard at low speed and the roar has swallowed them by line speed.
+**Wheels over the points.** Continuous welded rail has no joints to beat against, so the
+line is smooth and the switches are where the gaps are: every wheel drops across the gap in
+the running rail at the frog, and the sim counts one knock per axle per turnout. A bogie
+gives its double-thump and a carriage its four-beat, spaced by the vehicle's own axles, and
+a station throat rattles because the turnouts really are that close together. Impact noise
+grows with speed more slowly than rolling noise does, so the knocks stand out over the points
+at yard speed and are half-buried in the roar at line speed.
 
 Off the rails there is none of it: a derailed vehicle is sliding on ballast.
 

@@ -117,8 +117,8 @@ public:
     // own axles.
     std::vector<VehicleFrame> bogieFrames() const;
     // Arc-length offsets of each axle from the body centre. A description of where
-    // the wheels are and nothing more - axleFrames() already publishes the same
-    // thing in world space - and it is what says when each axle meets a rail joint.
+    // the wheels are and nothing more - axleFrames() already publishes the same thing
+    // in world space - and it is what says when each axle reaches a turnout.
     std::vector<float> axleOffsets() const;
     // Frame of each underframe body section (0 when <2 bogies, 1 for a carriage,
     // 2 for a 3-bogie module), each oriented by its bogie pair so an articulated
@@ -195,6 +195,11 @@ public:
     // and the rolling-noise synth needs the force at the friction surfaces, not the
     // pressure behind them.
     float brakeForce() const { return brakeForce_; }
+    // Wheels crossing turnouts, counted since the vehicle was created. Modern track is
+    // welded and silent between them, so the points are where the gaps are: every wheel
+    // drops across the gap in the running rail at the frog, and a bogie's pair of them
+    // is the double knock heard passing over a switch. One count per axle per turnout.
+    unsigned railImpacts() const { return railImpacts_; }
     float mrPressure() const { return mrPres_; } // main reservoir (bar)
     float bcPressure() const { return bcPres_; } // brake cylinder (bar)
     // Rate of brake-cylinder pressure change (bar/s): + charging (apply), −
@@ -259,6 +264,10 @@ private:
     // Resolve turnout crossings between sBefore and s_ on the current path (divert /
     // merge / trailing-break / facing-broken derail). Returns true if it derailed.
     bool crossTurnouts(float sBefore);
+    // Count each *axle* passing a turnout between sBefore and s_, for the sound. A
+    // separate question from crossTurnouts, which asks where the body centre is routed;
+    // this one asks which wheels have just crossed a frog, and every axle does.
+    void countRailImpacts(float sBefore);
     // Move onto another path, preserving the physical velocity vector (and flipping
     // orient_ so the reverser/push keep driving the same physical way).
     void swapPath(int newIdx, float newS);
@@ -285,6 +294,7 @@ private:
     float shiftTimer_ = 0.0f;           // s remaining in an upshift dwell (TE cut)
     float tractiveEffort_ = 0.0f;       // N applied this step (+ in +s), for the HUD
     float brakeForce_ = 0.0f;           // N of friction brake this step, for the sound
+    unsigned railImpacts_ = 0;          // axles that have crossed a turnout, for the sound
     bool compOn_ = false;               // compressor state (cut-in/cut-out governor)
     bool safetyBrake_ = false;          // low-reservoir automatic emergency (latched)
     int engineCount_ = 0;               // diesel engines (2 for a Class 93, else 0)

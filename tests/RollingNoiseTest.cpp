@@ -42,12 +42,6 @@ void check(bool ok, const std::string& what) {
     if (!ok) ++failures;
 }
 
-// A Class 93's running gear: three bogies, 2.5 m within a bogie, 30 m end to end.
-std::vector<float> classNinetyThreeAxles() {
-    const float b = 15.0f, h = 1.25f;
-    return {-b - h, -b + h, -h, h, b - h, b + h};
-}
-
 // Render `sec` seconds at fixed controls. The settle pass runs the same controls first
 // and is thrown away: every control is smoothed into the synth over a few hundred
 // milliseconds, so measuring from the first sample would measure the glide.
@@ -60,6 +54,30 @@ std::vector<float> renderSteady(const RollingSample& r, float sec, float settle 
     std::vector<float> out;
     out.reserve(static_cast<std::size_t>(sec * kFs));
     for (int done = 0; done < static_cast<int>(sec * kFs); done += 512) {
+        a.render(buf.data(), 512);
+        out.insert(out.end(), buf.begin(), buf.end());
+    }
+    return out;
+}
+
+// The same, but delivering `impactTimes` (seconds into the measured stretch) as wheels
+// crossing a frog, the way the sim delivers them frame by frame.
+std::vector<float> renderWithImpacts(RollingSample r, float sec,
+                                     const std::vector<float>& impactTimes) {
+    Audio a;
+    a.setRolling(r);
+    std::vector<float> buf(512);
+    for (int done = 0; done < static_cast<int>(2.5f * kFs); done += 512)
+        a.render(buf.data(), 512);
+    std::vector<float> out;
+    std::size_t next = 0;
+    for (int done = 0; done < static_cast<int>(sec * kFs); done += 512) {
+        while (next < impactTimes.size() &&
+               impactTimes[next] * kFs < static_cast<float>(done + 512)) {
+            ++r.impacts;
+            ++next;
+        }
+        a.setRolling(r);
         a.render(buf.data(), 512);
         out.insert(out.end(), buf.begin(), buf.end());
     }
@@ -112,42 +130,23 @@ float centroid(const std::vector<float>& x) {
     return den > 0.0 ? static_cast<float>(num / den) : 0.0f;
 }
 
-// Impacts per second: transients, found as the fast envelope pulling away from the slow
-// one, so the roar underneath does not count as an impact however loud it is.
-float impactRate(const std::vector<float>& x) {
-    std::vector<float> tr(x.size());
-    float fast = 0.0f, slow = 0.0f;
-    for (std::size_t i = 0; i < x.size(); ++i) {
-        const float a = std::fabs(x[i]);
-        fast += (a - fast) * 0.02f;
-        slow += (a - slow) * 0.0006f;
-        tr[i] = fast - slow;
-    }
-    // Threshold against how big an impact is, not against a percentile of everything:
-    // the impacts in a window are all much the same size and all far above the roar, so
-    // a fraction of the largest separates them cleanly. A percentile rides up with the
-    // roar instead, and at line speed lets the noise itself count as impacts.
-    float biggest = 0.0f;
-    for (float v : tr) biggest = std::max(biggest, v);
-    const float thr = 0.45f * biggest;
-    int peaks = 0, hold = 0;
-    for (std::size_t i = 1; i + 1 < tr.size(); ++i) {
-        if (hold > 0) { --hold; continue; }
-        if (tr[i] > thr && tr[i] >= tr[i - 1] && tr[i] > tr[i + 1]) {
-            ++peaks;
-            hold = static_cast<int>(0.030f * kFs); // one impact per 30 ms at most
-        }
-    }
-    return static_cast<float>(peaks) / (static_cast<float>(x.size()) / kFs);
-}
-
 RollingSample running(float speed, float axleTonnes) {
     RollingSample r;
     r.speed = speed;
     r.axleLoadN = axleTonnes * 1000.0f * 9.81f;
     r.gain = 1.0f;
-    r.axleOffsets = classNinetyThreeAxles();
     return r;
+}
+
+// When each of a Class 93's six axles reaches one turnout, in seconds from the first:
+// three bogies, 2.5 m within a bogie, 30 m end to end.
+std::vector<float> passOverPoints(float speed, float from) {
+    const float b = 15.0f, h = 1.25f;
+    const float nose = b + h;
+    std::vector<float> t;
+    for (const float o : {b + h, b - h, h, -h, -b + h, -b - h})
+        t.push_back(from + (nose - o) / speed);
+    return t;
 }
 
 } // namespace
@@ -170,29 +169,15 @@ int main() {
     //    where the law predicts 8x.
     {
         std::puts("\n  Speed:");
-        // The roar on its own: no axles, so no joint impacts riding on top of it. The
-        // law is a claim about the roar, and mixed with the impacts - which climb with
-        // speed too, by a different exponent - it cannot be read cleanly.
-        auto roarOnly = [](float v) {
-            RollingSample r = running(v, 11.5f);
-            r.axleOffsets.clear();
-            return rms(renderSteady(r, 4.0f));
-        };
-        const float a = roarOnly(10.0f), b = roarOnly(20.0f), c = roarOnly(40.0f);
+        // On plain line, which is where the law is a claim about the roar and nothing
+        // else is sounding.
+        auto roar = [](float v) { return rms(renderSteady(running(v, 11.5f), 4.0f)); };
+        const float a = roar(10.0f), b = roar(20.0f), c = roar(40.0f);
         std::printf("    10 m/s %.5f   20 m/s %.5f   40 m/s %.5f\n", a, b, c);
         check(a < b && b < c, "louder at every step up in speed");
         const float ratio = c / std::max(a, 1e-9f);
         std::printf("    40:10 level ratio %.2f (v^1.5 predicts 8.00)\n", double(ratio));
         check(ratio > 7.2f && ratio < 8.8f, "and the 4x speed range spans 8x, as it should");
-        // With the joints back in, the climb is *shallower*. Impact noise grows with
-        // speed more slowly than rolling noise does, so the joints are most of what is
-        // heard at low speed and the roar has swallowed them by line speed - which is
-        // how a real train goes from a clatter to a roar rather than getting louder.
-        const float withJoints = rms(renderSteady(running(40.0f, 11.5f), 4.0f)) /
-                                 std::max(rms(renderSteady(running(10.0f, 11.5f), 4.0f)),
-                                          1e-9f);
-        std::printf("    with the joints in, 40:10 is %.2f\n", double(withJoints));
-        check(withJoints < ratio, "and the joints, growing slower, flatten it a little");
         // The band also climbs with speed: the roughness that matters passes faster.
         const float ca = centroid(renderSteady(running(10.0f, 11.5f), 2.0f));
         const float cc = centroid(renderSteady(running(40.0f, 11.5f), 2.0f));
@@ -218,27 +203,52 @@ int main() {
         check(lowH > lowL * 1.5f, "with the weight of it in the low end");
     }
 
-    // 4. Rail joints. The rate is not a tuning choice - it is the speed divided by the
-    //    rail length, times the axles, and if it comes out wrong the train is running
-    //    on rails of the wrong length.
+    // 4. Wheels over the points. Continuous welded rail has nothing to knock against
+    //    between the switches, so a knock is an event at a place and not a beat: the
+    //    synth sounds one for each wheel the sim says has crossed a frog, and nothing
+    //    at all in between.
+    //
+    //    Counted by energy rather than by finding peaks in the waveform. The knocks sit
+    //    inside a roar that is louder than they are at line speed, and a peak-finder
+    //    good enough to separate them is a measuring instrument that has to be tuned
+    //    until it agrees - at which point it is no longer evidence. Energy is additive
+    //    for uncorrelated sounds, so twice the knocks is twice the added energy, and
+    //    nothing needs tuning.
     {
-        std::puts("\n  Rail joints:");
-        bool allOk = true;
-        for (const float v : {8.0f, 12.0f, 16.0f}) {
-            const float want = v / 25.0f * 6.0f; // 6 axles over 25 m rails
-            const float got = impactRate(renderSteady(running(v, 11.5f), 8.0f));
-            std::printf("    %4.0f m/s: %5.2f impacts/s (expected %5.2f)\n", v, got, want);
-            allOk = allOk && std::fabs(got - want) < 0.6f;
-        }
-        check(allOk, "impacts land at speed / 25 m x axles, at every speed");
-        // Two axles instead of six beat a third as often over the same ground.
-        RollingSample pair = running(12.0f, 11.5f);
-        pair.axleOffsets = {-0.9f, 0.9f};
-        const float got = impactRate(renderSteady(pair, 8.0f));
-        std::printf("    a lone bogie at 12 m/s: %.2f/s (expected %.2f)\n", got,
-                    12.0f / 25.0f * 2.0f);
-        check(std::fabs(got - 12.0f / 25.0f * 2.0f) < 0.4f,
-              "and the pattern is the vehicle's own axles, not a fixed beat");
+        std::puts("\n  Wheels over the points:");
+        auto energy = [](const std::vector<float>& x) {
+            double e = 0.0;
+            for (float v : x) e += double(v) * v;
+            return e;
+        };
+        const float v = 20.0f;
+        std::vector<float> one = passOverPoints(v, 1.0f), three;
+        for (int p = 0; p < 3; ++p)
+            for (const float x : passOverPoints(v, 1.0f + 2.0f * p)) three.push_back(x);
+
+        const std::vector<float> plainRun = renderSteady(running(v, 11.5f), 8.0f);
+        const std::vector<float> oneRun = renderWithImpacts(running(v, 11.5f), 8.0f, one);
+        const std::vector<float> threeRun = renderWithImpacts(running(v, 11.5f), 8.0f, three);
+        const double e0 = energy(plainRun), e1 = energy(oneRun), e3 = energy(threeRun);
+        std::printf("    energy: plain %.4f, one switch %.4f, three %.4f\n", e0, e1, e3);
+        check(e1 > e0 * 1.02, "passing a switch adds sound");
+        const double ratio = (e3 - e0) / std::max(e1 - e0, 1e-12);
+        std::printf("    three switches add %.2fx what one does (18 knocks vs 6)\n", ratio);
+        check(ratio > 2.4 && ratio < 3.6, "and three add three times as much as one");
+
+        // Impulsive, not just louder: knocks push the peak far above the roar's own
+        // level, which is what a knock is and a rise in volume is not.
+        const float crestPlain = peak(plainRun) / std::max(rms(plainRun), 1e-9f);
+        const float crestPoints = peak(threeRun) / std::max(rms(threeRun), 1e-9f);
+        std::printf("    crest factor: plain %.2f, over points %.2f\n", crestPlain,
+                    crestPoints);
+        check(crestPoints > crestPlain * 1.3f, "and they are knocks, not a swell");
+
+        // Weight is behind the knock: the same pass, loaded, hits harder.
+        const float lightPk = peak(renderWithImpacts(running(v, 1.3f), 4.0f, one));
+        const float heavyPk = peak(renderWithImpacts(running(v, 11.5f), 4.0f, one));
+        std::printf("    peak over a switch: 1.3 t %.3f, 11.5 t %.3f\n", lightPk, heavyPk);
+        check(heavyPk > lightPk * 1.3f, "a loaded axle hits the frog harder");
     }
 
     // 5. Curve squeal is gated. A squeal that leaked onto straight track would be far
