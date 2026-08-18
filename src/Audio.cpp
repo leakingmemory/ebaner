@@ -436,10 +436,16 @@ void Audio::render(float* out, int n) {
                        std::clamp((vv - 0.3f) / 4.0f, 0.0f, 1.0f) * rollGainEnv_;
         }
 
+        // The four wheel/rail voices are one group and are mixed as one: their balance
+        // against each other is what makes the sound, so a level change scales all four
+        // together rather than picking at one of them. This is a quarter down on where
+        // they started, which sat a little loud against the engines.
+        const float rollMix = 0.75f;
         float s = muted ? 0.0f
                         : (hiss * 1.2f + click * 0.9f) * envEnv_ + engine * 0.30f +
-                              comp * 0.22f + bell * 0.34f + roll * 0.45f +
-                              joints * 0.30f + squeal * 0.16f + brakeRub * 0.16f;
+                              comp * 0.22f + bell * 0.34f +
+                              (roll * 0.45f + joints * 0.30f + squeal * 0.16f +
+                               brakeRub * 0.16f) * rollMix;
         s = std::clamp(s, -1.0f, 1.0f);
         out[i] = s;
     }
