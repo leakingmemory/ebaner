@@ -67,8 +67,23 @@ void nearestOnPath(const TrackPath& p, const glm::dvec2& X, double& outDist,
 }
 } // namespace
 
+bool switchSuppressed(const std::vector<SwitchSuppression>& sup, const Turnout& t) {
+    for (const SwitchSuppression& r : sup) {
+        if (std::hypot(t.world.x - r.world.x, t.world.y - r.world.y) > r.radius) continue;
+        if (r.sidingTrack != 0 && r.sidingTrack != t.sidingTrack) continue;
+        // A road drawn in the editor is there on purpose, so an area-clearing record
+        // leaves its switches alone: the point of clearing an area is to lay new track
+        // through it, and taking that track's switches with it would defeat the exercise.
+        if (r.sidingTrack == 0 && !r.includeDrawn && t.sidingTrack >= kNewTrackIdBase)
+            continue;
+        return true;
+    }
+    return false;
+}
+
 void SwitchNetwork::build(const TerrainData& data,
-                          const std::vector<TrackPath>& paths) {
+                          const std::vector<TrackPath>& paths,
+                          const std::vector<SwitchSuppression>& suppress) {
     turnouts_.clear();
     state_.clear();
     origin_ = data.sceneOrigin();
@@ -229,6 +244,19 @@ void SwitchNetwork::build(const TerrainData& data,
                 break;
             }
         if (!dup) turnouts_.push_back(t);
+    }
+
+    // What the overlay says was never a switch.
+    if (!suppress.empty()) {
+        const std::size_t before = turnouts_.size();
+        turnouts_.erase(std::remove_if(turnouts_.begin(), turnouts_.end(),
+                                       [&](const Turnout& t) {
+                                           return switchSuppressed(suppress, t);
+                                       }),
+                        turnouts_.end());
+        if (turnouts_.size() != before)
+            std::printf("[SwitchNetwork] %zu turnout(s) suppressed by the overlay\n",
+                        before - turnouts_.size());
     }
 
     // Coarse index of the built paths (scene coords), so resolving a turnout looks only

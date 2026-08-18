@@ -339,7 +339,8 @@ int main(int argc, char** argv) {
         roads.build(data);
         buildings.build(data);
         platforms.build(data, paths);
-        switchNet.build(data, paths);   // turnout detection + routing
+        // turnout detection + routing, minus whatever the overlay says is not a switch
+        switchNet.build(data, paths, loadSwitchSuppressions(datasetRoot));
         applySwitchTypes(switchNet, loadSwitchTypes(datasetRoot)); // manual/motor overrides
         switches.build(switchNet, glm::vec3(0.0f), data.loadedRadius());
         graph = buildTrackGraph(data);

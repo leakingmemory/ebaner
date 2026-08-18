@@ -34,6 +34,7 @@
 #include "TrackOverlay.h"
 #include "SignalPaths.h"
 #include "SwitchNetwork.h"
+#include "SwitchTypes.h"
 #include "TrackPath.h"
 #include "TxpMesh.h"
 #include "TxpPositions.h"
@@ -486,6 +487,66 @@ int main(int argc, char** argv) {
             std::filesystem::remove_all(scratch, ec);
             data.removeTrack(rec.track); // leave the network as it was found
         }
+    }
+
+    // Suppressing a turnout the detector should not have made.
+    //
+    // Where several track ends meet at one point the detector reads every end as a branch
+    // off the others, so one set of points comes out as several turnouts. There is no
+    // reading of the geometry that settles which was meant, so the overlay says - and what
+    // has to hold is that it takes exactly the one named and nothing else.
+    {
+        std::puts("\n  Suppressing a turnout:");
+        SwitchNetwork plain;
+        plain.build(data, paths1);
+        // A turnout that shares its spot with another: the case this exists for.
+        int pick = -1;
+        for (std::size_t i = 0; i < plain.turnouts().size() && pick < 0; ++i)
+            for (std::size_t j = 0; j < plain.turnouts().size(); ++j) {
+                if (i == j) continue;
+                const Turnout& a = plain.turnouts()[i];
+                const Turnout& b = plain.turnouts()[j];
+                if (a.sidingTrack != b.sidingTrack &&
+                    std::hypot(a.world.x - b.world.x, a.world.y - b.world.y) < 1.0) {
+                    pick = static_cast<int>(i);
+                    break;
+                }
+            }
+        if (pick < 0) {
+            std::puts("  no co-located turnouts in this export - nothing to check");
+        } else {
+            const Turnout t = plain.turnouts()[pick];
+            std::vector<SwitchSuppression> sup(1);
+            sup[0].world = glm::dvec2(t.world.x, t.world.y);
+            sup[0].radius = 3.0;
+            sup[0].sidingTrack = t.sidingTrack;
+            SwitchNetwork cut;
+            cut.build(data, paths1, sup);
+            std::printf("  suppressed branch %#x at %.1f %.1f\n", t.sidingTrack,
+                        t.world.x, t.world.y);
+            check(cut.size() + 1 == plain.size(), "exactly one turnout goes",
+                  double(plain.size()) - double(cut.size()), 1.0);
+            // The one named is gone...
+            int still = 0;
+            for (const Turnout& u : cut.turnouts())
+                if (u.sidingTrack == t.sidingTrack &&
+                    std::hypot(u.world.x - t.world.x, u.world.y - t.world.y) < 3.0)
+                    ++still;
+            check(still == 0, "and it is the one that was named", double(still), 0.0);
+            // ...and its neighbour on the same points is not.
+            int partner = 0;
+            for (const Turnout& u : cut.turnouts())
+                if (std::hypot(u.world.x - t.world.x, u.world.y - t.world.y) < 1.0)
+                    ++partner;
+            check(partner >= 1, "the other switch on those points stays",
+                  double(partner), 1.0);
+        }
+        // An empty suppression list changes nothing at all - the path every dataset
+        // without one of these records takes.
+        SwitchNetwork none;
+        none.build(data, paths1, {});
+        check(none.size() == plain.size(), "no records, no difference",
+              double(none.size()), double(plain.size()));
     }
 
     std::printf("%s\n", failures ? "FAILED" : "PASSED");

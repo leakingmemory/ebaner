@@ -50,13 +50,40 @@ struct Turnout {
     std::uint32_t sidingTrack = 0; // branch track id (dedup keeps one switch per branch)
 };
 
+// A turnout the detector should not have made, authored in the overlay.
+//
+// Detection is geometry: a track end standing on another track's line is a switch. Where
+// several ends meet at one point that reads every end as a branch off the others, so one
+// set of points comes out as several turnouts - two stands, two independent states, and a
+// branch id that may name the very road the through route runs on. Rather than guess
+// which reading was meant, the site says so.
+//
+// Anchored by position like the type overrides, optionally narrowed to one branch. With
+// no branch named it clears everything in the radius, which is the "inhibit this area and
+// lay my own track through it" case - and there editor-drawn roads are left alone unless
+// `all` is given, since otherwise the replacement track's own switches would go too.
+struct SwitchSuppression {
+    glm::dvec2 world{0.0};
+    double radius = 3.0;
+    std::uint32_t sidingTrack = 0; // 0 = any branch at that spot
+    bool includeDrawn = false;     // also drop turnouts branching off drawn track
+};
+
+// True if `t` is covered by any of the records.
+bool switchSuppressed(const std::vector<SwitchSuppression>& sup, const Turnout& t);
+
 // The set of throwable switches in the loaded network, with mutable per-switch state.
 // Detection reuses the endpoint-on-another-track test (and stitch/angle filter) that
 // SwitchMesh used; resolution maps each turnout onto the built TrackPaths so the
 // vehicle can traverse it.
 class SwitchNetwork {
 public:
-    void build(const TerrainData& data, const std::vector<TrackPath>& paths);
+    // `suppress` drops detected turnouts the overlay says should not exist. Applied
+    // inside build, before anything can take a turnout index: the indices address the
+    // stand mesh, the locking sets, the routes' position requirements and the vehicle's
+    // routing, so removing one afterwards would renumber it under all four.
+    void build(const TerrainData& data, const std::vector<TrackPath>& paths,
+               const std::vector<SwitchSuppression>& suppress = {});
 
     const std::vector<Turnout>& turnouts() const { return turnouts_; }
     std::size_t size() const { return turnouts_.size(); }

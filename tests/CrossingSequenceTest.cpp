@@ -26,6 +26,7 @@
 #include "TxpMesh.h"
 #include "Script.h"
 #include "SignalPaths.h"
+#include "SwitchTypes.h"
 #include "TerrainData.h"
 #include "TrackOverlay.h"
 #include "TrackPath.h"
@@ -1623,6 +1624,63 @@ int main(int argc, char** argv) {
             check(back2.size() == 2 && back2[0].exitId == 0,
                   "and naming no signal - the mast is the border they end on");
             std::filesystem::remove(root + "/overlay/entry-approaches.txt", ec);
+        }
+
+        // A `noswitch` record has to survive a save. The writer rewrites switch-types.txt
+        // whole from the built network, and a suppressed turnout is by definition not in
+        // that network - so unless the suppressions are carried back through the write,
+        // saving a switch type in the editor would silently delete them.
+        {
+            std::vector<SwitchTypeOverride> types(1);
+            types[0].sidingTrack = 0x37d6;
+            types[0].world = glm::dvec2(461156.312, 7354484.5);
+            types[0].hasLock = true;
+            types[0].lock = {19};
+            std::vector<SwitchSuppression> sup(2);
+            sup[0].world = glm::dvec2(461156.312, 7354484.5);
+            sup[0].radius = 3.0;
+            sup[0].sidingTrack = 0x76e0;
+            sup[1].world = glm::dvec2(1000.0, 2000.0); // an area sweep, drawn track too
+            sup[1].radius = 25.0;
+            sup[1].includeDrawn = true;
+            check(writeSwitchTypes(root, types, sup), "switch types and suppressions write");
+            const std::vector<SwitchTypeOverride> bt = loadSwitchTypes(root);
+            const std::vector<SwitchSuppression> bs = loadSwitchSuppressions(root);
+            check(bt.size() == 1 && bt[0].sidingTrack == 0x37d6 && bt[0].lock.size() == 1,
+                  "the motor switch reads back with its lock");
+            check(bs.size() == 2, "and both suppressions come back");
+            if (bs.size() == 2) {
+                check(bs[0].sidingTrack == 0x76e0 && std::abs(bs[0].radius - 3.0) < 1e-9 &&
+                          std::abs(bs[0].world.x - 461156.312) < 0.001,
+                      "the one narrowed to a branch keeps it");
+                check(bs[1].sidingTrack == 0 && bs[1].includeDrawn,
+                      "and the area sweep keeps `all` and names no branch");
+            }
+            // The predicate itself: position, branch, and the drawn-track exemption.
+            Turnout t;
+            t.world = glm::dvec3(461156.312, 7354484.5, 0.0);
+            t.sidingTrack = 0x76e0;
+            check(switchSuppressed(bs, t), "a named branch at the spot is suppressed");
+            t.sidingTrack = 0x37d6;
+            check(!switchSuppressed(bs, t), "its neighbour on the same points is not");
+            Turnout far;
+            far.world = glm::dvec3(461156.312 + 10.0, 7354484.5, 0.0);
+            far.sidingTrack = 0x76e0;
+            check(!switchSuppressed(bs, far), "and the same branch ten metres off is not");
+            // An area sweep without `all` leaves editor-drawn roads their switches.
+            std::vector<SwitchSuppression> area(1);
+            area[0].world = glm::dvec2(1000.0, 2000.0);
+            area[0].radius = 25.0;
+            Turnout drawn;
+            drawn.world = glm::dvec3(1000.0, 2000.0, 0.0);
+            drawn.sidingTrack = kNewTrackIdBase + 7;
+            Turnout surveyed = drawn;
+            surveyed.sidingTrack = 0x1234;
+            check(switchSuppressed(area, surveyed), "an area sweep clears surveyed track");
+            check(!switchSuppressed(area, drawn),
+                  "but leaves a road drawn to replace it its switch");
+            check(switchSuppressed(bs, drawn), "unless the record says `all`");
+            std::filesystem::remove(root + "/overlay/switch-types.txt", ec);
         }
 
         // A file written before the keywords existed has to go on loading unchanged.

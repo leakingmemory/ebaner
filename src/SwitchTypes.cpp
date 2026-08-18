@@ -59,14 +59,40 @@ std::vector<SwitchTypeOverride> loadSwitchTypes(const std::string& datasetRoot) 
     return out;
 }
 
+std::vector<SwitchSuppression> loadSwitchSuppressions(const std::string& datasetRoot) {
+    std::vector<SwitchSuppression> out;
+    std::ifstream f(typesFile(datasetRoot));
+    if (!f) return out;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        std::istringstream is(line);
+        std::string kind;
+        SwitchSuppression r;
+        is >> kind >> r.world.x >> r.world.y >> r.radius;
+        if (kind != "noswitch" || !is) continue;
+        // Optional: a branch id to narrow it to, and `all` to take drawn track too.
+        std::string tok;
+        while (is >> tok) {
+            if (tok == "all") r.includeDrawn = true;
+            else r.sidingTrack = static_cast<std::uint32_t>(
+                     std::strtoul(tok.c_str(), nullptr, 16));
+        }
+        out.push_back(r);
+    }
+    return out;
+}
+
 bool writeSwitchTypes(const std::string& datasetRoot,
-                      const std::vector<SwitchTypeOverride>& overrides) {
+                      const std::vector<SwitchTypeOverride>& overrides,
+                      const std::vector<SwitchSuppression>& suppress) {
     std::error_code ec;
     fs::create_directories(datasetRoot + "/overlay", ec);
     std::ofstream f(typesFile(datasetRoot), std::ios::trunc);
     if (!f) return false;
     f << "# ebaner switch types (manual is default; only motor switches are listed).\n"
-         "# switch <trackIdHex> <x> <y> motor [lock <sectionId> ...]\n";
+         "# switch   <trackIdHex> <x> <y> motor [lock <sectionId> ...]\n"
+         "# noswitch <x> <y> <radius> [<trackIdHex>] [all]  - not really a switch\n";
     f << std::fixed << std::setprecision(3);
     for (const SwitchTypeOverride& o : overrides) {
         if (o.type != SwitchType::Motor) continue;
@@ -76,6 +102,12 @@ bool writeSwitchTypes(const std::string& datasetRoot,
             f << " lock";
             for (int id : o.lock) f << ' ' << id;
         }
+        f << '\n';
+    }
+    for (const SwitchSuppression& r : suppress) {
+        f << "noswitch " << r.world.x << ' ' << r.world.y << ' ' << r.radius;
+        if (r.sidingTrack != 0) f << ' ' << std::hex << r.sidingTrack << std::dec;
+        if (r.includeDrawn) f << " all";
         f << '\n';
     }
     return static_cast<bool>(f);

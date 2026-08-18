@@ -200,6 +200,11 @@ int main(int argc, char** argv) {
     SwitchNetwork switchNet;
     TrackGraph graph;
     std::vector<TrackPath> paths;
+    // Turnouts the overlay says the detector should not have made. Read once and kept,
+    // because every rebuild of the network has to apply the same set - and because a
+    // save writes them back out (they cannot be recovered from a network they are the
+    // reason for the absence of).
+    std::vector<SwitchSuppression> switchSuppress = loadSwitchSuppressions(datasetRoot);
     try {
         data.load(datasetRoot, start->world);
         paths = buildTrackPaths(data);
@@ -211,7 +216,8 @@ int main(int argc, char** argv) {
         roads.build(data);
         buildings.build(data);
         platforms.build(data, paths);
-        switchNet.build(data, paths);   // turnout detection + routing (all straight)
+        // turnout detection + routing, minus whatever the overlay says is not a switch
+        switchNet.build(data, paths, switchSuppress);
         applySwitchTypes(switchNet, loadSwitchTypes(datasetRoot)); // manual/motor overrides
         switches.build(switchNet, glm::vec3(0.0f), data.loadedRadius());
         graph = buildTrackGraph(data); // raw geo-points + links overlay
@@ -1143,7 +1149,7 @@ int main(int argc, char** argv) {
         // a tunnel mouth. A geometry edit can move a portal, so both are rebuilt together.
         tunnels.build(data);
         mesh.build(data, &tunnels);
-        switchNet.build(data, paths);
+        switchNet.build(data, paths, switchSuppress);
         switches.build(switchNet, glm::vec3(0.0f), data.loadedRadius());
         std::vector<TrackVertex> sv = buildings.vertices();
         std::vector<std::uint32_t> si = buildings.indices();
@@ -2633,6 +2639,32 @@ int main(int argc, char** argv) {
                             selTurnout, removed ? "removed" : "added",
                             tc.sections[sectionHover].name.c_str());
             }
+            // X: this is not really a switch. Where several track ends meet at one point
+            // the detector reads every end as a branch off the others, so one set of
+            // points can come out as two turnouts - two stands, two states, and a branch
+            // id that may name the road the through route actually runs on. There is no
+            // reading of the geometry that settles which was meant, so the site says.
+            if (kX && !prevX && selTurnout >= 0) {
+                const Turnout& t = switchNet.turnouts()[selTurnout];
+                SwitchSuppression r;
+                r.world = glm::dvec2(t.world.x, t.world.y);
+                r.radius = 3.0;
+                r.sidingTrack = t.sidingTrack; // this branch only, not the whole spot
+                switchSuppress.push_back(r);
+                switchTypesDirty = true;
+                selTurnout = -1;
+                std::printf("[trackedit] turnout at %.1f %.1f (branch %#x) suppressed "
+                            "(Ctrl+S to save)\n", r.world.x, r.world.y, r.sidingTrack);
+                // The suppression is applied inside build(), so the network has to be
+                // made again. The type and lock edits of this session live on that
+                // object, so they are carried across rather than re-read from the file.
+                const std::vector<SwitchTypeOverride> keep = collectSwitchOverrides(switchNet);
+                switchNet.build(data, paths, switchSuppress);
+                applySwitchTypes(switchNet, keep);
+                applySwitchLocks(switchNet, keep, tc, polys);
+                rebuildStructs();
+                rebuildOverlay();
+            }
         } else if (mode == EdMode::DistantSignals) { // --- Distant signals mode ---
             const bool haveSel = selDistant >= 0 &&
                                  selDistant < static_cast<int>(distantSignals.size());
@@ -3156,7 +3188,7 @@ int main(int argc, char** argv) {
         } else if (kSave && !prevS && mode == EdMode::Switches && switchTypesDirty) {
             // Switches mode: save the manual/motor overrides to their own overlay file.
             const std::vector<SwitchTypeOverride> ovr = collectSwitchOverrides(switchNet);
-            if (writeSwitchTypes(datasetRoot, ovr)) {
+            if (writeSwitchTypes(datasetRoot, ovr, switchSuppress)) {
                 std::printf("[trackedit] saved %zu motor switch(es) -> "
                             "%s/overlay/switch-types.txt\n", ovr.size(), datasetRoot.c_str());
                 switchTypesDirty = false;

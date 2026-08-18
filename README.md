@@ -388,6 +388,32 @@ being moved, because moving the *second* point of a leg swings the angle at the 
 just as surely as moving the end does — and a switch quietly lost that way has nothing else
 on screen to show for it.
 
+**A turnout that is not really there (`noswitch`).** Turnout detection is geometry: a track
+end standing on another track's line is a switch. Where several ends meet at *one* point that
+reads every end as a branch off the others, so a single set of points can come out as two
+turnouts — two stands drawn on top of each other, two independent states standing for one pair
+of blades, and a branch id that may name the very road the through route runs on. When it does,
+the interlocking asks that switch to be *diverging* for a route that in fact runs straight over
+it, and throws it the wrong way.
+
+No reading of the geometry settles which of the two was meant, so the site says. In Switches
+mode, select the wrong stand and press **X**: it writes a `noswitch` line to
+`overlay/switch-types.txt` and the turnout is gone from the next build.
+
+```
+noswitch <x> <y> <radius> [<trackIdHex>] [all]
+```
+
+With a track id it drops only the turnout whose branch is that road — the surgical form, and
+what a doubled set of points wants. Without one it clears every turnout in the radius, which is
+the "inhibit this area and lay my own track through it" case; there roads drawn in the editor
+keep their switches unless the line ends in `all`, since otherwise the replacement track's own
+turnouts would go with the ones being replaced.
+
+It lives in `switch-types.txt` because it is switch authoring like the motor/manual overrides
+— and because that file is rewritten whole on save, so anywhere else in it a `noswitch` line
+would be dropped the next time a switch type was saved. The writer carries them back out.
+
 **Simple entry signals.** The entry signals proper are routes between track-circuit
 borders, with C1/C2 authorities and full interlocking — which needs circuits drawn
 through the station, so they exist at Bodø and nowhere else. These are the plain

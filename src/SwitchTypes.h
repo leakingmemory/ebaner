@@ -35,6 +35,12 @@
 //
 // File `<datasetRoot>/overlay/switch-types.txt` (x/y are the anchor + a staleness hint):
 //   switch <sidingTrackHex> <x> <y> motor [lock <sectionId> <sectionId> ...]
+//   noswitch <x> <y> <radius> [<sidingTrackHex>] [all]
+//
+// The second says a turnout the detector found is not really there (SwitchSuppression in
+// SwitchNetwork.h). It lives in this file because it is switch authoring like the rest,
+// and because the writer below rewrites the file whole - kept anywhere else in it, a save
+// from the editor would drop it.
 
 struct SwitchTypeOverride {
     std::uint32_t sidingTrack = 0; // diverging branch track id (Turnout::sidingTrack)
@@ -46,8 +52,13 @@ struct SwitchTypeOverride {
 
 // --- File IO (mirrors loadTrackCircuits/writeTrackCircuits) ---
 std::vector<SwitchTypeOverride> loadSwitchTypes(const std::string& datasetRoot);
+std::vector<SwitchSuppression> loadSwitchSuppressions(const std::string& datasetRoot);
+// Rewrites the file whole, so the suppressions have to come back through it or a save
+// would lose them - they are not derivable from the built network, which by then no
+// longer contains what they suppressed.
 bool writeSwitchTypes(const std::string& datasetRoot,
-                      const std::vector<SwitchTypeOverride>& overrides);
+                      const std::vector<SwitchTypeOverride>& overrides,
+                      const std::vector<SwitchSuppression>& suppress = {});
 
 // --- Apply / collect against a built SwitchNetwork ---
 // Set each matching turnout's type from the overrides (match on sidingTrack + world
