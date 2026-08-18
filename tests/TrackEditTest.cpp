@@ -344,6 +344,150 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Moving a drawn siding's points about in plan.
+    //
+    // A drawn road *is* its overlay record, so the editor moves a point by editing that
+    // record and laying the road down again - there is no `move` edit and nothing to
+    // reconcile. What has to hold is that the move reaches the network, that it changes
+    // the plan and nothing else (the height is geometry mode's business), and that
+    // dragging an end onto or off another track makes or breaks its switch, which is the
+    // only reason to move an end at all.
+    {
+        std::puts("\n  Moving a drawn siding's points:");
+        // A vertex in the middle of a real main-line segment to branch from, so the road
+        // starts on the line rather than merely near it.
+        const TrackSegment* host = nullptr;
+        std::size_t vi = 0;
+        for (const TrackSegment& s : data.networkTracks()) {
+            if (s.trackType != 0 || s.pts.size() < 9) continue;
+            host = &s;
+            vi = s.pts.size() / 2;
+            break;
+        }
+        if (!host) {
+            std::puts("  no main-line segment to branch from - nothing to check");
+        } else {
+            const glm::dvec3 root = host->pts[vi];
+            glm::dvec2 t(host->pts[vi + 1].x - host->pts[vi - 1].x,
+                         host->pts[vi + 1].y - host->pts[vi - 1].y);
+            t /= std::max(glm::length(t), 1e-9);
+            // 15 degrees off the running line: inside the 8-35 window a turnout needs.
+            const double c = std::cos(0.2618), sn = std::sin(0.2618);
+            const glm::dvec2 d(t.x * c - t.y * sn, t.x * sn + t.y * c);
+
+            TrackEdit rec;
+            rec.kind = TrackEdit::Track;
+            rec.track = kNewTrackIdBase + 900;
+            rec.trackType = 1;
+            rec.pts = {root,
+                       {root.x + d.x * 60.0, root.y + d.y * 60.0, root.z},
+                       {root.x + d.x * 130.0, root.y + d.y * 130.0, root.z}};
+
+            auto turnoutsOnIt = [&](const TrackEdit& r) {
+                std::vector<TrackPath> ps = buildTrackPaths(data);
+                SwitchNetwork n;
+                n.build(data, ps);
+                int hits = 0;
+                for (const Turnout& to : n.turnouts())
+                    if (to.sidingTrack == r.track) ++hits;
+                return hits;
+            };
+
+            data.applyTrackEdits({rec});
+            const int joined = turnoutsOnIt(rec);
+            std::printf("  drawn at the root: %d turnout(s)\n", joined);
+            check(joined == 1, "a road drawn onto the line has its switch",
+                  double(joined), 1.0);
+
+            // Drag the middle point sideways to tweak the alignment: the plan changes,
+            // the heights do not, and the switch survives - a 4 m nudge 60 m out swings
+            // the angle the road leaves at by under 4 degrees, well inside the window a
+            // turnout needs. (A big enough nudge would take the switch off the root
+            // without the root having moved at all, which is why the mode reports the
+            // angle at both ends whichever point is being dragged.)
+            const glm::dvec2 across(-d.y, d.x);
+            const double z0 = rec.pts[1].z;
+            rec.pts[1].x += across.x * 4.0;
+            rec.pts[1].y += across.y * 4.0;
+            data.removeTrack(rec.track);
+            data.applyTrackEdits({rec});
+            const TrackSegment* laid = nullptr;
+            for (const TrackSegment& s : data.networkTracks())
+                if (s.trackId == rec.track) laid = &s;
+            check(laid != nullptr, "the moved road is in the network", laid ? 1.0 : 0.0,
+                  1.0);
+            if (laid) {
+                const double moved = std::hypot(laid->pts[1].x - (root.x + d.x * 60.0),
+                                                laid->pts[1].y - (root.y + d.y * 60.0));
+                check(std::abs(moved - 4.0) < 1e-6, "the middle point moved in plan (m)",
+                      moved, 4.0);
+                check(std::abs(laid->pts[1].z - z0) < 1e-9,
+                      "and not a millimetre in height", laid->pts[1].z - z0, 0.0);
+            }
+            check(turnoutsOnIt(rec) == 1, "its switch is where it was",
+                  double(turnoutsOnIt(rec)), 1.0);
+
+            // Now drag the *root* off the line. Nothing joins there any more, and the
+            // switch has to go with it - which is the thing an end move is really for.
+            rec.pts[0].x += d.x * 40.0;
+            rec.pts[0].y += d.y * 40.0;
+            data.removeTrack(rec.track);
+            data.applyTrackEdits({rec});
+            const int adrift = turnoutsOnIt(rec);
+            std::printf("  root dragged 40 m clear: %d turnout(s)\n", adrift);
+            check(adrift == 0, "an end moved off the line loses its switch",
+                  double(adrift), 0.0);
+
+            // And back onto it: the switch returns. A move is not one-way.
+            rec.pts[0] = root;
+            data.removeTrack(rec.track);
+            data.applyTrackEdits({rec});
+            check(turnoutsOnIt(rec) == 1, "and gets it back when put back",
+                  double(turnoutsOnIt(rec)), 1.0);
+
+            // How near counts as "on the line". The editor snaps an end onto a track and
+            // reports it as joined within a tolerance of its own, and that tolerance has
+            // to be the detector's or it promises switches that never appear. This is
+            // where the two are held together: 2 m is SwitchNetwork's touch tolerance.
+            auto atOffset = [&](double off) {
+                const glm::dvec3 a(root.x + across.x * off, root.y + across.y * off, root.z);
+                rec.pts[0] = a;
+                rec.pts[1] = {a.x + d.x * 60.0, a.y + d.y * 60.0, a.z};
+                rec.pts[2] = {a.x + d.x * 130.0, a.y + d.y * 130.0, a.z};
+                data.removeTrack(rec.track);
+                data.applyTrackEdits({rec});
+                return turnoutsOnIt(rec);
+            };
+            const int near = atOffset(1.5), far = atOffset(3.0);
+            std::printf("  1.5 m off the line: %d turnout(s); 3.0 m off: %d\n", near, far);
+            check(near == 1, "an end just off the line still switches", double(near), 1.0);
+            check(far == 0, "and one well off it does not", double(far), 0.0);
+            rec.pts[0] = root; // put it back for the round-trip below
+            rec.pts[1] = {root.x + d.x * 60.0, root.y + d.y * 60.0, root.z};
+            rec.pts[2] = {root.x + d.x * 130.0, root.y + d.y * 130.0, root.z};
+
+            // The record is what is saved, so it has to survive the file with the moves
+            // in it. Written to the build tree, never to the dataset.
+            const std::string scratch =
+                (std::filesystem::temp_directory_path() / "ebaner-move-test").string();
+            std::error_code ec;
+            std::filesystem::create_directories(scratch + "/overlay", ec);
+            if (writeTrackOverlay(scratch, {rec})) {
+                const std::vector<TrackEdit> back = loadTrackOverlay(scratch);
+                double worst = 0.0;
+                if (back.size() == 1 && back[0].pts.size() == rec.pts.size())
+                    for (std::size_t i = 0; i < rec.pts.size(); ++i)
+                        worst = std::max(worst, glm::length(back[0].pts[i] - rec.pts[i]));
+                else
+                    worst = 1e9;
+                check(worst < 0.002, "the moved road round-trips through the overlay (m)",
+                      worst, 0.0);
+            }
+            std::filesystem::remove_all(scratch, ec);
+            data.removeTrack(rec.track); // leave the network as it was found
+        }
+    }
+
     std::printf("%s\n", failures ? "FAILED" : "PASSED");
     return failures ? 1 : 0;
 }

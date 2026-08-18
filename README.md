@@ -366,6 +366,28 @@ into the record so the circuits, signal paths and crossings anchored to it by `<
 any other does — between **8° and 35°** of divergence — so the HUD shows the angle the road
 leaves its parent track at, and says when it is outside that window and no switch will form.
 
+**Moving a drawn siding's points.** Drawing puts the points where you clicked; fixing the
+alignment afterwards is a separate mode, **Move siding points**. Click a point to pick it
+up and drag it, or nudge it with the **arrow keys** — 0.1 m a tap, **Shift** 1 m, **Ctrl**
+10 m, and they move it the way you are looking rather than along world north and east, so a
+nudge goes where it looked like it would. The height never changes: the point rides its own
+horizontal plane, and elevation stays geometry mode's job.
+
+It edits the drawn roads and only those. An exported track's alignment is surveyed and is
+not ours to redraw — geometry mode still edits its height alone. There is also no new
+overlay grammar here, because a drawn road *is* its `track` record: moving a point is an
+edit to that record, saved with everything else by Ctrl+S.
+
+Let go of an **end** within 2 m of an existing track and it snaps onto it, taking that
+track's height so the two sit flush and the switch is certain rather than nearly. Two metres
+because that is exactly the touch tolerance the switch detector uses — measured, an end 2 m
+off the line still makes its switch and one 2.2 m off does not.
+
+The HUD reports what **both** ends are standing on and at what angle, whichever point is
+being moved, because moving the *second* point of a leg swings the angle at the first one
+just as surely as moving the end does — and a switch quietly lost that way has nothing else
+on screen to show for it.
+
 **Simple entry signals.** The entry signals proper are routes between track-circuit
 borders, with C1/C2 authorities and full interlocking — which needs circuits drawn
 through the station, so they exist at Bodø and nowhere else. These are the plain

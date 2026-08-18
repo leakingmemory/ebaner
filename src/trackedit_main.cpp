@@ -277,7 +277,8 @@ int main(int argc, char** argv) {
     // switch (turnout) properties, mini signal paths and exit (main) signals, switched
     // from the Escape menu. ---
     enum class EdMode {
-        Geometry, NewSidings, Circuits, Switches, SignalPaths, ExitSignals, EntrySignals,
+        Geometry, NewSidings, SidingPoints, Circuits, Switches, SignalPaths, ExitSignals,
+        EntrySignals,
         DistantSignals, SimpleEntries, Crossings, FlagPosts, TxpPositions
     };
     EdMode mode = EdMode::Geometry;
@@ -296,6 +297,26 @@ int main(int argc, char** argv) {
     glm::dvec3 drawBandTo(0.0);       // where the rubber band currently reaches
     glm::vec2 lastDrawCur(0.0f);      // and the cursor it was last drawn for...
     double lastDrawBand = 0.0;        // ...and when, so it is not rebuilt every frame
+    // Moving a drawn road's points about in plan. Only the roads drawn here: an exported
+    // track's shape is surveyed and is not ours to redraw, and geometry mode edits its
+    // height alone. A drawn road *is* its record, so a move is an edit to the point in
+    // that record - there is no `move` overlay line involved and nothing to reconcile.
+    std::uint32_t movTrack = 0;      // the road whose point is selected (0 = none)
+    int movPt = -1;                  // which point of it
+    bool movDragging = false;        // the button is down and the point follows the cursor
+    // What each end of the selected road is joined to, and at what angle. A switch only
+    // forms between 8 and 35 degrees, and the angle at an end is set by the *two* points
+    // of that end's leg - so nudging the second point can take the switch off the first,
+    // with nothing else to show for it. Worked out when something moves, not per frame:
+    // it sweeps every track to find what the end is standing on.
+    struct SidingJoin {
+        bool joined = false;
+        std::uint32_t trackId = 0;
+        double deg = 0.0;
+        double off = 0.0;      // how far the end stands off it (m)
+        glm::dvec3 world{0.0}; // the point on the host track, to snap the end onto
+    };
+    SidingJoin movJoin[2]; // [0] = the first point's end, [1] = the last point's
     int selTurnout = -1;             // selected turnout (index into switchNet.turnouts())
     bool switchTypesDirty = false;   // unsaved switch-type changes
     // Mini signal paths (own overlay): directional routes between two circuit borders.
@@ -590,6 +611,36 @@ int main(int argc, char** argv) {
                     if (i) {
                         lns.push_back({scv(e->pts[i - 1], 1.0f), col});
                         lns.push_back({scv(e->pts[i], 1.0f), col});
+                    }
+                }
+            }
+        } else if (mode == EdMode::SidingPoints) {
+            const glm::dvec3 o = data.sceneOrigin();
+            auto scv = [&](glm::dvec3 w, float lift) {
+                return glm::vec3(float(w.x - o.x), float(w.y - o.y), float(w.z - o.z) + lift);
+            };
+            // Every drawn road with a marker on every point, because every one of them
+            // is a handle here. The selected point goes white with a stalk to make it
+            // findable from any angle; the ends are drawn a shade apart, since only they
+            // make a switch and only they snap.
+            for (const TrackEdit* e : newTrackRecords()) {
+                const glm::vec3 line = e->trackType == 2 ? glm::vec3(1.0f, 0.6f, 0.9f)
+                                                         : glm::vec3(0.4f, 0.9f, 1.0f);
+                for (std::size_t i = 0; i < e->pts.size(); ++i) {
+                    const bool sel = e->track == movTrack && static_cast<int>(i) ==
+                                                                 static_cast<int>(movPt);
+                    const bool end = i == 0 || i + 1 == e->pts.size();
+                    const glm::vec3 col = sel ? white
+                                              : end ? glm::vec3(1.0f, 0.85f, 0.3f) : line;
+                    pts.push_back({scv(e->pts[i], 1.0f), col});
+                    if (sel) {
+                        lns.push_back({scv(e->pts[i], 0.2f), white});
+                        lns.push_back({scv(e->pts[i], 6.0f), white});
+                        pts.push_back({scv(e->pts[i], 6.0f), white});
+                    }
+                    if (i) {
+                        lns.push_back({scv(e->pts[i - 1], 1.0f), line});
+                        lns.push_back({scv(e->pts[i], 1.0f), line});
                     }
                 }
             }
@@ -1008,23 +1059,74 @@ int main(int argc, char** argv) {
         std::printf("[trackedit] road %#x removed (Ctrl+S to save)\n", id);
         rebuildOverlay();
     };
-    // Siding <-> yard on a road already drawn. The record changes and the segment is laid
-    // down again with the new type; nothing else about it moves.
+    // Lay a drawn road down again after its record has been changed - retyped, or a
+    // point moved. The record is the whole truth about the road, so the segment is
+    // dropped and rebuilt from it rather than patched in place, and everything derived
+    // from the network follows. Not cheap: it walks the whole graph, so callers dragging
+    // something do this once at the end and not per frame.
+    auto relayDrawnTrack = [&](const TrackEdit& e) {
+        data.removeTrack(e.track);
+        data.applyTrackEdits({e});
+        graph = buildTrackGraph(data);
+        buildPolys();
+        selected.clear(); selA = selB = -1; growFwd = growBack = {};
+        newTracksDirty = true;
+        rebuildOverlay();
+    };
+    // Which track each end of the selected road is standing on, and how sharply the road
+    // leaves it. Both ends every time, because moving any of the four points that make up
+    // the two end legs can change one of these angles, and an angle that has wandered
+    // outside 8-35 degrees means the switch is simply gone with nothing on screen to say so.
+    auto refreshSidingJoins = [&](const TrackEdit& e) {
+        // Two metres: SwitchNetwork's own touch tolerance for "this end lands on that
+        // track's line" (SwitchNetwork.cpp, `best = 2.0f`). Measured on the line, an end
+        // 2.0 m off still makes its switch and one 2.2 m off does not - so anything
+        // wider here would report a join the detector then declines to make.
+        constexpr double kOnTrack = 2.0;
+        for (int k = 0; k < 2; ++k) {
+            movJoin[k] = SidingJoin{};
+            if (e.pts.size() < 2) continue;
+            const std::size_t at = k == 0 ? 0 : e.pts.size() - 1;
+            const std::size_t nxt = k == 0 ? 1 : e.pts.size() - 2;
+            const glm::dvec3& p = e.pts[at];
+            glm::dvec2 leg(e.pts[nxt].x - p.x, e.pts[nxt].y - p.y);
+            const double legLen = glm::length(leg);
+            if (legLen < 1e-6) continue; // a doubled point has no direction to leave in
+            leg /= legLen;
+            double bestD = kOnTrack;
+            for (const TrackPoly& poly : polys) {
+                if (poly.id == e.track || poly.pts.empty()) continue;
+                // Cheap reject before the projection: these are short surveyed segments,
+                // so a first point a kilometre off cannot come within three metres.
+                if (std::hypot(poly.pts.front().x - p.x, poly.pts.front().y - p.y) > 1000.0)
+                    continue;
+                double frac = 0.0, dist = 0.0;
+                if (!projectOnTrack(polys, poly.id, glm::dvec2(p.x, p.y), frac, dist))
+                    continue;
+                if (dist >= bestD) continue;
+                bestD = dist;
+                const glm::dvec2 t = trackTangent(polys, poly.id, frac, +1);
+                movJoin[k].joined = true;
+                movJoin[k].trackId = poly.id;
+                movJoin[k].off = dist;
+                movJoin[k].world = fracToWorld(polys, poly.id, frac);
+                // Either sense of the host counts: the road may leave it the other way
+                // along, and the turnout is the same turnout.
+                movJoin[k].deg = glm::degrees(
+                    std::acos(std::min(1.0, std::abs(glm::dot(t, leg)))));
+            }
+        }
+    };
+    // Siding <-> yard on a road already drawn. Nothing about it moves.
     auto retypeDrawnTrack = [&](std::uint32_t id) {
         for (TrackEdit* e : newTrackRecords()) {
             if (e->track != id) continue;
             e->trackType = e->trackType == 2 ? 1 : 2;
-            data.removeTrack(id);
-            data.applyTrackEdits({*e});
-            graph = buildTrackGraph(data);
-            buildPolys();
-            selected.clear(); selA = selB = -1; growFwd = growBack = {};
-            newTracksDirty = true;
+            relayDrawnTrack(*e);
             pathMsg = e->trackType == 2 ? "yard track" : "siding";
             pathMsgUntil = glfwGetTime() + 3.0;
             std::printf("[trackedit] road %#x -> %s (Ctrl+S to save)\n", id,
                         e->trackType == 2 ? "yard" : "siding");
-            rebuildOverlay();
             return;
         }
     };
@@ -1718,6 +1820,7 @@ int main(int argc, char** argv) {
     bool prevNameEnter = false, prevNameEsc = false, prevNameBs = false;
     bool prevMenuEnter = false, prevMenuUp = false, prevMenuDown = false;
     const std::vector<std::string> kMenuItems = {"Geometry edit", "New sidings",
+                                                 "Move siding points",
                                                  "Track circuits",
                                                  "Switches", "Signal paths",
                                                  "Exit signals", "Entry signals",
@@ -1759,6 +1862,7 @@ int main(int argc, char** argv) {
                     glfwSetWindowShouldClose(window, GLFW_TRUE);
                 } else { // pick a mode and close the menu
                     mode = sel == "New sidings"    ? EdMode::NewSidings
+                           : sel == "Move siding points" ? EdMode::SidingPoints
                            : sel == "Track circuits" ? EdMode::Circuits
                            : sel == "Switches"      ? EdMode::Switches
                            : sel == "Signal paths"  ? EdMode::SignalPaths
@@ -1779,6 +1883,7 @@ int main(int argc, char** argv) {
                     // A half-drawn road is abandoned rather than carried between modes:
                     // it is not a record yet and nothing outside this mode can see it.
                     drawPts.clear(); drawBandTo = glm::dvec3(0.0); selNewTrack = 0;
+                    movTrack = 0; movPt = -1; movDragging = false;
                     showPending = false;
                     rebuildOverlay();
                     g_menuOpen = false;
@@ -2024,7 +2129,7 @@ int main(int argc, char** argv) {
              mode == EdMode::EntrySignals || mode == EdMode::DistantSignals ||
              mode == EdMode::SimpleEntries || mode == EdMode::Crossings ||
              mode == EdMode::FlagPosts || mode == EdMode::TxpPositions ||
-             mode == EdMode::NewSidings) &&
+             mode == EdMode::NewSidings || mode == EdMode::SidingPoints) &&
             !g_mouseCaptured) {
             double mx = 0.0, my = 0.0;
             glfwGetCursorPos(window, &mx, &my);
@@ -2135,6 +2240,73 @@ int main(int argc, char** argv) {
                 lastDrawCur = cur;
                 lastDrawBand = now;
                 drawBandTo = drawWorld;
+                rebuildOverlay();
+            }
+        }
+
+        // Moving a drawn road's points. Two questions a frame: which point is under the
+        // cursor (to pick one up), and where on its own height plane the cursor now is
+        // (to carry it there). Only points of roads drawn here are offered - an exported
+        // track's alignment is surveyed, and this mode does not touch it.
+        std::uint32_t movHoverTrack = 0;
+        int movHoverPt = -1;
+        bool movHit = false;
+        glm::dvec3 movWorld(0.0);
+        if (mode == EdMode::SidingPoints && !g_mouseCaptured) {
+            double mx = 0.0, my = 0.0;
+            glfwGetCursorPos(window, &mx, &my);
+            int winw = fbw, winh = fbh;
+            glfwGetWindowSize(window, &winw, &winh);
+            const glm::vec2 cur(static_cast<float>(mx) * fbw / std::max(winw, 1),
+                                static_cast<float>(my) * fbh / std::max(winh, 1));
+            const glm::dvec3 o = data.sceneOrigin();
+            float best = 16.0f; // px pick radius
+            for (const TrackEdit* e : newTrackRecords())
+                for (std::size_t i = 0; i < e->pts.size(); ++i) {
+                    const glm::dvec3& w = e->pts[i];
+                    const glm::vec4 clip =
+                        viewProj * glm::vec4(float(w.x - o.x), float(w.y - o.y),
+                                             float(w.z - o.z) + 1.0f, 1.0f);
+                    if (clip.w <= 0.0f) continue;
+                    const glm::vec2 px((clip.x / clip.w * 0.5f + 0.5f) * fbw,
+                                       (clip.y / clip.w * 0.5f + 0.5f) * fbh);
+                    const float d = glm::length(px - cur);
+                    if (d < best) {
+                        best = d;
+                        movHoverTrack = e->track;
+                        movHoverPt = static_cast<int>(i);
+                    }
+                }
+            // The plane is the selected point's own height: moving a point in plan must
+            // not change how high it is, which is geometry mode's business and not this
+            // mode's. The same ray-meets-a-plane the drawing mode uses.
+            if (movTrack != 0 && movPt >= 0)
+                for (const TrackEdit* e : newTrackRecords())
+                    if (e->track == movTrack && movPt < static_cast<int>(e->pts.size())) {
+                        glm::vec3 hit(0.0f);
+                        if (screenRayToPlane(g_camera.projMatrix(aspect),
+                                             g_camera.position(), g_camera.forward(), cur,
+                                             glm::vec2(fbw, fbh),
+                                             static_cast<float>(e->pts[movPt].z - o.z),
+                                             hit)) {
+                            movHit = true;
+                            movWorld = glm::dvec3(hit) + o;
+                        }
+                    }
+            // While the button is held the point follows the cursor. Only the record and
+            // the overlay move: relaying the road walks the whole graph, so that waits
+            // for the button to come up. The overlay for this mode draws the records
+            // themselves, so the preview costs nothing beyond the redraw.
+            if (movDragging && movHit && glm::length(cur - lastDrawCur) > 4.0f &&
+                now - lastDrawBand > 0.05) {
+                lastDrawCur = cur;
+                lastDrawBand = now;
+                for (TrackEdit* e : newTrackRecords())
+                    if (e->track == movTrack && movPt < static_cast<int>(e->pts.size())) {
+                        e->pts[movPt].x = movWorld.x;
+                        e->pts[movPt].y = movWorld.y;
+                        refreshSidingJoins(*e);
+                    }
                 rebuildOverlay();
             }
         }
@@ -2853,6 +3025,36 @@ int main(int argc, char** argv) {
                 // tick runs away with the point before the key is back up.
                 elevRepeat = ctrl ? 0.22f : shift ? 0.14f : 0.09f;
             }
+        } else if (mode == EdMode::SidingPoints && movTrack != 0 && movPt >= 0 &&
+                   (kUp || kDn || kLeft || kRight)) {
+            // Nudging the selected point in plan. Along the way the camera is looking
+            // and across it, rather than along world x and y: which way "east" is on
+            // screen depends on where you are standing, and a nudge has to go the way it
+            // looked like it would. The same step scaling as the elevation keys.
+            elevRepeat -= dt;
+            if ((kUp && !prevUp) || (kDn && !prevDown) || (kLeft && !prevLeft) ||
+                (kRight && !prevRight) || elevRepeat <= 0.0f) {
+                const glm::vec3 f = g_camera.forward();
+                glm::dvec2 fwd(f.x, f.y);
+                const double L = glm::length(fwd);
+                // Looking straight down there is no "forward" on the ground to speak of.
+                fwd = L > 1e-3 ? fwd / L : glm::dvec2(1.0, 0.0);
+                const glm::dvec2 rgt(fwd.y, -fwd.x);
+                glm::dvec2 d(0.0);
+                if (kUp) d += fwd;
+                if (kDn) d -= fwd;
+                if (kRight) d += rgt;
+                if (kLeft) d -= rgt;
+                for (TrackEdit* e : newTrackRecords())
+                    if (e->track == movTrack && movPt < static_cast<int>(e->pts.size())) {
+                        e->pts[movPt].x += d.x * elevStep;
+                        e->pts[movPt].y += d.y * elevStep;
+                        relayDrawnTrack(*e);
+                        refreshSidingJoins(*e);
+                        break;
+                    }
+                elevRepeat = ctrl ? 0.22f : shift ? 0.14f : 0.09f;
+            }
         } else {
             elevRepeat = 0.0f;
         }
@@ -2930,7 +3132,8 @@ int main(int argc, char** argv) {
                 }
             }
         } else if (kSave && !prevS &&
-                   (mode == EdMode::Geometry || mode == EdMode::NewSidings) &&
+                   (mode == EdMode::Geometry || mode == EdMode::NewSidings ||
+                    mode == EdMode::SidingPoints) &&
                    (!pending.empty() || removals > 0 || newTracksDirty)) {
             // One file, one save path: the drawn roads go into `pending` like every other
             // track edit, so the two modes that write track-edits.txt cannot clobber each
@@ -3094,6 +3297,59 @@ int main(int argc, char** argv) {
             }
             resetGrow(); // a fresh pick starts the walk over
             rebuildOverlay();
+        } else if (!g_mouseCaptured && mode == EdMode::SidingPoints) {
+            // Press on a point to pick it up, drag, release to lay it down. A press on
+            // nothing lets go of the selection.
+            if (mL && !prevML) {
+                if (movHoverPt >= 0) {
+                    movTrack = movHoverTrack;
+                    movPt = movHoverPt;
+                    movDragging = true;
+                    for (const TrackEdit* e : newTrackRecords())
+                        if (e->track == movTrack) refreshSidingJoins(*e);
+                    lastDrawCur = glm::vec2(0.0f); // the first drag frame always counts
+                    lastDrawBand = 0.0;
+                } else {
+                    movTrack = 0;
+                    movPt = -1;
+                }
+                rebuildOverlay();
+            } else if (!mL && prevML && movDragging) {
+                movDragging = false;
+                for (TrackEdit* e : newTrackRecords()) {
+                    if (e->track != movTrack || movPt >= static_cast<int>(e->pts.size()))
+                        continue;
+                    // An end left within reach of an existing track clicks onto it and
+                    // takes its height, so the two sit flush and the switch is certain
+                    // rather than nearly - the same snap the road was drawn with. Only
+                    // the ends: a switch is made where a road *meets* another, and a
+                    // middle point lying across one is just crossing it.
+                    //
+                    // Found by asking what the end is standing on, not by what is under
+                    // the cursor: the cursor is over the point being dragged, so the
+                    // nearest track to it is the road being moved.
+                    const int endK = movPt == 0 ? 0
+                                     : movPt + 1 == static_cast<int>(e->pts.size()) ? 1 : -1;
+                    if (endK >= 0) {
+                        refreshSidingJoins(*e);
+                        if (movJoin[endK].joined) {
+                            e->pts[movPt] = movJoin[endK].world;
+                            char b[96];
+                            std::snprintf(b, sizeof(b), "end snapped to %#x at %.1f m, "
+                                          "leaving at %.1f deg", movJoin[endK].trackId,
+                                          movJoin[endK].world.z, movJoin[endK].deg);
+                            pathMsg = b;
+                            pathMsgUntil = glfwGetTime() + 3.0;
+                        }
+                    }
+                    relayDrawnTrack(*e);
+                    refreshSidingJoins(*e);
+                    std::printf("[trackedit] road %#x point %d -> %.1f %.1f %.2f "
+                                "(Ctrl+S to save)\n", e->track, movPt, e->pts[movPt].x,
+                                e->pts[movPt].y, e->pts[movPt].z);
+                    break;
+                }
+            }
         } else if (!g_mouseCaptured && mL && !prevML && mode == EdMode::NewSidings) {
             if (drawPts.empty()) {
                 // The first point has to sit on an existing track: it is what fixes the
@@ -3537,6 +3793,7 @@ int main(int argc, char** argv) {
                              : mode == EdMode::SignalPaths  ? 9.0f
                              : mode == EdMode::EntrySignals ? 10.0f
                              : mode == EdMode::NewSidings   ? 9.0f
+                             : mode == EdMode::SidingPoints ? 9.0f
                                                             : 8.0f) * lh;
                 const glm::vec3 bg(0.04f, 0.05f, 0.09f);
                 const glm::vec2 a = ndc(20.0f, 20.0f), b = ndc(x1, 20.0f),
@@ -3623,6 +3880,91 @@ int main(int argc, char** argv) {
                                        : "SELECT: click point, Ctrl+click multi, "
                                          "click empty to clear",
                        x, 40.0f + 7 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
+          } else if (mode == EdMode::SidingPoints) { // --- Move siding points HUD ---
+            appendText(tv, "MODE: MOVE SIDING POINTS (Esc menu to switch)", x,
+                       40.0f + 3 * lh, sc, glm::vec3(0.4f, 1.0f, 0.9f), fbw, fbh);
+            const std::vector<TrackEdit*> roads = newTrackRecords();
+            std::size_t handles = 0;
+            for (const TrackEdit* e : roads) handles += e->pts.size();
+            std::snprintf(buf, sizeof(buf), "ROADS DRAWN %zu   %zu point(s) to move",
+                          roads.size(), handles);
+            appendText(tv, buf, x, 40.0f + 4 * lh, sc, glm::vec3(0.9f, 0.85f, 0.7f),
+                       fbw, fbh);
+            const TrackEdit* sel = nullptr;
+            for (const TrackEdit* e : roads)
+                if (e->track == movTrack && movPt >= 0 &&
+                    movPt < static_cast<int>(e->pts.size()))
+                    sel = e;
+            if (sel) {
+                const glm::dvec3& p = sel->pts[movPt];
+                std::snprintf(buf, sizeof(buf),
+                              "%#x %s   point %d of %zu%s   %.1f %.1f  z=%.2f",
+                              sel->track, sel->trackType == 2 ? "yard" : "siding",
+                              movPt + 1, sel->pts.size(),
+                              (movPt == 0 || movPt + 1 == static_cast<int>(sel->pts.size()))
+                                  ? " (end)" : "",
+                              p.x, p.y, p.z);
+                appendText(tv, buf, x, 40.0f + 5 * lh, sc, glm::vec3(1.0f, 0.9f, 0.3f),
+                           fbw, fbh);
+                // Both ends, always. Moving the second point of a leg changes the angle
+                // at the *first* one just as surely as moving the end itself does, and a
+                // switch quietly lost that way has nothing else on screen to show for it.
+                char ends[2][60];
+                bool anyBad = false;
+                for (int k = 0; k < 2; ++k) {
+                    if (!movJoin[k].joined) {
+                        std::snprintf(ends[k], sizeof(ends[k]), "%s free",
+                                      k == 0 ? "start" : "end");
+                        continue;
+                    }
+                    const bool ok = movJoin[k].deg >= 8.0 && movJoin[k].deg <= 35.0;
+                    anyBad = anyBad || !ok;
+                    std::snprintf(ends[k], sizeof(ends[k]),
+                                  "%s on %#x %.1f deg %.1fm off%s",
+                                  k == 0 ? "start" : "end", movJoin[k].trackId,
+                                  movJoin[k].deg, movJoin[k].off,
+                                  ok ? "" : " NO SWITCH");
+                }
+                std::snprintf(buf, sizeof(buf), "%s   |   %s", ends[0], ends[1]);
+                appendText(tv, buf, x, 40.0f + 6 * lh, sc,
+                           anyBad ? glm::vec3(1.0f, 0.55f, 0.3f)
+                                  : glm::vec3(0.6f, 1.0f, 0.6f),
+                           fbw, fbh);
+            } else {
+                appendText(tv, roads.empty()
+                                   ? "no roads drawn here - draw one in New sidings first"
+                                   : "click a point to pick it up",
+                           x, 40.0f + 5 * lh, sc, glm::vec3(0.8f, 0.95f, 0.8f), fbw, fbh);
+                appendText(tv, "", x, 40.0f + 6 * lh, sc, glm::vec3(0.7f), fbw, fbh);
+            }
+            if (glfwGetTime() < pathMsgUntil && !pathMsg.empty())
+                appendText(tv, pathMsg, x, 40.0f + 7 * lh, sc, glm::vec3(1.0f, 0.8f, 0.4f),
+                           fbw, fbh);
+            else {
+                const bool dirty = !pending.empty() || newTracksDirty || removals > 0;
+                std::snprintf(buf, sizeof(buf), "UNSAVED %zu   %s", pending.size(),
+                              dirty ? "Ctrl+S to save" : "");
+                appendText(tv, buf, x, 40.0f + 7 * lh, sc,
+                           dirty ? glm::vec3(1.0f, 0.6f, 0.3f)
+                                 : glm::vec3(0.6f, 0.9f, 0.6f),
+                           fbw, fbh);
+            }
+            {
+                const bool ctrlHud =
+                    glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
+                    glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
+                const bool shiftHud =
+                    glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
+                    glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
+                std::snprintf(buf, sizeof(buf),
+                              "drag a point  |  arrows nudge %s m, the way you are "
+                              "looking  |  Shift/Ctrl scale",
+                              ctrlHud ? "10" : shiftHud ? "1" : "0.1");
+                appendText(tv, buf, x, 40.0f + 8 * lh, sc,
+                           (ctrlHud || shiftHud) ? glm::vec3(1.0f, 0.9f, 0.3f)
+                                                 : glm::vec3(0.85f, 0.85f, 0.7f),
+                           fbw, fbh);
+            }
           } else if (mode == EdMode::NewSidings) { // --- New sidings HUD ---
             appendText(tv, "MODE: NEW SIDINGS (Esc menu to switch)", x, 40.0f + 3 * lh, sc,
                        glm::vec3(0.4f, 1.0f, 0.9f), fbw, fbh);
