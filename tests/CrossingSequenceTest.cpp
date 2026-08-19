@@ -20,6 +20,7 @@
 // occupancy dictated rather than simulated, and no dataset in the way.
 
 #include "Camera.h"
+#include "Font.h"
 #include "FlagPosts.h"
 #include "TxpGraph.h"
 #include "TxpNetwork.h"
@@ -1868,6 +1869,91 @@ int main(int argc, char** argv) {
                   "and none of them carries points");
         }
         std::filesystem::remove(path, ec);
+    }
+
+    // The menu panel cannot run off the screen.
+    //
+    // Every length in it is a multiple of fbH/240, so how many rows fit is a constant and
+    // not something a bigger screen buys more of - past it the panel simply grew off the
+    // top and bottom, taking the first and last items with it and saying nothing. The
+    // station picker knew (it windowed 687 stations by hand at 15) and no other caller did.
+    {
+        std::puts("\nThe menu window:");
+        bool everOver = false, everMissedSel = false, everBadMarker = false;
+        int worstRows = 0;
+        for (const int fbH : {480, 699, 768, 1080, 1440, 2160}) {
+            const float sc = std::max(2.0f, float(fbH) / 240.0f);
+            const float lh = 12.0f * sc, pad = 16.0f * sc;
+            for (int n = 1; n <= 200; ++n)
+                for (int sel = 0; sel < n; sel += std::max(1, n / 7)) {
+                    const MenuWindow w = menuWindow(n, sel, fbH);
+                    const int drawn = w.count + (w.moreAbove ? 1 : 0) + (w.moreBelow ? 1 : 0);
+                    worstRows = std::max(worstRows, drawn);
+                    // The panel the caller will build from this has to fit.
+                    if (2.0f * pad + 1.5f * lh + float(drawn) * lh > float(fbH))
+                        everOver = true;
+                    // The selection has to be inside the window, or the arrow keys move a
+                    // highlight nobody can see.
+                    if (sel < w.first || sel >= w.first + w.count) everMissedSel = true;
+                    // The markers have to agree with the slice.
+                    if (w.moreAbove != (w.first > 0) ||
+                        w.moreBelow != (w.first + w.count < n))
+                        everBadMarker = true;
+                }
+        }
+        check(!everOver, "no window ever builds a panel taller than the screen");
+        check(!everMissedSel, "and the selection is always inside it");
+        check(!everBadMarker, "with the markers agreeing with the slice");
+        std::printf("  most rows drawn at any size: %d\n", worstRows);
+
+        // A list that fits comes back whole and unwindowed - which is what keeps every
+        // short panel in the program byte-identical to before.
+        for (const int n : {1, 5, 12, 13}) {
+            const MenuWindow w = menuWindow(n, 0, 699);
+            check(w.first == 0 && w.count == n && !w.moreAbove && !w.moreBelow,
+                  "a list of " + std::to_string(n) + " fits whole at 699 px");
+        }
+        // 15 was the old ceiling; past it the window engages rather than overflowing.
+        const MenuWindow big = menuWindow(40, 20, 699);
+        std::printf("  40 items at 699 px: rows %d..%d, %s above / %s below\n", big.first,
+                    big.first + big.count - 1, big.moreAbove ? "more" : "none",
+                    big.moreBelow ? "more" : "none");
+        check(big.count < 40 && big.moreAbove && big.moreBelow,
+              "a long list is windowed at both ends");
+        check(menuWindow(200, 199, 699).moreBelow == false,
+              "and at the bottom of it there is nothing below");
+        check(menuWindow(200, 0, 699).moreAbove == false, "nor above at the top");
+
+        // And what is actually drawn stays inside the screen. Measured off the geometry
+        // appendMenu emits rather than argued from the window: the panel is the first
+        // quad, in NDC, so its height is readable straight out of it.
+        double worst = 0.0;
+        for (const int fbH : {480, 699, 1080}) {
+            for (int n = 1; n <= 200; ++n) {
+                std::vector<std::string> items(static_cast<std::size_t>(n), "ROUTE NAME  C2");
+                std::vector<TextVertex> tv;
+                appendMenu(tv, "SET ROUTE", items, n / 2, 1366, fbH);
+                if (tv.size() < 6) continue;
+                double lo = 1e30, hi = -1e30;
+                for (int k = 0; k < 6; ++k) { // the panel quad
+                    lo = std::min(lo, double(tv[k].pos.y));
+                    hi = std::max(hi, double(tv[k].pos.y));
+                }
+                worst = std::max(worst, std::max(-1.0 - lo, hi - 1.0)); // outside NDC by...
+            }
+        }
+        std::printf("  worst overhang past the screen edge: %.4f (NDC)\n", worst);
+        check(worst <= 0.0, "and the panel it draws never leaves the screen");
+
+        // The start-up station picker is the caller this was really costing: the export
+        // carries 687 stations, and it used to keep a hand-rolled window of its own
+        // because appendMenu would have drawn all of them.
+        const MenuWindow st = menuWindow(687, 400, 699);
+        std::printf("  687 stations, selection 400: rows %d..%d (%d shown)\n", st.first,
+                    st.first + st.count - 1, st.count);
+        check(st.count > 5 && st.count <= 15 && st.first <= 400 &&
+                  400 < st.first + st.count && st.moreAbove && st.moreBelow,
+              "the station list windows around the selection");
     }
 
     // The dataset's own script. What is checked here is the host, not any API: that a

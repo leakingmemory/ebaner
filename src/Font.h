@@ -41,8 +41,25 @@ std::size_t textChars(const std::string& text);
 // numerals the HUD draws, rather than needing an asset of its own.
 const unsigned char* fontGlyph(char ch);
 
+// The slice of a menu's items that fits on screen, kept around the selection.
+//
+// The panel scales with the framebuffer - every length in it is a multiple of the same
+// `fbH/240` - so how many rows fit is a constant, not something a bigger screen buys more
+// of. Past that count the panel simply grew off the top and bottom of the screen, taking
+// the first and last items with it and saying nothing.
+struct MenuWindow {
+    int first = 0;        // index of the first item drawn
+    int count = 0;        // how many are drawn
+    bool moreAbove = false;
+    bool moreBelow = false;
+};
+MenuWindow menuWindow(int itemCount, int selected, int fbH);
+
 // Append a centred modal menu: a dark panel carrying `title` and the `items` list,
 // with the item at `selected` highlighted (marked and brighter). Drawn opaque over
 // the scene with the same text overlay, `fbW`/`fbH` being the framebuffer size.
+//
+// A list too long for the screen is windowed around the selection (menuWindow) with a
+// count of what is out of sight at each end, so it stays workable however long it gets.
 void appendMenu(std::vector<TextVertex>& out, const std::string& title,
                 const std::vector<std::string>& items, int selected, int fbW, int fbH);

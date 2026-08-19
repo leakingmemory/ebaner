@@ -24,8 +24,9 @@
 #include <vector>
 
 namespace {
-// Drawn at once; the dataset has hundreds of stations and a screen holds this many.
-constexpr int kShown = 15;
+// PgUp/PgDn jump the selection; appendMenu windows the list around it, so the view is
+// no longer this file's business - it used to keep its own window of 15, which was the
+// only place in the program that knew a screen holds that many.
 constexpr int kPageStep = 10;
 
 void drawPanel(GLFWwindow* window, VulkanRenderer& renderer, const std::string& title,
@@ -80,12 +81,7 @@ const Station* runStationPicker(GLFWwindow* window, VulkanRenderer& renderer,
         if (en && !pEnter) return &all[pick];
         pUp = u; pDn = d; pPgU = pu; pPgD = pd; pEnter = en;
 
-        // A window onto the list, kept centred on the selection.
-        const int first = std::clamp(pick - kShown / 2, 0, std::max(0, n - kShown));
-        const std::vector<std::string> page(
-            names.begin() + first, names.begin() + std::min(n, first + kShown));
-        drawPanel(window, renderer, "START AT  (arrows, PgUp/PgDn, Enter)", page,
-                  pick - first);
+        drawPanel(window, renderer, "START AT  (arrows, PgUp/PgDn, Enter)", names, pick);
     }
     return nullptr; // closed
 }

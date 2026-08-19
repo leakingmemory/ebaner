@@ -85,7 +85,14 @@ bool g_menuOpen = false;    // Escape menu overlay (pauses the sim)
 int g_menuSel = 0;          // highlighted menu item
 bool g_mapMode = false;     // traffic-manager 2-D map view
 bool g_mapDirty = false;    // (re)build the map overlay this frame
-bool g_routePick = false;   // traffic manager: the exit-route picker is open
+// The traffic manager's route picker, in two steps like the dispatcher's own panel: a
+// station's routes are entries and exits together, and at a worked station there are enough
+// of both that one flat list is long to work and easy to misread - "NO MO NB T2" leaves the
+// station and "NO MO INFN T2" comes into it, and they sat next to each other.
+enum class RoutePickStep { None, PickKind, PickList };
+RoutePickStep g_routeStep = RoutePickStep::None;
+bool g_routeEntry = false;  // which kind the list is showing
+int g_routeKindSel = 0;     // highlighted line of the kind step
 int g_routePickSel = 0;     // highlighted route in that picker
 bool g_signalPick = false;  // traffic manager: the simple-entry-signal picker is open
 int g_signalPickSel = 0;    // highlighted signal in that picker
@@ -145,8 +152,11 @@ void keyCallback(GLFWwindow* win, int key, int, int action, int) {
             g_dispatchTo.clear();
         } else if (g_signalPick) {
             g_signalPick = false;
-        } else if (g_routePick) {
-            g_routePick = false;
+        } else if (g_routeStep == RoutePickStep::PickList) {
+            g_routeStep = RoutePickStep::PickKind;
+            g_routePickSel = 0;
+        } else if (g_routeStep == RoutePickStep::PickKind) {
+            g_routeStep = RoutePickStep::None;
         } else {
             g_menuOpen = !g_menuOpen;
         }
@@ -185,7 +195,9 @@ void keyCallback(GLFWwindow* win, int key, int, int action, int) {
     // R offers the exit routes of the nearest station, to set a main-signal route. Only in
     // the map: R is the cab reverser, which means nothing from a dispatcher's view.
     if (g_mapMode && key == GLFW_KEY_R && action == GLFW_PRESS) {
-        g_routePick = !g_routePick;
+        g_routeStep = g_routeStep == RoutePickStep::None ? RoutePickStep::PickKind
+                                                         : RoutePickStep::None;
+        g_routeKindSel = 0;
         g_routePickSel = 0;
     }
     // E offers the simple entry signals of the nearest station. Only in the map, and
@@ -872,6 +884,10 @@ int main(int argc, char** argv) {
         RouteType type = RouteType::C1;
         int placement = -1;      // the mast to light
         int station = -1;
+        // Into the station or out of it. The two build loops below are already exactly
+        // that split, so this costs nothing to record - and the picker needs it to offer
+        // the two apart, which is most of what stops one being mistaken for the other.
+        bool entry = false;
         glm::vec2 anchor{0.0f};  // its in-station end, which is what groups it by station
         SignalPath departure;    // the whole movement
         std::vector<int> beyond; // circuits past the signal
@@ -915,6 +931,7 @@ int main(int argc, char** argv) {
             // ones past the mast - and a circuit cannot straddle a border, so the sets are
             // disjoint rather than merely different.
             c.beyond = pathSections(exitSignals[e], circuits);
+            c.entry = false;
             c.anchor = sceneAt(c.departure.start); // the platform end
             mainCandidates.push_back(std::move(c));
         }
@@ -939,6 +956,7 @@ int main(int argc, char** argv) {
                 c.placement = mastOf(SignalKind::Entry, static_cast<int>(ei));
                 c.departure = entrySignals[ei];
                 c.beyond = pathSections(c.departure, circuits); // all of it is past the mast
+                c.entry = true;
                 c.anchor = sceneAt(c.departure.end);            // the platform end
                 mainCandidates.push_back(std::move(c));
                 continue;
@@ -954,6 +972,7 @@ int main(int argc, char** argv) {
                 // Still only what is past the mast: the approach is the run-up, and a train
                 // standing on it is the train being let in rather than one in the way.
                 c.beyond = pathSections(entrySignals[ei], circuits);
+                c.entry = true;
                 c.anchor = sceneAt(c.departure.end); // the platform end
                 mainCandidates.push_back(std::move(c));
             }
@@ -1643,8 +1662,12 @@ int main(int argc, char** argv) {
         const std::string p(panel);
         // `route` is the other picker the map offers (R), which like the dispatcher's own
         // panel is reachable only by keypress and so could not be looked at headlessly.
-        if (p == "route") {
-            g_routePick = true;
+        if (p == "route" || p == "entry" || p == "exit") {
+            // `route` stops at the kind step; `entry`/`exit` go straight to that list, so
+            // either screen can be looked at headlessly.
+            g_routeStep = p == "route" ? RoutePickStep::PickKind : RoutePickStep::PickList;
+            g_routeEntry = p == "entry";
+            g_routeKindSel = p == "exit" ? 1 : 0; // `route` opens on the first line
             g_routePickSel = 0;
         } else {
             g_signalPick = true;
@@ -1939,7 +1962,8 @@ int main(int argc, char** argv) {
 
     // The exit routes on offer: those of the station nearest what the map is looking at,
     // so a dispatcher panning to a place gets that place's routes.
-    auto stationRoutes = [&]() {
+    // `kind`: -1 every route the station has, 0 the ones leaving it, 1 the ones coming in.
+    auto stationRoutes = [&](int kind) {
         std::vector<int> out;
         if (stationAt.empty()) return out;
         // The route clusters are geometric and the panel's stations are named, so these
@@ -1952,8 +1976,11 @@ int main(int argc, char** argv) {
             const float d = glm::length(stationAt[i] - at);
             if (d < bestD) { bestD = d; best = static_cast<int>(i); }
         }
-        for (std::size_t ri = 0; ri < mainCandidates.size(); ++ri)
-            if (mainCandidates[ri].station == best) out.push_back(static_cast<int>(ri));
+        for (std::size_t ri = 0; ri < mainCandidates.size(); ++ri) {
+            if (mainCandidates[ri].station != best) continue;
+            if (kind >= 0 && mainCandidates[ri].entry != (kind == 1)) continue;
+            out.push_back(static_cast<int>(ri));
+        }
         return out;
     };
     // One picker line per route: its name, the authority it grants, and either that it is
@@ -2168,11 +2195,29 @@ int main(int argc, char** argv) {
                    fbw, fbh);
     };
 
-    // The picker panel, drawn after the map HUD so it sits over the map.
+    // The picker panel, drawn after the map HUD so it sits over the map. Two steps, like
+    // the dispatcher's: which kind of movement, then which one. The second panel replaces
+    // the first rather than stacking - appendMenu always centres, so two would overlap.
     auto appendRoutePicker = [&](std::vector<TextVertex>& tv, int fbw, int fbh) {
-        if (!g_routePick) return;
-        const std::vector<int> rs = stationRoutes();
-        appendMenu(tv, "SET ROUTE  (Up/Down, Enter, Esc)", routePickItems(rs),
+        if (g_routeStep == RoutePickStep::None) return;
+        const std::string here = simpleStationHere();
+        const std::string at = here.empty() ? std::string() : " - " + here;
+        if (g_routeStep == RoutePickStep::PickKind) {
+            const std::size_t nIn = stationRoutes(1).size(), nOut = stationRoutes(0).size();
+            appendMenu(tv, "SET ROUTE" + at + "  (Up/Down, Enter, Esc)",
+                       {"Into the station   (" + std::to_string(nIn) + ")",
+                        "Out of the station (" + std::to_string(nOut) + ")"},
+                       std::clamp(g_routeKindSel, 0, 1), fbw, fbh);
+            return;
+        }
+        const std::vector<int> rs = stationRoutes(g_routeEntry ? 1 : 0);
+        // The kind is in the title, so what is being chosen is on screen at the moment of
+        // choosing - which is the half of this that keeps an arrival from being read as a
+        // departure. The shorter list is the half that makes it workable.
+        appendMenu(tv,
+                   std::string(g_routeEntry ? "ROUTES INTO" : "ROUTES OUT OF") +
+                       at + "  (Up/Down, Enter, Esc backs out)",
+                   routePickItems(rs),
                    rs.empty() ? 0
                               : std::clamp(g_routePickSel, 0,
                                            static_cast<int>(rs.size()) - 1),
@@ -2189,18 +2234,25 @@ int main(int argc, char** argv) {
         // a route set from this hook has to meet the same state one set by keypress would,
         // or it would be granted roads with a train standing on them.
         computeOccupancy(secOccupied);
-        const std::vector<int> rs = stationRoutes();
         const std::string all(pick);
         std::istringstream is(all);
         std::string one;
         while (std::getline(is, one, ',')) {
             if (one.empty()) continue;
-            const int n = std::atoi(one.c_str()) - 1;
+            // A bare number still means what it always did: the nth of everything the
+            // station has, in the order EBANER_ROUTES prints. The picker shows those in
+            // two lists now, so `e`/`x` index within one of them for anything written
+            // against what is on screen.
+            const char pfx = one[0] == 'e' || one[0] == 'x' ? one[0] : '\0';
+            const int kind = pfx == 'e' ? 1 : pfx == 'x' ? 0 : -1;
+            const std::vector<int> rs = stationRoutes(kind);
+            const int n = std::atoi(one.c_str() + (pfx ? 1 : 0)) - 1;
             if (n >= 0 && n < static_cast<int>(rs.size())) trySetExitRoute(rs[n]);
             else
                 std::fprintf(stderr,
-                             "[Main] EBANER_ROUTE=%s: this station offers %zu route(s)\n",
-                             one.c_str(), rs.size());
+                             "[Main] EBANER_ROUTE=%s: this station offers %zu %sroute(s)\n",
+                             one.c_str(), rs.size(),
+                             kind < 0 ? "" : kind ? "entry " : "exit ");
         }
     }
 
@@ -2580,22 +2632,33 @@ int main(int argc, char** argv) {
             prevMapClick = mL;
         }
 
-        // Route picker: Up/Down move, Enter sets (or cancels a set route), Esc closes. The
-        // sim keeps running underneath - this is not the Escape menu and must not pause it.
-        if (g_mapMode && !g_menuOpen && g_routePick) {
+        // Route picker: Up/Down move, Enter chooses, Esc backs out a step (in the key
+        // callback, so it works from either). The sim keeps running underneath - this is
+        // not the Escape menu and must not pause it.
+        if (g_mapMode && !g_menuOpen && g_routeStep != RoutePickStep::None) {
             auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
             const bool pU = down(GLFW_KEY_UP), pD = down(GLFW_KEY_DOWN),
                        pE = down(GLFW_KEY_ENTER);
-            const std::vector<int> rs = stationRoutes();
-            const int n = static_cast<int>(rs.size());
-            if (n > 0) {
-                if (pU && !prevPickUp) g_routePickSel = (g_routePickSel + n - 1) % n;
-                if (pD && !prevPickDown) g_routePickSel = (g_routePickSel + 1) % n;
-                g_routePickSel = std::clamp(g_routePickSel, 0, n - 1);
+            if (g_routeStep == RoutePickStep::PickKind) {
+                if (pU && !prevPickUp) g_routeKindSel = (g_routeKindSel + 1) % 2;
+                if (pD && !prevPickDown) g_routeKindSel = (g_routeKindSel + 1) % 2;
                 if (pE && !prevPickEnter) {
-                    const int ri = rs[g_routePickSel];
-                    if (mainRouteFor(ri)) cancelExitRoute(ri);
-                    else trySetExitRoute(ri);
+                    g_routeEntry = g_routeKindSel == 0; // into the station is the first line
+                    g_routeStep = RoutePickStep::PickList;
+                    g_routePickSel = 0;
+                }
+            } else {
+                const std::vector<int> rs = stationRoutes(g_routeEntry ? 1 : 0);
+                const int n = static_cast<int>(rs.size());
+                if (n > 0) {
+                    if (pU && !prevPickUp) g_routePickSel = (g_routePickSel + n - 1) % n;
+                    if (pD && !prevPickDown) g_routePickSel = (g_routePickSel + 1) % n;
+                    g_routePickSel = std::clamp(g_routePickSel, 0, n - 1);
+                    if (pE && !prevPickEnter) {
+                        const int ri = rs[g_routePickSel];
+                        if (mainRouteFor(ri)) cancelExitRoute(ri);
+                        else trySetExitRoute(ri);
+                    }
                 }
             }
             prevPickUp = pU; prevPickDown = pD; prevPickEnter = pE;
@@ -2837,7 +2900,7 @@ int main(int argc, char** argv) {
             // --- Sim: hand push + physics + camera ---
             // Up/Down hand-push the vehicle, except while the picker has those keys.
             float pushInput = 0.0f;
-            if (!g_routePick) {
+            if (g_routeStep == RoutePickStep::None) {
                 if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) pushInput += 1.0f;
                 if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) pushInput -= 1.0f;
             }

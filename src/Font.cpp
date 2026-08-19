@@ -241,21 +241,73 @@ void appendText(std::vector<TextVertex>& out, const std::string& text, float xPx
     }
 }
 
+namespace {
+// The panel's own metrics, so menuWindow and appendMenu cannot drift apart.
+struct MenuMetrics { float sc, lh, pad; };
+MenuMetrics menuMetrics(int fbH) {
+    const float sc = std::max(2.0f, static_cast<float>(fbH) / 240.0f);
+    return {sc, 12.0f * sc, 16.0f * sc};
+}
+} // namespace
+
+MenuWindow menuWindow(int itemCount, int selected, int fbH) {
+    MenuWindow w;
+    if (itemCount <= 0 || fbH <= 0) return w;
+    const MenuMetrics m = menuMetrics(fbH);
+    // What is left for item rows once the panel's padding and its title line are taken:
+    // ph = 2*pad + 1.5*lh + rows*lh has to stay inside fbH.
+    const float forRows = static_cast<float>(fbH) - 2.0f * m.pad - 1.5f * m.lh;
+    int rows = static_cast<int>(forRows / m.lh);
+    if (rows < 1) rows = 1;              // a screen too small for even one still draws it
+    if (rows >= itemCount) {             // it all fits: unwindowed, and byte-for-byte as before
+        w.count = itemCount;
+        return w;
+    }
+    // A marker line costs a row, and there is one at each end that is cut. Deciding this
+    // before the window is placed keeps the panel the same height wherever it has scrolled
+    // to - a panel that changed size as the selection moved would be far worse to read.
+    rows = std::max(1, rows - 2);
+    const int sel = std::clamp(selected, 0, itemCount - 1);
+    w.first = std::clamp(sel - rows / 2, 0, itemCount - rows);
+    w.count = rows;
+    w.moreAbove = w.first > 0;
+    w.moreBelow = w.first + rows < itemCount;
+    return w;
+}
+
 void appendMenu(std::vector<TextVertex>& out, const std::string& title,
                 const std::vector<std::string>& items, int selected, int fbW, int fbH) {
     if (fbW <= 0 || fbH <= 0) return;
-    const float sc = std::max(2.0f, static_cast<float>(fbH) / 240.0f);
+    const MenuMetrics m = menuMetrics(fbH);
+    const float sc = m.sc;
     const float charW = 8.0f * sc; // monospace cell width
-    const float lh = 12.0f * sc;   // line height
-    const float pad = 16.0f * sc;
+    const float lh = m.lh;         // line height
+    const float pad = m.pad;
+
+    const MenuWindow win = menuWindow(static_cast<int>(items.size()), selected, fbH);
+    // The markers are rows of the panel like any other, so they are built into the list
+    // that is measured and drawn rather than bolted on afterwards.
+    std::vector<std::string> rows;
+    rows.reserve(static_cast<std::size_t>(win.count) + 2);
+    if (win.moreAbove)
+        rows.push_back("... " + std::to_string(win.first) + " more above");
+    for (int i = 0; i < win.count; ++i) rows.push_back(items[win.first + i]);
+    if (win.moreBelow)
+        rows.push_back("... " +
+                       std::to_string(static_cast<int>(items.size()) - win.first - win.count) +
+                       " more below");
+    // Which drawn row carries the highlight; -1 (nothing selected) stays -1.
+    const int hiRow = selected < 0 ? -1
+                                   : std::clamp(selected, 0, static_cast<int>(items.size()) - 1) -
+                                         win.first + (win.moreAbove ? 1 : 0);
 
     // Character count, not byte count: a name like Bodø is one byte longer than it looks
     // and the panel would be sized around the wrong width.
     std::size_t maxChars = textChars(title);
-    for (const std::string& it : items) maxChars = std::max(maxChars, textChars(it) + 2);
+    for (const std::string& it : rows) maxChars = std::max(maxChars, textChars(it) + 2);
 
     const float contentW = static_cast<float>(maxChars) * charW;
-    const float contentH = 1.5f * lh + static_cast<float>(items.size()) * lh; // title + gap + items
+    const float contentH = 1.5f * lh + static_cast<float>(rows.size()) * lh; // title + gap + items
     const float pw = contentW + 2.0f * pad;
     const float ph = contentH + 2.0f * pad;
     const float px0 = 0.5f * static_cast<float>(fbW) - 0.5f * pw;
@@ -274,10 +326,14 @@ void appendMenu(std::vector<TextVertex>& out, const std::string& title,
     const float tx = px0 + pad;
     appendText(out, title, tx, py0 + pad, sc, glm::vec3(1.0f, 0.95f, 0.5f), fbW, fbH);
     float y = py0 + pad + 1.5f * lh;
-    for (int i = 0; i < static_cast<int>(items.size()); ++i) {
-        const bool hi = (i == selected);
-        appendText(out, (hi ? "> " : "  ") + items[i], tx, y, sc,
-                   hi ? glm::vec3(1.0f) : glm::vec3(0.6f, 0.6f, 0.65f), fbW, fbH);
+    for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
+        const bool marker = (i == 0 && win.moreAbove) ||
+                            (i == static_cast<int>(rows.size()) - 1 && win.moreBelow);
+        const bool hi = (i == hiRow) && !marker;
+        appendText(out, (hi ? "> " : "  ") + rows[i], tx, y, sc,
+                   marker ? glm::vec3(0.45f, 0.45f, 0.5f)
+                          : hi ? glm::vec3(1.0f) : glm::vec3(0.6f, 0.6f, 0.65f),
+                   fbW, fbH);
         y += lh;
     }
 }

@@ -451,7 +451,22 @@ authored at them yet — that is what makes it possible to go and author somethi
 next one. `EBANER_MAP=1` opens the traffic manager straight away, and `EBANER_MAP=<name>`
 opens it at a named station, which is how it is screenshotted headlessly.
 
-**Setting a route** (`R`) asks only that the road **beyond the signal** is clear. The
+**Setting a route** (`R`) asks first **which way**: into the station or out of it, with the
+count of each, and then offers that list. A worked station has both — Mo i Rana has 7 in and
+6 out — and one flat list of them was both long to work and easy to misread, since "NO MO NB
+T2" leaves the station and "NO MO INFN T2" comes into it and they sat next to each other.
+The kind stays in the title of the list, so what is being chosen is on screen while it is
+chosen. **Esc** backs out one step, then closes.
+
+The panel behind all of this can no longer overflow. Every length in it scales with the
+framebuffer, so the number of rows that fit is a constant — **15** — and not something a
+bigger screen buys more of; past that it simply grew off the top and bottom of the screen,
+taking the first and last items with it and saying nothing. A longer list is now windowed
+around the selection with a count of what is out of sight at each end. That is why the
+start-up station picker no longer needs the window it used to keep by hand for its 687
+stations, and why no picker in the traffic manager can run off the screen again.
+
+Setting a route asks only that the road **beyond the signal** is clear. The
 run-up to it — the platform road the departure starts from — is where the train being
 cleared is standing, so a train there is the ordinary case and not a reason to refuse. It
 is the same division the release makes at the other end: only a circuit beyond the signal
@@ -747,9 +762,11 @@ covers, what it holds beyond the signal and which mast it lights, which is other
 visible a line at a time through the picker.
 
 `EBANER_PANEL=1|dest|type|route` opens the station panel, optionally at a dispatch step, or
-the **R** route picker, and `EBANER_ROUTE=<n>[,<n>…]` sets the worked station's nth routes
-(as the picker lists them) at startup, in order, so a second one meets the state the first
-left — the dispatcher's UI is otherwise reachable only by keypress and could not be checked
+the **R** route picker (`route` at its first step, `entry`/`exit` straight into a list), and
+`EBANER_ROUTE=<n>[,<n>…]` sets the worked station's nth routes at startup, in order, so a
+second one meets the state the first left. A bare number is the nth of everything the station
+has, in the order `EBANER_ROUTES` prints; `e3`/`x2` index within one of the picker's two
+lists — the dispatcher's UI is otherwise reachable only by keypress and could not be checked
 at all.
 
 It is a chain, which is all a line worked by train orders needs: a station deals with the
