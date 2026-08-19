@@ -1871,6 +1871,71 @@ int main(int argc, char** argv) {
         std::filesystem::remove(path, ec);
     }
 
+    // A walk has to be able to leave the track it started on.
+    //
+    // trackJunctions writes both directions of a junction on every pass, and both are
+    // needed - at a turnout only the branch's end is ever processed, so the through
+    // track's side would go unwritten. But where two *ends* meet, both ends get processed
+    // and each direction is written twice, and a duplicate is not harmless: walkAhead
+    // gathers the ways on from a junction and reads more than one as a turnout to be
+    // resolved, finds no turnout at a plain end-to-end join, and stops dead at the
+    // boundary. Every distant signal in the dataset was blind past its own track.
+    {
+        std::puts("\nCrossing a track boundary:");
+        // Two tracks meeting end to end, and a third branching off the first - a turnout,
+        // so both shapes of junction are present.
+        std::vector<TrackPoly> polys;
+        polys.push_back({1, {{0, 0, 0}, {100, 0, 0}, {200, 0, 0}}});
+        polys.push_back({2, {{200, 0, 0}, {300, 0, 0}, {400, 0, 0}}});
+        polys.push_back({3, {{100, 0, 0}, {140, 30, 0}, {180, 60, 0}}}); // branch off 1
+        const TrackJunctions j = trackJunctions(polys);
+
+        int dupes = 0;
+        for (const auto& [id, v] : j)
+            for (std::size_t a = 0; a < v.size(); ++a)
+                for (std::size_t b = a + 1; b < v.size(); ++b)
+                    if (v[a].other == v[b].other &&
+                        std::abs(v[a].here - v[b].here) < 1e-9 &&
+                        std::abs(v[a].there - v[b].there) < 1e-9)
+                        ++dupes;
+        std::printf("  %zu track(s) with junctions, %d exact duplicate(s)\n", j.size(),
+                    dupes);
+        check(dupes == 0, "no junction is recorded twice");
+        // Both shapes are still there: the end-to-end join and the turnout.
+        bool endToEnd = false, turnout = false;
+        for (const TrackJunction& c : j.at(1)) {
+            if (c.other == 2) endToEnd = true;
+            if (c.other == 3) turnout = true;
+        }
+        check(endToEnd, "the end-to-end join is recorded");
+        check(turnout, "and so is the branch");
+        // The through track's side of the turnout is the one only the reciprocal write
+        // produces - dropping that write instead of deduping would lose it.
+        bool backFromBranch = false;
+        for (const TrackJunction& c : j.at(3))
+            if (c.other == 1) backFromBranch = true;
+        check(backFromBranch, "from both sides");
+
+        // And the walk crosses. Just the two tracks that meet end to end: with a branch
+        // in the way the walk would stop at the turnout instead, which it should - an
+        // empty switch network cannot say which leg the points are set to. What is being
+        // checked here is the join, where there is only one way on and nothing to resolve.
+        std::vector<TrackPoly> plain(polys.begin(), polys.begin() + 2);
+        const TrackJunctions jp = trackJunctions(plain);
+        const SwitchNetwork noSwitches;
+        std::vector<std::uint32_t> seen;
+        walkAhead(plain, jp, noSwitches, 1, 0.1, +1, 1000.0,
+                  [&](std::uint32_t t, double, double, int) {
+                      if (seen.empty() || seen.back() != t) seen.push_back(t);
+                      return false; // never satisfied: walk as far as it will go
+                  });
+        std::string path;
+        for (const std::uint32_t t : seen) path += " " + std::to_string(t);
+        std::printf("  walking from track 1:%s\n", path.c_str());
+        check(seen.size() >= 2 && seen[0] == 1 && seen[1] == 2,
+              "a walk carries on across an end-to-end join");
+    }
+
     // The menu panel cannot run off the screen.
     //
     // Every length in it is a multiple of fbH/240, so how many rows fit is a constant and

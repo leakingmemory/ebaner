@@ -279,6 +279,29 @@ TrackJunctions trackJunctions(const std::vector<TrackPoly>& polys) {
             }
         }
     }
+
+    // Each pass writes both directions, and both are needed: at a turnout only the branch's
+    // end is ever processed, so the through track's side of it would otherwise go unwritten.
+    // Where two *ends* meet, though, both ends get processed and each direction is written
+    // twice - and a duplicate is not harmless. Anything reading down the line gathers the
+    // ways on from a junction and treats more than one as a turnout to be resolved; a plain
+    // end-to-end join listed twice looks like a two-way choice, no turnout is found there,
+    // and the walk stops dead at a track boundary. That is why no distant signal in the
+    // dataset could see past the end of its own track.
+    for (auto& [id, v] : conns) {
+        std::sort(v.begin(), v.end(), [](const TrackJunction& a, const TrackJunction& b) {
+            if (a.other != b.other) return a.other < b.other;
+            if (a.here != b.here) return a.here < b.here;
+            return a.there < b.there;
+        });
+        v.erase(std::unique(v.begin(), v.end(),
+                            [](const TrackJunction& a, const TrackJunction& b) {
+                                return a.other == b.other &&
+                                       std::abs(a.here - b.here) < 1e-9 &&
+                                       std::abs(a.there - b.there) < 1e-9;
+                            }),
+                v.end());
+    }
     return conns;
 }
 
