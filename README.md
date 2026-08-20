@@ -111,6 +111,29 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   reservoir at idle — which also lifts it back above the low-air safety trip. It starts
   held in **emergency with the reservoir full and the engines off**; the cab's speed and
   duplex air gauges and the combined lever animate with the sim, mirrored on a HUD.
+- **Coupled sets (multiple working)** — a Class 93 runs in multiple, and the start
+  screen offers **two sets coupled** as well as one: 83.6 m over the couplers, 140 t,
+  12 axles, four car bodies, four cabs and four diesels (`src/Consist.h`). Every train
+  is a **consist**, a single set being a consist of one, so there is no separate code
+  path for the common case. A consist owns the *motion* — a coupled train has one
+  speed, and every set's pulling and braking adds into it — and nothing else: each set
+  keeps its **own air system, its own compressor, its own low-reservoir safety device,
+  its own engines and its own two cabs**. Two mechanisms run over that, and they are
+  deliberately not the same one. The **digital link** carries the driving cab's brake
+  notch and power demand to every set, which then works out its own brake-cylinder
+  pressure from its own reservoir and its own tractive effort from its own engines, so
+  two sets in different states of charge brake differently. The **emergency line** does
+  not run over the link at all: any set whose own safety device trips puts the *whole
+  train* into emergency, on its own account, whether or not anything was commanding it
+  — and the HUD names the set that did it. Only the cabs at the two **ends** of the
+  train drive; the pair at the coupler are shut down and refuse the reverser, though
+  they can still be sat in with `V`. The reverser interlock is read across the whole
+  train, so a cab in gear in each set is the interlock case and holds the brakes on.
+  Each set carries its own place on the network and crosses its own turnouts, so a
+  switch thrown under the train does to the trailing set what it would do to a train on
+  its own; the coupler is measured every step and a train the points have split says
+  so. Sets being separate objects with separate state is also what makes coupling and
+  uncoupling in the world a later addition rather than a rewrite.
   With an audio backend
   (PulseAudio or PortAudio), the brake air is **synthesized** in real time: a hiss
   whose loudness tracks the airflow — a subdued charge on apply and a prominent,
@@ -901,7 +924,7 @@ the corresponding sources (national rail register + NVDB roads + OSM enrichment)
 | `EBANER_NOCARVE`    | Skip carving railway cuttings into the terrain.               |
 | `EBANER_NOOVERLAY`  | Ignore the `overlay/` track edits (link fixes).               |
 | `EBANER_EDMODE`     | `ebaner-trackedit` only: start in this mode, by its menu name. |
-| `EBANER_VEHICLE`    | Skip the start screen and preselect a vehicle (`0` or `1`).   |
+| `EBANER_VEHICLE`    | Skip the start screen and preselect a vehicle (`0`–`5`; `5` = two Class 93 sets coupled). |
 | `EBANER_AUDIO_DUMP` | Render a scripted brake sequence to the given WAV and exit.   |
 | `EBANER_AUDIO_DUMP_ENGINE` | Render an engine start/idle/stop to the given WAV, exit. |
 | `EBANER_AUDIO_DUMP_CROSSING` | Render a crossing bell activating/falling silent, exit. |

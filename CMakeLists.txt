@@ -149,6 +149,7 @@ add_executable(ebaner
     src/main.cpp
     src/VehicleMesh.cpp
     src/Vehicle.cpp
+    src/Consist.cpp
     src/Audio.cpp)
 add_dependencies(ebaner shaders)
 target_link_libraries(ebaner PRIVATE ebaner_engine)
@@ -181,8 +182,9 @@ set(EBANER_TEST_DATASET "${CMAKE_SOURCE_DIR}/../norway-rails"
     CACHE PATH "terrainmapper export the tests run against")
 
 enable_testing()
-# Vehicle.cpp: the turnout-knock check runs a real train over a real turnout.
-add_executable(TrackEditTest tests/TrackEditTest.cpp src/Vehicle.cpp)
+# Vehicle/Consist: the turnout-knock check runs a real train over a real turnout, and
+# the consist checks couple two sets and drive them.
+add_executable(TrackEditTest tests/TrackEditTest.cpp src/Vehicle.cpp src/Consist.cpp)
 add_dependencies(TrackEditTest shaders)
 target_link_libraries(TrackEditTest PRIVATE ebaner_engine)
 target_include_directories(TrackEditTest PRIVATE src)
@@ -205,7 +207,8 @@ add_test(NAME crossing-sequence
 # is the shipped synth, not a copy of it. Needs no export.
 # Vehicle.cpp comes along because Audio::update reads the vehicle; the test drives the
 # synth through setRolling and never builds one, but the symbols have to resolve.
-add_executable(RollingNoiseTest tests/RollingNoiseTest.cpp src/Audio.cpp src/Vehicle.cpp)
+add_executable(RollingNoiseTest tests/RollingNoiseTest.cpp src/Audio.cpp src/Vehicle.cpp
+               src/Consist.cpp)
 add_dependencies(RollingNoiseTest shaders)
 target_link_libraries(RollingNoiseTest PRIVATE ebaner_engine)
 target_include_directories(RollingNoiseTest PRIVATE src)

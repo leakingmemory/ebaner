@@ -22,7 +22,7 @@
 #include <limits>
 
 namespace {
-constexpr float kG = 9.81f;         // m/s^2
+constexpr float kG = Vehicle::kGravity;
 constexpr float kGauge = 1.435f;    // standard track gauge (tipping pivot width)
 constexpr float kFrictionMu = 0.6f; // derailed ground friction ("digging in")
 constexpr float kStopSpeed = 0.1f;  // m/s below which a derailed vehicle stops
@@ -101,7 +101,7 @@ Vehicle::Vehicle(const TrackPath* path, const VehicleSpec& spec, float s,
       bogieCount_(spec.bogieCount),
       bodyStyle_(spec.body),
       name_(spec.name),
-      v_(initialSpeed),
+      physV_(initialSpeed),
       mrPres_(kMRCapacity),   // reservoir starts at capacity
       bcPres_(kBCEmergency),  // brakes start in emergency (held)
       engineCount_(spec.body == BodyClass93 ? 2 : 0) {} // one diesel per cab end
@@ -110,6 +110,18 @@ void Vehicle::attachNetwork(const std::vector<TrackPath>* paths, SwitchNetwork* 
     paths_ = paths;
     net_ = net;
     pathIdx_ = (paths_ && path_) ? static_cast<int>(path_ - paths_->data()) : -1;
+}
+
+void Vehicle::ventReservoir(float toBar) {
+    mrPres_ = std::clamp(std::min(mrPres_, toBar), 0.0f, kMRCapacity);
+}
+
+void Vehicle::placeAt(const std::vector<TrackPath>& paths, const TrackAnchor& a) {
+    if (a.pathIdx < 0 || a.pathIdx >= static_cast<int>(paths.size())) return;
+    path_ = &paths[a.pathIdx];
+    pathIdx_ = a.pathIdx;
+    s_ = a.s;
+    orient_ = a.orient;
 }
 
 bool Vehicle::consumeSwitchChanged() {
@@ -124,19 +136,20 @@ void Vehicle::derailFreeze() {
     fRight_ = e.right;
     fTangent_ = e.tangent;
     fUp_ = e.up;
-    vel_ = v_ * e.tangent;
+    vel_ = physV_ * e.tangent;
     state_ = VehicleState::Derailed;
 }
 
 void Vehicle::swapPath(int newIdx, float newS) {
     // Preserve the physical velocity vector across the join: if the new path's +s
-    // tangent opposes the old one, flip v_ and orient_ together so speed/direction and
-    // the driver's controls stay physically continuous.
+    // tangent opposes the old one, flip orient_ so the driver's controls stay
+    // physically continuous. The speed itself is held in the physical frame and so
+    // does not flip - which way the new path counts its arc-length is the orientation's
+    // business alone.
     const glm::vec3 tOld = path_->poseAt(s_).tangent;
     const glm::vec3 tNew = (*paths_)[newIdx].poseAt(newS).tangent;
     const float g = glm::dot(tOld, tNew) >= 0.0f ? 1.0f : -1.0f;
-    v_ *= g;
-    orient_ *= g;
+    orient_ *= static_cast<int>(g);
     path_ = &(*paths_)[newIdx];
     pathIdx_ = newIdx;
     s_ = newS;
@@ -270,7 +283,7 @@ const char* Vehicle::reverserName(int cab) const {
     return r > 0 ? "F" : (r < 0 ? "R" : "N");
 }
 
-int Vehicle::activeCab() const {
+int Vehicle::localActiveCab() const {
     if (bodyStyle_ != BodyClass93) return -1;
     int active = -1, count = 0;
     for (int c = 0; c < 2; ++c)
@@ -279,36 +292,11 @@ int Vehicle::activeCab() const {
 }
 
 int Vehicle::effectiveNotch() const {
-    if (safetyBrake_) return kEmergencyNotch; // low reservoir overrides everything
-    if (bodyStyle_ == BodyClass93) {
-        const int a = activeCab();
-        return a >= 0 ? brakeNotch_[a] : kEmergencyNotch; // interlock: else emergency
-    }
-    return brakeNotch_[0]; // non-cab vehicles: a single handle, no interlock
-}
-
-bool Vehicle::interlockEmergency() const {
-    return bodyStyle_ == BodyClass93 && !safetyBrake_ && activeCab() < 0;
-}
-
-int Vehicle::effectivePowerNotch() const {
-    if (safetyBrake_ || bodyStyle_ != BodyClass93) return 0;
-    const int a = activeCab();
-    return a >= 0 ? powerNotch_[a] : 0; // no power unless exactly one cab is in gear
-}
-
-float Vehicle::tractionDemand() const {
-    const int a = activeCab();
-    if (a < 0) return 0.0f;
-    // The two cabs face opposite ways (cab 0 toward -s, cab 1 toward +s, matching
-    // `so` in the cab mesh / drivercam), so a given reverser direction drives the
-    // train opposite ways from each end. Fold that into the sign here.
-    const float cabSign = (a == 0) ? -1.0f : 1.0f;
-    // orient_ keeps a cab's physical forward mapped to the right track direction after
-    // a path swap at a switch (see swapPath).
-    return orient_ * cabSign *
-           static_cast<float>(reverser_[a] * effectivePowerNotch()) /
-           static_cast<float>(kMaxPowerNotch);
+    // This set's own safety device and the train-wide emergency line both override
+    // whatever the link commanded. Either one alone is enough, which is the whole
+    // point: a set can brake the train without the link having asked it to.
+    if (safetyBrake_ || trainEmerg_) return kEmergencyNotch;
+    return cmdNotch_;
 }
 
 void Vehicle::toggleEngines() {
@@ -373,8 +361,13 @@ float Vehicle::rollingResistance(float speed) const {
     return A + B * v + C * v * v;
 }
 
+float Vehicle::dragResistance(float speed) const {
+    const float C = 0.5f * kAirDensity * kDragCd * (width_ * height_);
+    return C * speed * speed;
+}
+
 float Vehicle::speed() const {
-    return (state_ == VehicleState::OnRail) ? std::abs(v_) : glm::length(vel_);
+    return (state_ == VehicleState::OnRail) ? std::abs(physV_) : glm::length(vel_);
 }
 
 float Vehicle::supportHalf() const {
@@ -401,20 +394,19 @@ std::vector<float> Vehicle::axleOffsets() const {
     return out;
 }
 
-TrackPose Vehicle::walkPose(float bodyOffset) const {
-    const float d = static_cast<float>(orient_);
+bool Vehicle::walkTo(float bodyOffset, int& cp, float& cs, int& nose) const {
     if (!net_ || !paths_ || pathIdx_ < 0) { // no network: straight sample on path_
-        TrackPose p = path_->poseAt(s_ + d * bodyOffset);
-        p.tangent = d * p.tangent;
-        p.right = d * p.right;
-        return p;
+        cp = pathIdx_;
+        cs = s_ + static_cast<float>(orient_) * bodyOffset;
+        nose = orient_;
+        return false;
     }
+    cp = pathIdx_;
+    cs = s_;
+    nose = orient_;
 
     constexpr float kTol = 0.05f;              // "at the junction" slack (m)
     const std::vector<Turnout>& tos = net_->turnouts();
-    int cp = pathIdx_;                          // current path index
-    float cs = s_;                              // current arc-length on it
-    int nose = orient_;                         // path-s direction toward the nose
     const int walkSign = bodyOffset >= 0.0f ? 1 : -1; // +1 toward nose, -1 toward tail
     float remaining = std::abs(bodyOffset);
     int prevCross = -1;                         // don't immediately re-cross a turnout
@@ -470,7 +462,30 @@ TrackPose Vehicle::walkPose(float bodyOffset) const {
         prevCross = toTurn;
     }
 
-    TrackPose p = (*paths_)[cp].poseAt(cs);
+    return true;
+}
+
+// Where a point `bodyOffset` along the train from this set's centre lands: which path,
+// where on it, and which way round it faces there. This is how a consist puts the next
+// set down behind this one - the same walk that puts each axle on the rail it is
+// actually on, asked over a longer distance.
+bool Vehicle::anchorAtOffset(float bodyOffset, TrackAnchor& out) const {
+    int cp = -1, nose = 1;
+    float cs = 0.0f;
+    if (!walkTo(bodyOffset, cp, cs, nose) || cp < 0 || !paths_) return false;
+    const TrackPath& P = (*paths_)[cp];
+    if (cs < 0.0f || cs > P.length()) return false; // walked off the end of the track
+    out.pathIdx = cp;
+    out.s = cs;
+    out.orient = nose;
+    return true;
+}
+
+TrackPose Vehicle::walkPose(float bodyOffset) const {
+    int cp = -1, nose = 1;
+    float cs = 0.0f;
+    walkTo(bodyOffset, cp, cs, nose);
+    TrackPose p = (cp >= 0 && paths_) ? (*paths_)[cp].poseAt(cs) : path_->poseAt(cs);
     const float nf = static_cast<float>(nose); // orient tangent/right toward the nose
     p.tangent = nf * p.tangent;
     p.right = nf * p.right;
@@ -545,7 +560,7 @@ void Vehicle::updateTraction(float demandSigned, float demand, bool powering,
     tractiveEffort_ = 0.0f;
     if (shiftTimer_ > 0.0f) shiftTimer_ = std::max(0.0f, shiftTimer_ - dt);
 
-    const float sp = std::abs(v_);
+    const float sp = std::abs(physV_);
     // Engine rev/min if the converter were locked in the current gear (the geared,
     // turbine-side speed). The automatic shifts on this, not the engine speed.
     const float rpmLock = sp / kWheelRadius * kGearRatio[gear_ - 1] / kRpmToRad;
@@ -588,19 +603,23 @@ void Vehicle::updateTraction(float demandSigned, float demand, bool powering,
     const float dir = demandSigned >= 0.0f ? 1.0f : -1.0f; // track direction of travel
     if (reverse && sp > kRevSpeedCap) TE = 0.0f;       // reverse stays a shunting speed
 
-    tractiveEffort_ = dir * TE;
-    v_ += tractiveEffort_ / mass_ * dt;
+    tractiveEffort_ = dir * TE; // left for the consist to apply to the whole train
 }
 
-void Vehicle::update(float dt, float pushInput) {
-    // Traction demand (signed by the reverser). Under power the engine speed is set
-    // by the transmission (below); otherwise the engines crank to / hold idle.
-    const float demandSigned = tractionDemand();
+UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
+                                 float physicalSpeed) {
+    physV_ = physicalSpeed;
+    cmdNotch_ = std::clamp(cmd.brakeNotch, 0, kEmergencyNotch);
+    trainEmerg_ = cmd.emergency;
+
+    // The link's demand arrives in the physical frame (+ = the way the train faces);
+    // this set turns it into its own path's frame, which is what orient_ is for. Two
+    // sets whose paths disagree about which way is +s then pull the same way.
+    const float demandSigned = static_cast<float>(orient_) * cmd.demand;
     const float demand = std::abs(demandSigned);
-    const int activeC = activeCab();
-    const bool reverse = activeC >= 0 && reverser_[activeC] < 0; // reverser in R
-    const bool powering =
-        engineOn_ && demand > 0.0f && enginesRunning() && state_ == VehicleState::OnRail;
+    const bool powering = engineOn_ && cmd.powering && demand > 0.0f &&
+                          enginesRunning() && state_ == VehicleState::OnRail;
+    tractiveEffort_ = 0.0f;
     // Off the rails there are no friction surfaces doing anything; only the on-rail
     // branch below sets this, so clear it or a derailed vehicle reports the last
     // brake force it had for ever.
@@ -618,123 +637,123 @@ void Vehicle::update(float dt, float pushInput) {
                 engineRpm_[i] = std::max(rpmTarget, engineRpm_[i] - kStopRate * dt);
         }
     }
+    if (state_ != VehicleState::OnRail) return {};
 
-    if (state_ == VehicleState::OnRail) {
-        // Driving acceleration: gravity along the track plus the hand push (a force,
-        // so a = F/m). Gravity acts on v_, which is velocity in the path's +s frame, so
-        // it uses the raw path tangent: bodyFrame()'s tangent carries orient_, which after
-        // a divert flips the vehicle (orient_ = -1) would invert gravity — the vehicle
-        // speeding up uphill and slowing downhill.
-        const float aGrav = -kG * path_->poseAt(s_).tangent.z;
-        const float aPush = orient_ * pushInput * kPushForce / mass_;
-        v_ += (aGrav + aPush) * dt;
+    // Traction: a torque converter feeding a 5-speed automatic gearbox. The effort is
+    // left in tractiveEffort_ rather than applied - the train moves as one.
+    updateTraction(demandSigned, demand, powering, cmd.reverse, dt);
 
-        // Traction: a torque converter feeding a 5-speed automatic gearbox. Only the
-        // in-gear cab powers, in its reverser direction, engines running (`powering`).
-        updateTraction(demandSigned, demand, powering, reverse, dt);
+    // Low main-reservoir safety: if the reservoir falls below the trip pressure this
+    // set calls for emergency regardless of the handle, latched until the reservoir
+    // recovers above the reset pressure. It is this set's own reservoir and this set's
+    // own device: nothing about the other sets can set it or clear it.
+    if (mrPres_ < kMRSafetyTrip) safetyBrake_ = true;
+    else if (mrPres_ >= kMRSafetyReset) safetyBrake_ = false;
+    const int effNotch = effectiveNotch();
 
-        // Low main-reservoir safety: if the reservoir falls below the trip
-        // pressure the brakes go to full emergency regardless of the handle,
-        // latched until the reservoir recovers above the reset pressure.
-        if (mrPres_ < kMRSafetyTrip) safetyBrake_ = true;
-        else if (mrPres_ >= kMRSafetyReset) safetyBrake_ = false;
-        const int effNotch = effectiveNotch();
+    // Air brake: lap the brake-cylinder pressure toward the notch target, charging
+    // from (and spending) this set's own main reservoir on apply, venting on release;
+    // its own governed compressor recharges it. Two sets in different states of charge
+    // therefore brake differently, which is the point of each keeping its own air.
+    const float bcBefore = bcPres_;
+    const float tgt = targetBC(effNotch);
+    if (tgt > bcPres_) {
+        const float rate = (effNotch >= kEmergencyNotch) ? kBCEmergRate : kBCApplyRate;
+        const float reach = std::min(tgt, mrPres_); // capped by reservoir pressure
+        const float before = bcPres_;
+        bcPres_ = std::min(reach, bcPres_ + rate * dt);
+        mrPres_ -= kMRPerBC * std::max(0.0f, bcPres_ - before);
+    } else if (tgt < bcPres_) {
+        bcPres_ = std::max(tgt, bcPres_ - kBCReleaseRate * dt);
+    }
+    mrPres_ -= kMRLeak * dt;
+    // Engine-driven compressors recharge only while the engines idle, scaled by how
+    // many are running. With the engines off the reservoir just draws down. "Running"
+    // uses a threshold below the compressor load droop so the droop can't make it cut
+    // out and hunt.
+    int running = 0;
+    for (int i = 0; i < engineCount_; ++i)
+        if (engineRpm_[i] >= kIdleRpm * 0.9f) ++running;
+    if (running > 0 && compOn_)
+        mrPres_ += kCompRate * (static_cast<float>(running) / engineCount_) * dt;
+    mrPres_ = std::clamp(mrPres_, 0.0f, kMRCapacity);
+    // Governor decision for the next step, from the resulting pressure: cut out at
+    // capacity, cut in below kMRCutIn. (Deciding after the recharge+clamp is what
+    // latches it off at 8 bar; deciding before let the tiny leak keep the pressure
+    // hovering just under 8 so it never cut out.)
+    if (running > 0) {
+        if (mrPres_ >= kMRCapacity) compOn_ = false;
+        else if (mrPres_ < kMRCutIn) compOn_ = true;
+    }
+    compActive_ = (running > 0 && compOn_); // drives the sound + engine load
+    bcPres_ = std::max(0.0f, bcPres_);
+    bcRate_ = (dt > 1e-6f) ? (bcPres_ - bcBefore) / dt : 0.0f; // airflow, for sound
 
-        // Air brake: lap the brake-cylinder pressure toward the notch target,
-        // charging from (and spending) the main reservoir on apply, venting on
-        // release; a governed compressor recharges the reservoir.
-        const float bcBefore = bcPres_;
-        const float tgt = targetBC(effNotch);
-        if (tgt > bcPres_) {
-            const float rate = (effNotch >= kEmergencyNotch) ? kBCEmergRate : kBCApplyRate;
-            const float reach = std::min(tgt, mrPres_); // capped by reservoir pressure
-            const float before = bcPres_;
-            bcPres_ = std::min(reach, bcPres_ + rate * dt);
-            mrPres_ -= kMRPerBC * std::max(0.0f, bcPres_ - before);
-        } else if (tgt < bcPres_) {
-            bcPres_ = std::max(tgt, bcPres_ - kBCReleaseRate * dt);
-        }
-        mrPres_ -= kMRLeak * dt;
-        // Engine-driven compressors recharge only while the engines idle, scaled by
-        // how many are running. With the engines off the reservoir just draws down.
-        // "Running" uses a threshold below the compressor load droop so the droop
-        // can't make it cut out and hunt.
-        int running = 0;
-        for (int i = 0; i < engineCount_; ++i)
-            if (engineRpm_[i] >= kIdleRpm * 0.9f) ++running;
-        if (running > 0 && compOn_)
-            mrPres_ += kCompRate * (static_cast<float>(running) / engineCount_) * dt;
-        mrPres_ = std::clamp(mrPres_, 0.0f, kMRCapacity);
-        // Governor decision for the next step, from the resulting pressure: cut out
-        // at capacity, cut in below kMRCutIn. (Deciding after the recharge+clamp is
-        // what latches it off at 8 bar; deciding before let the tiny leak keep the
-        // pressure hovering just under 8 so it never cut out.)
-        if (running > 0) {
-            if (mrPres_ >= kMRCapacity) compOn_ = false;
-            else if (mrPres_ < kMRCutIn) compOn_ = true;
-        }
-        compActive_ = (running > 0 && compOn_); // drives the sound + engine load
-        bcPres_ = std::max(0.0f, bcPres_);
-        bcRate_ = (dt > 1e-6f) ? (bcPres_ - bcBefore) / dt : 0.0f; // airflow, for sound
+    // Friction-brake force, capped by wheel/rail adhesion on this set's own weight.
+    brakeForce_ = std::min((bcPres_ / kBCFullService) * mass_ * kFullServiceDecel,
+                           kAdhesionMu * mass_ * kG);
 
-        // Brake force (capped by wheel/rail adhesion) and Davis running resistance
-        // both oppose motion, capped so they can't reverse v_ (this also holds the
-        // vehicle at rest, up to the grade the brakes can hold).
-        const float brake = std::min((bcPres_ / kBCFullService) * mass_ * kFullServiceDecel,
-                                     kAdhesionMu * mass_ * kG);
-        brakeForce_ = brake; // what the friction surfaces are actually doing (the sound)
-        const float resistDecel = brake / mass_ + rollingResistance(v_) / mass_;
-        const float resist = std::min(resistDecel * dt, std::abs(v_));
-        v_ -= std::copysign(resist, v_);
+    UnitStep out;
+    // Back into the physical frame for the train to add up.
+    out.tractiveEffort = static_cast<float>(orient_) * tractiveEffort_;
+    out.brakeForce = brakeForce_;
+    return out;
+}
 
-        const float sBefore = s_;
-        s_ += v_ * dt;
+bool Vehicle::advance(float ds) {
+    if (state_ != VehicleState::OnRail) return false;
+    const float sBefore = s_;
+    s_ += static_cast<float>(orient_) * ds; // the physical move, in this path's frame
 
-        // The wheels crossing the points, for the sound. Before crossTurnouts, which may
-        // swap the path out from under the comparison.
-        countRailImpacts(sBefore);
+    // The wheels crossing the points, for the sound. Before crossTurnouts, which may
+    // swap the path out from under the comparison.
+    countRailImpacts(sBefore);
 
-        // Turnouts first: a divert/merge swaps the path (so the end-of-path check
-        // below sees the new one); a facing move into a broken switch derails here.
-        if (net_ && crossTurnouts(sBefore)) return;
+    // Turnouts first: a divert/merge swaps the path (so the end-of-path check below
+    // sees the new one); a facing move into a broken switch derails here.
+    if (net_ && crossTurnouts(sBefore)) return true;
 
-        // Derail when the leading or trailing axle passes an end of the track — but
-        // only at a genuine dead-end. A path end that a turnout connects to (a siding
-        // end at the switch) is a junction: the body legitimately straddles it while
-        // diverting/merging, and a reversing train is handed back to the main by
-        // crossTurnouts at the body-centre crossing, so it never truly runs off there.
-        const float L = path_->length();
-        float outerHalf = 0.0f;
-        for (float o : axleOffsets()) outerHalf = std::max(outerHalf, std::abs(o));
-        bool connFront = false, connBack = false;
-        if (net_)
-            for (const Turnout& to : net_->turnouts())
-                if (to.sidingPath == pathIdx_)
-                    (to.sSiding < 1.0f ? connFront : connBack) = true;
-        const bool offFront = s_ - outerHalf < 0.0f;
-        const bool offBack = s_ + outerHalf > L;
-        if ((offFront && !connFront) || (offBack && !connBack)) {
-            const VehicleFrame e = bodyFrame(); // frozen at exit
-            pos_ = e.pos;
-            fRight_ = e.right;
-            fTangent_ = e.tangent;
-            fUp_ = e.up;
-            vel_ = v_ * e.tangent; // carry the exit velocity
-            state_ = VehicleState::Derailed;
-        }
-    } else if (state_ == VehicleState::Derailed) {
-        // Friction opposes velocity, magnitude proportional to weight
-        // (deceleration = mu * g); brings the vehicle to rest.
-        const float speed = glm::length(vel_);
-        if (speed > 1e-5f) {
-            const float drop = std::min(kFrictionMu * kG * dt, speed);
-            vel_ -= (vel_ / speed) * drop;
-            pos_ += vel_ * dt;
-        }
-        if (glm::length(vel_) < kStopSpeed) {
-            vel_ = glm::vec3(0.0f);
-            state_ = VehicleState::Stopped;
-        }
+    // Derail when the leading or trailing axle passes an end of the track — but only
+    // at a genuine dead-end. A path end that a turnout connects to (a siding end at
+    // the switch) is a junction: the body legitimately straddles it while
+    // diverting/merging, and a reversing train is handed back to the main by
+    // crossTurnouts at the body-centre crossing, so it never truly runs off there.
+    const float L = path_->length();
+    float outerHalf = 0.0f;
+    for (float o : axleOffsets()) outerHalf = std::max(outerHalf, std::abs(o));
+    bool connFront = false, connBack = false;
+    if (net_)
+        for (const Turnout& to : net_->turnouts())
+            if (to.sidingPath == pathIdx_)
+                (to.sSiding < 1.0f ? connFront : connBack) = true;
+    const bool offFront = s_ - outerHalf < 0.0f;
+    const bool offBack = s_ + outerHalf > L;
+    if ((offFront && !connFront) || (offBack && !connBack)) {
+        const VehicleFrame e = bodyFrame(); // frozen at exit
+        pos_ = e.pos;
+        fRight_ = e.right;
+        fTangent_ = e.tangent;
+        fUp_ = e.up;
+        vel_ = physV_ * e.tangent; // carry the exit velocity
+        state_ = VehicleState::Derailed;
+        return true;
+    }
+    return false;
+}
+
+void Vehicle::stepDerailed(float dt) {
+    if (state_ != VehicleState::Derailed) return;
+    // Friction opposes velocity, magnitude proportional to weight
+    // (deceleration = mu * g); brings the vehicle to rest.
+    const float speed = glm::length(vel_);
+    if (speed > 1e-5f) {
+        const float drop = std::min(kFrictionMu * kG * dt, speed);
+        vel_ -= (vel_ / speed) * drop;
+        pos_ += vel_ * dt;
+    }
+    if (glm::length(vel_) < kStopSpeed) {
+        vel_ = glm::vec3(0.0f);
+        state_ = VehicleState::Stopped;
     }
 }
 

@@ -13,6 +13,8 @@
 
 #include "VehicleMesh.h"
 
+#include "Consist.h"
+
 #include "Vehicle.h" // Vehicle, VehicleFrame
 
 #include <algorithm>
@@ -77,10 +79,11 @@ const glm::vec3 kEngBar(0.30f, 0.78f, 0.36f);  // engine progress-bar fill (gree
 } // namespace
 } // namespace
 
-void VehicleMesh::build(const Vehicle& vehicle) {
-    vertices_.clear();
-    indices_.clear();
-
+// One set's geometry, appended to whatever is already there. Everything below is
+// asked of that set alone, which is what puts the cab noses at each set's own two ends
+// and keeps the gangway bellows inside a set: between two coupled sets there is no
+// gangway, there are two nose ends facing each other over their couplers.
+void VehicleMesh::emitUnit(const Vehicle& vehicle) {
     const glm::vec2 uv(0.0f);
     auto push = [&](const glm::vec3& p, const glm::vec3& n, const glm::vec3& c) {
         vertices_.push_back({p, n, c, uv, -1.0f});
@@ -921,6 +924,16 @@ void VehicleMesh::build(const Vehicle& vehicle) {
         }
     }
 
+}
+
+// The whole train: every set's geometry into one buffer, then the glazing sorted to
+// the back of it. The renderer holds one vehicle buffer and draws it in two runs, so
+// the split has to be over the finished train and not per set.
+void VehicleMesh::build(const Consist& consist) {
+    vertices_.clear();
+    indices_.clear();
+    for (int i = 0; i < consist.unitCount(); ++i) emitUnit(consist.unit(i));
+
     // Split the glazing out into a trailing, transparent run so it can be drawn
     // after the opaque geometry with alpha blending. Glass is the exterior window
     // band / windscreen (kBand) and the interior glazing (kGlass); its vertices are
@@ -955,13 +968,21 @@ void VehicleMesh::build(const Vehicle& vehicle) {
 
 namespace drivercam {
 
-int count(const Vehicle& v) {
-    return (v.bodyStyle() == BodyClass93 && v.bodySectionFrames().size() >= 2) ? 2 : 0;
+int count(const Consist& c) {
+    const Vehicle& v = c.lead();
+    const int perSet =
+        (v.bodyStyle() == BodyClass93 && v.bodySectionFrames().size() >= 2) ? 2 : 0;
+    return perSet * c.unitCount();
 }
 
 // Mirrors the cab geometry in emitClass93: the seat sits at base + so*0.7 on the
 // raised vestibule floor, facing the nose (so). Uses the same frame-height stack.
-bool eyePose(const Vehicle& v, int position, glm::vec3& eye, glm::vec3& forward) {
+bool eyePose(const Consist& c, int position, glm::vec3& eye, glm::vec3& forward) {
+    // Cab `position` counts along the whole train, two to a set; within its set it is
+    // the cab at that section's outer end, which is the same geometry as before.
+    if (position < 0 || position >= count(c)) return false;
+    const Vehicle& v = c.unit(position / 2);
+    position %= 2;
     const std::vector<VehicleFrame> sections = v.bodySectionFrames();
     if (v.bodyStyle() != BodyClass93 || position < 0 ||
         position >= static_cast<int>(sections.size()))

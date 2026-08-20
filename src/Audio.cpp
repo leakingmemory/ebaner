@@ -13,6 +13,8 @@
 
 #include "Audio.h"
 
+#include "Consist.h"
+
 #include "Vehicle.h"
 
 #include <algorithm>
@@ -144,10 +146,11 @@ void Audio::render(float* out, int n) {
     const float targetAmp = amp_.load(std::memory_order_relaxed);
     const float targetBright = brightness_.load(std::memory_order_relaxed);
     const float targetEnv = envGain_.load(std::memory_order_relaxed);
-    const float engRpmT[2] = {engRpm_[0].load(std::memory_order_relaxed),
-                              engRpm_[1].load(std::memory_order_relaxed)};
-    const float engGainT[2] = {engGain_[0].load(std::memory_order_relaxed),
-                               engGain_[1].load(std::memory_order_relaxed)};
+    float engRpmT[kMaxEngines] = {}, engGainT[kMaxEngines] = {};
+    for (int k = 0; k < kMaxEngines; ++k) {
+        engRpmT[k] = engRpm_[k].load(std::memory_order_relaxed);
+        engGainT[k] = engGain_[k].load(std::memory_order_relaxed);
+    }
     const float compTarget = compActive_.load(std::memory_order_relaxed) ? 1.0f : 0.0f;
     const float bellTarget = bellGain_.load(std::memory_order_relaxed);
     const bool railborne = railborne_.load(std::memory_order_relaxed);
@@ -205,12 +208,13 @@ void Audio::render(float* out, int n) {
             clickEnv_ *= 0.9990f; // ~23 ms decay
         }
 
-        // Diesel engines: a muffled idle drone per end. Firing thrum (harmonics of
-        // the ~35 Hz firing rate) + a soft per-firing knock + a noise hum, heavily
-        // low-passed for the insulated/modern character; the two ends are detuned so
-        // they beat. Continuous while running; scaled by per-engine distance.
+        // Diesel engines: a muffled idle drone per engine - two to a set, so four on
+        // a pair of coupled sets. Firing thrum (harmonics of the ~35 Hz firing rate) +
+        // a soft per-firing knock + a noise hum, heavily low-passed for the
+        // insulated/modern character; each is detuned from the last so they beat.
+        // Continuous while running; scaled by per-engine distance.
         float engine = 0.0f;
-        for (int k = 0; k < 2; ++k) {
+        for (int k = 0; k < kMaxEngines; ++k) {
             engRpmEnv_[k] += (engRpmT[k] - engRpmEnv_[k]) * 0.002f;
             engGainEnv_[k] += (engGainT[k] - engGainEnv_[k]) * 0.001f;
             const float rpm = engRpmEnv_[k];
@@ -220,7 +224,9 @@ void Audio::render(float* out, int n) {
             rng_ = rng_ * 1664525u + 1013904223u;
             const float wn = static_cast<float>(rng_ >> 8) / 8388608.0f - 1.0f;
             engHunt_[k] += -engHunt_[k] * 0.00005f + wn * 0.0016f;
-            const float firingHz = rpm / 20.0f * (k == 0 ? 1.0f : 1.007f) *
+            // Each engine is detuned a little from the last, so several of them beat
+            // against one another rather than doubling into one louder engine.
+            const float firingHz = rpm / 20.0f * (1.0f + 0.007f * static_cast<float>(k)) *
                                    (1.0f + engHunt_[k] * 0.05f); // 3/rev, detuned + hunt
             engPhase_[k] += firingHz / fs;
             if (engPhase_[k] >= 1.0f) { engPhase_[k] -= 1.0f; engKnock_[k] = 1.0f; }
@@ -264,7 +270,11 @@ void Audio::render(float* out, int n) {
             const float cn = static_cast<float>(rng_ >> 8) / 8388608.0f - 1.0f;
             const float air = cn * (0.5f + 0.5f * std::sin(2.0f * kPi * cph)); // pump-modulated
             compLp_ += (tone * 0.5f + air * 0.15f - compLp_) * 0.14f; // ~1 kHz LP (muffled)
-            comp = compLp_ * compEnv_ * std::max(engGainEnv_[0], engGainEnv_[1]);
+            {
+            float near = 0.0f;
+            for (int k = 0; k < kMaxEngines; ++k) near = std::max(near, engGainEnv_[k]);
+            comp = compLp_ * compEnv_ * near; // heard from whichever end is nearest
+        }
         }
 
         // --- Crossing warning bell ------------------------------------------------
@@ -467,8 +477,9 @@ void Audio::setRolling(const RollingSample& r) {
     impacts_.store(r.impacts, std::memory_order_relaxed);
 }
 
-void Audio::update(const Vehicle& v, float /*dt*/, float brakeGain, float engGain0,
-                   float engGain1, float rollGain) {
+void Audio::update(const Consist& c, float /*dt*/, float brakeGain,
+                   const float* engGain, int engGainCount, float rollGain) {
+    const Consist& v = c; // everything below asks the train, not a set
     const float rate = v.bcRate();
     // The release (venting to atmosphere) is the prominent sound; the filling
     // (charging the cylinders) is quieter, as in reality.
@@ -478,10 +489,16 @@ void Audio::update(const Vehicle& v, float /*dt*/, float brakeGain, float engGai
     amp_.store(amp, std::memory_order_relaxed);
     brightness_.store(rate < 0.0f ? 1.0f : 0.0f, std::memory_order_relaxed);
     envGain_.store(std::clamp(brakeGain, 0.0f, 1.0f), std::memory_order_relaxed);
-    engRpm_[0].store(v.engineRpm(0), std::memory_order_relaxed);
-    engRpm_[1].store(v.engineRpm(1), std::memory_order_relaxed);
-    engGain_[0].store(std::clamp(engGain0, 0.0f, 1.0f), std::memory_order_relaxed);
-    engGain_[1].store(std::clamp(engGain1, 0.0f, 1.0f), std::memory_order_relaxed);
+    // Every engine on the train gets its own voice, up to what the synth holds. An
+    // engine that is not there is silent rather than absent, so a set uncoupled later
+    // leaves its slots quiet instead of shifting the others along.
+    const int engines = std::min(v.engineCount(), kMaxEngines);
+    for (int k = 0; k < kMaxEngines; ++k) {
+        engRpm_[k].store(k < engines ? v.engineRpm(k) : 0.0f, std::memory_order_relaxed);
+        const float g = (engGain && k < engGainCount) ? engGain[k] : 0.0f;
+        engGain_[k].store(std::clamp(k < engines ? g : 0.0f, 0.0f, 1.0f),
+                          std::memory_order_relaxed);
+    }
     compActive_.store(v.compressorRunning(), std::memory_order_relaxed);
 
     // --- Wheel on rail ------------------------------------------------------------
@@ -494,7 +511,9 @@ void Audio::update(const Vehicle& v, float /*dt*/, float brakeGain, float engGai
     r.gain = rollGain;
     r.impacts = v.railImpacts();
     const float weight = v.mass() * kGravity;
-    r.axleLoadN = weight / static_cast<float>(std::max<std::size_t>(v.axleOffsets().size(), 1));
+    // Spread over every axle of every set: a longer train is heavier but presses no
+    // harder per wheel, which is why this is a load and not a weight.
+    r.axleLoadN = weight / static_cast<float>(std::max(v.axleCount(), 1));
 
     // Work along the rail: what the wheels are pulling or pushing through the contact
     // patch, against what the contact patch can hold. The running resistance belongs

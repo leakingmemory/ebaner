@@ -21,6 +21,7 @@
 #include <vector>
 
 class Vehicle;
+class Consist;
 
 // Shared wheelset dimensions (metres). kAxleCentreAboveBed is the height of the
 // axle centre above the rail-bed centreline (pose.pos) — rail top + wheel radius.
@@ -35,7 +36,8 @@ constexpr float kAxleCentreAboveBed = kRailTopZ + kWheelRadius;
 // + indices in scene coords, drawn by the track pipeline.
 class VehicleMesh {
 public:
-    void build(const Vehicle& vehicle);
+    // The whole train, set by set, into one buffer.
+    void build(const Consist& consist);
 
     const std::vector<TrackVertex>& vertices() const { return vertices_; }
     const std::vector<std::uint32_t>& indices() const { return indices_; }
@@ -44,16 +46,20 @@ public:
     std::uint32_t glassFirstIndex() const { return glassFirstIndex_; }
 
 private:
+    // One set's geometry, appended to the buffer.
+    void emitUnit(const Vehicle& vehicle);
+
     std::vector<TrackVertex> vertices_;
     std::vector<std::uint32_t> indices_;
     std::uint32_t glassFirstIndex_ = 0;
 };
 
-// Driver's-eye camera for a cab vehicle. `count` is the number of driver
-// positions (2 for a Class 93, one per cab; 0 for vehicles with no cab).
-// `eyePose` gives the eye point and forward direction (world space) for cab
-// `position` at the vehicle's current pose; false when unavailable.
+// Driver's-eye camera. `count` is the number of driver positions on the train (2 per
+// Class 93 set, one per cab; 0 for vehicles with no cab) - every cab can be sat in and
+// looked out of, including the shut-down ones at a coupler. `eyePose` gives the eye
+// point and forward direction (world space) for cab `position` at the train's current
+// pose; false when unavailable.
 namespace drivercam {
-int count(const Vehicle& v);
-bool eyePose(const Vehicle& v, int position, glm::vec3& eye, glm::vec3& forward);
+int count(const Consist& c);
+bool eyePose(const Consist& c, int position, glm::vec3& eye, glm::vec3& forward);
 } // namespace drivercam

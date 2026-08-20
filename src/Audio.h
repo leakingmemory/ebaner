@@ -20,6 +20,7 @@
 #include <vector>
 
 class Vehicle;
+class Consist;
 
 // Everything the wheel-on-rail voices run on: how fast, how heavily each axle presses,
 // and how hard the contact is being worked along and across the rail.
@@ -50,12 +51,17 @@ public:
     Audio& operator=(const Audio&) = delete;
 
     void init();                              // open the device (silent on failure / headless)
+    // The engines a train can be heard as separate voices. Two per Class 93 set, so
+    // two sets coupled fill it: walking the length of the train, the near engines
+    // swell and the far ones recede rather than the whole train being one sound.
+    static constexpr int kMaxEngines = 4;
     // Main thread, per sim frame. `brakeGain` attenuates the brake sound by camera
-    // distance to the bogies; `engGain0/1` do the same per engine end; `rollGain` the
+    // distance to the bogies; `engGain` does the same per engine, one entry per engine
+    // on the train (extra entries ignored, missing ones silent); `rollGain` the
     // wheel/rail noise, which comes from the same wheels but carries much further.
     // All in [0,1].
-    void update(const Vehicle& v, float dt, float brakeGain, float engGain0,
-                float engGain1, float rollGain);
+    void update(const Consist& c, float dt, float brakeGain, const float* engGain,
+                int engGainCount, float rollGain);
     // Main thread: how loudly the nearest ringing level crossing is heard, already
     // attenuated by camera distance, in [0,1]. Zero silences it.
     //
@@ -93,8 +99,8 @@ private:
     std::atomic<float> amp_{0.0f};        // target hiss amplitude [0,1]
     std::atomic<float> brightness_{0.0f}; // 0 = apply (warm), 1 = release (bright vent)
     std::atomic<float> envGain_{1.0f};    // brake distance attenuation [0,1]
-    std::atomic<float> engRpm_[2]{};      // per-engine speed (rev/min)
-    std::atomic<float> engGain_[2]{};     // per-engine distance attenuation [0,1]
+    std::atomic<float> engRpm_[kMaxEngines]{};      // per-engine speed (rev/min)
+    std::atomic<float> engGain_[kMaxEngines]{};     // per-engine distance attenuation [0,1]
     std::atomic<bool> compActive_{false}; // a compressor is pumping
     std::atomic<unsigned> valveEvents_{0};
     std::atomic<float> bellGain_{0.0f};   // nearest ringing crossing [0,1]
@@ -130,13 +136,13 @@ private:
     float clkLow_ = 0.0f, clkBand_ = 0.0f;   // click band-pass
     float clickEnv_ = 0.0f, clickPhase_ = 0.0f;
     // Per-engine diesel voice state.
-    float engPhase_[2] = {0.0f, 0.0f};       // firing phase
-    float engRpmEnv_[2] = {0.0f, 0.0f};      // smoothed rpm
-    float engGainEnv_[2] = {0.0f, 0.0f};     // smoothed distance gain
-    float engLp_[2] = {0.0f, 0.0f};          // insulation low-pass
-    float engKnock_[2] = {0.0f, 0.0f};       // per-firing knock envelope
-    float engKnLp_[2] = {0.0f, 0.0f};        // knock noise low-pass
-    float engHunt_[2] = {0.0f, 0.0f};        // slow random load/rpm hunting
+    float engPhase_[kMaxEngines] = {};       // firing phase
+    float engRpmEnv_[kMaxEngines] = {};      // smoothed rpm
+    float engGainEnv_[kMaxEngines] = {};     // smoothed distance gain
+    float engLp_[kMaxEngines] = {};          // insulation low-pass
+    float engKnock_[kMaxEngines] = {};       // per-firing knock envelope
+    float engKnLp_[kMaxEngines] = {};        // knock noise low-pass
+    float engHunt_[kMaxEngines] = {};        // slow random load/rpm hunting
     float exhaustBuf_[1024] = {};            // exhaust comb (smears knocks into a hum)
     int exhaustIdx_ = 0;
     float exhaustLp_ = 0.0f;

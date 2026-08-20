@@ -38,6 +38,7 @@
 #include "TrackPath.h"
 #include "TxpMesh.h"
 #include "TxpPositions.h"
+#include "Consist.h"
 #include "Vehicle.h"
 
 #include <cmath>
@@ -315,16 +316,16 @@ int main(int argc, char** argv) {
             const Turnout& to = net.turnouts()[found];
             // The Class 93: three bogies, six axles.
             const VehicleSpec& spec = kVehicleSpecs[4];
-            Vehicle v(&paths1[to.mainPath], spec, to.sMain - 120.0f, 20.0f);
+            Consist v(&paths1, &paths1[to.mainPath], spec, to.sMain - 120.0f, 20.0f);
             v.attachNetwork(&paths1, &net);
             v.setReverser(0, 1);      // one cab in gear, so the handle rules...
             v.setBrakeNotch(0, 0);    // ...and release the brakes it starts held with
-            const std::size_t axles = v.axleOffsets().size();
-            const float from = v.s();
+            const std::size_t axles = static_cast<std::size_t>(v.axleCount());
+            const float from = v.lead().s();
             // Long enough to carry every axle past: 120 m up to it plus the train's own
             // length, at 20 m/s, with the rolling resistance shaving a little off.
             for (int step = 0; step < 1200; ++step) v.update(1.0f / 60.0f);
-            const float ran = std::abs(v.s() - from);
+            const float ran = std::abs(v.lead().s() - from);
             std::printf("  %zu axles, ran %.0f m over turnout %d, %u knock(s)\n", axles,
                         ran, found, v.railImpacts());
             // The count only means anything if the train really did run the whole way
@@ -337,11 +338,223 @@ int main(int argc, char** argv) {
             check(v.railImpacts() == axles, "one knock per axle over one turnout",
                   double(v.railImpacts()), double(axles));
             // And none at all standing still on plain line: welded rail is silent.
-            Vehicle still(&paths1[to.mainPath], spec, 20.0f, 0.0f);
+            Consist still(&paths1, &paths1[to.mainPath], spec, 20.0f, 0.0f);
             still.attachNetwork(&paths1, &net);
             for (int step = 0; step < 120; ++step) still.update(1.0f / 60.0f);
             check(still.railImpacts() == 0, "and none standing on plain line",
                   double(still.railImpacts()), 0.0);
+
+            // And a pair of sets knocks twice as often, because the count is per wheel
+            // and there are twice the wheels - both sets cross the same points, one
+            // after the other, so the trailing set has to be crossing turnouts on its
+            // own account and not just being dragged along behind the first.
+            const VehicleSpec& pair = kVehicleSpecs[5];
+            Consist duo(&paths1, &paths1[to.mainPath], pair, to.sMain - 160.0f, 20.0f);
+            duo.attachNetwork(&paths1, &net);
+            duo.setReverser(duo.cabCount() - 1, 1);
+            duo.setBrakeNotch(duo.cabCount() - 1, 0);
+            for (int step = 0; step < 1200; ++step) duo.update(1.0f / 60.0f);
+            std::printf("  coupled: %d axles, %u knock(s)\n", duo.axleCount(),
+                        duo.railImpacts());
+            check(duo.state() == VehicleState::OnRail, "the coupled train stays on",
+                  double(static_cast<int>(duo.state())), 0.0);
+            check(duo.railImpacts() == static_cast<unsigned>(duo.axleCount()),
+                  "one knock per axle of both sets", double(duo.railImpacts()),
+                  double(duo.axleCount()));
+            check(duo.unit(1).railImpacts() == axles,
+                  "the trailing set crossed the points itself",
+                  double(duo.unit(1).railImpacts()), double(axles));
+        }
+    }
+
+    // Two sets coupled: one train, two of everything that a set does for itself.
+    //
+    // The Class 93 runs in multiple, and what has to be true of a pair of them is not
+    // just that the train is twice as long. The sets are commanded together over the
+    // digital link, but each keeps its own air, its own compressor and its own safety
+    // device - and either one of them can put the whole train into emergency on its own
+    // account. That last part is the reason the sets are separate objects at all, so it
+    // is the part worth checking hardest: an implementation that quietly merged the two
+    // air systems would pass a length check and fail here.
+    {
+        std::puts("\n  Two sets coupled:");
+        SwitchNetwork net;
+        net.build(data, paths1);
+        const TrackPath* run = nullptr;
+        for (const TrackPath& q : paths1)
+            if (!run || q.length() > run->length()) run = &q;
+        const VehicleSpec& one = kVehicleSpecs[4];   // a set
+        const VehicleSpec& two = kVehicleSpecs[5];   // two of them
+        check(two.units == 2, "the x2 entry says two sets", double(two.units), 2.0);
+        const float startS = 0.5f * run->length();
+
+        // --- what the train is made of -----------------------------------------
+        {
+            Consist c(&paths1, run, two, startS);
+            c.attachNetwork(&paths1, &net);
+            check(c.unitCount() == 2, "two sets in the consist", double(c.unitCount()),
+                  2.0);
+            check(c.axleCount() == 12, "twelve axles", double(c.axleCount()), 12.0);
+            check(c.bogieFrames().size() == 6, "six bogies",
+                  double(c.bogieFrames().size()), 6.0);
+            check(c.bodySectionFrames().size() == 4, "four car bodies",
+                  double(c.bodySectionFrames().size()), 4.0);
+            check(std::abs(c.mass() - 2.0f * one.mass) < 1.0, "twice the mass (kg)",
+                  c.mass(), 2.0 * one.mass);
+            const double want = 2.0 * one.length + Consist::kCouplerGap;
+            check(std::abs(c.length() - want) < 0.01, "length over the couplers (m)",
+                  c.length(), want);
+            // The sets sit a coupler apart, and the axle offsets run symmetrically
+            // about the middle of the *train* rather than of either set.
+            const std::vector<float> ax = c.axleOffsets();
+            double worst = 0.0;
+            for (std::size_t i = 0; i < ax.size(); ++i)
+                worst = std::max(worst,
+                                 double(std::abs(ax[i] + ax[ax.size() - 1 - i])));
+            check(worst < 1e-3, "axles symmetric about the train centre (m)", worst, 0.0);
+            check(c.engineCount() == 4, "four engines", double(c.engineCount()), 4.0);
+
+            // Where one car body ends and the next begins says which joins are
+            // articulations and which are couplers, and that is what the mesh draws
+            // from: a gangway bellows inside a set, two cab noses facing each other
+            // between them. Within a set the car bodies are one car length apart;
+            // across the coupler they are that plus the gap.
+            const std::vector<VehicleFrame> secs = c.bodySectionFrames();
+            const double car = one.length / 2.0;
+            double worstIn = 0.0, worstAcross = 0.0;
+            for (std::size_t i = 1; i < secs.size(); ++i) {
+                const double gap = glm::length(secs[i].pos - secs[i - 1].pos);
+                // i == 2 is the join between the sets; the others are inside one.
+                if (i == 2) worstAcross = std::abs(gap - (car + Consist::kCouplerGap));
+                else worstIn = std::max(worstIn, std::abs(gap - car));
+            }
+            // Loose to a few centimetres: the bodies follow the track, so a chord
+            // across a curve comes up a little short of the length along it.
+            check(worstIn < 0.05, "car bodies a car apart inside a set (m)", worstIn, 0.0);
+            check(worstAcross < 0.05, "and a coupler apart between them (m)",
+                  worstAcross, 0.0);
+
+            // What the rolling-noise synth is handed is a load per axle, not a weight,
+            // and a longer train presses no harder on any one wheel. Twice the mass
+            // over twice the axles has to come out at the same number, or a coupled
+            // train would roar louder simply for being longer.
+            Consist single(&paths1, run, one, startS);
+            single.attachNetwork(&paths1, &net);
+            const double loadOne = single.mass() / single.axleCount();
+            const double loadTwo = c.mass() / c.axleCount();
+            check(std::abs(loadOne - loadTwo) < 1.0, "same load per axle (N/g)", loadTwo,
+                  loadOne);
+
+            // Only the cabs at the ends of the train drive; the two at the coupler are
+            // shut down, and refuse the reverser rather than silently taking it.
+            check(c.cabCount() == 4, "four cabs", double(c.cabCount()), 4.0);
+            check(c.cabDrivable(0) && c.cabDrivable(3), "the outer cabs drive",
+                  double(c.cabDrivable(0) && c.cabDrivable(3)), 1.0);
+            check(!c.cabDrivable(1) && !c.cabDrivable(2),
+                  "the ones at the coupler do not",
+                  double(!c.cabDrivable(1) && !c.cabDrivable(2)), 1.0);
+            c.setReverser(1, 1);
+            check(c.reverser(1) == 0, "a shut-down cab refuses the reverser",
+                  double(c.reverser(1)), 0.0);
+        }
+
+        // --- the digital link: one handle, both sets ----------------------------
+        {
+            Consist c(&paths1, run, two, startS);
+            c.attachNetwork(&paths1, &net);
+            c.setReverser(3, 1);
+            c.setBrakeNotch(3, 0);                       // release
+            for (int i = 0; i < 600; ++i) c.update(1.0f / 60.0f);
+            check(c.unit(0).bcPressure() < 0.01f && c.unit(1).bcPressure() < 0.01f,
+                  "released, both sets let go", c.unit(1).bcPressure(), 0.0);
+            c.setBrakeNotch(3, 3);                       // B3 from the one live cab
+            for (int i = 0; i < 600; ++i) c.update(1.0f / 60.0f);
+            const float b0 = c.unit(0).bcPressure(), b1 = c.unit(1).bcPressure();
+            check(b1 > 1.0f, "B3 from one cab applies the far set's brakes too", b1, 2.55);
+            check(std::abs(b0 - b1) < 1e-4, "and both cylinders reach the same pressure",
+                  std::abs(b0 - b1), 0.0);
+
+            // Twice the brakes, because there are twice the shoes on twice the weight.
+            Consist solo(&paths1, run, one, startS);
+            solo.attachNetwork(&paths1, &net);
+            solo.setReverser(1, 1);
+            solo.setBrakeNotch(1, 0);
+            for (int i = 0; i < 600; ++i) solo.update(1.0f / 60.0f);
+            solo.setBrakeNotch(1, 3);
+            for (int i = 0; i < 600; ++i) solo.update(1.0f / 60.0f);
+            const double ratio = solo.brakeForce() > 1.0
+                                     ? c.brakeForce() / solo.brakeForce() : 0.0;
+            check(std::abs(ratio - 2.0) < 0.02, "and twice the brake force", ratio, 2.0);
+        }
+
+        // --- either set can brake the whole train, on its own ---------------------
+        //
+        // The trailing set's reservoir is run down while the live cab sits in release.
+        // Nothing is commanding a brake application; the set has to make one happen by
+        // itself, and it has to reach the whole train and not just its own wheels.
+        for (int culprit = 0; culprit < 2; ++culprit) {
+            Consist c(&paths1, run, two, startS);
+            c.attachNetwork(&paths1, &net);
+            c.setReverser(3, 1);
+            c.setBrakeNotch(3, 0);
+            for (int i = 0; i < 900; ++i) c.update(1.0f / 60.0f); // settle, released
+            check(!c.safetyBrakeActive(), "nothing tripped to begin with",
+                  double(c.safetyBrakeActive()), 0.0);
+            // Bleed one set's main reservoir below its trip pressure.
+            c.unit(culprit).ventReservoir(5.0f); // low, not empty: it can still brake
+            for (int i = 0; i < 300; ++i) c.update(1.0f / 60.0f);
+            char what[64];
+            std::snprintf(what, sizeof(what), "set %d alone puts the train in emergency",
+                          culprit + 1);
+            check(c.emergencyLine(), what, double(c.emergencyLine()), 1.0);
+            check(c.trippedUnit() == culprit, "and the cab is told which set it was",
+                  double(c.trippedUnit()), double(culprit));
+            const int other = 1 - culprit;
+            check(c.unit(other).bcPressure() > 2.0f,
+                  "the other set's brakes go on as well", c.unit(other).bcPressure(), 3.8);
+            check(c.effectiveNotch() == Vehicle::kEmergencyNotch,
+                  "with the handle still sitting in release",
+                  double(c.effectiveNotch()), double(Vehicle::kEmergencyNotch));
+            check(c.brakeNotch(3) == 0, "(the handle really is in release)",
+                  double(c.brakeNotch(3)), 0.0);
+        }
+
+        // --- the sets are genuinely independent ---------------------------------
+        //
+        // One set's engines run and the other's do not. The running set's compressor
+        // must keep its own reservoir up and do nothing whatever for the other, whose
+        // air just leaks away. If the two air systems had been merged into one this is
+        // the check that would catch it.
+        {
+            Consist c(&paths1, run, two, startS);
+            c.attachNetwork(&paths1, &net);
+            c.setReverser(3, 1);
+            c.setBrakeNotch(3, 0);
+            c.unit(0).toggleEngines();                   // set 1's engines only
+            c.unit(0).ventReservoir(6.0f);
+            c.unit(1).ventReservoir(6.0f);
+            for (int i = 0; i < 3600; ++i) c.update(1.0f / 60.0f);
+            const float m0 = c.unit(0).mrPressure(), m1 = c.unit(1).mrPressure();
+            std::printf("  after a minute: set 1 MR %.2f bar, set 2 MR %.2f bar\n", m0, m1);
+            check(m0 > 6.5f, "the running set pumps its own reservoir up", m0, 8.0);
+            check(m1 < 6.0f, "and does nothing at all for the other set's", m1, 6.0);
+        }
+
+        // --- one cab in each set is still the interlock -------------------------
+        {
+            Consist c(&paths1, run, two, startS);
+            c.attachNetwork(&paths1, &net);
+            c.setReverser(0, 1);
+            c.setReverser(3, 1);                 // both ends of the train in gear
+            check(c.activeCab() < 0, "a cab in gear at each end is no cab in gear",
+                  double(c.activeCab()), -1.0);
+            check(c.interlockEmergency(), "which holds the train in emergency",
+                  double(c.interlockEmergency()), 1.0);
+            c.setReverser(0, 0);
+            check(c.activeCab() == 3, "and letting one go hands the train to the other",
+                  double(c.activeCab()), 3.0);
+            check(!c.interlockEmergency(), "with the interlock released",
+                  double(c.interlockEmergency()), 0.0);
         }
     }
 

@@ -47,6 +47,7 @@
 #include "TrackPath.h"
 #include "TunnelMesh.h"
 #include "Audio.h"
+#include "Consist.h"
 #include "Vehicle.h"
 #include "VehicleMesh.h"
 #include "VulkanRenderer.h"
@@ -76,7 +77,8 @@ double g_lastX = 0.0, g_lastY = 0.0;
 bool g_firstMouse = true;
 bool g_mouseCaptured = true;
 bool g_chase = false; // chase-cam mode (ride the rail vehicle)
-int g_driverPos = -1; // driver camera: -1 off, else cab index (0 front, 1 rear)
+int g_driverPos = -1; // driver camera: -1 off, else cab index along the whole train
+int g_cabCount = 2;   // how many cabs there are to cycle through (set on spawn)
 float g_driverYaw = 0.0f, g_driverPitch = 0.0f; // look offsets relative to the train
 constexpr float kLookSens = 0.0022f; // radians per pixel (matches Camera)
 Audio* g_audio = nullptr; // for the M mute toggle in the key callback
@@ -172,8 +174,11 @@ void keyCallback(GLFWwindow* win, int key, int, int action, int) {
     // C toggles the chase camera (ride the rail vehicle); leaves the driver view.
     if (key == GLFW_KEY_C && action == GLFW_PRESS) { g_chase = !g_chase; g_driverPos = -1; }
     // V cycles the driver camera through the cab positions, then back to free-fly.
+    // Every cab of every set, including the shut-down ones at a coupler: they cannot
+    // drive, but they can be sat in and looked out of.
     if (key == GLFW_KEY_V && action == GLFW_PRESS) {
-        g_driverPos = (g_driverPos + 2) % 3 - 1; // -1 -> 0 -> 1 -> -1
+        const int n = std::max(1, g_cabCount);
+        g_driverPos = (g_driverPos + 2) % (n + 1) - 1; // -1 -> 0 .. n-1 -> -1
         g_driverYaw = g_driverPitch = 0.0f;      // face forward on entering / switching
         if (g_driverPos >= 0) g_chase = false;
     }
@@ -385,7 +390,7 @@ int main(int argc, char** argv) {
     }
 
     // The vehicle is chosen on the start screen; created (attached) on confirm.
-    std::optional<Vehicle> vehicle;
+    std::optional<Consist> vehicle; // the train: one set, or several coupled
     VehicleMesh vmesh;
     Audio audio;
     g_audio = &audio; // init() is deferred until just before the render loop
@@ -503,13 +508,16 @@ int main(int argc, char** argv) {
         // (bogieSpacing + wheelbase)/2 from the body centre. Nudge the spawn in
         // from the ends (long carriages otherwise straddle the buffer-stop end).
         const float outerHalf =
-            0.5f * (sp.bogieSpacing + sp.wheelbase);
+            0.5f * (sp.bogieSpacing + sp.wheelbase) +
+            static_cast<float>(std::max(0, sp.units - 1)) *
+                0.5f * (sp.length + Consist::kCouplerGap);
         float startS = vs;
         const float L = vpath->length(), margin = outerHalf + 1.0f;
         if (L > 2.0f * margin) startS = std::clamp(vs, margin, L - margin);
-        vehicle.emplace(vpath, sp, startS);
+        vehicle.emplace(&paths, vpath, sp, startS);
         vehicle->attachNetwork(&paths, &switchNet); // divert at switches
         vmesh.build(*vehicle);
+        g_cabCount = drivercam::count(*vehicle);
         renderer.attachVehicle(vmesh.vertices(), vmesh.indices(),
                                vmesh.glassFirstIndex());
 
@@ -522,6 +530,11 @@ int main(int argc, char** argv) {
             if (std::abs(p.curvature) > kMax) { kMax = std::abs(p.curvature); cantAtMax = p.cant; }
         }
         const glm::vec3 I = vehicle->inertia();
+        if (vehicle->unitCount() > 1)
+            std::printf("[Vehicle] %d sets coupled: %.1f m over the couplers, %d axles, "
+                        "%d cabs (%d drive), %d engines\n",
+                        vehicle->unitCount(), vehicle->length(), vehicle->axleCount(),
+                        vehicle->cabCount(), 2, vehicle->engineCount());
         std::printf("[Vehicle] %s: mass %.0f kg, dims LxWxH = %.2fx%.2fx%.2f m, "
                     "wheelbase %.2f m; inertia (roll,pitch,yaw) = (%.0f,%.0f,%.0f) "
                     "kg*m^2; CoM %.2f m; Davis %.0f/%.0f/%.0f N @0/10/30 m/s\n",
@@ -1481,7 +1494,7 @@ int main(int argc, char** argv) {
     // The map-mode HUD: title, colour legend, and controls. When a vehicle is given
     // (the sim runs live under the map) its speed is shown so the motion is visible.
     auto appendMapHud = [&](std::vector<TextVertex>& tv, int fbw, int fbh,
-                            const Vehicle* veh) {
+                            const Consist* veh) {
         const float sc = std::max(2.0f, static_cast<float>(fbh) / 240.0f);
         const float x = 40.0f, lh = 12.0f * sc;
         float y = 40.0f;
@@ -1615,8 +1628,8 @@ int main(int argc, char** argv) {
                 g_mapPan = glm::clamp(tmStations[i].at, mapMin, mapMax) - mapCenter;
             }
     }
-    bool prevUp = false, prevDown = false, prevK1 = false, prevK2 = false,
-         prevK3 = false, prevK4 = false, prevK5 = false, prevEnter = false;
+    bool prevUp = false, prevDown = false, prevEnter = false;
+    bool prevNum[9] = {}; // one per vehicle-select number key
     bool prevBrkDown = false, prevBrkUp = false, prevBrkEmerg = false;
     bool prevSafety = false, prevEngine = false;
     bool prevRevF = false, prevRevN = false, prevRevR = false;
@@ -2915,21 +2928,19 @@ int main(int argc, char** argv) {
             // --- Start screen: pick a vehicle ---
             auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
             const bool kUp = down(GLFW_KEY_UP), kDn = down(GLFW_KEY_DOWN);
-            const bool k1 = down(GLFW_KEY_1), k2 = down(GLFW_KEY_2),
-                       k3 = down(GLFW_KEY_3), k4 = down(GLFW_KEY_4),
-                       k5 = down(GLFW_KEY_5);
             const bool kEnt = down(GLFW_KEY_ENTER);
             if (kUp && !prevUp)
                 menuIndex = (menuIndex + kNumVehicleSpecs - 1) % kNumVehicleSpecs;
             if (kDn && !prevDown) menuIndex = (menuIndex + 1) % kNumVehicleSpecs;
-            if (k1 && !prevK1) menuIndex = 0;
-            if (k2 && !prevK2 && kNumVehicleSpecs > 1) menuIndex = 1;
-            if (k3 && !prevK3 && kNumVehicleSpecs > 2) menuIndex = 2;
-            if (k4 && !prevK4 && kNumVehicleSpecs > 3) menuIndex = 3;
-            if (k5 && !prevK5 && kNumVehicleSpecs > 4) menuIndex = 4;
+            // A number key per vehicle, counted off the list rather than written out
+            // one at a time, so the keys follow the menu when it grows.
+            for (int i = 0; i < kNumVehicleSpecs && i < 9; ++i) {
+                const bool k = down(GLFW_KEY_1 + i);
+                if (k && !prevNum[i]) menuIndex = i;
+                prevNum[i] = k;
+            }
             const bool confirm = kEnt && !prevEnter;
-            prevUp = kUp; prevDown = kDn; prevK1 = k1; prevK2 = k2; prevK3 = k3;
-            prevK4 = k4; prevK5 = k5; prevEnter = kEnt;
+            prevUp = kUp; prevDown = kDn; prevEnter = kEnt;
 
             if (confirm) {
                 spawnVehicle(menuIndex);
@@ -2963,7 +2974,11 @@ int main(int argc, char** argv) {
                                hi ? glm::vec3(1.0f) : glm::vec3(0.6f, 0.6f, 0.65f),
                                fbw, fbh);
                 }
-                appendText(tv, "UP/DOWN OR 1-5 TO CHOOSE, ENTER TO START", x,
+                char pick[64];
+                std::snprintf(pick, sizeof(pick),
+                              "UP/DOWN OR 1-%d TO CHOOSE, ENTER TO START",
+                              std::min(kNumVehicleSpecs, 9));
+                appendText(tv, pick, x,
                            40.0f + (kNumVehicleSpecs + 3) * lh, sc * 0.75f,
                            glm::vec3(0.7f, 0.8f, 0.9f), fbw, fbh);
                 renderer.setOverlayText(tv);
@@ -3077,9 +3092,13 @@ int main(int argc, char** argv) {
                                         glm::clamp((160.0f - d) / 140.0f, 0.0f, 1.0f));
                 }
             }
-            float engGain[2] = {0.0f, 0.0f};
+            // One gain per engine, from the car body that engine sits in - the sets
+            // are laid out along the train, so on a coupled pair the near engines swell
+            // and the far ones recede as you walk the length of it.
+            float engGain[Audio::kMaxEngines] = {};
             const std::vector<VehicleFrame> secs = vehicle->bodySectionFrames();
-            for (int k = 0; k < 2 && k < static_cast<int>(secs.size()); ++k)
+            for (int k = 0; k < Audio::kMaxEngines && k < static_cast<int>(secs.size());
+                 ++k)
                 engGain[k] = glm::clamp((50.0f - glm::distance(camPos, secs[k].pos)) / 38.0f,
                                         0.0f, 1.0f);
             // The crossing bell: whichever ringing crossing is loudest from here. A bell
@@ -3100,7 +3119,8 @@ int main(int argc, char** argv) {
                                                0.0f, 1.0f));
             }
             audio.setCrossingBell(bellGain);
-            audio.update(*vehicle, simDt, distGain, engGain[0], engGain[1], rollGain);
+            audio.update(*vehicle, simDt, distGain, engGain, Audio::kMaxEngines,
+                         rollGain);
             vmesh.build(*vehicle);
             renderer.updateVehicleVertices(vmesh.vertices());
 
@@ -3160,12 +3180,29 @@ int main(int argc, char** argv) {
                               vehicle->speed() * 3.6f, vehicle->speed());
                 appendText(tv, buf, x, y, sc, glm::vec3(1.0f, 0.95f, 0.6f), fbw, fbh);
                 y += lh;
+                // The driver reads his own set's gauges; a coupled train lists every
+                // set's, because the whole point of them being separate is that they
+                // can differ - and a set low on air is a thing to see coming.
                 std::snprintf(buf, sizeof(buf), "MR %.1f bar   BC %.1f bar",
-                              vehicle->mrPressure(), vehicle->bcPressure());
+                              vehicle->mrPressure(cab), vehicle->bcPressure(cab));
                 appendText(tv, buf, x, y, sc, glm::vec3(0.8f, 0.9f, 1.0f), fbw, fbh);
                 y += lh;
-                std::snprintf(buf, sizeof(buf), "REV %s (cab %d)   F / N / R",
-                              vehicle->reverserName(cab), cab);
+                if (vehicle->unitCount() > 1) {
+                    std::string per;
+                    for (int u = 0; u < vehicle->unitCount(); ++u) {
+                        char one[48];
+                        std::snprintf(one, sizeof(one), "%sSET %d %.1f/%.1f",
+                                      u ? "   " : "", u + 1, vehicle->unit(u).mrPressure(),
+                                      vehicle->unit(u).bcPressure());
+                        per += one;
+                    }
+                    appendText(tv, per, x, y, sc, glm::vec3(0.7f, 0.8f, 0.95f), fbw, fbh);
+                    y += lh;
+                }
+                std::snprintf(buf, sizeof(buf), "REV %s (cab %d)   %s",
+                              vehicle->reverserName(cab), cab,
+                              vehicle->cabDrivable(cab) ? "F / N / R"
+                                                        : "SHUT DOWN (coupled)");
                 appendText(tv, buf, x, y, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
                 y += lh;
                 std::snprintf(buf, sizeof(buf), "HANDLE %s   , power / brake . / Space",
@@ -3181,8 +3218,16 @@ int main(int argc, char** argv) {
                     y += lh;
                 }
                 if (vehicle->safetyBrakeActive()) {
-                    appendText(tv, "!! LOW RESERVOIR - AUTO EMERGENCY !!", x, y,
-                               sc, glm::vec3(1.0f, 0.35f, 0.3f), fbw, fbh);
+                    // Which set called for it: on a coupled train the driver's own
+                    // gauges can be perfectly healthy while the other set stops him.
+                    if (vehicle->unitCount() > 1)
+                        std::snprintf(buf, sizeof(buf),
+                                      "!! SET %d LOW RESERVOIR - AUTO EMERGENCY !!",
+                                      vehicle->trippedUnit() + 1);
+                    else
+                        std::snprintf(buf, sizeof(buf),
+                                      "!! LOW RESERVOIR - AUTO EMERGENCY !!");
+                    appendText(tv, buf, x, y, sc, glm::vec3(1.0f, 0.35f, 0.3f), fbw, fbh);
                     y += lh;
                 }
                 if (vehicle->engineCount() > 0) {

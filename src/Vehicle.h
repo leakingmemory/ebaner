@@ -42,17 +42,22 @@ struct VehicleSpec {
     float bogieSpacing; // m end-bogie-to-end-bogie distance (0 = <2 bogies)
     int   bogieCount;   // 0 bare axle, 1 bogie, 2 end bogies, 3 end + middle
     int   body;         // VehicleBodyStyle
+    int   units;        // sets coupled into one train (1 = a single set)
 };
 
 // The vehicles offered on the start screen.
 inline constexpr VehicleSpec kVehicleSpecs[] = {
-    {"Single-axle wheelset", 1300.0f, 0.20f, 2.20f, 0.92f, 0.00f, 0.00f, 0, BodyUnderframe},
-    {"Dual-axle bogie", 4000.0f, 2.60f, 2.50f, 1.05f, 1.80f, 0.00f, 1, BodyUnderframe},
-    {"Carriage (two bogies)", 34000.0f, 25.0f, 3.00f, 1.30f, 2.50f, 18.00f, 2, BodyUnderframe},
-    {"Articulated (3 bogies)", 45000.0f, 30.0f, 2.70f, 1.30f, 2.50f, 22.00f, 3, BodyUnderframe},
-    {"NSB Class 93 (Talent)", 70000.0f, 41.5f, 2.75f, 3.80f, 2.50f, 30.00f, 3, BodyClass93},
+    {"Single-axle wheelset", 1300.0f, 0.20f, 2.20f, 0.92f, 0.00f, 0.00f, 0, BodyUnderframe, 1},
+    {"Dual-axle bogie", 4000.0f, 2.60f, 2.50f, 1.05f, 1.80f, 0.00f, 1, BodyUnderframe, 1},
+    {"Carriage (two bogies)", 34000.0f, 25.0f, 3.00f, 1.30f, 2.50f, 18.00f, 2, BodyUnderframe, 1},
+    {"Articulated (3 bogies)", 45000.0f, 30.0f, 2.70f, 1.30f, 2.50f, 22.00f, 3, BodyUnderframe, 1},
+    {"NSB Class 93 (Talent)", 70000.0f, 41.5f, 2.75f, 3.80f, 2.50f, 30.00f, 3, BodyClass93, 1},
+    // Two sets coupled: the figures stay per set and `units` says how many. A Class 93
+    // runs in multiple in service, and the two sets keep their own air, engines and
+    // safety systems - see Consist.
+    {"NSB Class 93 x2 (Talent)", 70000.0f, 41.5f, 2.75f, 3.80f, 2.50f, 30.00f, 3, BodyClass93, 2},
 };
-inline constexpr int kNumVehicleSpecs = 5;
+inline constexpr int kNumVehicleSpecs = 6;
 
 // Gravity on the vehicle resolved at its current pose. The along-track part is
 // "free" (it drives acceleration up/down grades); the remainder is reacted by the
@@ -88,8 +93,35 @@ enum class VehicleState { OnRail, Derailed, Stopped };
 // Per-engine state, derived from its rpm (cranking up / at idle / spinning down).
 enum class EngineState { Off, Starting, Running, Stopping };
 
+// What the digital link carries from the driving cab to every set of the train, and
+// what a set hands back for the train's motion to be worked out from.
+//
+// `emergency` is deliberately not part of the commanded notch: it is the train-wide
+// emergency line, which runs independently of the link so that a set can brake the whole
+// train on its own account even when nothing is commanding it. See Consist.
+struct LinkCommand {
+    int brakeNotch = 5;       // commanded by the active cab (Vehicle::kEmergencyNotch)
+    float demand = 0.0f;      // signed traction demand [-1,1], + = train forward
+    bool reverse = false;     // the reverser is in R (holds it to a shunting speed)
+    bool powering = false;    // the cab is asking for power at all
+    bool emergency = true;    // the train-wide emergency line is up
+};
+
+// One set's contribution to the whole train's motion this step, in the physical frame
+// (+ = the direction the train faces), so sets running on paths that disagree about
+// which way is +s still add up.
+struct UnitStep {
+    float tractiveEffort = 0.0f; // N, signed
+    float brakeForce = 0.0f;     // N, >= 0
+};
+
 // A rail vehicle (1 or 2 axles) riding a TrackPath at arc-length s (body centre),
 // with a 1-DOF along-track physics model.
+//
+// A vehicle is one *set*: its own air system, its own compressor and low-reservoir
+// safety device, its own engines and its own two cabs. It does not integrate its own
+// motion - a Consist owns the speed of the whole train and steps every set with it,
+// which is what lets several sets be coupled and still each brake on their own account.
 class Vehicle {
 public:
     Vehicle(const TrackPath* path, const VehicleSpec& spec, float s,
@@ -102,11 +134,31 @@ public:
     // can rebuild the switch-stand mesh.
     bool consumeSwitchChanged();
 
-    // Advance the simulation. `pushInput` in [-1, +1] is a hand push (physically
-    // forward = +1), applied only while on the rails. Gravity also accelerates it;
-    // light rolling resistance coasts it to a stop; running off a path end (or a
-    // facing move into a broken switch) derails it (then ground friction stops it).
-    void update(float dt, float pushInput = 0.0f);
+    // Step this set's own subsystems - engines, compressor, air brake, low-reservoir
+    // safety, transmission - at the train's current speed, and report what it is
+    // contributing to the train's motion. Does not move the set: see advance().
+    UnitStep stepSubsystems(float dt, const LinkCommand& cmd, float physicalSpeed);
+    // Move this set along its own path by a physical distance (+ = train forward),
+    // crossing its own turnouts on the way. True if it derailed.
+    bool advance(float ds);
+    // Off the rails: ground friction brings the free body to rest.
+    void stepDerailed(float dt);
+    // This set is calling for emergency on its own account (its low-reservoir safety
+    // has tripped). The train-wide emergency line is the OR of this over every set.
+    bool safetyBrakeDemand() const { return safetyBrake_; }
+    // The one cab of *this set* that is in gear, or -1 if neither or both are. The
+    // train-wide rule (exactly one cab in gear over the whole train) is the consist's.
+    int localActiveCab() const;
+    // The physical speed the consist last stepped this set with (m/s, unsigned).
+    void setPhysicalSpeed(float v) { physV_ = v; }
+    // Where a set sits on the network: which path, where along it, and which way round.
+    struct TrackAnchor { int pathIdx = -1; float s = 0.0f; int orient = 1; };
+    // Follow the track `bodyOffset` metres from this set's centre (+ = toward its nose)
+    // and report where that lands, crossing turnouts by rail geometry on the way. How a
+    // consist places the set coupled behind this one. False if it runs off the end.
+    bool anchorAtOffset(float bodyOffset, TrackAnchor& out) const;
+    // Put this set down at an anchor (used when the consist is first laid out).
+    void placeAt(const std::vector<TrackPath>& paths, const TrackAnchor& a);
 
     // Rigid body frame for the camera / vehicle frame, in the current state.
     VehicleFrame frame() const { return bodyFrame(); }
@@ -147,11 +199,18 @@ public:
     // flange/track (B*v, proportional to weight), aerodynamic drag (C*v^2, from
     // the frontal area). Used as the on-rail rolling resistance.
     float rollingResistance(float speed) const;
+    // Just the aerodynamic term of the above (C*v^2). A train of several sets pushes
+    // the air once, not once per set, so a consist has to be able to take this out.
+    float dragResistance(float speed) const;
 
     // Air brake (notched direct brake). The handle sits at notch 0 (release),
     // 1..4 (graduated service) or kEmergencyNotch (emergency); each commands a
     // brake-cylinder pressure the local air system laps onto from the main
     // reservoir. Pressures are in bar.
+    // One gravity for the whole program. It lives here because this is where the
+    // forces are worked out, and a second copy of it somewhere else is a slow drift
+    // waiting to happen rather than a rounding difference.
+    static constexpr float kGravity = 9.81f; // m/s^2
     static constexpr int kEmergencyNotch = 5;
     static constexpr int kMaxPowerNotch = 5; // combined lever: N .. P1..P5 power side
     // Per-cab brake handle (0 release .. kEmergencyNotch emergency), power notch
@@ -174,12 +233,13 @@ public:
     void setReverser(int cab, int dir);
     int reverser(int cab) const;
     const char* reverserName(int cab) const;
-    // Brake actually applied, after the reverser interlock and low-air safety:
-    // emergency unless exactly one cab is out of Neutral (its handle then rules).
-    // Non-cab vehicles just use handle 0.
+    // Brake actually applied by *this set*: the notch the link commanded, unless this
+    // set's own safety device has tripped or the train-wide emergency line is up, in
+    // which case emergency regardless of what was commanded.
     int effectiveNotch() const;
     const char* effectiveBrakeName() const;
-    bool interlockEmergency() const; // the reverser interlock is forcing emergency
+    // Something other than the commanded notch is holding this set in emergency.
+    bool forcedEmergency() const { return safetyBrake_ || trainEmerg_; }
     // The single cab currently in gear (reverser out of Neutral), or -1 if none
     // or both are — the cab whose power/brake lever is live (see effectiveNotch).
     int activeCab() const;
@@ -205,6 +265,11 @@ public:
     // Rate of brake-cylinder pressure change (bar/s): + charging (apply), −
     // venting (release), 0 when equalized/released. Drives the air-brake sound.
     float bcRate() const { return bcRate_; }
+    // Let air out of this set's main reservoir, down to the given pressure. A set can
+    // lose its air on its own account - a leak, a compressor that has stopped - and
+    // that is the fault its low-reservoir safety device exists to catch, so it has to
+    // be something that can happen to one set and not the other.
+    void ventReservoir(float toBar);
     // True when the low-reservoir safety has forced an automatic emergency
     // application (overriding the handle) because the reservoir fell too low.
     bool safetyBrakeActive() const { return safetyBrake_; }
@@ -221,6 +286,13 @@ public:
     bool compressorRunning() const { return compActive_; } // charging the reservoir
 
     float s() const { return s_; }
+    int pathIdx() const { return pathIdx_; }
+    // Which way this set faces along its path's +s (+1 or -1).
+    int orientation() const { return orient_; }
+    // Slide along the current path without walking turnouts: the small correction a
+    // consist makes to take up the slack a turnout crossing leaves in a coupler.
+    void nudge(float ds) { s_ += ds; }
+    bool enginesOn() const { return engineOn_; }
     float mass() const { return mass_; }
     float length() const { return length_; }
     float width() const { return width_; }
@@ -233,9 +305,10 @@ public:
     const TrackPath* path() const { return path_; }
 
 private:
-    // Advance the transmission (auto gearbox + torque converter) and apply the
-    // resulting tractive effort to v_. `demandSigned` is the demand in [-1,1] signed
-    // by track direction (cab orientation folded in), `demand` its magnitude,
+    // Advance the transmission (auto gearbox + torque converter) and work out the
+    // resulting tractive effort, left in tractiveEffort_ for the caller to apply to
+    // the whole train. `demandSigned` is the demand in [-1,1] signed by track
+    // direction (this set's orientation folded in), `demand` its magnitude,
     // `powering` whether traction is live, `reverse` whether the reverser is in R.
     void updateTraction(float demandSigned, float demand, bool powering, bool reverse,
                         float dt);
@@ -260,6 +333,9 @@ private:
     // train bends through the turnout. Falls back to a straight path sample if there
     // is no switch network.
     TrackPose walkPose(float bodyOffset) const;
+    // The walk itself: leaves the path, arc-length and nose direction it ends on.
+    // False when there is no switch network to walk (the caller gets a straight sample).
+    bool walkTo(float bodyOffset, int& cp, float& cs, int& nose) const;
 
     // Resolve turnout crossings between sBefore and s_ on the current path (divert /
     // merge / trailing-break / facing-broken derail). Returns true if it derailed.
@@ -282,7 +358,12 @@ private:
     const char* name_;
 
     VehicleState state_ = VehicleState::OnRail;
-    float v_ = 0.0f;                    // on-rail scalar speed (+ = increasing s)
+    // The train's speed, written by the consist each step. A set does not integrate
+    // its own motion - the whole train has one speed - but the transmission, the
+    // running resistance and the derail exit velocity all need to know it.
+    float physV_ = 0.0f;                // m/s, + = the direction the train faces
+    int cmdNotch_ = kEmergencyNotch;    // what the digital link last commanded
+    bool trainEmerg_ = true;            // the train-wide emergency line, last step
     // Air-brake state (bar). Starts held: reservoir full, emergency applied.
     float mrPres_;                      // main reservoir pressure
     float bcPres_;                      // brake cylinder pressure
