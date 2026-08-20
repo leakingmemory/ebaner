@@ -283,7 +283,7 @@ int main(int argc, char** argv) {
     // switch (turnout) properties, mini signal paths and exit (main) signals, switched
     // from the Escape menu. ---
     enum class EdMode {
-        Geometry, NewSidings, SidingPoints, Circuits, Switches, SignalPaths, ExitSignals,
+        Geometry, NewSidings, MovePoints, Circuits, Switches, SignalPaths, ExitSignals,
         EntrySignals,
         DistantSignals, SimpleEntries, Crossings, FlagPosts, TxpPositions
     };
@@ -323,6 +323,17 @@ int main(int argc, char** argv) {
         glm::dvec3 world{0.0}; // the point on the host track, to snap the end onto
     };
     SidingJoin movJoin[2]; // [0] = the first point's end, [1] = the last point's
+    // ...and the export's own track. Its alignment is surveyed and is not ours to
+    // redraw, but a surveyed point can still sit wrong - a bump in the ride is usually
+    // one vertex a little out of line with its neighbours - so a point here can be
+    // nudged back and the correction is written to the overlay as a `move`, naming the
+    // vertex by where the survey put it. The export itself is never touched.
+    int movGraph = -1;                // graph point being moved (-1 = none)
+    std::uint32_t movGraphTrack = 0;  // the track it belongs to...
+    glm::dvec3 movGraphFrom{0.0};     // ...and where it stands now, which is what the
+                                      // next move edit has to name it by
+    glm::dvec3 movPreview{0.0};       // where a drag of it currently reaches...
+    bool movPreviewOn = false;        // ...while the button is still down
     int selTurnout = -1;             // selected turnout (index into switchNet.turnouts())
     bool switchTypesDirty = false;   // unsaved switch-type changes
     // Mini signal paths (own overlay): directional routes between two circuit borders.
@@ -620,7 +631,7 @@ int main(int argc, char** argv) {
                     }
                 }
             }
-        } else if (mode == EdMode::SidingPoints) {
+        } else if (mode == EdMode::MovePoints) {
             const glm::dvec3 o = data.sceneOrigin();
             auto scv = [&](glm::dvec3 w, float lift) {
                 return glm::vec3(float(w.x - o.x), float(w.y - o.y), float(w.z - o.z) + lift);
@@ -648,6 +659,27 @@ int main(int argc, char** argv) {
                         lns.push_back({scv(e->pts[i - 1], 1.0f), line});
                         lns.push_back({scv(e->pts[i], 1.0f), line});
                     }
+                }
+            }
+            // The exported vertex being moved. Its neighbours are already on screen as
+            // the graph itself, so only the one in hand is marked - white on a stalk,
+            // the same handle a drawn road's point gets.
+            if (movGraph >= 0 && movGraph < static_cast<int>(graph.pointWorld.size())) {
+                const glm::dvec3 w = graph.pointWorld[movGraph];
+                pts.push_back({scv(w, 1.0f), white});
+                lns.push_back({scv(w, 0.2f), white});
+                lns.push_back({scv(w, 6.0f), white});
+                pts.push_back({scv(w, 6.0f), white});
+                // Where the drag has reached, and how far that is from where the point
+                // started - a vertex is nudged back into line with its neighbours, so
+                // the line back to where it was is the thing being judged.
+                if (movPreviewOn) {
+                    const glm::vec3 amber(1.0f, 0.75f, 0.2f);
+                    pts.push_back({scv(movPreview, 1.0f), amber});
+                    lns.push_back({scv(movPreview, 0.2f), amber});
+                    lns.push_back({scv(movPreview, 6.0f), amber});
+                    lns.push_back({scv(w, 1.0f), amber});
+                    lns.push_back({scv(movPreview, 1.0f), amber});
                 }
             }
         } else if (mode == EdMode::Circuits) {
@@ -991,6 +1023,22 @@ int main(int argc, char** argv) {
             // two into one. What ties a nudge to the one before it is that it starts
             // where that one left the vertex, so the height it names is the link.
             TrackEdit ne = e;
+            if (e.kind == TrackEdit::Move) {
+                // A second drag of the same vertex continues the first: it starts where
+                // that one left it. Collapse the two, keeping where the survey put the
+                // point - that is the only position that still names the vertex once the
+                // file is read back, the later ones being places this edit itself put it.
+                for (auto it = pending.begin(); it != pending.end();) {
+                    if (it->kind == TrackEdit::Move && it->track == e.track &&
+                        std::hypot(it->b.x - e.a.x, it->b.y - e.a.y) < 1e-6 &&
+                        std::abs(it->b.z - e.a.z) < 1e-6) {
+                        ne.a = it->a;
+                        it = pending.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+            }
             if (e.kind == TrackEdit::Elev) {
                 for (auto it = pending.begin(); it != pending.end();) {
                     const bool sameSpot = it->kind == TrackEdit::Elev &&
@@ -1016,6 +1064,49 @@ int main(int argc, char** argv) {
         // The selection is gone, so the walk along the line has nowhere to resume from.
         if (!keepSelection) { selected.clear(); selA = selB = -1; growFwd = growBack = {}; }
         rebuildOverlay();
+    };
+    // Carry the selected exported vertex to a new place in plan. The correction goes
+    // into the overlay as a `move` naming the vertex by where it stands now, and the
+    // graph is rebuilt around it - so the point is then found again rather than trusted
+    // to have kept its index: buildTrackGraph drops points that fall on top of each
+    // other, and a move can put one there or take it out of there.
+    auto moveGraphPoint = [&](glm::dvec3 to) {
+        if (movGraph < 0) return;
+        TrackEdit e;
+        e.kind = TrackEdit::Move;
+        e.a = movGraphFrom;
+        e.b = glm::dvec3(to.x, to.y, movGraphFrom.z); // z is geometry mode's business
+        e.track = movGraphTrack;
+        // Where two tracks meet end to end the export holds the meeting point twice,
+        // once on each, at identical coordinates. It is one point of the railway, and
+        // the bumps at a track boundary are exactly there - so the whole group goes,
+        // one edit per track. Moving a single copy would pull the two ends apart and
+        // break the chain, quietly and in a way nothing on screen would show.
+        std::vector<TrackEdit> es{e};
+        for (std::size_t i = 0; i < graph.pointWorld.size(); ++i) {
+            const glm::dvec3& q = graph.pointWorld[i];
+            if (graph.pointTrack[i] == movGraphTrack) continue;
+            if (std::hypot(q.x - movGraphFrom.x, q.y - movGraphFrom.y) > 0.01 ||
+                std::abs(q.z - movGraphFrom.z) > 0.05)
+                continue;
+            TrackEdit t = e;
+            t.a = q;
+            t.b = glm::dvec3(to.x, to.y, q.z); // each keeps the height it had
+            t.track = graph.pointTrack[i];
+            es.push_back(t);
+        }
+        applyEditsLive(es, /*keepSelection=*/true);
+        movGraphFrom = e.b;
+        movGraph = -1;
+        double best = 0.5;
+        for (std::size_t i = 0; i < graph.pointWorld.size(); ++i) {
+            if (graph.pointTrack[i] != movGraphTrack) continue;
+            const double d = std::hypot(graph.pointWorld[i].x - e.b.x,
+                                        graph.pointWorld[i].y - e.b.y);
+            if (d < best) { best = d; movGraph = static_cast<int>(i); }
+        }
+        std::printf("[trackedit] %#x vertex -> %.2f %.2f (z %.2f, %zu track(s), "
+                    "Ctrl+S to save)\n", movGraphTrack, e.b.x, e.b.y, e.b.z, es.size());
     };
     // Turn the road being drawn into a record. It goes into `pending` through the same
     // path every other edit takes, so one save owns track-edits.txt and the two modes
@@ -1826,7 +1917,7 @@ int main(int argc, char** argv) {
     bool prevNameEnter = false, prevNameEsc = false, prevNameBs = false;
     bool prevMenuEnter = false, prevMenuUp = false, prevMenuDown = false;
     const std::vector<std::string> kMenuItems = {"Geometry edit", "New sidings",
-                                                 "Move siding points",
+                                                 "Move track points",
                                                  "Track circuits",
                                                  "Switches", "Signal paths",
                                                  "Exit signals", "Entry signals",
@@ -1834,6 +1925,34 @@ int main(int argc, char** argv) {
                                                  "Simple entry signals",
                                                  "Level crossings", "Flag posts",
                                                  "TXP positions", "Exit"};
+    // The mode to start in, by its menu name (EBANER_EDMODE="Move track points"). The
+    // editor is otherwise reachable only through the Esc menu, which puts every mode but
+    // the first out of reach of a screenshot - and a mode whose whole affordance is what
+    // it draws is exactly the kind that wants one.
+    auto modeFor = [](const std::string& sel) {
+        return sel == "New sidings"          ? EdMode::NewSidings
+               : sel == "Move track points"  ? EdMode::MovePoints
+               : sel == "Track circuits"     ? EdMode::Circuits
+               : sel == "Switches"           ? EdMode::Switches
+               : sel == "Signal paths"       ? EdMode::SignalPaths
+               : sel == "Exit signals"       ? EdMode::ExitSignals
+               : sel == "Entry signals"      ? EdMode::EntrySignals
+               : sel == "Distant signals"    ? EdMode::DistantSignals
+               : sel == "Simple entry signals" ? EdMode::SimpleEntries
+               : sel == "Level crossings"    ? EdMode::Crossings
+               : sel == "Flag posts"         ? EdMode::FlagPosts
+               : sel == "TXP positions"      ? EdMode::TxpPositions
+                                             : EdMode::Geometry;
+    };
+    if (const char* em = std::getenv("EBANER_EDMODE")) {
+        const auto it = std::find(kMenuItems.begin(), kMenuItems.end(), std::string(em));
+        if (it == kMenuItems.end() || *it == "Exit") {
+            std::fprintf(stderr, "[trackedit] no such mode: %s\n", em);
+        } else {
+            g_menuSel = static_cast<int>(it - kMenuItems.begin());
+            mode = modeFor(*it);
+        }
+    }
     // Flashing lamps (an entry signal's danger) blink from the push constant rather than by
     // rebuilding the signal mesh - here those vertices share the struct buffer with 32k
     // buildings, so a rebuild twice a second is out of the question.
@@ -1867,19 +1986,7 @@ int main(int argc, char** argv) {
                 if (sel == "Exit") {
                     glfwSetWindowShouldClose(window, GLFW_TRUE);
                 } else { // pick a mode and close the menu
-                    mode = sel == "New sidings"    ? EdMode::NewSidings
-                           : sel == "Move siding points" ? EdMode::SidingPoints
-                           : sel == "Track circuits" ? EdMode::Circuits
-                           : sel == "Switches"      ? EdMode::Switches
-                           : sel == "Signal paths"  ? EdMode::SignalPaths
-                           : sel == "Exit signals"  ? EdMode::ExitSignals
-                           : sel == "Entry signals" ? EdMode::EntrySignals
-                           : sel == "Distant signals" ? EdMode::DistantSignals
-                           : sel == "Simple entry signals" ? EdMode::SimpleEntries
-                           : sel == "Level crossings" ? EdMode::Crossings
-                           : sel == "Flag posts" ? EdMode::FlagPosts
-                           : sel == "TXP positions" ? EdMode::TxpPositions
-                                                    : EdMode::Geometry;
+                    mode = modeFor(sel);
                     selected.clear(); selA = selB = -1; selBorder = -1;
                     selTurnout = -1;
                     pathStart = -1; selPath = -1; selExit = -1; pendingVias.clear();
@@ -2135,7 +2242,7 @@ int main(int argc, char** argv) {
              mode == EdMode::EntrySignals || mode == EdMode::DistantSignals ||
              mode == EdMode::SimpleEntries || mode == EdMode::Crossings ||
              mode == EdMode::FlagPosts || mode == EdMode::TxpPositions ||
-             mode == EdMode::NewSidings || mode == EdMode::SidingPoints) &&
+             mode == EdMode::NewSidings || mode == EdMode::MovePoints) &&
             !g_mouseCaptured) {
             double mx = 0.0, my = 0.0;
             glfwGetCursorPos(window, &mx, &my);
@@ -2256,9 +2363,10 @@ int main(int argc, char** argv) {
         // track's alignment is surveyed, and this mode does not touch it.
         std::uint32_t movHoverTrack = 0;
         int movHoverPt = -1;
+        int movHoverGraph = -1;
         bool movHit = false;
         glm::dvec3 movWorld(0.0);
-        if (mode == EdMode::SidingPoints && !g_mouseCaptured) {
+        if (mode == EdMode::MovePoints && !g_mouseCaptured) {
             double mx = 0.0, my = 0.0;
             glfwGetCursorPos(window, &mx, &my);
             int winw = fbw, winh = fbh;
@@ -2283,9 +2391,39 @@ int main(int argc, char** argv) {
                         movHoverPt = static_cast<int>(i);
                     }
                 }
+            // The export's vertices, on the same terms. A drawn road is a track like any
+            // other once it is laid, so its points are in the graph as well - they are
+            // skipped here and picked up as record points above, which is where a move
+            // to one of them has to land.
+            std::set<std::uint32_t> drawnIds;
+            for (const TrackEdit* e : newTrackRecords()) drawnIds.insert(e->track);
+            for (std::size_t i = 0; i < graph.pointWorld.size(); ++i) {
+                if (drawnIds.count(graph.pointTrack[i])) continue;
+                const glm::vec4 clip = viewProj * glm::vec4(graph.points[i].pos, 1.0f);
+                if (clip.w <= 0.0f) continue;
+                const glm::vec2 px((clip.x / clip.w * 0.5f + 0.5f) * fbw,
+                                   (clip.y / clip.w * 0.5f + 0.5f) * fbh);
+                const float d = glm::length(px - cur);
+                if (d < best) {
+                    best = d;
+                    movHoverTrack = 0;
+                    movHoverPt = -1;
+                    movHoverGraph = static_cast<int>(i);
+                }
+            }
             // The plane is the selected point's own height: moving a point in plan must
             // not change how high it is, which is geometry mode's business and not this
             // mode's. The same ray-meets-a-plane the drawing mode uses.
+            if (movGraph >= 0 && movGraph < static_cast<int>(graph.pointWorld.size())) {
+                glm::vec3 hit(0.0f);
+                if (screenRayToPlane(g_camera.projMatrix(aspect), g_camera.position(),
+                                     g_camera.forward(), cur, glm::vec2(fbw, fbh),
+                                     static_cast<float>(graph.pointWorld[movGraph].z - o.z),
+                                     hit)) {
+                    movHit = true;
+                    movWorld = glm::dvec3(hit) + o;
+                }
+            }
             if (movTrack != 0 && movPt >= 0)
                 for (const TrackEdit* e : newTrackRecords())
                     if (e->track == movTrack && movPt < static_cast<int>(e->pts.size())) {
@@ -2303,8 +2441,20 @@ int main(int argc, char** argv) {
             // the overlay move: relaying the road walks the whole graph, so that waits
             // for the button to come up. The overlay for this mode draws the records
             // themselves, so the preview costs nothing beyond the redraw.
-            if (movDragging && movHit && glm::length(cur - lastDrawCur) > 4.0f &&
-                now - lastDrawBand > 0.05) {
+            // An exported vertex is not carried live: moving it means authoring an
+            // overlay edit and rebuilding the whole graph, which is not a thing to do
+            // sixty times a second. It follows the cursor as a marker and lands when the
+            // button comes up. A drawn road is its own record, so that one is cheap.
+            if (movDragging && movHit && movGraph >= 0 &&
+                glm::length(cur - lastDrawCur) > 4.0f && now - lastDrawBand > 0.05) {
+                lastDrawCur = cur;
+                lastDrawBand = now;
+                movPreview = movWorld;
+                movPreviewOn = true;
+                rebuildOverlay();
+            }
+            if (movDragging && movHit && movGraph < 0 &&
+                glm::length(cur - lastDrawCur) > 4.0f && now - lastDrawBand > 0.05) {
                 lastDrawCur = cur;
                 lastDrawBand = now;
                 for (TrackEdit* e : newTrackRecords())
@@ -3057,7 +3207,8 @@ int main(int argc, char** argv) {
                 // tick runs away with the point before the key is back up.
                 elevRepeat = ctrl ? 0.22f : shift ? 0.14f : 0.09f;
             }
-        } else if (mode == EdMode::SidingPoints && movTrack != 0 && movPt >= 0 &&
+        } else if (mode == EdMode::MovePoints && (movTrack != 0 || movGraph >= 0) &&
+                   (movPt >= 0 || movGraph >= 0) &&
                    (kUp || kDn || kLeft || kRight)) {
             // Nudging the selected point in plan. Along the way the camera is looking
             // and across it, rather than along world x and y: which way "east" is on
@@ -3077,14 +3228,20 @@ int main(int argc, char** argv) {
                 if (kDn) d -= fwd;
                 if (kRight) d += rgt;
                 if (kLeft) d -= rgt;
-                for (TrackEdit* e : newTrackRecords())
-                    if (e->track == movTrack && movPt < static_cast<int>(e->pts.size())) {
-                        e->pts[movPt].x += d.x * elevStep;
-                        e->pts[movPt].y += d.y * elevStep;
-                        relayDrawnTrack(*e);
-                        refreshSidingJoins(*e);
-                        break;
-                    }
+                if (movGraph >= 0) {
+                    moveGraphPoint(movGraphFrom + glm::dvec3(d.x * elevStep,
+                                                             d.y * elevStep, 0.0));
+                } else {
+                    for (TrackEdit* e : newTrackRecords())
+                        if (e->track == movTrack &&
+                            movPt < static_cast<int>(e->pts.size())) {
+                            e->pts[movPt].x += d.x * elevStep;
+                            e->pts[movPt].y += d.y * elevStep;
+                            relayDrawnTrack(*e);
+                            refreshSidingJoins(*e);
+                            break;
+                        }
+                }
                 elevRepeat = ctrl ? 0.22f : shift ? 0.14f : 0.09f;
             }
         } else {
@@ -3165,7 +3322,7 @@ int main(int argc, char** argv) {
             }
         } else if (kSave && !prevS &&
                    (mode == EdMode::Geometry || mode == EdMode::NewSidings ||
-                    mode == EdMode::SidingPoints) &&
+                    mode == EdMode::MovePoints) &&
                    (!pending.empty() || removals > 0 || newTracksDirty)) {
             // One file, one save path: the drawn roads go into `pending` like every other
             // track edit, so the two modes that write track-edits.txt cannot clobber each
@@ -3329,22 +3486,43 @@ int main(int argc, char** argv) {
             }
             resetGrow(); // a fresh pick starts the walk over
             rebuildOverlay();
-        } else if (!g_mouseCaptured && mode == EdMode::SidingPoints) {
+        } else if (!g_mouseCaptured && mode == EdMode::MovePoints) {
             // Press on a point to pick it up, drag, release to lay it down. A press on
             // nothing lets go of the selection.
             if (mL && !prevML) {
                 if (movHoverPt >= 0) {
                     movTrack = movHoverTrack;
                     movPt = movHoverPt;
+                    movGraph = -1;
                     movDragging = true;
                     for (const TrackEdit* e : newTrackRecords())
                         if (e->track == movTrack) refreshSidingJoins(*e);
                     lastDrawCur = glm::vec2(0.0f); // the first drag frame always counts
                     lastDrawBand = 0.0;
+                } else if (movHoverGraph >= 0) {
+                    movGraph = movHoverGraph;
+                    movGraphTrack = graph.pointTrack[movGraph];
+                    movGraphFrom = graph.pointWorld[movGraph];
+                    movTrack = 0;
+                    movPt = -1;
+                    movDragging = true;
+                    movPreviewOn = false;
+                    lastDrawCur = glm::vec2(0.0f);
+                    lastDrawBand = 0.0;
                 } else {
                     movTrack = 0;
                     movPt = -1;
+                    movGraph = -1;
                 }
+                rebuildOverlay();
+            } else if (!mL && prevML && movDragging && movGraph >= 0) {
+                // An exported vertex lands where it was let go of, keeping its height:
+                // this mode answers for x and y, geometry mode for z.
+                movDragging = false;
+                movPreviewOn = false;
+                if (movHit && std::hypot(movWorld.x - movGraphFrom.x,
+                                         movWorld.y - movGraphFrom.y) > 1e-3)
+                    moveGraphPoint(glm::dvec3(movWorld.x, movWorld.y, movGraphFrom.z));
                 rebuildOverlay();
             } else if (!mL && prevML && movDragging) {
                 movDragging = false;
@@ -3825,7 +4003,7 @@ int main(int argc, char** argv) {
                              : mode == EdMode::SignalPaths  ? 9.0f
                              : mode == EdMode::EntrySignals ? 10.0f
                              : mode == EdMode::NewSidings   ? 9.0f
-                             : mode == EdMode::SidingPoints ? 9.0f
+                             : mode == EdMode::MovePoints ? 9.0f
                                                             : 8.0f) * lh;
                 const glm::vec3 bg(0.04f, 0.05f, 0.09f);
                 const glm::vec2 a = ndc(20.0f, 20.0f), b = ndc(x1, 20.0f),
@@ -3912,14 +4090,15 @@ int main(int argc, char** argv) {
                                        : "SELECT: click point, Ctrl+click multi, "
                                          "click empty to clear",
                        x, 40.0f + 7 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
-          } else if (mode == EdMode::SidingPoints) { // --- Move siding points HUD ---
-            appendText(tv, "MODE: MOVE SIDING POINTS (Esc menu to switch)", x,
+          } else if (mode == EdMode::MovePoints) { // --- Move track points HUD ---
+            appendText(tv, "MODE: MOVE TRACK POINTS (Esc menu to switch)", x,
                        40.0f + 3 * lh, sc, glm::vec3(0.4f, 1.0f, 0.9f), fbw, fbh);
             const std::vector<TrackEdit*> roads = newTrackRecords();
             std::size_t handles = 0;
             for (const TrackEdit* e : roads) handles += e->pts.size();
-            std::snprintf(buf, sizeof(buf), "ROADS DRAWN %zu   %zu point(s) to move",
-                          roads.size(), handles);
+            std::snprintf(buf, sizeof(buf),
+                          "ROADS DRAWN %zu (%zu pts)   + %zu surveyed point(s)",
+                          roads.size(), handles, graph.pointWorld.size());
             appendText(tv, buf, x, 40.0f + 4 * lh, sc, glm::vec3(0.9f, 0.85f, 0.7f),
                        fbw, fbh);
             const TrackEdit* sel = nullptr;
@@ -3962,11 +4141,74 @@ int main(int argc, char** argv) {
                            anyBad ? glm::vec3(1.0f, 0.55f, 0.3f)
                                   : glm::vec3(0.6f, 1.0f, 0.6f),
                            fbw, fbh);
+            } else if (movGraph >= 0 &&
+                       movGraph < static_cast<int>(graph.pointWorld.size())) {
+                const glm::dvec3& P = graph.pointWorld[movGraph];
+                std::size_t shared = 1;
+                for (std::size_t i = 0; i < graph.pointWorld.size(); ++i)
+                    if (static_cast<int>(i) != movGraph &&
+                        std::hypot(graph.pointWorld[i].x - P.x,
+                                   graph.pointWorld[i].y - P.y) <= 0.01 &&
+                        std::abs(graph.pointWorld[i].z - P.z) <= 0.05)
+                        ++shared;
+                char grp[40] = "";
+                if (shared > 1)
+                    std::snprintf(grp, sizeof(grp), "   + %zu track(s) share it",
+                                  shared - 1);
+                std::snprintf(buf, sizeof(buf), "%#x surveyed   %.1f %.1f  z=%.2f%s",
+                              movGraphTrack, P.x, P.y, P.z, grp);
+                appendText(tv, buf, x, 40.0f + 5 * lh, sc, glm::vec3(1.0f, 0.9f, 0.3f),
+                           fbw, fbh);
+                // A bump is a vertex out of line with the two beside it, so those are
+                // what the point is reported against: how far away they are, and how far
+                // off the straight line between them this one sits. Bringing that offset
+                // down is the whole of the job, and it is not readable from the ride.
+                // At a track boundary the point is the last of one track and the first
+                // of the next, so the vertex before it in the line is not this track's -
+                // and that is exactly where the boundary bumps are. The neighbours are
+                // looked for across the join: on this track first, then on any track
+                // sharing the point.
+                auto neighbour = [&](int step) {
+                    auto sameTrack = [&](int at) {
+                        const int k = at + step;
+                        return k >= 0 && k < static_cast<int>(graph.pointWorld.size()) &&
+                                       graph.pointTrack[k] == graph.pointTrack[at]
+                                   ? k : -1;
+                    };
+                    if (const int k = sameTrack(movGraph); k >= 0) return k;
+                    for (std::size_t i = 0; i < graph.pointWorld.size(); ++i) {
+                        if (static_cast<int>(i) == movGraph) continue;
+                        if (std::hypot(graph.pointWorld[i].x - P.x,
+                                       graph.pointWorld[i].y - P.y) > 0.01)
+                            continue;
+                        if (const int k = sameTrack(static_cast<int>(i)); k >= 0) return k;
+                    }
+                    return -1;
+                };
+                const int pv = neighbour(-1);
+                const int nx = neighbour(+1);
+                if (pv >= 0 && nx >= 0) {
+                    const glm::dvec3 &A = graph.pointWorld[pv], &B = graph.pointWorld[nx];
+                    glm::dvec2 ab(B.x - A.x, B.y - A.y);
+                    const double L = glm::length(ab);
+                    const double off =
+                        L > 1e-6 ? std::abs((ab.x * (P.y - A.y) - ab.y * (P.x - A.x)) / L)
+                                 : 0.0;
+                    std::snprintf(buf, sizeof(buf),
+                                  "neighbours %.1f m back, %.1f m on   %.2f m off the "
+                                  "line between them", std::hypot(P.x - A.x, P.y - A.y),
+                                  std::hypot(B.x - P.x, B.y - P.y), off);
+                    appendText(tv, buf, x, 40.0f + 6 * lh, sc,
+                               off > 0.5 ? glm::vec3(1.0f, 0.55f, 0.3f)
+                                         : glm::vec3(0.6f, 1.0f, 0.6f),
+                               fbw, fbh);
+                } else {
+                    appendText(tv, "end of the track - no line to judge it against", x,
+                               40.0f + 6 * lh, sc, glm::vec3(0.8f, 0.95f, 0.8f), fbw, fbh);
+                }
             } else {
-                appendText(tv, roads.empty()
-                                   ? "no roads drawn here - draw one in New sidings first"
-                                   : "click a point to pick it up",
-                           x, 40.0f + 5 * lh, sc, glm::vec3(0.8f, 0.95f, 0.8f), fbw, fbh);
+                appendText(tv, "click a point to pick it up - drawn or surveyed", x,
+                           40.0f + 5 * lh, sc, glm::vec3(0.8f, 0.95f, 0.8f), fbw, fbh);
                 appendText(tv, "", x, 40.0f + 6 * lh, sc, glm::vec3(0.7f), fbw, fbh);
             }
             if (glfwGetTime() < pathMsgUntil && !pathMsg.empty())

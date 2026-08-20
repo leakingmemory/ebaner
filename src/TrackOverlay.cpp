@@ -131,6 +131,16 @@ std::vector<TrackEdit> loadTrackOverlay(const std::string& datasetRoot) {
             edits.push_back(e);
         } else if (n == 7 && std::string(kind) == "move") {
             e.kind = TrackEdit::Move; // a = old pos, b = new pos
+            // An optional track id after the six numbers, read off the tail the way a
+            // link's medium is: which track's vertex is meant, where several tracks meet
+            // at one spot. Absent (legacy) = whichever track is nearest. Written in
+            // decimal, as an elev's is: the two are the vertex edits and end up side by
+            // side naming the same points, and one number for a track is enough.
+            std::istringstream is(line);
+            std::string tok;
+            for (int k = 0; k < 7 && (is >> tok); ++k) {}
+            if (is >> tok)
+                e.track = static_cast<std::uint32_t>(std::strtoul(tok.c_str(), nullptr, 10));
             edits.push_back(e);
         } else if (n == 7 && std::string(kind) == "rail") {
             e.kind = TrackEdit::Rail; // a, b = the new connecting rail's ends
@@ -185,23 +195,29 @@ void applyTrackOverlay(std::vector<TrackSegment>& segs,
         segs.push_back(std::move(r));
         ++rails;
     }
-    // Elevation overrides first, so a link's endpoint reflects any regraded z.
+    // The vertex edits, in the order they are written down - both kinds in one pass.
+    // Each names a vertex by where it is *now*, so a move made after a regrade has to
+    // see the regraded height and a regrade made after a move has to see the moved
+    // position. Two passes by kind can only ever satisfy one of those, and the editor
+    // authors both against what is on screen, which is the state after everything
+    // above the new line. Done before the links, so a link's endpoint picks up any
+    // vertex the edits above it have shifted.
     for (const TrackEdit& e : edits) {
-        if (e.kind != TrackEdit::Elev) continue;
         int si = 0, vi = 0;
-        if (nearestVertex(segs, e.a.x, e.a.y, kVertexTol, si, vi, e.track,
-                          e.hasFromZ ? &e.fromZ : nullptr)) {
-            segs[si].pts[vi].z = e.a.z;
-            ++elev;
-        }
-    }
-    // Vertex moves (e.g. snapping a siding end onto the track it crosses).
-    for (const TrackEdit& e : edits) {
-        if (e.kind != TrackEdit::Move) continue;
-        int si = 0, vi = 0;
-        if (nearestVertex(segs, e.a.x, e.a.y, kVertexTol, si, vi, e.track)) {
-            segs[si].pts[vi] = e.b;
-            ++moves;
+        if (e.kind == TrackEdit::Elev) {
+            if (nearestVertex(segs, e.a.x, e.a.y, kVertexTol, si, vi, e.track,
+                              e.hasFromZ ? &e.fromZ : nullptr)) {
+                segs[si].pts[vi].z = e.a.z;
+                ++elev;
+            }
+        } else if (e.kind == TrackEdit::Move) {
+            // A move carries the whole old position, so its z separates two vertices
+            // sharing a spot without a `fromz` of its own - the same problem an elev
+            // needs that keyword for.
+            if (nearestVertex(segs, e.a.x, e.a.y, kVertexTol, si, vi, e.track, &e.a.z)) {
+                segs[si].pts[vi] = e.b;
+                ++moves;
+            }
         }
     }
 
@@ -261,6 +277,8 @@ void writeEdits(std::ofstream& f, const std::vector<TrackEdit>& edits) {
                              : e.kind == TrackEdit::Rail ? "rail" : "link";
             f << kw << ' ' << e.a.x << ' ' << e.a.y << ' ' << e.a.z << ' ' << e.b.x
               << ' ' << e.b.y << ' ' << e.b.z;
+            if (e.kind == TrackEdit::Move && e.track != 0)
+                f << ' ' << e.track; // which track's vertex, as an elev names it
             if (e.kind == TrackEdit::Link && e.medium == 0x55) f << " tunnel";
             else if (e.kind == TrackEdit::Link && e.medium == 0x20) f << " surface";
             f << '\n';

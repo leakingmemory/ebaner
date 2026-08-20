@@ -42,6 +42,7 @@
 #include <fstream>
 #include <map>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -2115,6 +2116,108 @@ int main(int argc, char** argv) {
             }
             std::filesystem::remove(path, ec); // leave the scratch dir as it was found
         }
+    }
+
+    // Moving a surveyed vertex: the `move` overlay edit.
+    //
+    // Sidings drawn in the editor are their own records, so moving one of their points
+    // rewrites the record. An exported track is not ours to redraw, so a correction to
+    // one of its vertices is carried as a `move` naming the vertex by where it stands.
+    // Two things have to hold for that to be usable at a station throat, which is where
+    // the bumps are: the edit must be able to say *which* track's vertex it means, and it
+    // must be able to tell apart two vertices of that track sitting at one spot. And
+    // because a point gets both a height and a position, the two kinds of edit have to be
+    // applied in the order they were written down - each names its vertex by where
+    // everything above it left the thing.
+    {
+        std::puts("\n  Moving a surveyed vertex:");
+        const std::string root =
+            (std::filesystem::temp_directory_path() / "ebaner-moveedit-test").string();
+        std::error_code ec;
+        std::filesystem::create_directories(root + "/overlay", ec);
+        auto put = [&](const std::string& body) {
+            std::ofstream f(root + "/overlay/track-edits.txt", std::ios::trunc);
+            f << body;
+        };
+        // Two tracks crossing at one point, and one of them doubling back so it has two
+        // vertices there - every way of confusing an edit, in one place.
+        auto scene = [] {
+            std::vector<TrackSegment> segs(2);
+            segs[0].trackId = 100;
+            segs[0].pts = {{0, 0, 10}, {100, 0, 10}, {200, 0, 10}};
+            segs[1].trackId = 200;
+            segs[1].pts = {{100, -50, 20}, {100, 0, 21}, {100.2, 0, 24}, {100, 50, 25}};
+            return segs;
+        };
+        auto vertex = [](const std::vector<TrackSegment>& segs, std::uint32_t id, int i) {
+            for (const TrackSegment& t : segs)
+                if (t.trackId == id) return t.pts[i];
+            return glm::dvec3(1e9);
+        };
+
+        put("move 100 0 10 100 7 10 100\n");
+        {
+            std::vector<TrackSegment> segs = scene();
+            applyTrackOverlay(segs, loadTrackOverlay(root));
+            check(std::abs(vertex(segs, 100, 1).y - 7.0) < 1e-9,
+                  "a move names the track whose vertex it means");
+            check(std::abs(vertex(segs, 200, 1).y) < 1e-9,
+                  "and leaves the other track's vertex at that spot alone");
+        }
+        // Both of 200's vertices are within the two-metre tolerance of the query, and
+        // the nearer one in plan is not the one asked for. Only the height separates them.
+        put("move 100 0 24 100 0 24.5 200\n");
+        {
+            std::vector<TrackSegment> segs = scene();
+            applyTrackOverlay(segs, loadTrackOverlay(root));
+            check(std::abs(vertex(segs, 200, 2).z - 24.5) < 1e-9,
+                  "and which of two vertices at one spot, by the height it has");
+            check(std::abs(vertex(segs, 200, 1).z - 21.0) < 1e-9,
+                  "not the nearer one in plan");
+        }
+        // Order. A regrade written after a move names the moved position; a move written
+        // after a regrade names the regraded height. Neither can work if the two kinds are
+        // applied in separate passes - one pass or the other always runs on stale ground.
+        put("move 100 0 10 100 7 10 100\nelev 100 7 12.5 100\n");
+        {
+            std::vector<TrackSegment> segs = scene();
+            applyTrackOverlay(segs, loadTrackOverlay(root));
+            const glm::dvec3 v = vertex(segs, 100, 1);
+            check(std::abs(v.y - 7.0) < 1e-9 && std::abs(v.z - 12.5) < 1e-9,
+                  "a regrade after a move sees where the move put the point");
+        }
+        put("elev 100 0 12.5 100\nmove 100 0 12.5 100 7 12.5 100\n");
+        {
+            std::vector<TrackSegment> segs = scene();
+            applyTrackOverlay(segs, loadTrackOverlay(root));
+            const glm::dvec3 v = vertex(segs, 100, 1);
+            check(std::abs(v.y - 7.0) < 1e-9 && std::abs(v.z - 12.5) < 1e-9,
+                  "and a move after a regrade sees the height the regrade gave it");
+        }
+        // The file is the record, so it has to survive being written back out.
+        {
+            TrackEdit e;
+            e.kind = TrackEdit::Move;
+            e.a = glm::dvec3(100, 0, 10);
+            e.b = glm::dvec3(100, 7, 10);
+            e.track = 100;
+            writeTrackOverlay(root, {e});
+            const std::vector<TrackEdit> back = loadTrackOverlay(root);
+            check(back.size() == 1 && back[0].kind == TrackEdit::Move &&
+                      back[0].track == 100 &&
+                      glm::length(back[0].a - e.a) < 1e-6 &&
+                      glm::length(back[0].b - e.b) < 1e-6,
+                  "and a move round-trips through the file, track and all");
+        }
+        // A hand-written move with no track id has to keep meaning what it did.
+        put("move 100 0 10 100 7 10\n");
+        {
+            std::vector<TrackSegment> segs = scene();
+            applyTrackOverlay(segs, loadTrackOverlay(root));
+            check(std::abs(vertex(segs, 100, 1).y - 7.0) < 1e-9,
+                  "a move without a track id still moves the nearest vertex");
+        }
+        std::filesystem::remove_all(root, ec);
     }
 
     std::printf("\n%s\n", failures ? "FAILED" : "PASSED");

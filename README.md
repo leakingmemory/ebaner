@@ -366,17 +366,46 @@ into the record so the circuits, signal paths and crossings anchored to it by `<
 any other does — between **8° and 35°** of divergence — so the HUD shows the angle the road
 leaves its parent track at, and says when it is outside that window and no switch will form.
 
-**Moving a drawn siding's points.** Drawing puts the points where you clicked; fixing the
-alignment afterwards is a separate mode, **Move siding points**. Click a point to pick it
-up and drag it, or nudge it with the **arrow keys** — 0.1 m a tap, **Shift** 1 m, **Ctrl**
-10 m, and they move it the way you are looking rather than along world north and east, so a
-nudge goes where it looked like it would. The height never changes: the point rides its own
-horizontal plane, and elevation stays geometry mode's job.
+**Moving track points.** Drawing puts the points where you clicked; fixing the alignment
+afterwards is a separate mode, **Move track points**. Click a point to pick it up and drag
+it, or nudge it with the **arrow keys** — 0.1 m a tap, **Shift** 1 m, **Ctrl** 10 m, and
+they move it the way you are looking rather than along world north and east, so a nudge goes
+where it looked like it would. The height never changes: the point rides its own horizontal
+plane, and elevation stays geometry mode's job.
 
-It edits the drawn roads and only those. An exported track's alignment is surveyed and is
-not ours to redraw — geometry mode still edits its height alone. There is also no new
-overlay grammar here, because a drawn road *is* its `track` record: moving a point is an
-edit to that record, saved with everything else by Ctrl+S.
+It moves **drawn roads and exported track alike**, because a bump in the ride is usually one
+surveyed vertex a little out of line with the two beside it, and there is no way to take that
+out by changing heights. The two are carried differently. A drawn road *is* its `track`
+record, so moving one of its points is an edit to that record. An exported track has no
+record — it comes off the tiles — so the correction travels as a **`move`** line naming the
+vertex by where it stands and saying where it should be. The export is never touched.
+
+```
+move <oldX> <oldY> <oldZ> <newX> <newY> <newZ> [<trackId>]
+```
+
+The old position is how the vertex is found, so it carries a height as well as a place: two
+vertices of one track can sit at one spot, and only the height tells them apart — the same
+problem `elev` needs its `fromz` for. The optional track id says *which* track's vertex is
+meant where several meet, in decimal, as an `elev` names its track.
+
+`elev` and `move` are applied **in the order they are written**, not in two passes by kind.
+Each line names its vertex by where everything above it left the thing, which is also what
+the editor sees on screen when it writes one — so a regrade after a move finds the moved
+point, and a move after a regrade finds the regraded height. Two passes can only ever satisfy
+one of those.
+
+For a surveyed point the HUD reports the thing being judged: how far the two neighbouring
+vertices are, and **how far off the straight line between them** this one sits. That offset
+is the bump, and it is not readable from the ride at any speed. The neighbours are looked for
+across a track boundary as well as along the track, because a boundary is exactly where the
+bumps are.
+
+Where two tracks meet end to end the export holds the meeting point **twice**, once on each
+track, at identical coordinates. It is one point of the railway, so the whole group moves
+together — one `move` line per track. Moving a single copy would pull the two ends apart and
+break the chain, quietly, with nothing on screen to show for it; the HUD says how many tracks
+share the point before you move it.
 
 Let go of an **end** within 2 m of an existing track and it snaps onto it, taking that
 track's height so the two sit flush and the switch is certain rather than nearly. Two metres
@@ -871,6 +900,7 @@ the corresponding sources (national rail register + NVDB roads + OSM enrichment)
 | `EBANER_NOSTITCH`   | Skip the seam-stitching pass (to inspect raw tile seams).     |
 | `EBANER_NOCARVE`    | Skip carving railway cuttings into the terrain.               |
 | `EBANER_NOOVERLAY`  | Ignore the `overlay/` track edits (link fixes).               |
+| `EBANER_EDMODE`     | `ebaner-trackedit` only: start in this mode, by its menu name. |
 | `EBANER_VEHICLE`    | Skip the start screen and preselect a vehicle (`0` or `1`).   |
 | `EBANER_AUDIO_DUMP` | Render a scripted brake sequence to the given WAV and exit.   |
 | `EBANER_AUDIO_DUMP_ENGINE` | Render an engine start/idle/stop to the given WAV, exit. |

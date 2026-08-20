@@ -489,6 +489,101 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Moving a vertex of the export's own track.
+    //
+    // A drawn siding is its own record, so moving one of its points rewrites the record
+    // and the network is rebuilt from it. An exported track has no record - it comes off
+    // the tiles - so the correction has to travel as a `move` edit, and the question this
+    // file exists to ask is whether it reaches everything built from the geometry rather
+    // than only the store it was applied to. It also has to be reversible: the whole use
+    // of the mode is nudging a point until the bump goes, which means putting it back.
+    {
+        std::puts("\n  Moving a surveyed vertex:");
+        // A long main-line track, and a vertex well inside it so it has neighbours.
+        const TrackSegment* pick = nullptr;
+        for (const TrackSegment& t : data.networkTracks())
+            if (t.pts.size() > 20 && (pick == nullptr || t.pts.size() > pick->pts.size()))
+                pick = &t;
+        if (pick == nullptr) {
+            std::puts("  (no track long enough here)");
+        } else {
+            const std::uint32_t id = pick->trackId;
+            const int vi = static_cast<int>(pick->pts.size()) / 2;
+            const glm::dvec3 was = pick->pts[vi];
+            // Across the line, so the move is a real change of alignment rather than a
+            // slide along it that the smoothing would swallow.
+            const glm::dvec3 nxt = pick->pts[vi + 1];
+            glm::dvec2 along(nxt.x - was.x, nxt.y - was.y);
+            const double L = glm::length(along);
+            along = L > 1e-9 ? along / L : glm::dvec2(1.0, 0.0);
+            const glm::dvec2 across(-along.y, along.x);
+            const glm::dvec3 to(was.x + across.x * 4.0, was.y + across.y * 4.0, was.z);
+
+            // How near the smoothed path runs to a point - the path is what the train
+            // rides on, so it is the path that has to have heard about the edit.
+            auto nearestOnPath = [&](const std::vector<TrackPath>& ps,
+                                     const glm::dvec3& q) {
+                double best = 1e30;
+                for (const TrackPath& pp : ps) {
+                    if (pp.trackId() != id) continue;
+                    for (float t = 0.0f; t <= pp.length(); t += 1.0f)
+                        best = std::min(best, double(glm::length(
+                                                  glm::dvec2(pp.poseAt(t).pos.x + data.sceneOrigin().x - q.x,
+                                                             pp.poseAt(t).pos.y + data.sceneOrigin().y - q.y))));
+                }
+                return best;
+            };
+            const double toNewBefore = nearestOnPath(buildTrackPaths(data), to);
+
+            TrackEdit e;
+            e.kind = TrackEdit::Move;
+            e.a = was;
+            e.b = to;
+            e.track = id;
+            data.applyTrackEdits({e});
+
+            const TrackSegment* now = nullptr;
+            for (const TrackSegment& t : data.networkTracks())
+                if (t.trackId == id) now = &t;
+            check(now != nullptr && std::abs(std::hypot(now->pts[vi].x - was.x,
+                                                        now->pts[vi].y - was.y) - 4.0)
+                                        < 1e-6,
+                  "the surveyed vertex moved in plan (m)",
+                  now ? std::hypot(now->pts[vi].x - was.x, now->pts[vi].y - was.y) : -1.0,
+                  4.0);
+            check(now != nullptr && std::abs(now->pts[vi].z - was.z) < 1e-9,
+                  "and not a millimetre in height",
+                  now ? now->pts[vi].z - was.z : -1.0, 0.0);
+            // The graph the editor picks points off has to show it where it now is,
+            // otherwise the next nudge would be authored against a position that is no
+            // longer there.
+            const TrackGraph g = buildTrackGraph(data);
+            double gBest = 1e30;
+            for (std::size_t i = 0; i < g.pointWorld.size(); ++i)
+                if (g.pointTrack[i] == id)
+                    gBest = std::min(gBest, std::hypot(g.pointWorld[i].x - to.x,
+                                                       g.pointWorld[i].y - to.y));
+            check(gBest < 0.001, "the editor's graph has it there (m)", gBest, 0.0);
+            const double toNewAfter = nearestOnPath(buildTrackPaths(data), to);
+            check(toNewAfter < toNewBefore - 1.0,
+                  "and the ridden path came to meet it (m)", toNewAfter, toNewBefore);
+
+            // Back where it was. A move names its vertex by where the point stands now,
+            // so undoing one means an edit from the new position to the old.
+            TrackEdit back;
+            back.kind = TrackEdit::Move;
+            back.a = to;
+            back.b = was;
+            back.track = id;
+            data.applyTrackEdits({back});
+            const TrackSegment* undone = nullptr;
+            for (const TrackSegment& t : data.networkTracks())
+                if (t.trackId == id) undone = &t;
+            const double off = undone ? glm::length(undone->pts[vi] - was) : 1e9;
+            check(off < 1e-9, "and goes back exactly where it was (m)", off, 0.0);
+        }
+    }
+
     // Suppressing a turnout the detector should not have made.
     //
     // Where several track ends meet at one point the detector reads every end as a branch
