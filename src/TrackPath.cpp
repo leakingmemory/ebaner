@@ -455,7 +455,16 @@ std::vector<TrackPath> buildTrackPaths(const TerrainData& data) {
                 if (c > 0 && k == 0) continue; // shared node with previous segment
                 const int kk = flip ? (n - 1 - k) : k;
                 const glm::vec3& P = s.pts[kk];
-                if (!pts.empty() && glm::distance(pts.back(), P) <= 1e-3f) continue;
+                // Coincidence is a question about the ground, so it is asked in plan. The
+                // export produces points at one x,y with different heights - a spike - and
+                // comparing in 3-D lets those through: 43 mm of height is a metre of
+                // "distance" as far as 1 mm is concerned, so the pair survives and the
+                // spline gets a span of no length. Centripetal knots then run sqrt(0.043)
+                // against sqrt(50) either side, the tangents blow up, and the ride heaves
+                // - which is what a duplicated point looks like from the cab.
+                if (!pts.empty() &&
+                    std::hypot(pts.back().x - P.x, pts.back().y - P.y) <= 1e-3f)
+                    continue;
                 pts.push_back(P);
                 speed.push_back(kk < static_cast<int>(s.speed.size()) ? s.speed[kk] : 0);
             }
