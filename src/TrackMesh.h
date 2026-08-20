@@ -35,6 +35,9 @@ struct TrackDrawChunk {
     glm::vec3 centroid;      // scene-relative metres
     std::uint32_t firstIndex = 0;
     std::uint32_t indexCount = 0;
+    // Bounding radius about the centroid, for testing the whole chunk against the view
+    // at once. Zero means "not known", and such a chunk is always drawn.
+    float radius = 0.0f;
 };
 
 // Builds a realistic railway cross-section (ballast bed, sleepers, two rails) for
@@ -57,11 +60,15 @@ public:
     const std::vector<TrackVertex>& vertices() const { return vertices_; }
     const std::vector<std::uint32_t>& indices() const { return indices_; }
     std::uint32_t alwaysIndexCount() const { return alwaysIndexCount_; }
+    // The ballast-and-rails run cut into pieces, so the ones the camera is not looking
+    // at can be left out. Always drawn is not the same as always in view.
+    const std::vector<TrackDrawChunk>& alwaysChunks() const { return alwaysChunks_; }
     const std::vector<TrackDrawChunk>& sleeperChunks() const { return chunks_; }
 
 private:
     std::vector<TrackVertex> vertices_;
     std::vector<std::uint32_t> indices_;
     std::uint32_t alwaysIndexCount_ = 0; // ballast + rails, drawn every frame
+    std::vector<TrackDrawChunk> alwaysChunks_; // ...cut up, frustum-culled
     std::vector<TrackDrawChunk> chunks_; // sleeper runs, distance-culled
 };

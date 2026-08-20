@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -95,7 +96,9 @@ void VulkanRenderer::init(GLFWwindow* window,
                           const std::vector<TrackVertex>& roadVertices,
                           const std::vector<std::uint32_t>& roadIndices,
                           const std::vector<TrackVertex>& buildingVertices,
-                          const std::vector<std::uint32_t>& buildingIndices) {
+                          const std::vector<std::uint32_t>& buildingIndices,
+                          const std::vector<TrackDrawChunk>& buildingChunks,
+                          std::uint32_t buildingChunkedIndexCount) {
     window_ = window;
     validationEnabled_ = validationLayersSupported();
     trackAlwaysIndexCount_ = trackAlwaysIndexCount;
@@ -121,6 +124,8 @@ void VulkanRenderer::init(GLFWwindow* window,
     createMeshBuffers(vertices, indices);
     createTrackBuffers(trackVertices, trackIndices);
     createRoadBuffers(roadVertices, roadIndices);
+    buildingChunks_ = buildingChunks;
+    buildingChunkedIndexCount_ = buildingChunkedIndexCount;
     createBuildingBuffers(buildingVertices, buildingIndices);
     createTextResources(); // vehicle is attached later, after the start screen
     createCommandBuffers();
@@ -1083,6 +1088,41 @@ void VulkanRenderer::sweepRetired(bool force) {
     }
 }
 
+namespace {
+// The six clipping planes of a view-projection, so a chunk of the world can be tested
+// whole instead of a triangle at a time.
+//
+// Each plane falls out as a sum or difference of two rows of the matrix (Gribb and
+// Hartmann). Taking all six as row3 +/- rowI keeps it independent of which way the
+// depth range and the Y axis run - this build flips Y by hand and does not define
+// GLM_FORCE_DEPTH_ZERO_TO_ONE - because the pair for an axis is the same two planes
+// whichever way round they are named.
+struct Frustum {
+    glm::vec4 plane[6];
+
+    explicit Frustum(const glm::mat4& m) {
+        auto row = [&](int i) { return glm::vec4(m[0][i], m[1][i], m[2][i], m[3][i]); };
+        const glm::vec4 r3 = row(3);
+        for (int i = 0; i < 3; ++i) {
+            plane[2 * i] = r3 + row(i);
+            plane[2 * i + 1] = r3 - row(i);
+        }
+        for (glm::vec4& q : plane) {
+            const float n = glm::length(glm::vec3(q));
+            if (n > 1e-9f) q /= n; // so the distance below is in metres
+        }
+    }
+
+    // Conservative: a sphere is only rejected when it is wholly outside a plane, so
+    // anything that might be on screen is drawn. Cheap to be wrong the safe way.
+    bool sees(const glm::vec3& c, float r) const {
+        for (const glm::vec4& q : plane)
+            if (glm::dot(glm::vec3(q), c) + q.w < -r) return false;
+        return true;
+    }
+};
+} // namespace
+
 void VulkanRenderer::removeTerrainChunk(std::uint64_t key) {
     const auto it = terrainChunks_.find(key);
     if (it == terrainChunks_.end()) return;
@@ -1117,6 +1157,15 @@ void VulkanRenderer::setTerrainChunk(std::uint64_t key,
 
     TerrainChunk c;
     c.indexCount = static_cast<uint32_t>(indices.size());
+    // The chunk's bounding sphere, taken once here rather than every frame: a tile of
+    // ground is a fixed piece of the world and this is what lets the ones the camera is
+    // not looking at be skipped.
+    if (!vertices.empty()) {
+        glm::vec3 lo = vertices[0].pos, hi = vertices[0].pos;
+        for (const Vertex& v : vertices) { lo = glm::min(lo, v.pos); hi = glm::max(hi, v.pos); }
+        c.centre = 0.5f * (lo + hi);
+        c.radius = 0.5f * glm::length(hi - lo);
+    }
     upload(vertices.data(), sizeof(Vertex) * vertices.size(),
            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, c.vbuf, c.vmem);
     upload(indices.data(), sizeof(std::uint32_t) * indices.size(),
@@ -1347,14 +1396,20 @@ void VulkanRenderer::updateTerrain(const std::vector<Vertex>& vertices,
 void VulkanRenderer::updateTracks(const std::vector<TrackVertex>& vertices,
                                   const std::vector<std::uint32_t>& indices,
                                   std::uint32_t alwaysIndexCount,
-                                  const std::vector<TrackDrawChunk>& sleeperChunks) {
+                                  const std::vector<TrackDrawChunk>& sleeperChunks,
+                                  const std::vector<TrackDrawChunk>& alwaysChunks) {
     createTrackBuffers(vertices, indices);
     trackAlwaysIndexCount_ = alwaysIndexCount;
     sleeperChunks_ = sleeperChunks;
+    trackAlwaysChunks_ = alwaysChunks;
 }
 
 void VulkanRenderer::updateStructs(const std::vector<TrackVertex>& vertices,
-                                   const std::vector<std::uint32_t>& indices) {
+                                   const std::vector<std::uint32_t>& indices,
+                                   const std::vector<TrackDrawChunk>& chunks,
+                                   std::uint32_t chunkedIndexCount) {
+    buildingChunks_ = chunks;
+    buildingChunkedIndexCount_ = chunkedIndexCount;
     createBuildingBuffers(vertices, indices);
 }
 
@@ -1633,8 +1688,13 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageInde
     // dark clear. The push constants (ortho pc.viewProj), viewport and scissor above still
     // apply to the overlay pipelines.
     if (!mapMode_) {
+    // Only the ground the camera can actually see. The tiles are separate draws
+    // already; what was missing was asking whether each is on screen, and most are not -
+    // the world streams for twenty kilometres around and a view covers a wedge of it.
+    const Frustum frustum(lastPush_.viewProj);
     for (const auto& [key, c] : terrainChunks_) {
         if (c.indexCount == 0) continue;
+        if (c.radius > 0.0f && !frustum.sees(c.centre, c.radius)) continue;
         vkCmdBindVertexBuffers(cmd, 0, 1, &c.vbuf, &offset);
         vkCmdBindIndexBuffer(cmd, c.ibuf, 0, VK_INDEX_TYPE_UINT32);
         vkCmdDrawIndexed(cmd, c.indexCount, 1, 0, 0, 0);
@@ -1649,12 +1709,24 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageInde
         vkCmdDrawIndexed(cmd, roadIndexCount_, 1, 0, 0, 0);
     }
 
-    // Buildings — extruded prisms on the same track pipeline.
+    // Buildings — extruded prisms on the same track pipeline, drawn by locality so a
+    // town behind the camera costs nothing. What follows them in the buffer (platforms,
+    // speed signs, tunnel bores) is small and sits along the line, so it is drawn whole.
     if (buildingIndexCount_ > 0) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, trackPipeline_);
         vkCmdBindVertexBuffers(cmd, 0, 1, &buildingVertexBuffer_, &offset);
         vkCmdBindIndexBuffer(cmd, buildingIndexBuffer_, 0, VK_INDEX_TYPE_UINT32);
-        vkCmdDrawIndexed(cmd, buildingIndexCount_, 1, 0, 0, 0);
+        if (buildingChunks_.empty()) {
+            vkCmdDrawIndexed(cmd, buildingIndexCount_, 1, 0, 0, 0);
+        } else {
+            for (const TrackDrawChunk& c : buildingChunks_)
+                if (c.indexCount > 0 &&
+                    (c.radius <= 0.0f || frustum.sees(c.centroid, c.radius)))
+                    vkCmdDrawIndexed(cmd, c.indexCount, 1, c.firstIndex, 0, 0);
+            if (buildingIndexCount_ > buildingChunkedIndexCount_)
+                vkCmdDrawIndexed(cmd, buildingIndexCount_ - buildingChunkedIndexCount_,
+                                 1, buildingChunkedIndexCount_, 0, 0);
+        }
     }
 
     // Movable switch stands — same track pipeline; dynamic (rebuilt on a throw).
@@ -1691,7 +1763,16 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageInde
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, trackPipeline_);
         vkCmdBindVertexBuffers(cmd, 0, 1, &trackVertexBuffer_, &offset);
         vkCmdBindIndexBuffer(cmd, trackIndexBuffer_, 0, VK_INDEX_TYPE_UINT32);
-        vkCmdDrawIndexed(cmd, trackAlwaysIndexCount_, 1, 0, 0, 0);
+        // Ballast and rails: every piece that is on screen. Cut up at build time, so
+        // the line behind the camera is not submitted only to be thrown away.
+        if (trackAlwaysChunks_.empty()) {
+            vkCmdDrawIndexed(cmd, trackAlwaysIndexCount_, 1, 0, 0, 0);
+        } else {
+            for (const TrackDrawChunk& c : trackAlwaysChunks_)
+                if (c.indexCount > 0 &&
+                    (c.radius <= 0.0f || frustum.sees(c.centroid, c.radius)))
+                    vkCmdDrawIndexed(cmd, c.indexCount, 1, c.firstIndex, 0, 0);
+        }
 
         constexpr float kSleeperLODRadius = 230.0f; // metres (ties fade in ~here)
         const glm::vec3 cam = glm::vec3(lastPush_.camPos);

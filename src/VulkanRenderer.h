@@ -58,7 +58,13 @@ public:
               const std::vector<TrackVertex>& roadVertices,
               const std::vector<std::uint32_t>& roadIndices,
               const std::vector<TrackVertex>& buildingVertices,
-              const std::vector<std::uint32_t>& buildingIndices);
+              const std::vector<std::uint32_t>& buildingIndices,
+              // Optional: the buildings grouped by locality, and how far into the
+              // buffer that grouping reaches. Left out, the whole buffer is drawn
+              // every frame - which is what the editor wants, since it rebuilds the
+              // world wholesale and has no streamer to group it.
+              const std::vector<TrackDrawChunk>& buildingChunks = {},
+              std::uint32_t buildingChunkedIndexCount = 0);
     void drawFrame(const PushConstants& pc);
     void waitIdle();
     void cleanup();
@@ -99,9 +105,14 @@ public:
     void updateTracks(const std::vector<TrackVertex>& vertices,
                       const std::vector<std::uint32_t>& indices,
                       std::uint32_t alwaysIndexCount,
-                      const std::vector<TrackDrawChunk>& sleeperChunks);
+                      const std::vector<TrackDrawChunk>& sleeperChunks,
+                      // Optional: the ballast-and-rails run cut into pieces. Left out,
+                      // it is drawn whole (what the editor does).
+                      const std::vector<TrackDrawChunk>& alwaysChunks = {});
     void updateStructs(const std::vector<TrackVertex>& vertices,
-                       const std::vector<std::uint32_t>& indices);
+                       const std::vector<std::uint32_t>& indices,
+                       const std::vector<TrackDrawChunk>& chunks = {},
+                       std::uint32_t chunkedIndexCount = 0);
     void updateRoads(const std::vector<TrackVertex>& vertices,
                      const std::vector<std::uint32_t>& indices);
     // Set the 2-D text overlay (screen-space triangles) drawn on top each frame.
@@ -249,6 +260,10 @@ private:
         VkBuffer ibuf = VK_NULL_HANDLE;
         VkDeviceMemory imem = VK_NULL_HANDLE;
         uint32_t indexCount = 0;
+        // Bounding sphere, so a chunk behind the camera or off to the side can be left
+        // out without looking at it. A radius of 0 means "not known" and is drawn.
+        glm::vec3 centre{0.0f};
+        float radius = 0.0f;
     };
     std::unordered_map<std::uint64_t, TerrainChunk> terrainChunks_;
     // A buffer replaced this frame may still be referenced by a command buffer in
@@ -272,7 +287,12 @@ private:
     VkDeviceMemory trackIndexMemory_ = VK_NULL_HANDLE;
     uint32_t trackIndexCount_ = 0;
     uint32_t trackAlwaysIndexCount_ = 0;       // ballast + rails, drawn always
+    std::vector<TrackDrawChunk> trackAlwaysChunks_; // frustum-culled ballast + rails
     std::vector<TrackDrawChunk> sleeperChunks_; // distance-culled sleeper runs
+    // Buildings grouped by locality, and how much of the buffer they cover; the rest
+    // (platforms, signs, bores) is drawn whatever the view.
+    std::vector<TrackDrawChunk> buildingChunks_;
+    std::uint32_t buildingChunkedIndexCount_ = 0;
 
     // Roads reuse the track pipeline (flat solid-colour lit ribbons).
     VkBuffer roadVertexBuffer_ = VK_NULL_HANDLE;

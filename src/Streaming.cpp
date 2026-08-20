@@ -133,6 +133,7 @@ void WorldStreamer::run() {
         b.trackI = tracks.indices();
         b.trackAlways = tracks.alwaysIndexCount();
         b.sleeperChunks = tracks.sleeperChunks();
+        b.trackAlwaysChunks = tracks.alwaysChunks();
 
         RoadMesh roads;
         roads.build(*data_);
@@ -145,6 +146,8 @@ void WorldStreamer::run() {
         buildings.build(*data_);
         b.structV = buildings.vertices();
         b.structI = buildings.indices();
+        b.structChunks = buildings.chunks();
+        b.structChunked = static_cast<std::uint32_t>(b.structI.size());
         auto merge = [&](const std::vector<TrackVertex>& v,
                          const std::vector<std::uint32_t>& idx) {
             const std::uint32_t base = static_cast<std::uint32_t>(b.structV.size());

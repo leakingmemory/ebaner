@@ -62,11 +62,17 @@ public:
         std::vector<TrackVertex> trackV;
         std::vector<std::uint32_t> trackI;
         std::uint32_t trackAlways = 0;
+        std::vector<TrackDrawChunk> trackAlwaysChunks;
         std::vector<TrackDrawChunk> sleeperChunks;
         std::vector<TrackVertex> roadV;
         std::vector<std::uint32_t> roadI;
         std::vector<TrackVertex> structV;
         std::vector<std::uint32_t> structI;
+        // The buildings grouped by locality, covering the first structChunked indices;
+        // whatever is merged in after them (platforms, signs, bores) is small, sits by
+        // the line and is always drawn.
+        std::vector<TrackDrawChunk> structChunks;
+        std::uint32_t structChunked = 0;
         float minElev = 0.0f, maxElev = 1.0f;
     };
 

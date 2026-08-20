@@ -61,6 +61,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <chrono>
 #include <cstdio>
 #include <unordered_set>
 #include <cstdlib>
@@ -467,9 +468,13 @@ int main(int argc, char** argv) {
                     renderer.terrainChunkCount(), verts);
     }
     renderer.updateTracks(tracks.vertices(), tracks.indices(),
-                          tracks.alwaysIndexCount(), tracks.sleeperChunks());
+                          tracks.alwaysIndexCount(), tracks.sleeperChunks(),
+                          tracks.alwaysChunks());
     renderer.updateRoads(roads.vertices(), roads.indices());
-    renderer.updateStructs(structVerts, structIndices);
+    // The buildings' own chunks, and how far into the buffer they reach: what follows
+    // them here is platforms, speed signs and bores, which are always drawn.
+    renderer.updateStructs(structVerts, structIndices, buildings.chunks(),
+                           static_cast<std::uint32_t>(buildings.indices().size()));
 
     renderer.attachSwitches(switches.vertices(), switches.indices());
 
@@ -2375,9 +2380,10 @@ int main(int argc, char** argv) {
                     chunkVerts += c.vertices.size();
                 }
                 renderer.updateTracks(nb.trackV, nb.trackI, nb.trackAlways,
-                                      nb.sleeperChunks);
+                                      nb.sleeperChunks, nb.trackAlwaysChunks);
                 renderer.updateRoads(nb.roadV, nb.roadI);
-                renderer.updateStructs(nb.structV, nb.structI);
+                renderer.updateStructs(nb.structV, nb.structI, nb.structChunks,
+                                       nb.structChunked);
                 switches.build(switchNet, worldCentre, data.loadedRadius());
                 renderer.updateSwitches(switches.vertices(), switches.indices());
                 std::printf("[stream] about scene (%.0f, %.0f): %zu chunk(s) in "

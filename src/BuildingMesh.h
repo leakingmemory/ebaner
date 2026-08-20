@@ -29,8 +29,13 @@ public:
 
     const std::vector<TrackVertex>& vertices() const { return vertices_; }
     const std::vector<std::uint32_t>& indices() const { return indices_; }
+    // The buildings grouped by where they stand, so the ones the camera is not looking
+    // at need not be drawn. A town is tens of thousands of prisms and a view holds a
+    // wedge of it.
+    const std::vector<TrackDrawChunk>& chunks() const { return chunks_; }
 
 private:
     std::vector<TrackVertex> vertices_;
     std::vector<std::uint32_t> indices_;
+    std::vector<TrackDrawChunk> chunks_;
 };

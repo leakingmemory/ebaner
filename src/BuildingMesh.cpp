@@ -13,6 +13,8 @@
 
 #include "BuildingMesh.h"
 
+#include <utility>
+
 #include "EarClip.h"
 #include "TerrainData.h"
 
@@ -60,15 +62,30 @@ std::uint64_t hashBuilding(const BuildingSegment& b) {
 
 void BuildingMesh::build(const TerrainData& data) {
     const glm::dvec3 origin = data.sceneOrigin();
+    vertices_.clear();
+    indices_.clear();
+    chunks_.clear();
 
     std::unordered_set<std::uint64_t> seen;
     std::vector<const BuildingSegment*> uniq;
+    // Which tile each of them came off, so the geometry can be grouped by where it
+    // stands without being reordered. The buildings are gathered a tile at a time and a
+    // tile is already a piece of the map, so the run of one tile's buildings is exactly
+    // the group wanted - and taking it as it comes leaves the buffer byte for byte what
+    // it was. Sorting them into a grid of my own would have been tidier and would have
+    // changed which of two roofs at one height is the one drawn.
+    std::vector<int> ofTile;
+    int tileOrdinal = 0;
     for (const auto& [tileKey, tilePtr] : data.tiles()) {
         const Tile& t = *tilePtr;
         for (const BuildingSegment& b : t.buildings) {
             if (b.footprint.size() < 3) continue;
-            if (seen.insert(hashBuilding(b)).second) uniq.push_back(&b);
+            if (seen.insert(hashBuilding(b)).second) {
+                uniq.push_back(&b);
+                ofTile.push_back(tileOrdinal);
+            }
         }
+        ++tileOrdinal;
     }
 
     // Quad with an outward normal (flipped to face away from `inside`).
@@ -115,8 +132,47 @@ void BuildingMesh::build(const TerrainData& data) {
         indices_.push_back(base + 2);
     };
 
-    for (const BuildingSegment* bp : uniq) {
-        const BuildingSegment& b = *bp;
+    int openCell = -1;
+    bool cellOpen = false;
+    std::uint32_t cellFirst = 0, cellVertFirst = 0;
+    // Close the run that is open and record it as a chunk.
+    //
+    // The extent is measured from the vertices the cell actually produced, not from the
+    // footprints it was given: a roof stands several metres above the wall top it was
+    // derived from, and a bound that does not know that rejects a chunk whose roofs are
+    // the only part of it on screen. Reading back what was emitted cannot be wrong that
+    // way whatever the geometry later grows.
+    auto closeCell = [&]() {
+        if (!cellOpen) return;
+        const std::uint32_t count = static_cast<std::uint32_t>(indices_.size()) - cellFirst;
+        if (count > 0 && cellVertFirst < vertices_.size()) {
+            glm::vec3 lo(1e30f), hi(-1e30f);
+            for (std::size_t k = cellVertFirst; k < vertices_.size(); ++k) {
+                lo = glm::min(lo, vertices_[k].pos);
+                hi = glm::max(hi, vertices_[k].pos);
+            }
+            TrackDrawChunk c;
+            c.firstIndex = cellFirst;
+            c.indexCount = count;
+            c.centroid = 0.5f * (lo + hi);
+            c.radius = 0.5f * glm::length(hi - lo);
+            chunks_.push_back(c);
+        }
+        cellOpen = false;
+    };
+
+    for (std::size_t bi = 0; bi < uniq.size(); ++bi) {
+        const BuildingSegment& b = *uniq[bi];
+        {
+            const int cc = ofTile[bi];
+            if (!cellOpen || cc != openCell) {
+                closeCell();
+                openCell = cc;
+                cellOpen = true;
+                cellFirst = static_cast<std::uint32_t>(indices_.size());
+                cellVertFirst = static_cast<std::uint32_t>(vertices_.size());
+            }
+        }
         const BuildingStyle st = styleFor(b.kind);
         const int n = static_cast<int>(b.footprint.size());
 
@@ -204,6 +260,7 @@ void BuildingMesh::build(const TerrainData& data) {
             }
         }
     }
+    closeCell(); // the last cell has no successor to close it
 
     std::printf("[BuildingMesh] %zu buildings, %zu vertices, %zu triangles\n",
                 uniq.size(), vertices_.size(), indices_.size() / 3);

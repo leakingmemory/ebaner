@@ -78,6 +78,7 @@ void TrackMesh::build(const std::vector<TrackPath>& paths, const glm::vec3& cent
     indices_.clear();
     chunks_.clear();
     alwaysIndexCount_ = 0;
+    alwaysChunks_.clear();
 
     // Which stretch of each path to draw. A path is not near or far as a whole - the
     // main line runs the length of the country - so this clips it to the arc length
@@ -154,10 +155,45 @@ void TrackMesh::build(const std::vector<TrackPath>& paths, const glm::vec3& cent
     };
 
     // --- Pass 1: ballast bed + rails (always drawn) ------------------------
+    //
+    // Cut into pieces as it goes, so that what is behind the camera need not be drawn.
+    // A run can be kilometres long and one bounding sphere around it would never be
+    // rejected, so the piece is a fixed length of line rather than a whole run.
+    constexpr float kAlwaysChunkM = 200.0f;
+    std::uint32_t runFirst = 0, runVertFirst = 0;
+    bool runOpen = false;
+    // The piece's extent comes off the vertices it produced, so it is exactly what was
+    // drawn rather than an estimate of how far the formation stands off the centre line.
+    auto closeAlways = [&]() {
+        if (!runOpen) return;
+        const std::uint32_t n = static_cast<std::uint32_t>(indices_.size()) - runFirst;
+        if (n > 0 && runVertFirst < vertices_.size()) {
+            glm::vec3 lo(1e30f), hi(-1e30f);
+            for (std::size_t k = runVertFirst; k < vertices_.size(); ++k) {
+                lo = glm::min(lo, vertices_[k].pos);
+                hi = glm::max(hi, vertices_[k].pos);
+            }
+            TrackDrawChunk c;
+            c.firstIndex = runFirst;
+            c.indexCount = n;
+            c.centroid = 0.5f * (lo + hi);
+            c.radius = 0.5f * glm::length(hi - lo);
+            alwaysChunks_.push_back(c);
+        }
+        runOpen = false;
+    };
+    auto openAlways = [&]() {
+        closeAlways();
+        runFirst = static_cast<std::uint32_t>(indices_.size());
+        runVertFirst = static_cast<std::uint32_t>(vertices_.size());
+        runOpen = true;
+    };
     for (const Run& run : near) {
         const TrackPath& path = *run.path;
         const std::vector<float> ss = sampleDistances(run.from, run.to, kRailSampleStep);
+        float chunkFrom = run.from - kAlwaysChunkM; // force one open on the first sample
         for (std::size_t i = 0; i + 1 < ss.size(); ++i) {
+            if (ss[i] - chunkFrom >= kAlwaysChunkM) { openAlways(); chunkFrom = ss[i]; }
             const TrackPose pa = path.poseAt(ss[i]);
             const TrackPose pb = path.poseAt(ss[i + 1]);
             const glm::vec3 A = pa.pos, B = pb.pos;
@@ -207,6 +243,7 @@ void TrackMesh::build(const std::vector<TrackPath>& paths, const glm::vec3& cent
             }
         }
     }
+    closeAlways(); // the last piece has no successor to close it
     alwaysIndexCount_ = static_cast<std::uint32_t>(indices_.size());
 
     // --- Pass 2: sleeper boxes, grouped into distance-culled chunks --------

@@ -32,6 +32,19 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   **centripetal Catmull-Rom** spline, so curves are continuous. Sleepers are real
   3-D boxes near the camera and a repeating texture at distance (distance LOD).
   Track is **superelevated (banked)** on curves from the OSM speed limit + curvature.
+- **Only what is on screen** — the ground, the buildings and the ballast-and-rails run
+  are each cut into pieces with a bounding sphere, and a piece outside the view frustum
+  is not submitted (`Frustum` in `src/VulkanRenderer.cpp`). The world streams for twenty
+  kilometres around the camera and a view holds a wedge of that, so most of it was being
+  sent to the card every frame to be thrown away behind the eye. The pieces come off
+  what the geometry already is — a terrain tile, the run of one map tile's buildings, a
+  200 m length of line — and the bounds are measured from the vertices actually emitted
+  rather than from the footprints they were derived from, since a roof stands several
+  metres above the wall top it was built on. Nothing is reordered to achieve it: which of
+  two roofs at the same height is the one drawn depends on the order they are submitted
+  in, so grouping them by anything other than the order they already arrive in would
+  quietly change the picture. Worth 39-51% of the frame time on the machine it was
+  measured on, and it renders pixel for pixel what it did before.
 - **Roads** — category-coloured asphalt ribbons (`src/RoadMesh.cpp`): the public
   network (Europavei/Riksvei/Fylkesvei/Kommunal) prominent, private tracks thin
   and faint.
