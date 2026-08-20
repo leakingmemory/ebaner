@@ -451,6 +451,27 @@ authored at them yet — that is what makes it possible to go and author somethi
 next one. `EBANER_MAP=1` opens the traffic manager straight away, and `EBANER_MAP=<name>`
 opens it at a named station, which is how it is screenshotted headlessly.
 
+**Which station works a route** is normally worked out from where its in-station end lies:
+routes whose ends sit within 800 m of one another are one place. That is right until a route
+runs somewhere far from the platforms — a branch out to an industrial siding a couple of
+kilometres beyond the station. Those cluster as a place of their own, and since the picker
+offers *the cluster nearest the station being worked*, a cluster with no station near it can
+never be offered at all: the route is built, has a mast, and is simply unreachable from the
+panel. Mo i Rana's two mining routes were exactly that — one of them sharing a mast with a
+route that **was** offered.
+
+So a route may name its station outright, in any of the four route files:
+
+```
+entry 16 "NO MO INFN MINING" 63e:0.826377 d0000000:0.097737 type C2 station "Mo i Rana" …
+```
+
+It overrules the geometry: the route joins whichever cluster the panel would offer when that
+station is worked, so naming a station and walking to it come to the same thing. A movement
+has two halves and either may carry it — the approach or the signal, the exit route or the
+exit signal — and if both name one they must agree (the approach wins, and it says so). A
+name the export does not have falls back to the geometry with a warning.
+
 **Setting a route** (`R`) asks first **which way**: into the station or out of it, with the
 count of each, and then offers that list. A worked station has both — Mo i Rana has 7 in and
 6 out — and one flat list of them was both long to work and easy to misread, since "NO MO NB

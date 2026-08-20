@@ -1684,6 +1684,47 @@ int main(int argc, char** argv) {
             std::filesystem::remove(root + "/overlay/switch-types.txt", ec);
         }
 
+        // Naming the station a route is worked from. A route running out to a branch far
+        // from the platforms clusters as a place of its own, and the panel offers the
+        // cluster nearest the station being worked - so a cluster with no station near it
+        // can never be offered and the route, mast and all, is unreachable. The name
+        // overrules the geometry. Authored on either half of a movement, and names have
+        // spaces in them, so it has to survive quoting.
+        {
+            std::vector<SignalPath> rs{route(1, 0.1, 0.5), route(2, 0.3, 0.5)};
+            rs[0].station = "Mo i Rana";
+            rs[0].twoLamp = true;   // alongside the other mast keywords, not instead
+            rs[1].distant = true;   // and a record with no station stays silent
+            check(writeExitSignals(root, rs), "a route naming its station writes");
+            const std::vector<SignalPath> back = loadExitSignals(root);
+            check(back.size() == 2, "and reads back");
+            if (back.size() == 2) {
+                check(back[0].station == "Mo i Rana",
+                      "the name survives, spaces and all");
+                check(back[0].twoLamp && back[1].distant,
+                      "and does not disturb the mast keywords beside it");
+                check(back[1].station.empty(),
+                      "a record that named none still names none");
+                check(back[0].parts.size() == rs[0].parts.size(),
+                      "the intervals after it are still read");
+            }
+            // The same on the other three files, since a movement is two halves and either
+            // may carry it.
+            check(writeEntrySignals(root, rs) &&
+                      loadEntrySignals(root)[0].station == "Mo i Rana",
+                  "an entry signal carries it too");
+            check(writeExitRoutes(root, rs) &&
+                      loadExitRoutes(root)[0].station == "Mo i Rana",
+                  "so does an exit route");
+            check(writeEntryApproaches(root, rs) &&
+                      loadEntryApproaches(root)[0].station == "Mo i Rana",
+                  "and an entry approach");
+            std::filesystem::remove(root + "/overlay/exit-signals.txt", ec);
+            std::filesystem::remove(root + "/overlay/entry-signals.txt", ec);
+            std::filesystem::remove(root + "/overlay/exit-routes.txt", ec);
+            std::filesystem::remove(root + "/overlay/entry-approaches.txt", ec);
+        }
+
         // A file written before the keywords existed has to go on loading unchanged.
         {
             std::ofstream f(root + "/overlay/entry-signals.txt", std::ios::trunc);

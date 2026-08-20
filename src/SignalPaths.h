@@ -58,6 +58,18 @@ struct SignalPath {
     // This signal is built with two lamps rather than three - red over green, the head a
     // siding's own signal carries. A fact about the mast in the same way `distant` is.
     bool twoLamp = false;
+    // Which station works this route, named outright, overruling the geometry.
+    //
+    // The traffic manager groups routes into places by how close their in-station ends
+    // lie, which is right until a route runs somewhere far from the platforms - a branch
+    // to an industrial siding a couple of kilometres out. Those cluster as a place of
+    // their own, and since the picker offers the cluster nearest the station being
+    // worked, a cluster with no station near it can never be offered at all: the route
+    // is built, has a mast, and is unreachable. Naming the station settles it.
+    //
+    // Authored on either half of a movement - the approach or the signal - since either
+    // may be the one that reads oddly; if both name a station they must agree.
+    std::string station;
 };
 
 // --- Moving a border (see canMoveBorder/moveBorderFrac in TrackCircuits.h) ---

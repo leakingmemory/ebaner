@@ -150,6 +150,10 @@ std::vector<SignalPath> loadRoutes(const std::string& file, const char* keyword)
                 p.twoLamp = true;
                 continue;
             }
+            if (tok == "station") { // which place works this route, overruling geometry
+                readName(is, p.station);
+                continue;
+            }
             const auto c1 = tok.find(':');
             const auto c2 = tok.rfind(':');
             if (c1 == std::string::npos || c2 == c1) continue;
@@ -182,7 +186,7 @@ bool writeRoutes(const std::string& datasetRoot, const std::string& file,
       << " <id> \"<name>\" <startTrackHex>:<frac> <endTrackHex>:<frac> "
          "[signal <exitId> type <C1|C2>] "
       << (withMastFlags ? "[distant] [twolamp] " : "")
-      << "[via <trackHex>:<frac>]... "
+      << "[station \"<name>\"] [via <trackHex>:<frac>]... "
          "<trackHex>:<from>:<to> ...\n";
     for (const SignalPath& p : routes) {
         f << keyword << ' ' << p.id << ' ' << quoteName(p.name) << ' '
@@ -195,6 +199,7 @@ bool writeRoutes(const std::string& datasetRoot, const std::string& file,
         if (withType) f << " type " << (p.type == RouteType::C2 ? "C2" : "C1");
         if (withMastFlags && p.distant) f << " distant";
         if (withMastFlags && p.twoLamp) f << " twolamp";
+        if (!p.station.empty()) f << " station " << quoteName(p.station);
         for (const Border& v : p.vias)
             f << " via " << std::hex << v.trackId << std::dec << ':' << v.frac;
         for (const SectionInterval& iv : p.parts)

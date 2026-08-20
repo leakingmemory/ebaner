@@ -888,6 +888,9 @@ int main(int argc, char** argv) {
         // that split, so this costs nothing to record - and the picker needs it to offer
         // the two apart, which is most of what stops one being mistaken for the other.
         bool entry = false;
+        // The station named on the record, if either half named one. Empty = let the
+        // geometry decide.
+        std::string stationName;
         glm::vec2 anchor{0.0f};  // its in-station end, which is what groups it by station
         SignalPath departure;    // the whole movement
         std::vector<int> beyond; // circuits past the signal
@@ -932,6 +935,15 @@ int main(int argc, char** argv) {
             // disjoint rather than merely different.
             c.beyond = pathSections(exitSignals[e], circuits);
             c.entry = false;
+            // Either half may name the station; the signal wins only if the route is silent.
+            c.stationName = !exitRoutes[ri].station.empty() ? exitRoutes[ri].station
+                                                            : exitSignals[e].station;
+            if (!exitRoutes[ri].station.empty() && !exitSignals[e].station.empty() &&
+                exitRoutes[ri].station != exitSignals[e].station)
+                std::fprintf(stderr,
+                             "[Route] %s: the route says station \"%s\" and its signal "
+                             "says \"%s\"; taking the route's\n", c.name.c_str(),
+                             exitRoutes[ri].station.c_str(), exitSignals[e].station.c_str());
             c.anchor = sceneAt(c.departure.start); // the platform end
             mainCandidates.push_back(std::move(c));
         }
@@ -957,6 +969,7 @@ int main(int argc, char** argv) {
                 c.departure = entrySignals[ei];
                 c.beyond = pathSections(c.departure, circuits); // all of it is past the mast
                 c.entry = true;
+                c.stationName = entrySignals[ei].station;
                 c.anchor = sceneAt(c.departure.end);            // the platform end
                 mainCandidates.push_back(std::move(c));
                 continue;
@@ -973,6 +986,9 @@ int main(int argc, char** argv) {
                 // standing on it is the train being let in rather than one in the way.
                 c.beyond = pathSections(entrySignals[ei], circuits);
                 c.entry = true;
+                c.stationName = !entryApproaches[ai].station.empty()
+                                    ? entryApproaches[ai].station
+                                    : entrySignals[ei].station;
                 c.anchor = sceneAt(c.departure.end); // the platform end
                 mainCandidates.push_back(std::move(c));
             }
@@ -985,8 +1001,30 @@ int main(int argc, char** argv) {
     std::vector<glm::vec2> stationAt; // station -> scene-relative centre
     {
         constexpr double kStationSpan = 800.0; // m
+        // A route may name its station outright, and that overrules the geometry. Those
+        // are held back from the clustering below and placed afterwards: a branch running
+        // two kilometres out to an industrial siding otherwise clusters as a place of its
+        // own, and since the picker offers the cluster *nearest the station being worked*,
+        // a cluster with no station near it can never be offered - the route is built, has
+        // a mast, and is unreachable from the panel.
+        const glm::dvec3 orgS = data.sceneOrigin();
+        std::vector<int> named(mainCandidates.size(), -1); // -> index into `stations`
         for (std::size_t a = 0; a < mainCandidates.size(); ++a) {
-            if (mainCandidates[a].station >= 0) continue;
+            if (mainCandidates[a].stationName.empty()) continue;
+            for (std::size_t i = 0; i < stations.size(); ++i)
+                if (stations[i].name == mainCandidates[a].stationName)
+                    named[a] = static_cast<int>(i);
+            if (named[a] < 0)
+                std::fprintf(stderr,
+                             "[Route] %s names station \"%s\", which the export does not "
+                             "have; falling back to the geometry\n",
+                             mainCandidates[a].name.c_str(),
+                             mainCandidates[a].stationName.c_str());
+            else
+                mainCandidates[a].station = -2; // held back
+        }
+        for (std::size_t a = 0; a < mainCandidates.size(); ++a) {
+            if (mainCandidates[a].station != -1) continue;
             const int st = static_cast<int>(stationAt.size());
             std::vector<std::size_t> queue{a};
             mainCandidates[a].station = st;
@@ -998,7 +1036,7 @@ int main(int argc, char** argv) {
                 sum += mainCandidates[c].anchor;
                 ++n;
                 for (std::size_t o = 0; o < mainCandidates.size(); ++o) {
-                    if (mainCandidates[o].station >= 0) continue;
+                    if (mainCandidates[o].station != -1) continue;
                     if (glm::length(mainCandidates[o].anchor - mainCandidates[c].anchor) >
                         kStationSpan)
                         continue;
@@ -1007,6 +1045,40 @@ int main(int argc, char** argv) {
                 }
             }
             stationAt.push_back(sum / static_cast<float>(std::max(n, 1)));
+        }
+        // Now the ones that named a station: each joins the cluster the panel would offer
+        // when that station is being worked - the one nearest it - so naming a station and
+        // walking to it are the same thing. With nothing to join, the named station becomes
+        // a cluster in its own right.
+        for (std::size_t a = 0; a < mainCandidates.size(); ++a) {
+            if (mainCandidates[a].station != -2) continue;
+            const Station& st = stations[static_cast<std::size_t>(named[a])];
+            const glm::vec2 at(static_cast<float>(st.world.x - orgS.x),
+                               static_cast<float>(st.world.y - orgS.y));
+            int best = -1;
+            float bestD = std::numeric_limits<float>::max();
+            for (std::size_t i = 0; i < stationAt.size(); ++i)
+                if (const float d = glm::length(stationAt[i] - at); d < bestD) {
+                    bestD = d;
+                    best = static_cast<int>(i);
+                }
+            if (best < 0) {
+                best = static_cast<int>(stationAt.size());
+                stationAt.push_back(at);
+            }
+            mainCandidates[a].station = best;
+            std::printf("[Route] %s -> station \"%s\" as authored\n",
+                        mainCandidates[a].name.c_str(), st.name.c_str());
+        }
+        // The centres are what the panel measures against, so they have to reflect the
+        // final membership rather than the geometric pass alone.
+        {
+            std::vector<glm::vec2> sum(stationAt.size(), glm::vec2(0.0f));
+            std::vector<int> cnt(stationAt.size(), 0);
+            for (const MainCandidate& c : mainCandidates)
+                if (c.station >= 0) { sum[c.station] += c.anchor; ++cnt[c.station]; }
+            for (std::size_t i = 0; i < stationAt.size(); ++i)
+                if (cnt[i] > 0) stationAt[i] = sum[i] / static_cast<float>(cnt[i]);
         }
         std::printf("[Route] %zu exit route(s), %zu entry route(s)%s -> %zu main route(s) "
                     "in %zu station(s)\n", exitRoutes.size(), entrySignals.size(),
