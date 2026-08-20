@@ -204,6 +204,18 @@ int crossingTrackUnder(const CrossingSite& site, const std::vector<TrackPath>& p
         // kilometres long, and nothing outside the circuits can be on this crossing.
         const float lo = std::max(0.0f, sAt - site.outerM - 200.0f);
         const float hi = std::min(p.length(), sAt + site.outerM + 200.0f);
+        // Is the point anywhere near this crossing at all? Asked once, against the
+        // crossing itself, before walking the approach five metres at a time.
+        //
+        // A point that comes out on this road sits within kOnIt of some place in the
+        // window above, and that place is at most (outerM + 200) of *track* from the
+        // crossing - which is at least as far as the straight line between them. So
+        // anything further off than that in plan cannot be on this road, and the
+        // several hundred samples that would say so need not be taken. Nearly every
+        // ask is this case: a train is near one crossing and kilometres from the rest,
+        // and this is asked of every crossing for every axle, every frame.
+        const glm::vec3 c = p.poseAt(sAt).pos;
+        if (std::hypot(c.x - at.x, c.y - at.y) > site.outerM + 200.0 + kOnIt) continue;
         float bestS = lo;
         double bestD = 1e30;
         for (float u = lo; u <= hi; u += 5.0f) {
