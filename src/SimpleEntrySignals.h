@@ -42,6 +42,7 @@ struct SimpleEntrySignal {
     std::uint32_t trackId = 0;
     double frac = 0.0;
     int dir = 1; // +1 governs movements toward increasing frac, -1 the other way
+    int side = 1; // +1 right of that direction, -1 left; independent of it
     // Which station it belongs to, and so which other signals it is interlocked with.
     // Normally empty, meaning "whichever is nearest" - that is what attachStations works
     // out, and it cannot go stale the way a written-down name could. Set only to overrule

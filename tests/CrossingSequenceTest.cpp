@@ -27,6 +27,7 @@
 #include "TxpMesh.h"
 #include "Script.h"
 #include "SignalPaths.h"
+#include "SimpleEntrySignals.h"
 #include "SwitchTypes.h"
 #include "TerrainData.h"
 #include "TrackOverlay.h"
@@ -1609,6 +1610,120 @@ int main(int argc, char** argv) {
             check(xp.size() == 2 && xp[1].twoLamp && xp[1].withDistant,
                   "and one with both");
             std::filesystem::remove(root + "/overlay/exit-signals.txt", ec);
+        }
+
+        // Which side of the track a mast stands on. Right is the convention and so the
+        // silent default, which is the whole reason this is worth a test: every file
+        // written before the field existed has to keep meaning what it meant, and a
+        // round trip of one must not start sprouting tokens.
+        {
+            std::vector<SignalPath> xs{route(1, 0.1, 0.6), route(2, 0.1, 0.7),
+                                       route(3, 0.9, 0.6)};
+            check(writeExitSignals(root, xs), "three signals, none of them saying a side");
+            std::string before;
+            {
+                std::ifstream in(root + "/overlay/exit-signals.txt");
+                before.assign(std::istreambuf_iterator<char>(in), {});
+            }
+            check(before.find(" left") == std::string::npos &&
+                      before.find(" right") == std::string::npos,
+                  "a right-hand signal writes no token at all");
+            std::vector<SignalPath> r = loadExitSignals(root);
+            check(r.size() == 3 && r[0].side == 1 && r[1].side == 1 && r[2].side == 1,
+                  "and reads back as right");
+
+            // Left, and only on one of the two records that share the first mast: a side
+            // is a fact about the mast, so one record saying it settles it for the signal.
+            r[0].side = -1;
+            check(writeExitSignals(root, r), "one record put over to the left");
+            const std::vector<SignalPath> back = loadExitSignals(root);
+            check(back.size() == 3 && back[0].side == -1 && back[1].side == 1 &&
+                      back[2].side == 1,
+                  "the token comes back on the record that carried it, and only that one");
+            const std::vector<SignalPlacement> xp =
+                signalPlacements(back, polys, SignalKind::Exit);
+            check(xp.size() == 2 && xp[0].side == -1,
+                  "and the mast the two share stands on the left");
+            check(xp.size() == 2 && xp[1].side == 1, "while the far one is untouched");
+
+            // Round-tripping a file that does say left leaves it saying exactly that, and
+            // the side does not stand in for the mast flags or take their place.
+            std::vector<SignalPath> r2 = back;
+            r2[2].twoLamp = true;
+            r2[2].distant = true;
+            r2[2].side = -1;
+            check(writeExitSignals(root, r2), "left plus both mast flags writes");
+            const std::vector<SignalPath> back2 = loadExitSignals(root);
+            check(back2.size() == 3 && back2[2].side == -1 && back2[2].twoLamp &&
+                      back2[2].distant,
+                  "and all three come back together");
+            check(back2[0].side == -1 && !back2[0].twoLamp && !back2[0].distant,
+                  "with none of them leaking onto another record");
+            std::filesystem::remove(root + "/overlay/exit-signals.txt", ec);
+        }
+
+        // The same field on the two signals that are a plain point on a track rather than
+        // a border: a distant, and a simple station entry. The entry is the awkward one -
+        // its side token sits where an optional quoted station name may also be - so it is
+        // checked with a station and without.
+        {
+            std::vector<DistantSignal> ds(2);
+            ds[0].id = 1; ds[0].name = "D1"; ds[0].trackId = 1; ds[0].frac = 0.2;
+            ds[1].id = 2; ds[1].name = "D2"; ds[1].trackId = 1; ds[1].frac = 0.8;
+            ds[1].dir = -1;
+            ds[1].side = -1;
+            check(writeDistantSignals(root, ds), "the distants write");
+            const std::vector<DistantSignal> dr = loadDistantSignals(root);
+            check(dr.size() == 2 && dr[0].side == 1 && dr[1].side == -1,
+                  "and their sides come back");
+            check(dr.size() == 2 && dr[0].dir == 1 && dr[1].dir == -1,
+                  "with the facing untouched by it");
+            std::filesystem::remove(root + "/overlay/distant-signals.txt", ec);
+
+            std::vector<SimpleEntrySignal> se(3);
+            se[0].id = 1; se[0].name = "E1"; se[0].trackId = 1; se[0].frac = 0.2;
+            se[0].side = -1; // left, and no station: the token stands where a name would
+            se[1].id = 2; se[1].name = "E2"; se[1].trackId = 1; se[1].frac = 0.5;
+            se[1].side = -1; se[1].station = "Two Words";
+            se[2].id = 3; se[2].name = "E3"; se[2].trackId = 1; se[2].frac = 0.8;
+            se[2].station = "Bjerka"; // right, with a station
+            check(writeSimpleEntrySignals(root, se), "the simple entries write");
+            const std::vector<SimpleEntrySignal> sr = loadSimpleEntrySignals(root);
+            check(sr.size() == 3 && sr[0].side == -1 && sr[1].side == -1 && sr[2].side == 1,
+                  "their sides come back");
+            check(sr.size() == 3 && sr[0].station.empty() &&
+                      sr[1].station == "Two Words" && sr[2].station == "Bjerka",
+                  "and a bare `left` is not mistaken for the station name");
+            std::filesystem::remove(root + "/overlay/simple-entry-signals.txt", ec);
+        }
+
+        // The drawing. A mast on the left must be the same mast, mirrored across the
+        // track - not a mirrored mast, which is what flipping the whole basis would give.
+        {
+            SignalPlacement a;
+            a.kind = SignalKind::Exit;
+            a.world = {500.0, 0.0, 0.0};
+            a.forward = {1.0, 0.0};
+            SignalPlacement b = a;
+            b.side = -1;
+            SignalMesh ma, mb;
+            ma.build({a}, {0.0, 0.0, 0.0});
+            mb.build({b}, {0.0, 0.0, 0.0});
+            check(ma.vertices().size() == mb.vertices().size() &&
+                      ma.indices().size() == mb.indices().size(),
+                  "the same signal either side is the same amount of geometry");
+            // Forward is +x, so right of it is -y: the post stands at negative y on the
+            // right and positive y on the left, and nothing else about it moves.
+            double ya = 0.0, yb = 0.0, xa = 0.0, xb = 0.0, za = 0.0, zb = 0.0;
+            for (const TrackVertex& v : ma.vertices()) { ya += v.pos.y; xa += v.pos.x; za += v.pos.z; }
+            for (const TrackVertex& v : mb.vertices()) { yb += v.pos.y; xb += v.pos.x; zb += v.pos.z; }
+            const double n = static_cast<double>(std::max<std::size_t>(1, ma.vertices().size()));
+            ya /= n; yb /= n; xa /= n; xb /= n; za /= n; zb /= n;
+            check(ya < -1.0, "the right-hand post stands off the right of the track");
+            check(yb > 1.0, "and the left-hand one off the left");
+            check(std::abs(ya + yb) < 1e-3, "mirrored about the track centre exactly");
+            check(std::abs(xa - xb) < 1e-3 && std::abs(za - zb) < 1e-3,
+                  "and it has not moved along the track or up it");
         }
 
         // The approaches round-trip through their own file, and a dataset with none of

@@ -55,6 +55,16 @@ std::vector<SimpleEntrySignal> loadSimpleEntrySignals(const std::string& dataset
         is >> atTok >> dirTok;
         if (atTok.empty() || !parseAt(atTok, s.trackId, s.frac)) continue;
         s.dir = dirTok == "-" ? -1 : 1;
+        // Optional side flag, ahead of the optional station. Peeked rather than consumed:
+        // readName takes a bare token as a name, so a line ending in `left` and no station
+        // would otherwise come back as a signal belonging to a station called "left".
+        const std::streampos after = is.tellg();
+        std::string sideTok;
+        if (is >> sideTok) {
+            if (sideTok == "left") s.side = -1;
+            else if (sideTok == "right") s.side = 1;
+            else { is.clear(); is.seekg(after); }
+        }
         readName(is, s.station); // optional; absent leaves it empty = nearest wins
         out.push_back(std::move(s));
     }
@@ -69,12 +79,15 @@ bool writeSimpleEntrySignals(const std::string& datasetRoot,
     if (!f) return false;
     f << "# ebaner simple entry signals. Red or green, no track circuits and no routes;\n"
          "# the only interlocking is that a station shows one green at a time.\n"
-         "# entry <id> \"<name>\" <trackHex>:<frac> <+|-> [\"<station>\"]\n"
-         "# + governs movements toward increasing frac. The station is optional and\n"
-         "# normally left out: the nearest one is used, which cannot go stale.\n";
+         "# entry <id> \"<name>\" <trackHex>:<frac> <+|-> [left] [\"<station>\"]\n"
+         "# + governs movements toward increasing frac, and the post stands right of that\n"
+         "# unless it says left - right being the convention and so the silent default.\n"
+         "# The station is optional and normally left out: the nearest one is used, which\n"
+         "# cannot go stale.\n";
     for (const SimpleEntrySignal& s : sigs) {
         f << "entry " << s.id << ' ' << quoteName(s.name) << ' ' << std::hex << s.trackId
           << std::dec << ':' << s.frac << ' ' << (s.dir < 0 ? '-' : '+');
+        if (s.side < 0) f << " left";
         if (!s.station.empty()) f << ' ' << quoteName(s.station);
         f << '\n';
     }

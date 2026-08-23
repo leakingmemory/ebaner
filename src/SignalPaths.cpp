@@ -150,6 +150,14 @@ std::vector<SignalPath> loadRoutes(const std::string& file, const char* keyword)
                 p.twoLamp = true;
                 continue;
             }
+            if (tok == "left") { // the mast stands left of the way it is read from
+                p.side = -1;
+                continue;
+            }
+            if (tok == "right") { // ...which is the default, so this is only ever explicit
+                p.side = 1;
+                continue;
+            }
             if (tok == "station") { // which place works this route, overruling geometry
                 readName(is, p.station);
                 continue;
@@ -174,10 +182,16 @@ std::vector<SignalPath> loadRoutes(const std::string& file, const char* keyword)
 // how a mast is *built* - the distant hanging on it and the two-lamp head - which only a
 // main *signal* can have: not a mini path, and not an exit route, whose start is inside the
 // station where no mast stands.
+//
+// `withSide` is a third grouping again, and deliberately not the same as either: which side
+// of the track a post stands on is something a dwarf's mini path has to say as much as a
+// main signal does, and something a road *leading up to* a mast has no business saying at
+// all. Written only when the answer is left, so every file that means right - which is all
+// of them today - comes back out of a round trip exactly as it went in.
 bool writeRoutes(const std::string& datasetRoot, const std::string& file,
                  const char* keyword, const char* header,
                  const std::vector<SignalPath>& routes, bool withType = false,
-                 bool withMastFlags = false) {
+                 bool withMastFlags = false, bool withSide = false) {
     std::error_code ec;
     fs::create_directories(datasetRoot + "/overlay", ec);
     std::ofstream f(file, std::ios::trunc);
@@ -186,6 +200,7 @@ bool writeRoutes(const std::string& datasetRoot, const std::string& file,
       << " <id> \"<name>\" <startTrackHex>:<frac> <endTrackHex>:<frac> "
          "[signal <exitId> type <C1|C2>] "
       << (withMastFlags ? "[distant] [twolamp] " : "")
+      << (withSide ? "[left] " : "")
       << "[station \"<name>\"] [via <trackHex>:<frac>]... "
          "<trackHex>:<from>:<to> ...\n";
     for (const SignalPath& p : routes) {
@@ -199,6 +214,7 @@ bool writeRoutes(const std::string& datasetRoot, const std::string& file,
         if (withType) f << " type " << (p.type == RouteType::C2 ? "C2" : "C1");
         if (withMastFlags && p.distant) f << " distant";
         if (withMastFlags && p.twoLamp) f << " twolamp";
+        if (withSide && p.side < 0) f << " left";
         if (!p.station.empty()) f << " station " << quoteName(p.station);
         for (const Border& v : p.vias)
             f << " via " << std::hex << v.trackId << std::dec << ':' << v.frac;
@@ -218,7 +234,8 @@ bool writeSignalPaths(const std::string& datasetRoot,
                       const std::vector<SignalPath>& paths) {
     return writeRoutes(datasetRoot, pathsFile(datasetRoot), "path",
                        "# ebaner mini signal paths (directional routes, border -> border).\n",
-                       paths);
+                       paths, /*withType=*/false, /*withMastFlags=*/false,
+                       /*withSide=*/true);
 }
 
 std::vector<SignalPath> loadExitRoutes(const std::string& datasetRoot) {
@@ -259,7 +276,8 @@ bool writeEntrySignals(const std::string& datasetRoot,
                        "# ebaner entry signals (main signals). The signal stands on the start\n"
                        "# border and the record is the whole route into the station; several\n"
                        "# sharing a start border are one signal governing them all.\n",
-                       entries, true, true);
+                       entries, /*withType=*/true, /*withMastFlags=*/true,
+                       /*withSide=*/true);
 }
 
 std::vector<SignalPath> loadExitSignals(const std::string& datasetRoot) {
@@ -271,7 +289,8 @@ bool writeExitSignals(const std::string& datasetRoot,
     return writeRoutes(datasetRoot, exitsFile(datasetRoot), "exit",
                        "# ebaner exit signals (main signals). The signal stands on the start\n"
                        "# border and protects the route to the destination border.\n",
-                       exits, false, true);
+                       exits, /*withType=*/false, /*withMastFlags=*/true,
+                       /*withSide=*/true);
 }
 
 bool routeStartPose(const SignalPath& p, const std::vector<TrackPoly>& polys,
@@ -349,6 +368,15 @@ std::vector<DistantSignal> loadDistantSignals(const std::string& datasetRoot) {
         d.trackId = b.trackId;
         d.frac = b.frac;
         d.dir = dirTok == "-" ? -1 : 1;
+        // Optional side flag. Peeked rather than consumed, so a file that has not got one
+        // is left exactly where the reader found it.
+        const std::streampos after = is.tellg();
+        std::string sideTok;
+        if (is >> sideTok) {
+            if (sideTok == "left") d.side = -1;
+            else if (sideTok == "right") d.side = 1;
+            else { is.clear(); is.seekg(after); }
+        }
         out.push_back(std::move(d));
     }
     return out;
@@ -362,10 +390,15 @@ bool writeDistantSignals(const std::string& datasetRoot,
     if (!f) return false;
     f << "# ebaner distant signals (forsignal). Each stands at a plain point along a track,\n"
          "# not on a border, and repeats what the first main signal ahead is showing.\n"
-         "# distant <id> \"<name>\" <trackHex>:<frac> <+|->   (+ reads toward increasing frac)\n";
-    for (const DistantSignal& d : ds)
+         "# distant <id> \"<name>\" <trackHex>:<frac> <+|-> [left]\n"
+         "# + reads toward increasing frac; the post stands right of that unless it says\n"
+         "# left, right being the convention and so the silent default.\n";
+    for (const DistantSignal& d : ds) {
         f << "distant " << d.id << ' ' << quoteName(d.name) << ' ' << std::hex << d.trackId
-          << std::dec << ':' << d.frac << ' ' << (d.dir < 0 ? '-' : '+') << '\n';
+          << std::dec << ':' << d.frac << ' ' << (d.dir < 0 ? '-' : '+');
+        if (d.side < 0) f << " left";
+        f << '\n';
+    }
     return static_cast<bool>(f);
 }
 
@@ -403,6 +436,7 @@ std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& pat
             // for the signal all of them share.
             if (p.distant) out[it->second].withDistant = true;
             if (p.twoLamp) out[it->second].twoLamp = true;
+            if (p.side < 0) out[it->second].side = -1;
             continue;
         }
         seen.emplace(key, static_cast<int>(out.size()));
@@ -413,6 +447,7 @@ std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& pat
         sp.at = p.start;
         sp.withDistant = p.distant;
         sp.twoLamp = p.twoLamp;
+        sp.side = p.side;
         sp.paths.push_back(static_cast<int>(pi));
         out.push_back(std::move(sp));
     }

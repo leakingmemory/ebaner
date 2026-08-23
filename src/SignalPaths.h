@@ -58,6 +58,16 @@ struct SignalPath {
     // This signal is built with two lamps rather than three - red over green, the head a
     // siding's own signal carries. A fact about the mast in the same way `distant` is.
     bool twoLamp = false;
+    // --- anything that stands beside a track (mini paths and main signals alike) ---
+    // Which side of the track the mast stands on: +1 to the right of the direction the
+    // signal is read from, -1 to the left. Right is the Norwegian convention and the
+    // default, so a file that says nothing means right and stays as it was written.
+    //
+    // Kept apart from the facing on purpose, exactly as an avalanche signal's is: turning
+    // a head round should not walk its post across the line. Like `distant` and `twoLamp`
+    // this is a fact about the *mast*, so several records sharing a start border settle it
+    // between them - any one of them saying left puts the mast on the left.
+    int side = 1;
     // Which station works this route, named outright, overruling the geometry.
     //
     // The traffic manager groups routes into places by how close their in-station ends
@@ -146,6 +156,7 @@ struct DistantSignal {
     std::uint32_t trackId = 0;
     double frac = 0.0;
     int dir = 1; // +1 reads toward increasing frac along the track, -1 the other way
+    int side = 1; // +1 right of that direction, -1 left; independent of it
 };
 std::vector<DistantSignal> loadDistantSignals(const std::string& datasetRoot);
 bool writeDistantSignals(const std::string& datasetRoot,
@@ -193,6 +204,9 @@ struct SignalPlacement {
     Border at;
     SignalAspect aspect = SignalAspect::Stop;
     SignalKind kind = SignalKind::Dwarf;
+    // Which side of the track the post stands on, +1 right of `forward` and -1 left. The
+    // one thing here the drawing reads that the interlocking does not.
+    int side = 1;
     // An exit signal placed where a dwarf also stands shares its pole, the dwarf lower to
     // the ground. `dwarfAspect` is that dwarf's own indication, kept separate so each head
     // still shows what it means.

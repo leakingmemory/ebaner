@@ -678,6 +678,7 @@ int main(int argc, char** argv) {
         sp.world = w;
         sp.forward = trackTangent(polys, d.trackId, d.frac, d.dir);
         sp.at = {d.trackId, d.frac};
+        sp.side = d.side;
         sp.paths.push_back(static_cast<int>(i));
         sigPlacements.push_back(std::move(sp));
     }
@@ -711,6 +712,7 @@ int main(int argc, char** argv) {
         sp.world = w;
         sp.forward = trackTangent(polys, e.trackId, e.frac, e.dir);
         sp.at = {e.trackId, e.frac};
+        sp.side = e.side;
         sp.paths.push_back(static_cast<int>(i));
         simpleEntryPlacement[i] = static_cast<int>(sigPlacements.size());
         sigPlacements.push_back(std::move(sp));

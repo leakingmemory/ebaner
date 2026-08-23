@@ -31,6 +31,8 @@ const glm::vec3 kAmberOff{0.26f, 0.17f, 0.06f};
 // shorter one, which is what the simple station signals and the siding masts carry.
 constexpr float kThreeLampHalfH = 0.72f;
 constexpr float kTwoLampHalfH = 0.52f;
+// How far from the track centre a post stands, whichever side it is on.
+constexpr float kStandoffM = 3.5f;
 } // namespace
 
 void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 origin) {
@@ -112,9 +114,13 @@ void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 o
                                                             : glm::dvec2(1.0, 0.0);
         const glm::vec3 F(static_cast<float>(f2.x), static_cast<float>(f2.y), 0.0f);
         const glm::vec3 R(F.y, -F.x, 0.0f); // right of the travel direction
-        // Base: on the ground, offset to the right of the track; scene-relative.
-        const glm::vec3 B(static_cast<float>(s.world.x - origin.x) + R.x * 3.5f,
-                          static_cast<float>(s.world.y - origin.y) + R.y * 3.5f,
+        // Base: on the ground, offset to one side of the track; scene-relative. Only the
+        // offset takes the side - R itself stays the right of travel, because it is also
+        // the basis vector every head and housing below is built on and mirroring that
+        // would turn the signal inside out rather than move it across the line.
+        const float off = kStandoffM * static_cast<float>(s.side < 0 ? -1 : 1);
+        const glm::vec3 B(static_cast<float>(s.world.x - origin.x) + R.x * off,
+                          static_cast<float>(s.world.y - origin.y) + R.y * off,
                           static_cast<float>(s.world.z - origin.z));
 
         // A distant signal on its own post out on the line: a short mast under the head.
