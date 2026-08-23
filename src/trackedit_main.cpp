@@ -3130,7 +3130,7 @@ int main(int argc, char** argv) {
             // B: with a mast selected, start drawing the road that leads up to it - an
             // exit signal's authority begins back at the platform road rather than at the
             // mast, and an entry signal's begins at the mast unless a road in is authored.
-            if (kB && !prevB && (exitMode || entryMode)) {
+            if (kB && !shiftSel && !prevB && (exitMode || entryMode)) {
                 int target = -1;
                 if (selRoute >= 0 && selRoute < static_cast<int>(routes.size()))
                     target = selRoute;
@@ -3184,46 +3184,85 @@ int main(int argc, char** argv) {
             // two lamps or three. Both are facts about the mast rather than about one road
             // into the station, so both are set on every record sharing this signal's start
             // border - which is exactly the set that makes up the one signal.
-            auto toggleMastFlag = [&](bool SignalPath::*flag, const char* on,
-                                      const char* off, char key) {
-                // `selRoute` is the signal's own record in both modes - in exit mode that
-                // is the exit signal, never the approach route, which starts inside the
-                // station where no mast stands.
-                const int sel = selRoute;
-                if (sel < 0 || sel >= static_cast<int>(routes.size())) {
-                    pathMsg = std::string(exitMode ? "right-click an exit signal first, then "
-                                                   : "right-click an entry route first, then ") +
-                              key;
-                } else {
-                    const Border& b = routes[sel].start;
-                    const bool want = !(routes[sel].*flag);
-                    int touched = 0;
-                    for (SignalPath& r : routes) {
-                        if (r.start.trackId != b.trackId ||
-                            std::abs(r.start.frac - b.frac) > 1e-9)
-                            continue;
-                        r.*flag = want;
-                        ++touched;
-                    }
-                    routesDirty = true;
-                    pathMsg = want ? on : off;
-                    std::printf("[trackedit] %s %d -> %s (%d record(s)) (Ctrl+S to save)\n",
-                                exitMode ? "exit signal" : "entry signal", routes[sel].id,
-                                want ? on : off, touched);
-                    rebuildStructs(); // the mast changes shape
+            // Every record standing on the same start border, which is exactly the set
+            // that makes up the one signal. Returns how many it touched.
+            auto forSameMast = [&](int sel, auto&& fn) {
+                const Border b = routes[sel].start;
+                int touched = 0;
+                for (SignalPath& r : routes) {
+                    if (r.start.trackId != b.trackId ||
+                        std::abs(r.start.frac - b.frac) > 1e-9)
+                        continue;
+                    fn(r);
+                    ++touched;
                 }
+                return touched;
+            };
+            // `selRoute` is the signal's own record in both modes - in exit mode that is
+            // the exit signal, never the approach route, which starts inside the station
+            // where no mast stands.
+            auto haveMast = [&] {
+                return selRoute >= 0 && selRoute < static_cast<int>(routes.size());
+            };
+            auto needMast = [&](const char* key) {
+                pathMsg = std::string(exitMode ? "right-click an exit signal first, then "
+                                               : "right-click an entry route first, then ") +
+                          key;
+                pathMsgUntil = glfwGetTime() + 3.0;
+                rebuildOverlay();
+            };
+            auto toggleMastFlag = [&](bool SignalPath::*flag, const char* on,
+                                      const char* off, const char* key) {
+                if (!haveMast()) { needMast(key); return; }
+                const int sel = selRoute;
+                const bool want = !(routes[sel].*flag);
+                const int touched = forSameMast(sel, [&](SignalPath& r) { r.*flag = want; });
+                routesDirty = true;
+                pathMsg = want ? on : off;
+                std::printf("[trackedit] %s %d -> %s (%d record(s)) (Ctrl+S to save)\n",
+                            exitMode ? "exit signal" : "entry signal", routes[sel].id,
+                            want ? on : off, touched);
+                rebuildStructs(); // the mast changes shape
                 pathMsgUntil = glfwGetTime() + 3.0;
                 rebuildOverlay();
             };
             // F: a distant (forsignal) on the mast, showing what the next main signal ahead
             // is displaying and switched off entirely while this one is at danger.
             if (kF && !prevF && (exitMode || entryMode))
-                toggleMastFlag(&SignalPath::distant, "distant on the mast", "no distant", 'F');
+                toggleMastFlag(&SignalPath::distant, "distant on the mast", "no distant", "F");
             // 2: two lamps on the head rather than three - red over green, the head a
             // siding's own signal carries. It changes nothing but what the mast can show:
             // one green, lit for any clearance.
             if (k2 && !prev2 && (exitMode || entryMode))
-                toggleMastFlag(&SignalPath::twoLamp, "two-lamp head", "three-lamp head", '2');
+                toggleMastFlag(&SignalPath::twoLamp, "two-lamp head", "three-lamp head", "2");
+            // Shift+B: walk the mast across to the other side of the track. Plain B is
+            // taken here - it arms the road leading up to this mast - and that binding is
+            // wanted with a mast selected, which is the same state this one needs, so the
+            // two cannot share the key. Shift+B is the nearest thing to it that is free.
+            //
+            // Which side a post stands on is a fact about the mast, not about one road
+            // into the station, so it is set on every record sharing the start border,
+            // exactly as the head and the distant are. It does not touch the facing: the
+            // signal goes on reading the way it read.
+            if (kB && shiftSel && !prevB && (exitMode || entryMode)) {
+                if (!haveMast()) { needMast("Shift+B"); }
+                else {
+                    const int sel = selRoute;
+                    const int want = -routes[sel].side;
+                    const int touched =
+                        forSameMast(sel, [&](SignalPath& r) { r.side = want; });
+                    routesDirty = true;
+                    pathMsg = std::string("stands ") + (want > 0 ? "right" : "left") +
+                              " of the way it is read from";
+                    std::printf("[trackedit] %s %d -> %s of the track (%d record(s)) "
+                                "(Ctrl+S to save)\n",
+                                exitMode ? "exit signal" : "entry signal", routes[sel].id,
+                                want > 0 ? "right" : "left", touched);
+                    rebuildStructs(); // the mast moves
+                    pathMsgUntil = glfwGetTime() + 3.0;
+                    rebuildOverlay();
+                }
+            }
             // X: cancel whatever is in progress, else delete the selected thing.
             if (kX && !prevX) {
                 if (armed() || pathStart >= 0) {
@@ -4843,7 +4882,7 @@ int main(int argc, char** argv) {
             // and the distant if there is one.
             auto mastBuild = [](const SignalPath& p) {
                 return std::string(p.twoLamp ? "2-lamp" : "3-lamp") +
-                       (p.distant ? " +distant" : "");
+                       (p.distant ? " +distant" : "") + (p.side < 0 ? " left" : "");
             };
             // Exit mode says what the selection *is*, since a signal and a route look alike
             // in a name alone: a signal plus how many routes reach it, or a route plus the
@@ -4935,7 +4974,7 @@ int main(int argc, char** argv) {
                            x, 40.0f + hl * lh, sc, hintCol, fbw, fbh);
                 const char* second =
                     selEntryApproach >= 0 ? "B=another approach  F2=rename  X=delete"
-                    : selEntry >= 0 ? "destination  T=C1/C2  F/2=mast  B=approach  V/F2/X"
+                    : selEntry >= 0 ? "destination  T=C1/C2  F/2  B=road  ^B=side  F2/X/V"
                                     : "A ROAD UP TO A MAST: right-click it, then B";
                 appendText(tv, second, x, 40.0f + (hl + 1) * lh, sc,
                            selR ? glm::vec3(1.0f, 0.9f, 0.5f) : hintCol, fbw, fbh);
@@ -4949,7 +4988,7 @@ int main(int argc, char** argv) {
                            x, 40.0f + hl * lh, sc, hintCol, fbw, fbh);
                 const char* second =
                     selExitRoute >= 0 ? "T=C1/C2  B=another route  F2=rename  X=delete"
-                    : selExit >= 0    ? "B=add route  F=distant  2=head  F2/X  V=via"
+                    : selExit >= 0    ? "B=route  F=distant  2=head  ^B=side  F2/X  V=via"
                                       : "ROUTE UP TO A SIGNAL: right-click it, then B";
                 appendText(tv, second, x, 40.0f + (hl + 1) * lh, sc,
                            selR ? glm::vec3(1.0f, 0.9f, 0.5f) : hintCol, fbw, fbh);
