@@ -15,6 +15,7 @@
 
 #include "Vehicle.h"
 
+#include <optional>
 #include <vector>
 
 // A train: one or more sets coupled together and driven as one.
@@ -38,10 +39,30 @@
 //     all. Any set whose own safety device trips puts the whole train into emergency,
 //     independently, and it does so whether or not anything was commanding it.
 //
-// It is also what lets sets be coupled and uncoupled later: the sets are already
-// separate objects with separate state, and an uncoupled set is a consist of one.
+// It is also what lets sets be uncoupled: the sets are already separate objects with
+// separate state, so parting a train is a matter of handing some of them to a second
+// consist, and an uncoupled set is a consist of one. See uncoupleAfter.
 class Consist {
 public:
+    // Why a parted train is holding its brakes on, and what will let go of them.
+    //
+    // Uncoupling brakes both portions, and the hold does not care what any handle
+    // says - including a handle whose reverser is in gear and would otherwise rule.
+    // The driver gets his brakes back by putting the reverser to Neutral and taking it
+    // out again; nothing else clears it, so a driver who never lets go never gets them
+    // back. That is the whole point of it: the train has just been taken apart and the
+    // man in the cab has to acknowledge it before he moves.
+    //
+    // "Out of gear" is read over every cab of the portion, not just the one acting.
+    // Reading only the acting cab is the way round it: a driver in F at one end taps
+    // the other end's reverser through N and is released without his own ever having
+    // moved. It is also the same quantity the reverser interlock already measures, so
+    // the two read as one idea.
+    enum class UncoupleHold {
+        None,      // not held
+        InGear,    // held, and something is still in gear: put the reverser to N
+        AtNeutral, // held, and nothing is in gear: take a reverser out of N to go
+    };
     // Lay out `spec.units` sets from the given place, the first at `s` and the rest
     // coupled behind it, each following the track by the walk (so a train laid across a
     // turnout is placed on the rails it is actually on).
@@ -84,8 +105,10 @@ public:
     // More than one is the interlock case, and it now catches a cab in each set.
     int activeCab() const;
     bool interlockEmergency() const;
-    // The train-wide emergency line: any set's own safety device, or the interlock.
+    // The train-wide emergency line: any set's own safety device, the interlock, or
+    // the hold a train comes away from an uncoupling with.
     bool emergencyLine() const;
+    UncoupleHold uncoupleHold() const { return hold_; }
     // Which set is calling for emergency on its own account (-1 = none), so the cab can
     // be told *which* one rather than just that something tripped.
     int trippedUnit() const;
@@ -138,12 +161,43 @@ public:
     // Arc-length offsets of every axle from the *train's* centre.
     std::vector<float> axleOffsets() const;
 
+    // --- uncoupling -------------------------------------------------------------
+    // Part the train at the coupler behind set `k` (0-based): sets 0..k stay here and
+    // sets k+1.. leave as a train of their own, which is returned.
+    //
+    // Nothing moves. Every set keeps the road it is on, where it is along it, which way
+    // round it faces, its air, its engines and its handles, and both portions keep the
+    // speed they had - so the instant after the split is indistinguishable from the
+    // instant before it except that there are two trains. They draw apart because they
+    // are stepped separately from here on, not because either was pushed.
+    //
+    // Both portions come away in emergency, held until a reverser is cycled through
+    // Neutral. The portion the driver is not on would in any case be held by the
+    // reverser interlock, having no cab in gear; the hold is what makes that survive
+    // someone walking to it and taking a reverser out of Neutral, and what holds the
+    // driver's own portion, whose handle would otherwise rule.
+    //
+    // nullopt, and this train untouched, if the split is refused - see mayUncouple.
+    std::optional<Consist> uncoupleAfter(int k);
+    // Whether the coupler behind set `k` may be parted, and if not, why not in words a
+    // cab display can show. A train of one has no coupler, and nothing is uncoupled on
+    // the move: two portions parted at speed would be two trains at the same speed
+    // drifting apart at whatever rate their brakes and their grades differ by, which is
+    // not a thing that is done.
+    bool mayUncouple(int k, const char*& why) const;
+    // How many couplers there are: one fewer than there are sets.
+    int couplerCount() const { return std::max(0, unitCount() - 1); }
+    static constexpr float kUncoupleMaxSpeed = 0.15f; // m/s, "at a stand"
+
     // Nose-to-nose over the Scharfenberg heads of two coupled sets. A modelling choice:
     // the real gap is small and the couplers are drawn closed, so this is what keeps the
     // two noses from sharing the same metre of track rather than a measured figure.
     static constexpr float kCouplerGap = 0.6f;
 
 private:
+    // The rear portion of an uncoupling: sets that already exist, moved across whole.
+    Consist(std::vector<Vehicle>&& units, const std::vector<TrackPath>* paths,
+            const char* name, float v);
     // Distance between the centres of two adjacent sets.
     float unitPitch() const { return lead().length() + kCouplerGap; }
     // Put the trailing sets where the coupler says they should be, following the track.
@@ -155,4 +209,5 @@ private:
     float v_ = 0.0f;                 // m/s, + = the direction the train faces
     float tractiveEffort_ = 0.0f;    // N, summed over the sets (for the HUD)
     float brakeForce_ = 0.0f;        // N, summed over the sets
+    UncoupleHold hold_ = UncoupleHold::None;
 };

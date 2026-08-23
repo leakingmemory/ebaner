@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <iterator>
 
 namespace {
 constexpr float kG = Vehicle::kGravity;
@@ -47,6 +48,18 @@ Consist::Consist(const std::vector<TrackPath>* paths, const TrackPath* path,
         a.orient = 1;
         units_[i].placeAt(*paths_, a);
     }
+}
+
+Consist::Consist(std::vector<Vehicle>&& units, const std::vector<TrackPath>* paths,
+                 const char* name, float v)
+    : units_(std::move(units)), paths_(paths), name_(name), v_(v) {
+    // Deliberately no layOut(): these sets are already standing where they stand, on
+    // the roads they are on. Laying them out again would re-place them at the pitch
+    // they are already at - a nudge for nothing, and on a set halfway over a turnout,
+    // a nudge that fights the coupler loop for it.
+    //
+    // tractiveEffort_ and brakeForce_ are left at zero: they are last step's sums and
+    // are written afresh on the next one.
 }
 
 void Consist::attachNetwork(const std::vector<TrackPath>* paths, SwitchNetwork* net) {
@@ -137,6 +150,11 @@ bool Consist::emergencyLine() const {
     // The train-wide emergency line. It is asked of every set in turn and is up if any
     // one of them is calling for it, which is what "either set can brake the whole
     // train, independently" means. The reverser interlock rides the same line.
+    //
+    // So does the hold a parted train comes away with, and it is first because it is
+    // the one thing here that no handle and no reverser position can talk its way past
+    // in the same breath: it is cleared by its own sequence, in update(), or not at all.
+    if (hold_ != UncoupleHold::None) return true;
     if (interlockEmergency()) return true;
     for (const Vehicle& u : units_)
         if (u.safetyBrakeDemand()) return true;
@@ -156,7 +174,76 @@ const char* Consist::effectiveBrakeName() const {
 
 // --- the step -------------------------------------------------------------------
 
+bool Consist::mayUncouple(int k, const char*& why) const {
+    if (k < 0 || k >= couplerCount()) {
+        why = unitCount() > 1 ? "NO SUCH COUPLER" : "NOTHING TO UNCOUPLE";
+        return false;
+    }
+    if (speed() > kUncoupleMaxSpeed) {
+        why = "THE TRAIN IS MOVING";
+        return false;
+    }
+    why = "";
+    return true;
+}
+
+std::optional<Consist> Consist::uncoupleAfter(int k) {
+    const char* why = nullptr;
+    if (!mayUncouple(k, why)) return std::nullopt;
+
+    // Move the tail out and drop the source range in the same breath, so there is no
+    // window in which a moved-from Vehicle is still part of a train. A Vehicle owns
+    // nothing - its path, its network and its paths list all point at storage outside
+    // it - so moving one is a copy of pointers and PODs and is exactly safe; moving
+    // rather than copying is only to avoid the churn.
+    std::vector<Vehicle> tail(std::make_move_iterator(units_.begin() + k + 1),
+                              std::make_move_iterator(units_.end()));
+    units_.erase(units_.begin() + k + 1, units_.end());
+    Consist rear(std::move(tail), paths_, name_, v_);
+
+    // The two cabs that were at this coupler are shut-down cabs that have just become
+    // the ends of two trains. A shut-down cab refuses the reverser but not the brake
+    // handle, so whatever was left wound into it is still there - and if that is power,
+    // the portion runs away the moment its hold clears. Leave them as an uncoupling
+    // shunter leaves a cab: brake fully applied, power off.
+    setBrakeNotch(cabCount() - 1, Vehicle::kEmergencyNotch);
+    setPowerNotch(cabCount() - 1, 0);
+    rear.setBrakeNotch(0, Vehicle::kEmergencyNotch);
+    rear.setPowerNotch(0, 0);
+
+    // Both portions come away held, whatever their reversers happen to say. Asking the
+    // reversers here would be the bug: a portion already at Neutral would be released
+    // on its very first step, which is the one case the requirement is about.
+    hold_ = UncoupleHold::InGear;
+    rear.hold_ = UncoupleHold::InGear;
+    tractiveEffort_ = brakeForce_ = 0.0f;
+
+    std::printf("[Uncouple] coupler %d parted: %d set(s) stay, %d away - both trains "
+                "in emergency until a reverser is cycled through N\n",
+                k + 1, unitCount(), rear.unitCount());
+    std::fflush(stdout);
+    return rear;
+}
+
 void Consist::update(float dt, float pushInput) {
+    // The uncoupling hold, before anything reads the emergency line below. Sampled
+    // rather than remembered: three states and the current reversers are a complete
+    // edge detector for "has been through Neutral", which is the same recompute-every-
+    // frame shape the rest of the brake path has - and unlike watching setReverser it
+    // cannot be walked around by reaching into unit(i) and setting the reverser there.
+    if (hold_ != UncoupleHold::None) {
+        bool anyInGear = false;
+        for (int c = 0; c < cabCount(); ++c)
+            if (reverser(c) != 0) anyInGear = true;
+        if (!anyInGear) {
+            hold_ = UncoupleHold::AtNeutral;
+        } else if (hold_ == UncoupleHold::AtNeutral) {
+            hold_ = UncoupleHold::None;
+            std::printf("[Uncouple] reverser cycled through N - brakes released\n");
+            std::fflush(stdout);
+        }
+    }
+
     // What the driving cab is asking for, worked out once and sent to every set. The
     // two cabs of a set face opposite ways (even cab toward -s, odd toward +s), so a
     // given reverser direction drives the train opposite ways from each end; that is

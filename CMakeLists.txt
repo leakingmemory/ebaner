@@ -215,3 +215,12 @@ add_dependencies(RollingNoiseTest shaders)
 target_link_libraries(RollingNoiseTest PRIVATE ebaner_engine)
 target_include_directories(RollingNoiseTest PRIVATE src)
 add_test(NAME rolling-noise COMMAND RollingNoiseTest)
+
+# Uncoupling: parting a train at a coupler and the hold both portions come away with.
+# Needs no dataset and no export - TrackPath takes points directly, so a kilometre of
+# straight and a kilometre of 2 % falling grade are the whole world it works in.
+add_executable(UncoupleTest tests/UncoupleTest.cpp src/Vehicle.cpp src/Consist.cpp)
+add_dependencies(UncoupleTest shaders)
+target_link_libraries(UncoupleTest PRIVATE ebaner_engine)
+target_include_directories(UncoupleTest PRIVATE src)
+add_test(NAME uncouple COMMAND UncoupleTest)
