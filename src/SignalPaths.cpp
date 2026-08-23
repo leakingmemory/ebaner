@@ -734,6 +734,14 @@ void walkAhead(const std::vector<TrackPoly>& polys, const TrackJunctions& juncti
                 const int nd = glm::dot(tPlus, headIn) >= 0.0 ? +1 : -1;
                 if (glm::dot(trackTangent(polys, c.other, c.there, nd), headIn) <= 0.0)
                     continue; // reversing: not a move a train can make
+                // ...and the way that does point onward has to have track under it. Where
+                // two tracks meet end to end at a node their tangents agree, so the road
+                // out of one of them leaves by the very end we would be standing on: the
+                // heading is right and there is nothing there. Admitting it makes a plain
+                // two-road node look like a three-way the walk cannot resolve, and the
+                // walk stops dead at the throat - which is what kept a distant from
+                // seeing the exit signal at the far end of a station's straight road.
+                if (nd > 0 ? c.there >= 1.0 - 1e-9 : c.there <= 1e-9) continue;
                 cand.push_back({c.other, c.there, nd});
             }
         if (cand.empty()) return; // a dead end, or nothing legal to take
