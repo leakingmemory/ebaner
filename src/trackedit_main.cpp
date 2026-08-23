@@ -31,6 +31,8 @@
 #include "SignalMesh.h"
 #include "SignalPaths.h"
 #include "CrossingMesh.h"
+#include "AvalancheMesh.h"
+#include "AvalancheSignals.h"
 #include "FlagMesh.h"
 #include "TxpMesh.h"
 #include "TxpPositions.h"
@@ -285,7 +287,8 @@ int main(int argc, char** argv) {
     enum class EdMode {
         Geometry, NewSidings, MovePoints, Circuits, Switches, SignalPaths, ExitSignals,
         EntrySignals,
-        DistantSignals, SimpleEntries, Crossings, FlagPosts, TxpPositions
+        DistantSignals, SimpleEntries, Crossings, FlagPosts, TxpPositions,
+        AvalancheSignals
     };
     EdMode mode = EdMode::Geometry;
     // New sidings: whole roads the export does not carry, drawn point by point. The first
@@ -412,6 +415,18 @@ int main(int argc, char** argv) {
     int selFlag = -1;
     int nextFlagId = 1;
     for (const FlagPost& fp : flagPosts) nextFlagId = std::max(nextFlagId, fp.id + 1);
+    // The avalanche warning signals. No station to attach to and no interlocking to
+    // answer: they stand where the hillside is.
+    std::vector<AvalancheSignal> avalanches = loadAvalancheSignals(datasetRoot);
+    bool avalancheDirty = false;
+    int selAvalanche = -1;
+    int nextAvalancheId = 1;
+    for (const AvalancheSignal& a : avalanches)
+        nextAvalancheId = std::max(nextAvalancheId, a.id + 1);
+    // What the selected head is being shown as while it is being placed. A view state
+    // and nothing more - it is never written to the overlay, and it is how you see the
+    // warning aspect at all, since nothing in the editor can raise one.
+    std::vector<AvalancheAspect> avalanchePreview;
     // Where the TXP stands to give permission to leave.
     std::vector<TxpPosition> txpPositions = loadTxpPositions(datasetRoot);
     std::vector<SignalStation> txpStation;
@@ -430,7 +445,7 @@ int main(int argc, char** argv) {
     // what the operator will pick from when setting a route - so creating one opens this
     // straight away, pre-filled with the auto default.
     enum class NameTarget { None, Section, Path, Exit, ExitRoute, Entry, EntryApproach,
-                           Distant, Simple, Crossing, Flag, Txp };
+                           Distant, Simple, Crossing, Flag, Txp, Avalanche };
     NameTarget namingWhat = NameTarget::None;
     int namingIdx = -1;              // index into whichever collection that names
     int nextSectionId = 1;           // auto-increment section id
@@ -475,6 +490,9 @@ int main(int argc, char** argv) {
         else if (what == NameTarget::Txp && idx >= 0 &&
                  idx < static_cast<int>(txpPositions.size()))
             cur = &txpPositions[idx].name;
+        else if (what == NameTarget::Avalanche && idx >= 0 &&
+                 idx < static_cast<int>(avalanches.size()))
+            cur = &avalanches[idx].name;
         if (!cur) return;
         namingWhat = what;
         namingIdx = idx;
@@ -1306,6 +1324,19 @@ int main(int argc, char** argv) {
                      polys, data.sceneOrigin());
             merge(fm.vertices(), fm.indices());
         }
+        // The avalanche signals. Every one is drawn at rest unless it is the selected one
+        // being previewed: nothing in the editor can raise a warning, and what the
+        // hillside is doing is not what the signal is being placed for. The preview key
+        // is the only way to see the other aspect at all.
+        {
+            std::vector<AvalancheAspect> show(avalanches.size(), AvalancheAspect::Clear);
+            if (selAvalanche >= 0 && selAvalanche < static_cast<int>(show.size()) &&
+                selAvalanche < static_cast<int>(avalanchePreview.size()))
+                show[selAvalanche] = avalanchePreview[selAvalanche];
+            AvalancheMesh am;
+            am.build(avalanches, show, polys, data.sceneOrigin());
+            merge(am.vertices(), am.indices());
+        }
         // The TXP is drawn at every position here, sign and all, though in the sim they
         // appear only where the signal is actually being given: there would otherwise be
         // nothing to see, select or aim while placing one.
@@ -1924,7 +1955,8 @@ int main(int argc, char** argv) {
                                                  "Distant signals",
                                                  "Simple entry signals",
                                                  "Level crossings", "Flag posts",
-                                                 "TXP positions", "Exit"};
+                                                 "TXP positions",
+                                                 "Avalanche signals", "Exit"};
     // The mode to start in, by its menu name (EBANER_EDMODE="Move track points"). The
     // editor is otherwise reachable only through the Esc menu, which puts every mode but
     // the first out of reach of a screenshot - and a mode whose whole affordance is what
@@ -1942,6 +1974,7 @@ int main(int argc, char** argv) {
                : sel == "Level crossings"    ? EdMode::Crossings
                : sel == "Flag posts"         ? EdMode::FlagPosts
                : sel == "TXP positions"      ? EdMode::TxpPositions
+               : sel == "Avalanche signals"  ? EdMode::AvalancheSignals
                                              : EdMode::Geometry;
     };
     if (const char* em = std::getenv("EBANER_EDMODE")) {
@@ -1993,6 +2026,7 @@ int main(int argc, char** argv) {
                     selExitRoute = -1; armedExit = -1; selEntry = -1; selDistant = -1;
                     selEntryApproach = -1; armedEntry = -1;
                     selSimple = -1; selCrossing = -1; selFlag = -1; selTxp = -1;
+                    selAvalanche = -1;
                     // A half-drawn road is abandoned rather than carried between modes:
                     // it is not a record yet and nothing outside this mode can see it.
                     drawPts.clear(); drawBandTo = glm::dvec3(0.0); selNewTrack = 0;
@@ -2041,6 +2075,8 @@ int main(int argc, char** argv) {
                                : namingWhat == NameTarget::Crossing ? "level crossing"
                                : namingWhat == NameTarget::Flag ? "flag post"
                                : namingWhat == NameTarget::Txp ? "TXP position"
+                               : namingWhat == NameTarget::Avalanche
+                                   ? "avalanche warning signal"
                                                                       : "";
             const char* pfx = namingWhat == NameTarget::Section      ? "S"
                               : namingWhat == NameTarget::Path       ? "P"
@@ -2052,6 +2088,7 @@ int main(int argc, char** argv) {
                               : namingWhat == NameTarget::Crossing   ? "X"
                               : namingWhat == NameTarget::Flag       ? "FL"
                               : namingWhat == NameTarget::Txp        ? "TX"
+                              : namingWhat == NameTarget::Avalanche  ? "AV"
                                                                      : "R";
             if (e && !prevNameEnter) {
                 std::vector<SignalPath>* nr = namedRoutes(namingWhat);
@@ -2062,6 +2099,13 @@ int main(int argc, char** argv) {
                     txpDirty = true;
                     std::printf("[trackedit] %s %d named \"%s\" (Ctrl+S to save)\n", what,
                                 t.id, t.name.c_str());
+                } else if (namingWhat == NameTarget::Avalanche && namingIdx >= 0 &&
+                    namingIdx < static_cast<int>(avalanches.size())) {
+                    AvalancheSignal& a = avalanches[namingIdx];
+                    a.name = g_nameBuf.empty() ? (pfx + std::to_string(a.id)) : g_nameBuf;
+                    avalancheDirty = true;
+                    std::printf("[trackedit] %s %d named \"%s\" (Ctrl+S to save)\n", what,
+                                a.id, a.name.c_str());
                 } else if (namingWhat == NameTarget::Flag && namingIdx >= 0 &&
                     namingIdx < static_cast<int>(flagPosts.size())) {
                     FlagPost& fp = flagPosts[namingIdx];
@@ -2145,6 +2189,9 @@ int main(int argc, char** argv) {
             else if (namingWhat == NameTarget::Txp && namingIdx >= 0 &&
                      namingIdx < static_cast<int>(txpPositions.size()))
                 nid = txpPositions[namingIdx].id;
+            else if (namingWhat == NameTarget::Avalanche && namingIdx >= 0 &&
+                     namingIdx < static_cast<int>(avalanches.size()))
+                nid = avalanches[namingIdx].id;
             std::string title = "NAME ";
             for (const char* c = what; *c; ++c)
                 title.push_back(static_cast<char>(std::toupper(*c)));
@@ -2242,7 +2289,8 @@ int main(int argc, char** argv) {
              mode == EdMode::EntrySignals || mode == EdMode::DistantSignals ||
              mode == EdMode::SimpleEntries || mode == EdMode::Crossings ||
              mode == EdMode::FlagPosts || mode == EdMode::TxpPositions ||
-             mode == EdMode::NewSidings || mode == EdMode::MovePoints) &&
+             mode == EdMode::NewSidings || mode == EdMode::MovePoints ||
+             mode == EdMode::AvalancheSignals) &&
             !g_mouseCaptured) {
             double mx = 0.0, my = 0.0;
             glfwGetCursorPos(window, &mx, &my);
@@ -2921,6 +2969,70 @@ int main(int argc, char** argv) {
                 rebuildOverlay();
             }
             if (kF2 && !prevF2 && haveSel) beginNaming(NameTarget::Crossing, selCrossing);
+        } else if (mode == EdMode::AvalancheSignals) { // --- Avalanche signals mode ---
+            const bool haveSel =
+                selAvalanche >= 0 && selAvalanche < static_cast<int>(avalanches.size());
+            // Two separate toggles, as the TXP has: F turns the head round, B walks the
+            // post across the track. Tying them together would move one when you meant
+            // the other.
+            if (kF && !prevF) {
+                if (haveSel) {
+                    avalanches[selAvalanche].dir = -avalanches[selAvalanche].dir;
+                    avalancheDirty = true;
+                    pathMsg = std::string("read by a train travelling toward ") +
+                              (avalanches[selAvalanche].dir > 0 ? "+frac" : "-frac");
+                    rebuildStructs();
+                } else {
+                    pathMsg = "right-click an avalanche signal first, then F";
+                }
+                pathMsgUntil = glfwGetTime() + 3.0;
+                rebuildOverlay();
+            }
+            if (kB && !prevB) {
+                if (haveSel) {
+                    avalanches[selAvalanche].side = -avalanches[selAvalanche].side;
+                    avalancheDirty = true;
+                    pathMsg = std::string("stands ") +
+                              (avalanches[selAvalanche].side > 0 ? "right" : "left") +
+                              " of increasing frac";
+                    rebuildStructs();
+                } else {
+                    pathMsg = "right-click an avalanche signal first, then B";
+                }
+                pathMsgUntil = glfwGetTime() + 3.0;
+                rebuildOverlay();
+            }
+            // Y shows the selected head in the other aspect. A view state and nothing
+            // else - it is never saved, and it is the only way to see the warning at all,
+            // since nothing here can raise one.
+            if (kY && !prevY) {
+                if (haveSel) {
+                    avalanchePreview.resize(avalanches.size(), AvalancheAspect::Clear);
+                    AvalancheAspect& a = avalanchePreview[selAvalanche];
+                    a = a == AvalancheAspect::Clear ? AvalancheAspect::Warning
+                                                    : AvalancheAspect::Clear;
+                    pathMsg = a == AvalancheAspect::Warning
+                                  ? "showing the warning (preview only, not saved)"
+                                  : "showing it at rest";
+                    rebuildStructs();
+                } else {
+                    pathMsg = "right-click an avalanche signal first, then Y";
+                }
+                pathMsgUntil = glfwGetTime() + 3.0;
+                rebuildOverlay();
+            }
+            if (kX && !prevX && haveSel) {
+                avalanches.erase(avalanches.begin() + selAvalanche);
+                if (selAvalanche < static_cast<int>(avalanchePreview.size()))
+                    avalanchePreview.erase(avalanchePreview.begin() + selAvalanche);
+                selAvalanche = -1;
+                avalancheDirty = true;
+                std::printf("[trackedit] avalanche signal removed (Ctrl+S to save)\n");
+                rebuildStructs();
+                rebuildOverlay();
+            }
+            if (kF2 && !prevF2 && haveSel)
+                beginNaming(NameTarget::Avalanche, selAvalanche);
         } else if (mode == EdMode::FlagPosts) { // --- Flag posts mode ---
             const bool haveSel =
                 selFlag >= 0 && selFlag < static_cast<int>(flagPosts.size());
@@ -3407,6 +3519,16 @@ int main(int argc, char** argv) {
             } else {
                 std::fprintf(stderr, "[trackedit] failed to write TXP positions\n");
             }
+        } else if (kSave && !prevS && mode == EdMode::AvalancheSignals &&
+                   avalancheDirty) {
+            if (writeAvalancheSignals(datasetRoot, avalanches)) {
+                std::printf("[trackedit] saved %zu avalanche signal(s) to "
+                            "%s/overlay/avalanche-signals.txt\n", avalanches.size(),
+                            datasetRoot.c_str());
+                avalancheDirty = false;
+            } else {
+                std::fprintf(stderr, "[trackedit] failed to write avalanche signals\n");
+            }
         } else if (kSave && !prevS && mode == EdMode::FlagPosts && flagDirty) {
             if (writeFlagPosts(datasetRoot, flagPosts)) {
                 std::printf("[trackedit] saved %zu flag post(s) to "
@@ -3700,6 +3822,27 @@ int main(int argc, char** argv) {
                 beginNaming(NameTarget::Txp, selTxp);
             }
             rebuildOverlay();
+        } else if (!g_mouseCaptured && mL && !prevML &&
+                   mode == EdMode::AvalancheSignals) {
+            // Free placement: any point on any track. It protects a hillside, not a
+            // junction, so there is no border to snap to.
+            if (circHit) {
+                AvalancheSignal a;
+                a.id = nextAvalancheId++;
+                a.name = "AV" + std::to_string(a.id);
+                a.trackId = circTrack;
+                a.frac = circFrac;
+                avalanches.push_back(std::move(a));
+                selAvalanche = static_cast<int>(avalanches.size()) - 1;
+                avalanchePreview.resize(avalanches.size(), AvalancheAspect::Clear);
+                avalancheDirty = true;
+                rebuildStructs();
+                std::printf("[trackedit] avalanche signal %d on %#x at %.6f "
+                            "(Ctrl+S to save)\n", avalanches[selAvalanche].id, circTrack,
+                            circFrac);
+                beginNaming(NameTarget::Avalanche, selAvalanche);
+            }
+            rebuildOverlay();
         } else if (!g_mouseCaptured && mL && !prevML && mode == EdMode::FlagPosts) {
             if (circHit) {
                 FlagPost fp;
@@ -3903,6 +4046,31 @@ int main(int argc, char** argv) {
                 const float dpx = glm::length(px - cur);
                 if (dpx < best) { best = dpx; selTxp = static_cast<int>(i); }
             }
+            rebuildOverlay();
+        } else if (!g_mouseCaptured && mR && !prevMR &&
+                   mode == EdMode::AvalancheSignals) {
+            double mx = 0.0, my = 0.0;
+            glfwGetCursorPos(window, &mx, &my);
+            int winw = fbw, winh = fbh;
+            glfwGetWindowSize(window, &winw, &winh);
+            const glm::vec2 cur(static_cast<float>(mx) * fbw / std::max(winw, 1),
+                                static_cast<float>(my) * fbh / std::max(winh, 1));
+            const glm::dvec3 o = data.sceneOrigin();
+            float best = 24.0f; // px
+            selAvalanche = -1;
+            for (std::size_t i = 0; i < avalanches.size(); ++i) {
+                const glm::dvec3 w =
+                    fracToWorld(polys, avalanches[i].trackId, avalanches[i].frac);
+                if (w.x == 0.0 && w.y == 0.0) continue;
+                const glm::vec4 clip = viewProj * glm::vec4(
+                    float(w.x - o.x), float(w.y - o.y), float(w.z - o.z) + 2.0f, 1.0f);
+                if (clip.w <= 0.0f) continue;
+                const glm::vec2 px((clip.x / clip.w * 0.5f + 0.5f) * fbw,
+                                   (clip.y / clip.w * 0.5f + 0.5f) * fbh);
+                const float dpx = glm::length(px - cur);
+                if (dpx < best) { best = dpx; selAvalanche = static_cast<int>(i); }
+            }
+            rebuildStructs(); // the preview follows the selection
             rebuildOverlay();
         } else if (!g_mouseCaptured && mR && !prevMR && mode == EdMode::FlagPosts) {
             double mx = 0.0, my = 0.0;
@@ -4434,6 +4602,42 @@ int main(int argc, char** argv) {
                        "click track: place   right-click: select   F: direction   "
                        "B: side   F2: name   X: delete",
                        x, 40.0f + 6 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
+          } else if (mode == EdMode::AvalancheSignals) { // --- Avalanche signals HUD ---
+            appendText(tv, "MODE: AVALANCHE SIGNALS (Esc menu to switch)", x,
+                       40.0f + 3 * lh, sc, glm::vec3(1.0f, 0.55f, 0.45f), fbw, fbh);
+            const bool haveSel =
+                selAvalanche >= 0 && selAvalanche < static_cast<int>(avalanches.size());
+            std::snprintf(buf, sizeof(buf), "AVALANCHE SIGNALS %zu", avalanches.size());
+            appendText(tv, buf, x, 40.0f + 4 * lh, sc,
+                       haveSel ? glm::vec3(1.0f, 0.9f, 0.3f) : glm::vec3(0.9f, 0.85f, 0.7f),
+                       fbw, fbh);
+            if (haveSel) {
+                const AvalancheSignal& a = avalanches[selAvalanche];
+                const bool warn =
+                    selAvalanche < static_cast<int>(avalanchePreview.size()) &&
+                    avalanchePreview[selAvalanche] == AvalancheAspect::Warning;
+                std::snprintf(buf, sizeof(buf),
+                              "%s   %#x at %.4f   read toward %s   stands %s   %s",
+                              a.name.c_str(), a.trackId, a.frac,
+                              a.dir > 0 ? "+frac" : "-frac",
+                              a.side > 0 ? "right" : "left",
+                              warn ? "PREVIEW: warning" : "at rest");
+                appendText(tv, buf, x, 40.0f + 5 * lh, sc,
+                           warn ? glm::vec3(1.0f, 0.45f, 0.35f)
+                                : glm::vec3(1.0f, 0.9f, 0.3f),
+                           fbw, fbh);
+            } else {
+                appendText(tv, "click a track to place one", x, 40.0f + 5 * lh, sc,
+                           glm::vec3(0.8f, 0.95f, 0.8f), fbw, fbh);
+            }
+            if (glfwGetTime() < pathMsgUntil && !pathMsg.empty())
+                appendText(tv, pathMsg, x, 40.0f + 6 * lh, sc,
+                           glm::vec3(1.0f, 0.8f, 0.4f), fbw, fbh);
+            else
+                appendText(tv,
+                           "click: place   right-click: select   F direction   B side   "
+                           "Y preview warning   F2 name   X delete   Ctrl+S save",
+                           x, 40.0f + 6 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
           } else if (mode == EdMode::FlagPosts) { // --- Flag posts HUD ---
             appendText(tv, "MODE: FLAG POSTS (Esc menu to switch)", x, 40.0f + 3 * lh, sc,
                        glm::vec3(1.0f, 0.75f, 0.3f), fbw, fbh);

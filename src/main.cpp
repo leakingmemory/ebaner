@@ -22,6 +22,8 @@
 #include <cassert>
 
 #include "CrossingMesh.h"
+#include "AvalancheMesh.h"
+#include "AvalancheSignals.h"
 #include "FlagMesh.h"
 #include "TxpGraph.h"
 #include "TxpNetwork.h"
@@ -775,6 +777,18 @@ int main(int argc, char** argv) {
     if (!flagPosts.empty())
         std::printf("[FlagPost] %zu post(s)\n", flagPosts.size());
 
+    // Avalanche warning signals. They answer to nothing here: no route runs through one,
+    // no aspect logic reads one, and no station owns one. What they show is a property of
+    // the mountainside.
+    const std::vector<AvalancheSignal> avalanches = loadAvalancheSignals(datasetRoot);
+    // One aspect per signal, and every one of them is Clear. Nothing in this program can
+    // make it anything else - the detector that would raise a warning does not exist. It
+    // is a vector rather than a constant so that when one does, it writes here and the
+    // rebuild that already runs draws it: no new buffer, no new mesh path, no new plumbing.
+    std::vector<AvalancheAspect> avalancheShown(avalanches.size(), AvalancheAspect::Clear);
+    if (!avalanches.empty())
+        std::printf("[Avalanche] %zu warning signal(s)\n", avalanches.size());
+
     // Where the TXP stands to give a train permission to leave. One position showing per
     // station: a person really can only be in one place, which is what separates this
     // from the flags in their fixtures. Held outside StationState on purpose - that is
@@ -800,6 +814,7 @@ int main(int argc, char** argv) {
     SignalMesh signals;
     CrossingMesh crossingMesh;
     FlagMesh flagMesh;
+    AvalancheMesh avalancheMesh;
     TxpMesh txpMesh;
     // Signals and crossings share one buffer: both change while the sim runs, and the
     // renderer already has an update path for that one. Merged as the struct bucket is.
@@ -871,6 +886,17 @@ int main(int argc, char** argv) {
                            flagMesh.vertices().end());
         signalIdx.reserve(signalIdx.size() + flagMesh.indices().size());
         for (const std::uint32_t i : flagMesh.indices()) signalIdx.push_back(i + fbase);
+
+        // The avalanche signals go in the dynamic bucket beside the rest, though nothing
+        // changes their aspect yet: the day something does, it is this rebuild that draws
+        // it, and there is nothing else to arrange.
+        avalancheMesh.build(avalanches, avalancheShown, polys, data.sceneOrigin());
+        const std::uint32_t abase = static_cast<std::uint32_t>(signalVerts.size());
+        signalVerts.insert(signalVerts.end(), avalancheMesh.vertices().begin(),
+                           avalancheMesh.vertices().end());
+        signalIdx.reserve(signalIdx.size() + avalancheMesh.indices().size());
+        for (const std::uint32_t i : avalancheMesh.indices())
+            signalIdx.push_back(i + abase);
 
         // The TXP appears only where the departure signal is actually being given.
         std::vector<char> txpShowing(txpPositions.size(), 0);

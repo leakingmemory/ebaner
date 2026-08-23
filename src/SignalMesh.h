@@ -27,6 +27,10 @@ constexpr float kBlinkWrapS = 300.0f;
 constexpr float kSignalBlinkS = 1.0f;   // a signal's flashing danger, as it always was
 constexpr float kCrossingSlowS = 1.5f;  // a crossing at rest
 constexpr float kCrossingFastS = 0.5f;  // a crossing with a train coming
+// An avalanche warning signal, at rest and in warning alike. The same beat as a
+// flashing danger, so the lineside has one flash rate and this does not read as a
+// different system standing beside the railway.
+constexpr float kAvalancheBlinkS = 1.0f;
 
 // The value for PushConstants::params.y.
 inline float blinkClock(double nowSeconds) {

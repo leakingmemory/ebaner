@@ -32,6 +32,9 @@
 #include "TrackOverlay.h"
 #include "TrackPath.h"
 #include "TxpPositions.h"
+#include "AvalancheMesh.h"
+#include "SignalMesh.h" // kAvalancheBlinkS, kBlinkWrapS
+#include "AvalancheSignals.h"
 #include "CrossingMesh.h"
 #include "LevelCrossings.h"
 
@@ -2218,6 +2221,105 @@ int main(int argc, char** argv) {
                   "a move without a track id still moves the nearest vertex");
         }
         std::filesystem::remove_all(root, ec);
+    }
+
+    // The avalanche warning signal: three lamps in a column, and which of them is
+    // flashing is the whole of what it says.
+    //
+    // The flashing itself happens on the GPU against a clock in the push constant, so it
+    // cannot be observed here and a screenshot of it is a coin toss. What can be checked
+    // exactly is the contract the shader reads: a lit lens is tagged -4 and carries its
+    // period and phase in the uv slot, a dark one is tagged -3 and is ordinary geometry.
+    // Get that wrong and the lamp is steady, or dark, or blinks at the wrong rate, and no
+    // still image would tell you which.
+    {
+        std::puts("\n  Avalanche warning signals:");
+        std::vector<TrackPoly> polys;
+        TrackPoly p;
+        p.id = 0x6d7;
+        for (int i = 0; i <= 10; ++i) p.pts.push_back({1000.0 * i / 10, 0.0, 0.0});
+        polys.push_back(p);
+
+        std::vector<AvalancheSignal> sigs;
+        sigs.push_back({1, "Rasovergang nord", 0x6d7, 0.4, 1, 1});
+
+        // Count the lit lenses by colour, and collect the phases they blink on.
+        struct Lit { int white = 0, red = 0, steady = 0; std::vector<float> redPhase; };
+        auto survey = [&](const AvalancheMesh& m) {
+            Lit l;
+            for (const TrackVertex& v : m.vertices()) {
+                if (v.texLayer < -3.5f) {           // a blinking lens
+                    if (v.color.b > 0.5f) ++l.white;   // white is bright in blue
+                    else if (v.color.r > 0.5f) { ++l.red; l.redPhase.push_back(v.uv.y); }
+                } else if (v.texLayer < -2.5f) {
+                    ++l.steady;                      // a steady lens: this head has none
+                }
+            }
+            return l;
+        };
+
+        AvalancheMesh rest, warn;
+        rest.build(sigs, {AvalancheAspect::Clear}, polys, glm::dvec3(0.0));
+        warn.build(sigs, {AvalancheAspect::Warning}, polys, glm::dvec3(0.0));
+        const Lit r = survey(rest), w = survey(warn);
+
+        // One lens' worth of triangles is 12, three vertices each.
+        constexpr int kLens = 36;
+        check(r.white == kLens && r.red == 0, "at rest only the white lens is lit");
+        check(w.red == 2 * kLens && w.white == 0,
+              "and on a warning only the two reds are");
+        check(r.steady == 0 && w.steady == 0,
+              "no lens on this head is ever lit steady - it is a flashing signal");
+        // Both reds on the same phase: they flash together rather than as a wig-wag.
+        bool together = !w.redPhase.empty();
+        for (float ph : w.redPhase) together = together && ph == w.redPhase.front();
+        check(together, "the two reds share a phase, so they flash together");
+        // The period every lit lens blinks on, and the one thing that would make the
+        // wrap visible: a period that does not divide it leaves one clipped blink every
+        // few minutes.
+        bool rightPeriod = true;
+        for (const TrackVertex& v : rest.vertices())
+            if (v.texLayer < -3.5f) rightPeriod = rightPeriod && v.uv.x == kAvalancheBlinkS;
+        check(rightPeriod, "and blink on the avalanche period");
+        check(std::fmod(kBlinkWrapS, kAvalancheBlinkS) == 0.0f,
+              "which divides the clock wrap, so the wrap never shows");
+        // A lit lens and a dark one are the same disc, so the aspect cannot change how
+        // much geometry there is - which is what lets the buffer be updated in place.
+        check(rest.vertices().size() == warn.vertices().size(),
+              "both aspects are the same amount of geometry");
+
+        // An anchor whose track has gone - a geometry edit deleting one - draws nothing
+        // rather than a post at the origin.
+        std::vector<AvalancheSignal> orphan;
+        orphan.push_back({2, "nowhere", 0x9999, 0.5, 1, 1});
+        AvalancheMesh gone;
+        gone.build(orphan, {AvalancheAspect::Clear}, polys, glm::dvec3(0.0));
+        check(gone.vertices().empty(), "a signal on a track that is gone draws nothing");
+
+        // The overlay is the record, so it has to survive the file.
+        {
+            const std::string root =
+                (std::filesystem::temp_directory_path() / "ebaner-avalanche-test").string();
+            std::error_code ec;
+            std::filesystem::create_directories(root + "/overlay", ec);
+            std::vector<AvalancheSignal> out;
+            out.push_back({1, "Rasovergang nord", 0x6d7, 0.312500, 1, 1});
+            out.push_back({2, "Sor for tunnelen", 0x76c7, 0.625000, -1, -1});
+            check(writeAvalancheSignals(root, out), "the overlay writes");
+            const std::vector<AvalancheSignal> back = loadAvalancheSignals(root);
+            bool same = back.size() == out.size();
+            for (std::size_t i = 0; same && i < back.size(); ++i)
+                same = back[i].id == out[i].id && back[i].name == out[i].name &&
+                       back[i].trackId == out[i].trackId &&
+                       std::abs(back[i].frac - out[i].frac) < 1e-9 &&
+                       back[i].dir == out[i].dir && back[i].side == out[i].side;
+            check(same, "and reads back field for field");
+            // The two toggles are independent: a flipped facing must not drag the post
+            // across the track with it.
+            check(back.size() == 2 && back[1].dir == -1 && back[1].side == -1,
+                  "a flipped facing and a flipped side are kept apart");
+            std::filesystem::remove_all(root, ec);
+        }
     }
 
     std::printf("\n%s\n", failures ? "FAILED" : "PASSED");

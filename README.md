@@ -787,6 +787,32 @@ Nothing constrains the flag against the fixed signalling either — a green flag
 red entry signal is allowed, because part of why a hand signal exists is to say what the
 signalling cannot.
 
+**Avalanche warning signals.** Three lamps in a column on a post — **red over white over
+red** — protecting a stretch where the mountain can come down on the line. At rest the
+**white flashes**: it is not saying "proceed", the road ahead is nobody's business here, it
+is saying that the watch is being kept and has nothing to report. A driver who sees a dark
+head has learned something too, which is why the resting aspect is a flash. On a warning
+**both reds flash together and the white goes out**.
+
+Pick **Avalanche signals** from the Esc menu and **click a point on any track**;
+**right-click** selects, **F** turns the head round, **B** walks the post across the track,
+**Y** previews the warning aspect, **F2** names, **X** deletes, **Ctrl+S** saves to
+`overlay/avalanche-signals.txt`. `F` and `B` are separate on purpose — turning the head
+round should not move the post.
+
+Unlike every other signal here it **governs nothing**: no route runs through one, no
+interlocking reads one, no station owns one. What it shows is a property of the
+mountainside. **Nothing can raise a warning yet** — there is no detector, and the aspect
+exists so that the day there is one, it writes into a vector the rebuild already draws
+from. `Y` in the editor is the only way to see it, and it is a preview: it is never saved.
+
+The flashing costs nothing per frame. A lit lens carries its own period and phase in its
+vertices and the shader reads them against a clock in the push constant, so a blinking head
+never rebuilds a mesh — the same mechanism a flashing danger and a level crossing already
+use, and why several lamps on one head can blink independently. The two reds are given the
+same phase, so they flash together; giving one of them half a period would make them
+alternate like a road crossing, and that is the whole of the change.
+
 **TXP positions (permission to leave).** The one hand signal that hangs on nothing: the
 TXP walks out to a spot beside the track where the driver can see them and holds up a
 round sign — **a green ring around a white centre**, a European prohibitory sign with the
