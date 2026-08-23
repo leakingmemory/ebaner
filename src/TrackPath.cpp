@@ -34,8 +34,9 @@ constexpr float kCantSmoothM = 22.0f; // cant-transition smoothing window (m)
 
 TrackPath::TrackPath(std::uint32_t trackId, std::uint8_t trackType,
                      const std::vector<glm::vec3>& pts,
-                     const std::vector<std::uint16_t>& speed)
-    : speed_(speed), trackId_(trackId), trackType_(trackType) {
+                     const std::vector<std::uint16_t>& speed,
+                     const std::vector<std::uint8_t>& medium)
+    : speed_(speed), medium_(medium), trackId_(trackId), trackType_(trackType) {
     const int n = static_cast<int>(pts.size());
     // Control points with reflected phantom endpoints, so span i interpolates
     // ctrl_[i+1]..ctrl_[i+2] using neighbours ctrl_[i] and ctrl_[i+3].
@@ -257,6 +258,18 @@ std::vector<TrackPath::SpeedPoint> TrackPath::speedPoints() const {
     return out;
 }
 
+bool TrackPath::undergroundAt(float s) const {
+    if (medium_.empty()) return false;
+    int span;
+    float u, cant;
+    locate(s, span, u, cant);
+    const int n = static_cast<int>(medium_.size());
+    // Piecewise-constant like the line speed, and snapped to the nearer end of the span
+    // for the same reason: the medium changes at a surveyed point, not between two.
+    const int i = std::clamp((span < 0) ? 0 : ((u < 0.5f) ? span : span + 1), 0, n - 1);
+    return medium_[i] == 0x55 || medium_[i] == 0x54;
+}
+
 float TrackPath::speedLimitAt(float s) const {
     if (speed_.empty()) return 0.0f;
     int span;
@@ -278,6 +291,7 @@ namespace {
 struct Seg {
     std::vector<glm::vec3> pts;
     std::vector<std::uint16_t> speed;
+    std::vector<std::uint8_t> medium;
     std::uint8_t trackType = 0;
     std::uint32_t trackId = 0;
 };
@@ -323,6 +337,10 @@ std::vector<TrackPath> buildTrackPaths(const TerrainData& data) {
                 if (s.pts.empty() || glm::distance(s.pts.back(), p) > 1e-3f) {
                     s.pts.push_back(p); // drop coincident points (and their speed)
                     s.speed.push_back(k < seg.speed.size() ? seg.speed[k] : 0);
+                    // One medium for the whole segment: the exporter splits a line
+                    // wherever it changes, which is what makes this per point once the
+                    // segments are chained back into a path.
+                    s.medium.push_back(seg.medium);
                 }
             }
             if (s.pts.size() < 2) continue;
@@ -447,6 +465,7 @@ std::vector<TrackPath> buildTrackPaths(const TerrainData& data) {
         // Concatenate (dropping the duplicated join vertex, then any coincident).
         std::vector<glm::vec3> pts;
         std::vector<std::uint16_t> speed;
+        std::vector<std::uint8_t> medium;
         for (std::size_t c = 0; c < chain.size(); ++c) {
             const auto [sg, flip] = chain[c];
             const Seg& s = segs[sg];
@@ -467,10 +486,12 @@ std::vector<TrackPath> buildTrackPaths(const TerrainData& data) {
                     continue;
                 pts.push_back(P);
                 speed.push_back(kk < static_cast<int>(s.speed.size()) ? s.speed[kk] : 0);
+                medium.push_back(kk < static_cast<int>(s.medium.size()) ? s.medium[kk]
+                                                                        : 0x20);
             }
         }
         if (pts.size() < 2) continue;
-        paths.emplace_back(segs[i].trackId, segs[i].trackType, pts, speed);
+        paths.emplace_back(segs[i].trackId, segs[i].trackType, pts, speed, medium);
     }
 
     int modal = 0, modalCount = 0;

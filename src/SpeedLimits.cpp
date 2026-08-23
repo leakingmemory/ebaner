@@ -74,6 +74,7 @@ std::vector<SpeedSign> speedSigns(const std::vector<TrackPath>& paths,
                 if (const float L = glm::length(sg.right); L > 1e-6f) sg.right /= L;
                 sg.kmh = kmh;
                 sg.kind = kind;
+                sg.underground = p.undergroundAt(s);
                 out.push_back(sg);
             };
             // From index 1: the first stretch is where the path starts, not a change.

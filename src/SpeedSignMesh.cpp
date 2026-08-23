@@ -22,6 +22,18 @@ const glm::vec3 kPost{0.20f, 0.20f, 0.21f};  // galvanised post, near-black at d
 const glm::vec3 kAmber{1.00f, 0.62f, 0.05f}; // the sign face
 const glm::vec3 kInk{0.05f, 0.04f, 0.03f};   // the numeral, and the blank back
 constexpr float kSide = 3.0f;                // m right of the track centre
+// ...and how much closer one stands in a tunnel. A bore is 3.5 m from the centre to the
+// wall where the wall is straight, and the arch has started closing in above 2.5 m; the
+// blasted-rock wobble then moves it a further 0.28 m either way. Measured against the
+// bores actually built, the wall at the height of a plate's widest edge runs anywhere
+// from 3.17 m to 3.70 m out.
+//
+// A plate 1.30 m across standing at the lineside 3.0 m reaches 3.65 m, so most of them
+// have a corner in the rock - fourteen of sixteen sampled, the worst by 0.48 m. This is
+// what it takes for all of them to clear: half a metre in, putting the outer edge at
+// 3.15 m, inside the tightest wall measured. It leaves the plate 1.85 m from the centre
+// line, which is still half a metre outside anything on a train.
+constexpr float kTunnelInset = 0.50f;        // m
 constexpr float kPostH = 2.0f;               // m to the foot of the triangle
 constexpr float kTriW = 1.30f;               // m across the base
 constexpr float kTriH = 1.15f;               // m base to apex
@@ -71,7 +83,7 @@ void SpeedSignMesh::build(const std::vector<SpeedSign>& signs) {
         // travel direction; it stands to the right of that direction.
         const glm::vec3 F(s.tangent.x, s.tangent.y, 0.0f);
         const glm::vec3 R(s.right.x, s.right.y, 0.0f);
-        const glm::vec3 base = s.pos + R * kSide;
+        const glm::vec3 base = s.pos + R * (s.underground ? kSide - kTunnelInset : kSide);
         const glm::vec3 n = -F;
         const glm::vec3 out = F * 0.03f; // plate thickness, so the two faces do not z-fight
 

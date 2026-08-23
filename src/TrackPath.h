@@ -37,12 +37,19 @@ struct TrackPose {
 class TrackPath {
 public:
     TrackPath(std::uint32_t trackId, std::uint8_t trackType,
-              const std::vector<glm::vec3>& pts,      // scene-relative input
-              const std::vector<std::uint16_t>& speed); // per-point km/h (0=?)
+              const std::vector<glm::vec3>& pts,        // scene-relative input
+              const std::vector<std::uint16_t>& speed,  // per-point km/h (0=?)
+              // Per-point medium (0x20 surface, 0x55 tunnel, 0x54 tube, 0x4C/0x42
+              // bridge). Empty means "not known", which reads as surface everywhere.
+              const std::vector<std::uint8_t>& medium = {});
 
     float length() const { return length_; }
     TrackPose poseAt(float s) const;       // s clamped to [0, length]
     float speedLimitAt(float s) const;     // km/h at s (0 = unknown)
+    // Whether the line runs underground here. Lineside furniture needs to know: a bore
+    // is a far tighter space than the open line, and a sign set out for daylight ends
+    // up inside the rock.
+    bool undergroundAt(float s) const;
 
     // The surveyed limits as imported, in order along the path: km/h with 0 meaning
     // unknown, paired with where each takes effect. Raw on purpose - speedLimitAt() hides
@@ -86,6 +93,7 @@ private:
     float length_ = 0.0f;
 
     std::vector<std::uint16_t> speed_; // one per surveyed point (aligned to pts)
+    std::vector<std::uint8_t> medium_; // ditto; empty when the caller did not say
 
     std::uint32_t trackId_ = 0;
     std::uint8_t trackType_ = 0;

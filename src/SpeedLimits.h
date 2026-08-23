@@ -63,6 +63,10 @@ struct SpeedSign {
     // An Increase carrying the opposing direction's reduction marker on its back plate. The
     // marker is then not a sign in its own right - it is the other face of this one.
     bool backMarker = false;
+    // Standing in a tunnel. A bore is a much tighter space than the open line, so a sign
+    // set out at the lineside distance has its outer corner inside the rock; underground
+    // it stands in closer. See SpeedSignMesh.
+    bool underground = false;
 };
 
 // --- How far before the drop its warning stands ---
