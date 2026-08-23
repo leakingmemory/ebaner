@@ -340,6 +340,7 @@ private:
     uint32_t vehicleIndexCount_ = 0;
     uint32_t vehicleGlassFirstIndex_ = 0; // opaque indices [0, this); glass [this, count)
     std::vector<TrackVertex> pendingVehicleVertices_;
+    bool vehicleSizeWarned_ = false; // the size-mismatch complaint is said once
 
     // 2-D text overlay: a 2-D pipeline + one host-visible mapped vertex buffer per
     // in-flight frame, sized to a fixed capacity; the count varies each frame.

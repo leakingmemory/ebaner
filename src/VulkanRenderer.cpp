@@ -1421,6 +1421,23 @@ void VulkanRenderer::updateRoads(const std::vector<TrackVertex>& vertices,
 void VulkanRenderer::createVehicleBuffers(
     const std::vector<TrackVertex>& vertices,
     const std::vector<std::uint32_t>& indices, std::uint32_t glassFirstIndex) {
+    // Idempotent: whatever was attached before is retired rather than destroyed,
+    // because a frame still in flight may be reading it. Until trains could be parted
+    // this only ever ran once, and the old buffers were simply dropped on the floor.
+    //
+    // The mapped pointers have to be dropped *before* the retire, and that is not
+    // tidiness: retireBuffer defers the free by kMaxFramesInFlight + 1 frames, and for
+    // every one of those frames drawFrame would go on memcpy'ing through the stale
+    // pointer into memory that is about to be freed.
+    retireBuffer(vehicleIndexBuffer_, vehicleIndexMemory_);
+    for (int i = 0; i < kMaxFramesInFlight; ++i) {
+        vehicleVertexMapped_[i] = nullptr;
+        retireBuffer(vehicleVertexBuffers_[i], vehicleVertexMemories_[i]);
+    }
+    vehicleVertexBytes_ = 0;
+    pendingVehicleVertices_.clear();
+    vehicleSizeWarned_ = false;
+
     vehicleIndexCount_ = static_cast<uint32_t>(indices.size());
     vehicleGlassFirstIndex_ = glassFirstIndex;
     if (indices.empty() || vertices.empty()) return; // no vehicle
@@ -1933,6 +1950,21 @@ void VulkanRenderer::drawFrame(const PushConstants& pc) {
             std::memcpy(vehicleVertexMapped_[currentFrame_],
                         pendingVehicleVertices_.data(),
                         static_cast<std::size_t>(bytes));
+        else if (bytes != vehicleVertexBytes_ && !vehicleSizeWarned_) {
+            // The buffer is a fixed size, so a mesh of a different size cannot go into
+            // it and the copy has to be dropped. Say so once: the symptom otherwise is
+            // the train standing perfectly still while the simulation runs on, which
+            // looks like a physics bug and is not one. Whoever rebuilt the mesh with a
+            // different vertex count owes it an attachVehicle.
+            vehicleSizeWarned_ = true;
+            std::printf("[Renderer] vehicle mesh is %zu vertices (%llu bytes) but the "
+                        "attached buffer holds %llu - the train will not move until it "
+                        "is re-attached\n",
+                        pendingVehicleVertices_.size(),
+                        static_cast<unsigned long long>(bytes),
+                        static_cast<unsigned long long>(vehicleVertexBytes_));
+            std::fflush(stdout);
+        }
     }
     // Text overlay: refresh this slot's mapped buffer (count varies per frame).
     textVertexCount_ = static_cast<uint32_t>(pendingTextVertices_.size());
