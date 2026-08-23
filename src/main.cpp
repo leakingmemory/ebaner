@@ -23,6 +23,7 @@
 
 #include "CrossingMesh.h"
 #include "AvalancheMesh.h"
+#include "LampGeometry.h"
 #include "AvalancheSignals.h"
 #include "FlagMesh.h"
 #include "TxpGraph.h"
@@ -415,6 +416,12 @@ int main(int argc, char** argv) {
     std::deque<Consist> trains;
     int driverTrain = 0;        // index into `trains` of the one being driven
     Consist* vehicle = nullptr; // &trains[driverTrain]; re-seated whenever that changes
+    // The coupler U has been aimed at and is waiting for a second press on: which train,
+    // which of its couplers, and when it was armed. -1 is nothing armed. Up here rather
+    // than beside the other input state because the marker drawn on it is built in
+    // rebuildSignalBuffer, which is defined further down but before the loop.
+    int armedTrain = -1, armedCoupler = -1;
+    double armedAt = 0.0;
     VehicleMesh vmesh;
     Audio audio;
     g_audio = &audio; // init() is deferred until just before the render loop
@@ -921,6 +928,30 @@ int main(int argc, char** argv) {
         signalIdx.reserve(signalIdx.size() + avalancheMesh.indices().size());
         for (const std::uint32_t i : avalancheMesh.indices())
             signalIdx.push_back(i + abase);
+
+        // A mark over the coupler U is armed on, so that "the nearest one to the camera"
+        // is something the driver can see rather than something he has to trust. Only
+        // the armed one is marked: arming is a keypress and not a hover, so this is
+        // rebuilt on an event and not every frame - and a train that may be uncoupled is
+        // standing still, so the mark stays over the coupler once it is placed.
+        if (armedTrain >= 0 && armedCoupler >= 0 &&
+            static_cast<std::size_t>(armedTrain) < trains.size()) {
+            const Consist& at = trains[static_cast<std::size_t>(armedTrain)];
+            if (armedCoupler + 1 < at.unitCount()) {
+                // Midway between the two sets' centres - see the pick in the loop.
+                const VehicleFrame& a = at.unit(armedCoupler).frame();
+                const glm::vec3 c = 0.5f * (a.pos + at.unit(armedCoupler + 1).frame().pos);
+                const glm::vec3 R = a.right, F = a.tangent, U = a.up;
+                const glm::vec3 amber(1.0f, 0.72f, 0.18f);
+                // A post standing out of the roof over the coupler, with a plate across
+                // it: tall enough to clear the bodies and be read from the ground beside
+                // the train, which is where the man doing the uncoupling is.
+                lampgeom::box(signalVerts, signalIdx, c + U * 3.6f, R, F, U, 0.05f, 0.05f,
+                              1.4f, amber);
+                lampgeom::box(signalVerts, signalIdx, c + U * 5.1f, R, F, U, 0.45f, 0.06f,
+                              0.16f, amber);
+            }
+        }
 
         // The TXP appears only where the departure signal is actually being given.
         std::vector<char> txpShowing(txpPositions.size(), 0);
@@ -1708,6 +1739,8 @@ int main(int argc, char** argv) {
     bool prevBrkDown = false, prevBrkUp = false, prevBrkEmerg = false;
     bool prevSafety = false, prevEngine = false;
     bool prevRevF = false, prevRevN = false, prevRevR = false;
+    bool prevUncouple = false;
+    int markedTrain = -1, markedCoupler = -1; // what the coupler mark is drawn on
     bool prevMenuEnter = false, prevMenuUp = false, prevMenuDown = false;
     bool mapAttached = false; // whether the map overlay is currently attached
     bool switchesChanged = true; // a switch moved: re-evaluate the signal aspects
@@ -3123,6 +3156,96 @@ int main(int argc, char** argv) {
                 std::fflush(stdout);
             }
 
+            // --- Uncoupling ---------------------------------------------------
+            // No picker and no list: the coupler acted on is the one nearest the
+            // camera, because uncoupling is something done by walking to it. Past
+            // kUncoupleReach there is no coupler at all, so "nearest" means "the one I
+            // am standing at" rather than "the one on the train down the valley".
+            //
+            // Where a coupler is: midway between the centres of the two sets it holds.
+            // On a curve that sits a little inside the arc, which is nowhere near
+            // enough to confuse two couplers 42 m apart, and unlike stepping half a
+            // body length off a tangent it cannot come out on the wrong side of a set.
+            constexpr float kUncoupleReach = 30.0f; // m from the camera
+            constexpr double kUncoupleArmS = 5.0;   // how long an armed coupler waits
+            int nearTrain = -1, nearCoupler = -1;
+            {
+                const glm::vec3 eye = g_camera.position();
+                float nearest = kUncoupleReach;
+                for (std::size_t ti = 0; ti < trains.size(); ++ti) {
+                    const Consist& t = trains[ti];
+                    for (int k = 0; k + 1 < t.unitCount(); ++k) {
+                        const glm::vec3 c =
+                            0.5f * (t.unit(k).frame().pos + t.unit(k + 1).frame().pos);
+                        const float d = glm::distance(eye, c);
+                        if (d < nearest) {
+                            nearest = d;
+                            nearTrain = static_cast<int>(ti);
+                            nearCoupler = k;
+                        }
+                    }
+                }
+            }
+            // Walking away from an armed coupler, or simply leaving it, disarms it.
+            if (armedCoupler >= 0 &&
+                (nearTrain != armedTrain || nearCoupler != armedCoupler ||
+                 now - armedAt > kUncoupleArmS))
+                armedTrain = armedCoupler = -1;
+            // Two presses, and not because two is a nicer number: there is no coupling
+            // yet, so parting a train cannot be undone, and the first press is what
+            // lets the driver read back which coupler he is about to open.
+            const char* uncoupleWhy = "";
+            const bool uKey = !g_mapMode && down(GLFW_KEY_U);
+            if (uKey && !prevUncouple && nearCoupler >= 0) {
+                Consist& t = trains[static_cast<std::size_t>(nearTrain)];
+                if (!t.mayUncouple(nearCoupler, uncoupleWhy)) {
+                    armedTrain = armedCoupler = -1;
+                } else if (armedTrain == nearTrain && armedCoupler == nearCoupler) {
+                    const int k = nearCoupler;
+                    const int setsBefore = t.unitCount();
+                    std::optional<Consist> rear = t.uncoupleAfter(k);
+                    armedTrain = armedCoupler = -1;
+                    if (rear) {
+                        // On the end, never in the middle: a deque moves nothing on
+                        // push_back, and `vehicle` is a pointer into it.
+                        trains.push_back(std::move(*rear));
+                        // The driver keeps the cab he is sitting in, wherever it has
+                        // ended up. Not in one, he keeps the portion whose identity was
+                        // preserved - the front, which is still where it was.
+                        if (nearTrain == driverTrain && g_driverPos >= 2 * (k + 1)) {
+                            driverTrain = static_cast<int>(trains.size()) - 1;
+                            g_driverPos -= 2 * (k + 1);
+                        }
+                        vehicle = &trains[static_cast<std::size_t>(driverTrain)];
+                        g_cabCount = std::max(1, drivercam::count(*vehicle));
+                        // The composition changed, so the index buffer has to be rebuilt
+                        // too - a vertex refresh under the old indices draws a heap of
+                        // triangles and says nothing about it.
+                        vmesh.build(trains);
+                        renderer.attachVehicle(vmesh.vertices(), vmesh.indices(),
+                                               vmesh.glassFirstIndex());
+                        std::printf("[Uncouple] %d sets became %d + %d; driving train %d "
+                                    "cab %d\n",
+                                    setsBefore, trains[static_cast<std::size_t>(nearTrain)]
+                                                    .unitCount(),
+                                    trains.back().unitCount(), driverTrain, g_driverPos);
+                        std::fflush(stdout);
+                    }
+                } else {
+                    armedTrain = nearTrain;
+                    armedCoupler = nearCoupler;
+                    armedAt = now;
+                }
+            }
+            prevUncouple = uKey;
+            // The mark follows the armed coupler, and is rebuilt only when that changes.
+            if (armedTrain != markedTrain || armedCoupler != markedCoupler) {
+                markedTrain = armedTrain;
+                markedCoupler = armedCoupler;
+                rebuildSignalBuffer();
+                renderer.updateSignals(signalVerts, signalIdx);
+            }
+
             // I: start / stop the diesel engines (both together, edge-triggered).
             const bool iKey = down(GLFW_KEY_I);
             if (iKey && !prevEngine && vehicle->engineCount() > 0) {
@@ -3356,6 +3479,42 @@ int main(int argc, char** argv) {
                         std::snprintf(buf, sizeof(buf),
                                       "!! LOW RESERVOIR - AUTO EMERGENCY !!");
                     appendText(tv, buf, x, y, sc, glm::vec3(1.0f, 0.35f, 0.3f), fbw, fbh);
+                    y += lh;
+                }
+                // The uncoupling hold, and why the brakes will not come off. Without
+                // this the driver of a train that has just come apart sees an emergency
+                // with no cause anywhere on his gauges - his own air is perfect.
+                if (vehicle->uncoupleHold() != Consist::UncoupleHold::None) {
+                    const bool atN =
+                        vehicle->uncoupleHold() == Consist::UncoupleHold::AtNeutral;
+                    appendText(tv,
+                               atN ? "!! UNCOUPLED - REVERSER OUT OF N TO RELEASE !!"
+                                   : "!! UNCOUPLED - AUTO EMERGENCY - REVERSER TO N !!",
+                               x, y, sc, glm::vec3(1.0f, 0.35f, 0.3f), fbw, fbh);
+                    y += lh;
+                }
+                // The coupler being stood at, and what U would do to it. Named by the
+                // sets it holds together, because that is what the driver can see.
+                if (nearCoupler >= 0) {
+                    const Consist& nt = trains[static_cast<std::size_t>(nearTrain)];
+                    const bool armed =
+                        armedTrain == nearTrain && armedCoupler == nearCoupler;
+                    const char* why = "";
+                    if (!nt.mayUncouple(nearCoupler, why))
+                        std::snprintf(buf, sizeof(buf), "COUPLER %d | %d   %s",
+                                      nearCoupler + 1, nearCoupler + 2, why);
+                    else if (armed)
+                        std::snprintf(buf, sizeof(buf),
+                                      "!! UNCOUPLE SETS %d | %d - PRESS U AGAIN !!",
+                                      nearCoupler + 1, nearCoupler + 2);
+                    else
+                        std::snprintf(buf, sizeof(buf),
+                                      "COUPLER BETWEEN SETS %d AND %d   U to uncouple",
+                                      nearCoupler + 1, nearCoupler + 2);
+                    appendText(tv, buf, x, y, sc,
+                               armed ? glm::vec3(1.0f, 0.8f, 0.3f)
+                                     : glm::vec3(0.7f, 0.85f, 0.7f),
+                               fbw, fbh);
                     y += lh;
                 }
                 if (vehicle->engineCount() > 0) {
