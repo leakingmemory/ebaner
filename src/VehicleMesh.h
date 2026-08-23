@@ -18,6 +18,7 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
+#include <deque>
 #include <vector>
 
 class Vehicle;
@@ -38,6 +39,12 @@ class VehicleMesh {
 public:
     // The whole train, set by set, into one buffer.
     void build(const Consist& consist);
+    // Every train in the world, in the order they are held, into that same one buffer.
+    // Any change to what is in there or what order it is in has to be followed by an
+    // attachVehicle and not merely an updateVehicleVertices: the index buffer is built
+    // at attach time and never touched again, so a rebuild under the old one would draw
+    // as a heap of triangles with nothing anywhere to say why.
+    void build(const std::deque<Consist>& trains);
 
     const std::vector<TrackVertex>& vertices() const { return vertices_; }
     const std::vector<std::uint32_t>& indices() const { return indices_; }
@@ -48,6 +55,8 @@ public:
 private:
     // One set's geometry, appended to the buffer.
     void emitUnit(const Vehicle& vehicle);
+    // Move the glazing to the back of the index buffer, over whatever has been emitted.
+    void sortGlass();
 
     std::vector<TrackVertex> vertices_;
     std::vector<std::uint32_t> indices_;

@@ -67,7 +67,9 @@
 #include <cstdio>
 #include <unordered_set>
 #include <cstdlib>
+#include <deque>
 #include <exception>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -392,8 +394,27 @@ int main(int argc, char** argv) {
         if (!vpath && !paths.empty()) vpath = &paths[0];
     }
 
-    // The vehicle is chosen on the start screen; created (attached) on confirm.
-    std::optional<Consist> vehicle; // the train: one set, or several coupled
+    // Every train in the world. The one the driver is on is chosen on the start screen
+    // and created on confirm; parting a coupler adds a second, and from then on this
+    // loop has to mean "every train" wherever it is talking about occupancy, level
+    // crossings, sound or geometry, and "the one I am on" only where it is talking
+    // about the controls, the HUD and the cameras.
+    //
+    // A deque and not a vector, deliberately: `vehicle` points into this, and a vector
+    // would move its elements out from under that pointer the moment an uncoupling
+    // appended to it. A moved-from Consist has no sets at all, so lead() on one is not
+    // a morning anybody wants.
+    //
+    // Only ever appended to, which is what keeps `vehicle` valid: a deque moves nothing
+    // on push_back. A parted portion therefore goes on the end rather than in behind the
+    // train it came out of, so the order the sets reach the vehicle mesh in changes -
+    // and because the vehicle index buffer is fixed from the moment it is attached, a
+    // change of composition has to be followed by attachVehicle and not by another
+    // vertex refresh. Under the old indices the trains would draw as a heap of triangles
+    // and nothing would say why.
+    std::deque<Consist> trains;
+    int driverTrain = 0;        // index into `trains` of the one being driven
+    Consist* vehicle = nullptr; // &trains[driverTrain]; re-seated whenever that changes
     VehicleMesh vmesh;
     Audio audio;
     g_audio = &audio; // init() is deferred until just before the render loop
@@ -532,9 +553,12 @@ int main(int argc, char** argv) {
                         "- it will not fit and will derail at once\n",
                         sp.name, 2.0f * margin, L);
         }
-        vehicle.emplace(&paths, vpath, sp, startS);
+        trains.clear();
+        trains.emplace_back(&paths, vpath, sp, startS);
+        driverTrain = 0;
+        vehicle = &trains.front();
         vehicle->attachNetwork(&paths, &switchNet); // divert at switches
-        vmesh.build(*vehicle);
+        vmesh.build(trains);
         g_cabCount = drivercam::count(*vehicle);
         renderer.attachVehicle(vmesh.vertices(), vmesh.indices(),
                                vmesh.glassFirstIndex());
@@ -1228,8 +1252,17 @@ int main(int argc, char** argv) {
     // track without bleeding onto a parallel one (track centres are >4 m apart).
     auto computeOccupancy = [&](std::vector<char>& occ) {
         std::fill(occ.begin(), occ.end(), 0);
-        if (!vehicle) return;
-        const std::vector<VehicleFrame> axles = vehicle->axleFrames();
+        if (trains.empty()) return;
+        // Every train, not just the one being driven. A portion left standing in a
+        // section holds it exactly as surely, and everything the interlocking does -
+        // releasing a route, clearing a signal, refusing to move a switch - is decided
+        // from this occupancy and not from the vehicle, so this one loop is what makes
+        // all of that true of a detached portion as well.
+        std::vector<VehicleFrame> axles;
+        for (const Consist& t : trains) {
+            const std::vector<VehicleFrame> a = t.axleFrames();
+            axles.insert(axles.end(), a.begin(), a.end());
+        }
         constexpr float kTol2 = 2.5f * 2.5f;
         for (const SecRun& run : secRuns) {
             if (occ[run.section]) continue;
@@ -1710,11 +1743,14 @@ int main(int argc, char** argv) {
         float lo = std::min(na->s, nb->s) + kStationLimitM;
         float hi = std::max(na->s, nb->s) - kStationLimitM;
         if (hi <= lo) return true; // stations closer together than their own limits
-        const std::vector<VehicleFrame> bogies = vehicle->bogieFrames();
-        for (float s = lo; s <= hi; s += 25.0f) {
-            const glm::vec3 q = p.poseAt(s).pos;
-            for (const VehicleFrame& bg : bogies)
-                if (glm::distance(q, bg.pos) < 30.0f) return false;
+        // Any train on the stretch between them, not only the one being driven.
+        for (const Consist& t : trains) {
+            const std::vector<VehicleFrame> bogies = t.bogieFrames();
+            for (float s = lo; s <= hi; s += 25.0f) {
+                const glm::vec3 q = p.poseAt(s).pos;
+                for (const VehicleFrame& bg : bogies)
+                    if (glm::distance(q, bg.pos) < 30.0f) return false;
+            }
         }
         return true;
     };
@@ -2466,8 +2502,15 @@ int main(int argc, char** argv) {
         // frame rather than only on an occupancy change, because the phases are timed -
         // the 5 s delays and the stuck timeout advance whether or not a train moved.
         if (!crossings.empty()) {
-            const std::vector<VehicleFrame> axles =
-                vehicle ? vehicle->axleFrames() : std::vector<VehicleFrame>{};
+            // Every train's axles together. A crossing counts wheels over its circuits
+            // and does not care whose they are, so two portions standing on one approach
+            // read as one long train - which is the conservative answer and the right
+            // one for a crossing.
+            std::vector<VehicleFrame> axles;
+            for (const Consist& t : trains) {
+                const std::vector<VehicleFrame> a = t.axleFrames();
+                axles.insert(axles.end(), a.begin(), a.end());
+            }
             bool anyPhaseMoved = false;
             bool anyBarrierMoving = false;
             // Which signals are giving an authority to move, which is what decides how far
@@ -3093,8 +3136,16 @@ int main(int argc, char** argv) {
 
             const float simDt = std::min(dt, 0.05f);
             const VehicleState prev = vehicle->state();
-            vehicle->update(simDt, pushInput);
-            if (vehicle->consumeSwitchChanged()) { // a switch was forced/broken
+            // Every train is stepped; only the one being driven feels the hand push.
+            for (Consist& t : trains) t.update(simDt, &t == vehicle ? pushInput : 0.0f);
+            // ...and every train is asked whether it forced a switch, the answers OR'd.
+            // The flag clears on read, so asking only the driven train would silently
+            // lose one a detached portion had run through, and the only symptom would
+            // be the stand no longer matching the switch it stands at.
+            bool switchForced = false;
+            for (Consist& t : trains)
+                switchForced = t.consumeSwitchChanged() || switchForced;
+            if (switchForced) { // a switch was forced/broken
                 switches.build(switchNet, worldCentre, data.loadedRadius());
                 renderer.updateSwitches(switches.vertices(), switches.indices());
                 g_mapDirty = true; // refresh the map marker if it's open
@@ -3121,12 +3172,29 @@ int main(int argc, char** argv) {
             // loudest thing a running train makes and carries far further than a brake
             // valve: a train is heard passing long before its air is.
             float rollGain = 0.0f;
+            // Which train the roar, the brake hiss and the compressor come from: the
+            // nearest to the camera, and not necessarily the one being driven. There is
+            // one of each of those voices and one set of filters behind them, so exactly
+            // one train can have them. Nearest is what lets a detached portion be heard
+            // rolling past and still leaves a driver hearing his own train from the cab.
+            // It is only audibly wrong with two trains in earshot both working at once,
+            // and that is a limit of the synth rather than of the simulation.
+            const Consist* sounded = vehicle;
             {
                 // A bare wheelset has no bogie at all, so its own frame stands in -
                 // without that the single-axle vehicle was silent at any distance,
                 // including nose to nose with it.
-                std::vector<VehicleFrame> at = vehicle->bogieFrames();
-                if (at.empty()) at.push_back(vehicle->frame());
+                float nearest = std::numeric_limits<float>::max();
+                for (const Consist& t : trains) {
+                    std::vector<VehicleFrame> at = t.bogieFrames();
+                    if (at.empty()) at.push_back(t.frame());
+                    for (const VehicleFrame& b : at) {
+                        const float d = glm::distance(camPos, b.pos);
+                        if (d < nearest) { nearest = d; sounded = &t; }
+                    }
+                }
+                std::vector<VehicleFrame> at = sounded->bogieFrames();
+                if (at.empty()) at.push_back(sounded->frame());
                 for (const VehicleFrame& b : at) {
                     const float d = glm::distance(camPos, b.pos);
                     distGain = std::max(distGain,
@@ -3140,13 +3208,25 @@ int main(int argc, char** argv) {
             // and the far ones recede as you walk the length of it.
             // Engine k sits in car body k: two engines and two car bodies to a set, laid
             // out in that order in both lists, so the index carries straight across.
-            float engGain[Audio::kMaxEngines] = {};
-            const std::vector<VehicleFrame> secs = vehicle->bodySectionFrames();
-            const int nGain =
-                std::min<int>(Audio::kMaxEngines, static_cast<int>(secs.size()));
-            for (int k = 0; k < nGain; ++k)
-                engGain[k] = glm::clamp((50.0f - glm::distance(camPos, secs[k].pos)) / 38.0f,
-                                        0.0f, 1.0f);
+            // Gathered over every train, because the synth's six slots have no notion
+            // of which train a slot belongs to - a portion left idling nearby wants a
+            // voice as much as the far end of the train being driven does. In `trains`
+            // order and never sorted: a slot carries its own filter state, so shuffling
+            // which engine sits in which slot would smear one engine's sound onto the
+            // next. Six is the longest Class 93 train there is, so parting one never
+            // asks for more slots than it had.
+            Audio::EngineVoice voices[Audio::kMaxEngines];
+            int nGain = 0;
+            for (const Consist& t : trains) {
+                const std::vector<VehicleFrame> secs = t.bodySectionFrames();
+                const int n =
+                    std::min<int>(t.engineCount(), static_cast<int>(secs.size()));
+                for (int k = 0; k < n && nGain < Audio::kMaxEngines; ++k)
+                    voices[nGain++] = {
+                        t.engineRpm(k),
+                        glm::clamp((50.0f - glm::distance(camPos, secs[k].pos)) / 38.0f,
+                                   0.0f, 1.0f)};
+            }
             // The crossing bell: whichever ringing crossing is loudest from here. A bell
             // carries further than the brakes do, and it is the crossing's own sound
             // rather than the train's, so it is placed at the crossing and not the cab.
@@ -3165,8 +3245,8 @@ int main(int argc, char** argv) {
                                                0.0f, 1.0f));
             }
             audio.setCrossingBell(bellGain);
-            audio.update(*vehicle, simDt, distGain, engGain, nGain, rollGain);
-            vmesh.build(*vehicle);
+            audio.update(*sounded, simDt, distGain, voices, nGain, rollGain);
+            vmesh.build(trains);
             renderer.updateVehicleVertices(vmesh.vertices());
 
             // Aim: the switch stand nearest the camera's forward ray (the crosshair),
@@ -3210,7 +3290,7 @@ int main(int argc, char** argv) {
             // otherwise the cab HUD (speed, reservoir/brake pressures, brake notch).
             if (g_mapMode) {
                 std::vector<TextVertex> tv;
-                appendMapHud(tv, fbw, fbh, &*vehicle);
+                appendMapHud(tv, fbw, fbh, vehicle);
                 appendRoutePicker(tv, fbw, fbh);
                 appendSignalPicker(tv, fbw, fbh);
                 renderer.setOverlayText(tv);

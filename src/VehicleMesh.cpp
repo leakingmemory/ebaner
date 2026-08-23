@@ -933,7 +933,25 @@ void VehicleMesh::build(const Consist& consist) {
     vertices_.clear();
     indices_.clear();
     for (int i = 0; i < consist.unitCount(); ++i) emitUnit(consist.unit(i));
+    sortGlass();
+}
 
+// Every train in the world, into the same one buffer. There is a single vehicle buffer
+// and its index buffer is fixed from the moment it is attached, so this ordering is
+// only safe under a live index buffer while the trains and their sets stay as they
+// were: parting one appends a portion at the end, which moves sets past each other in
+// this loop, and that has to be followed by a fresh attachVehicle rather than another
+// vertex refresh. Otherwise the old indices are read against new vertices and the
+// trains draw as a heap of triangles, silently.
+void VehicleMesh::build(const std::deque<Consist>& trains) {
+    vertices_.clear();
+    indices_.clear();
+    for (const Consist& t : trains)
+        for (int i = 0; i < t.unitCount(); ++i) emitUnit(t.unit(i));
+    sortGlass();
+}
+
+void VehicleMesh::sortGlass() {
     // Split the glazing out into a trailing, transparent run so it can be drawn
     // after the opaque geometry with alpha blending. Glass is the exterior window
     // band / windscreen (kBand) and the interior glazing (kGlass); its vertices are

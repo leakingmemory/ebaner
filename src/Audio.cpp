@@ -477,9 +477,9 @@ void Audio::setRolling(const RollingSample& r) {
     impacts_.store(r.impacts, std::memory_order_relaxed);
 }
 
-void Audio::update(const Consist& c, float /*dt*/, float brakeGain,
-                   const float* engGain, int engGainCount, float rollGain) {
-    const Consist& v = c; // everything below asks the train, not a set
+void Audio::update(const Consist& sounded, float /*dt*/, float brakeGain,
+                   const EngineVoice* engines, int engineCount, float rollGain) {
+    const Consist& v = sounded; // everything below asks the train, not a set
     const float rate = v.bcRate();
     // The release (venting to atmosphere) is the prominent sound; the filling
     // (charging the cylinders) is quieter, as in reality.
@@ -489,14 +489,14 @@ void Audio::update(const Consist& c, float /*dt*/, float brakeGain,
     amp_.store(amp, std::memory_order_relaxed);
     brightness_.store(rate < 0.0f ? 1.0f : 0.0f, std::memory_order_relaxed);
     envGain_.store(std::clamp(brakeGain, 0.0f, 1.0f), std::memory_order_relaxed);
-    // Every engine on the train gets its own voice, up to what the synth holds. An
-    // engine that is not there is silent rather than absent, so a set uncoupled later
-    // leaves its slots quiet instead of shifting the others along.
-    const int engines = std::min(v.engineCount(), kMaxEngines);
+    // Every voice handed in gets a slot, up to what the synth holds. A slot nothing is
+    // driving is silent rather than absent, so a train losing engines - a set uncoupled
+    // away - leaves its slots quiet instead of shifting the others along, and no filter
+    // state is smeared from one engine onto another.
+    const int n = engines ? std::min(engineCount, kMaxEngines) : 0;
     for (int k = 0; k < kMaxEngines; ++k) {
-        engRpm_[k].store(k < engines ? v.engineRpm(k) : 0.0f, std::memory_order_relaxed);
-        const float g = (engGain && k < engGainCount) ? engGain[k] : 0.0f;
-        engGain_[k].store(std::clamp(k < engines ? g : 0.0f, 0.0f, 1.0f),
+        engRpm_[k].store(k < n ? engines[k].rpm : 0.0f, std::memory_order_relaxed);
+        engGain_[k].store(k < n ? std::clamp(engines[k].gain, 0.0f, 1.0f) : 0.0f,
                           std::memory_order_relaxed);
     }
     compActive_.store(v.compressorRunning(), std::memory_order_relaxed);
@@ -509,7 +509,15 @@ void Audio::update(const Consist& c, float /*dt*/, float brakeGain,
     r.speed = v.speed();
     r.railborne = v.state() == VehicleState::OnRail;
     r.gain = rollGain;
-    r.impacts = v.railImpacts();
+    // See soundedTrain_: the count the synth is shown is continuous across a change of
+    // train even though the two trains' own counts have nothing to do with each other.
+    const unsigned raw = v.railImpacts();
+    if (&v != soundedTrain_) {
+        impactOffset_ += rawImpacts_ - raw; // unsigned, and the wrap is the point
+        soundedTrain_ = &v;
+    }
+    rawImpacts_ = raw;
+    r.impacts = impactOffset_ + raw;
     const float weight = v.mass() * kGravity;
     // Spread over every axle of every set: a longer train is heavier but presses no
     // harder per wheel, which is why this is a load and not a weight.

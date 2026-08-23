@@ -114,12 +114,21 @@ std::vector<float> renderEngines(int units, const std::vector<float>& gains,
     Bench b(units);
     Audio a;
     std::vector<float> buf(512);
-    std::vector<float> g(Audio::kMaxEngines, 0.0f);
-    for (std::size_t i = 0; i < gains.size() && i < g.size(); ++i) g[i] = gains[i];
+    // One voice per engine of the train, in the train's own order: the engine rpm the
+    // train is actually turning, at the gain asked for. Slots past the engines it has
+    // stay at zero rpm, which is what makes them silent rather than merely quiet.
+    std::vector<Audio::EngineVoice> g(Audio::kMaxEngines);
+    for (std::size_t i = 0; i < g.size(); ++i)
+        if (static_cast<int>(i) < b.train->engineCount())
+            g[i].gain = i < gains.size() ? gains[i] : 0.0f;
     // Ten seconds of sim to crank the diesels to idle, and a settle pass through the
     // synth's own smoothing, both thrown away.
     for (int i = 0; i < 600; ++i) b.train->update(1.0f / 60.0f);
     for (int pass = 0; pass < 2; ++pass) {
+        for (std::size_t i = 0; i < g.size(); ++i)
+            g[i].rpm = static_cast<int>(i) < b.train->engineCount()
+                           ? b.train->engineRpm(static_cast<int>(i))
+                           : 0.0f;
         a.update(*b.train, 1.0f / 60.0f, 0.0f, g.data(), static_cast<int>(g.size()), 0.0f);
         for (int done = 0; done < static_cast<int>(2.5f * kFs); done += 512)
             a.render(buf.data(), 512);

@@ -61,13 +61,24 @@ public:
     // sounding. It costs six flops and a predicted branch per sample, which is why the
     // ceiling is set by the longest train there is and not trimmed to the common case.
     static constexpr int kMaxEngines = 6;
-    // Main thread, per sim frame. `brakeGain` attenuates the brake sound by camera
-    // distance to the bogies; `engGain` does the same per engine, one entry per engine
-    // on the train (extra entries ignored, missing ones silent); `rollGain` the
-    // wheel/rail noise, which comes from the same wheels but carries much further.
-    // All in [0,1].
-    void update(const Consist& c, float dt, float brakeGain, const float* engGain,
-                int engGainCount, float rollGain);
+    // One engine's voice: how fast it is turning and how loudly it is heard from here.
+    //
+    // Handed in as a flat list rather than read off a train, because the slots are not
+    // a train's - once a train can be parted there are two trains' engines competing
+    // for six voices, and which of them get one is the caller's business to decide.
+    struct EngineVoice {
+        float rpm = 0.0f;  // rev/min; 0 is a silent slot
+        float gain = 0.0f; // [0,1] camera distance attenuation
+    };
+    // Main thread, per sim frame. `sounded` is the train the single rolling, brake and
+    // compressor voices are taken from - there is one of each and one set of filters
+    // behind them, so exactly one train can have them, and the caller picks which.
+    // `brakeGain` attenuates the brake sound by camera distance to the bogies;
+    // `engines` is the engine voices, in slot order (extra entries ignored, missing
+    // ones silent); `rollGain` the wheel/rail noise, which comes from the same wheels
+    // but carries much further. All gains in [0,1].
+    void update(const Consist& sounded, float dt, float brakeGain,
+                const EngineVoice* engines, int engineCount, float rollGain);
     // Main thread: how loudly the nearest ringing level crossing is heard, already
     // attenuated by camera distance, in [0,1]. Zero silences it.
     //
@@ -129,6 +140,17 @@ private:
     // Main-thread only.
     int lastCmd_ = 0;
     bool firstUpdate_ = true;
+    // Keeping the frog-knock count continuous when the rolling voice changes trains.
+    //
+    // `impacts` is a running total, and the synth knocks once for each new one, so it
+    // is only ever read as a difference. Two trains have unrelated totals: swapping
+    // which one feeds it would hand the audio thread a step, and a step is either a
+    // burst of knocks or - going the other way, on unsigned - about four billion of
+    // them. So the raw count is carried across by an offset and what the synth sees
+    // never jumps, whoever it is coming from.
+    const void* soundedTrain_ = nullptr;
+    unsigned rawImpacts_ = 0;    // last raw count read off the sounded train
+    unsigned impactOffset_ = 0;  // added to it; wraps with the count, which is intended
 
     // Frame counter (the device probe uses it) + a hidden test tone
     // (EBANER_AUDIO_TEST) that checks the output path.
