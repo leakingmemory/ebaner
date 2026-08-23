@@ -518,7 +518,18 @@ int main(int argc, char** argv) {
                 0.5f * (sp.length + Consist::kCouplerGap);
         float startS = vs;
         const float L = vpath->length(), margin = outerHalf + 1.0f;
-        if (L > 2.0f * margin) startS = std::clamp(vs, margin, L - margin);
+        if (L > 2.0f * margin) {
+            startS = std::clamp(vs, margin, L - margin);
+        } else {
+            // Nowhere on this path fits the train. Worth saying, because what happens
+            // otherwise looks like nothing: the sets past the end are pinned there by
+            // the arc-length clamp, the train draws as a heap and derails on the first
+            // step with nothing to explain it. Three sets need 119 m of clear road
+            // where one needs 35, so a path that was long enough before may not be.
+            std::printf("[Vehicle] %s wants %.0f m of clear road and this one is %.0f m "
+                        "- it will not fit and will derail at once\n",
+                        sp.name, 2.0f * margin, L);
+        }
         vehicle.emplace(&paths, vpath, sp, startS);
         vehicle->attachNetwork(&paths, &switchNet); // divert at switches
         vmesh.build(*vehicle);
@@ -3101,10 +3112,13 @@ int main(int argc, char** argv) {
             // One gain per engine, from the car body that engine sits in - the sets
             // are laid out along the train, so on a coupled pair the near engines swell
             // and the far ones recede as you walk the length of it.
+            // Engine k sits in car body k: two engines and two car bodies to a set, laid
+            // out in that order in both lists, so the index carries straight across.
             float engGain[Audio::kMaxEngines] = {};
             const std::vector<VehicleFrame> secs = vehicle->bodySectionFrames();
-            for (int k = 0; k < Audio::kMaxEngines && k < static_cast<int>(secs.size());
-                 ++k)
+            const int nGain =
+                std::min<int>(Audio::kMaxEngines, static_cast<int>(secs.size()));
+            for (int k = 0; k < nGain; ++k)
                 engGain[k] = glm::clamp((50.0f - glm::distance(camPos, secs[k].pos)) / 38.0f,
                                         0.0f, 1.0f);
             // The crossing bell: whichever ringing crossing is loudest from here. A bell
@@ -3125,8 +3139,7 @@ int main(int argc, char** argv) {
                                                0.0f, 1.0f));
             }
             audio.setCrossingBell(bellGain);
-            audio.update(*vehicle, simDt, distGain, engGain, Audio::kMaxEngines,
-                         rollGain);
+            audio.update(*vehicle, simDt, distGain, engGain, nGain, rollGain);
             vmesh.build(*vehicle);
             renderer.updateVehicleVertices(vmesh.vertices());
 
@@ -3194,11 +3207,14 @@ int main(int argc, char** argv) {
                 appendText(tv, buf, x, y, sc, glm::vec3(0.8f, 0.9f, 1.0f), fbw, fbh);
                 y += lh;
                 if (vehicle->unitCount() > 1) {
+                    // Set by set along the train, reservoir over brake cylinder. Just
+                    // the number: spelling out SET each time runs three sets past the
+                    // width of a narrow window for nothing the order does not say.
                     std::string per;
                     for (int u = 0; u < vehicle->unitCount(); ++u) {
-                        char one[48];
-                        std::snprintf(one, sizeof(one), "%sSET %d %.1f/%.1f",
-                                      u ? "   " : "", u + 1, vehicle->unit(u).mrPressure(),
+                        char one[40];
+                        std::snprintf(one, sizeof(one), "%s%d %.1f/%.1f", u ? "   " : "",
+                                      u + 1, vehicle->unit(u).mrPressure(),
                                       vehicle->unit(u).bcPressure());
                         per += one;
                     }

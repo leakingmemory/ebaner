@@ -25,10 +25,14 @@
 // measured here is the shipped code and not a copy of it.
 
 #include "Audio.h"
+#include "Consist.h"
+#include "TrackPath.h"
+#include "Vehicle.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -78,6 +82,51 @@ std::vector<float> renderWithImpacts(RollingSample r, float sec,
             ++next;
         }
         a.setRolling(r);
+        a.render(buf.data(), 512);
+        out.insert(out.end(), buf.begin(), buf.end());
+    }
+    return out;
+}
+
+// A train of `units` sets standing on a straight line, engines running. No dataset:
+// TrackPath takes points directly, and a kilometre of straight is all the engines need.
+struct Bench {
+    std::vector<TrackPath> paths;
+    std::optional<Consist> train;
+
+    explicit Bench(int units) {
+        std::vector<glm::vec3> pts;
+        for (int i = 0; i <= 40; ++i) pts.push_back({float(i) * 25.0f, 0.0f, 0.0f});
+        paths.emplace_back(1u, 0u, pts, std::vector<std::uint16_t>(pts.size(), 100));
+        VehicleSpec sp{};
+        for (const VehicleSpec& v : kVehicleSpecs)
+            if (v.body == BodyClass93 && v.units == 1) sp = v;
+        sp.units = units;
+        train.emplace(&paths, &paths[0], sp, 500.0f);
+        train->toggleEngines();
+    }
+};
+
+// Render the engines of an `units`-set train with the given per-engine distance gains,
+// after letting them crank up to idle and the smoothing settle.
+std::vector<float> renderEngines(int units, const std::vector<float>& gains,
+                                 float sec = 1.5f) {
+    Bench b(units);
+    Audio a;
+    std::vector<float> buf(512);
+    std::vector<float> g(Audio::kMaxEngines, 0.0f);
+    for (std::size_t i = 0; i < gains.size() && i < g.size(); ++i) g[i] = gains[i];
+    // Ten seconds of sim to crank the diesels to idle, and a settle pass through the
+    // synth's own smoothing, both thrown away.
+    for (int i = 0; i < 600; ++i) b.train->update(1.0f / 60.0f);
+    for (int pass = 0; pass < 2; ++pass) {
+        a.update(*b.train, 1.0f / 60.0f, 0.0f, g.data(), static_cast<int>(g.size()), 0.0f);
+        for (int done = 0; done < static_cast<int>(2.5f * kFs); done += 512)
+            a.render(buf.data(), 512);
+    }
+    std::vector<float> out;
+    out.reserve(static_cast<std::size_t>(sec * kFs));
+    for (int done = 0; done < static_cast<int>(sec * kFs); done += 512) {
         a.render(buf.data(), 512);
         out.insert(out.end(), buf.begin(), buf.end());
     }
@@ -320,6 +369,69 @@ int main() {
         const float n = rms(renderSteady(near, 2.0f)), h = rms(renderSteady(half, 2.0f));
         std::printf("    gain 1.0 %.5f, gain 0.5 %.5f\n", n, h);
         check(h < n * 0.75f, "and half the gain is audibly further off");
+    }
+
+    // --- Every engine of a long train is its own voice -----------------------------
+    //
+    // Two diesels to a Class 93 set, so a three-set train has six, and the synth holds
+    // six voices. What has to be true is not just that the far ones make *a* noise: a
+    // set at the back has to sound like the same machine as the set at the front, and
+    // the voices have to stay separate rather than piling into one loud engine.
+    {
+        std::puts("\n  Six engines, three sets:");
+        const std::vector<float> rear{0, 0, 0, 0, 1, 1};
+        const std::vector<float> none(6, 0.0f);
+        const float r = rms(renderEngines(3, rear));
+        const float q = rms(renderEngines(3, none));
+        std::printf("  rear set alone rms %.5f  (all gains zero %.5f)\n", r, q);
+        // The one that fails outright before the ceiling was widened: with four slots
+        // the third set's engines are zeroed and this is exact silence.
+        check(r > 10.0f * std::max(q, 1e-7f), "the third set is heard at all");
+        const float fire = band(renderEngines(3, rear), 25.0f, 50.0f);
+        const float quiet = band(renderEngines(3, none), 25.0f, 50.0f);
+        check(fire > 10.0f * std::max(quiet, 1e-12f),
+              "and it is a diesel firing, not a hiss");
+
+        // Every engine is the same machine. Measured one at a time rather than a set at
+        // a time: the two engines of a set are detuned against each other and beat at
+        // about a quarter of a hertz, so a window shorter than several seconds catches
+        // whatever part of the beat it lands on and a pair's loudness swings by half.
+        // One voice does not beat with anything, so this compares what it claims to.
+        float lo = 1e30f, hi = 0.0f;
+        for (int k = 0; k < 6; ++k) {
+            std::vector<float> one(6, 0.0f);
+            one[k] = 1.0f;
+            const float v = rms(renderEngines(3, one));
+            std::printf("  engine %d alone rms %.5f\n", k, v);
+            lo = std::min(lo, v);
+            hi = std::max(hi, v);
+        }
+        // They are not identical and should not be: each is detuned a little further
+        // than the last so that several together beat rather than doubling into one.
+        check(hi < 1.15f * lo, "every engine of the train sounds like the others");
+
+        // Six at once must not run the mix into the clipper.
+        const std::vector<float> all(6, 1.0f);
+        const std::vector<float> x = renderEngines(3, all);
+        int hard = 0;
+        for (float v : x) if (std::fabs(v) >= 0.999f) ++hard;
+        std::printf("  all six at full gain: peak %.4f, %d clipped sample(s)\n",
+                    peak(x), hard);
+        check(hard == 0, "six engines at once do not clip");
+    }
+
+    // A slot with no engine behind it is inert, not merely quiet: the render loop bails
+    // on it before it reaches the shared noise generator, so widening the ceiling cannot
+    // move a sample of a train that does not fill it. Asserted as exact equality, in one
+    // process, so it cannot drift with the compiler or the maths library.
+    {
+        std::puts("\n  An empty engine slot changes nothing:");
+        const std::vector<float> two = renderEngines(2, {1, 1, 1, 1});
+        const std::vector<float> padded = renderEngines(2, {1, 1, 1, 1, 0, 0});
+        bool same = two.size() == padded.size();
+        for (std::size_t i = 0; same && i < two.size(); ++i)
+            same = two[i] == padded[i];
+        check(same, "two sets render identically with the spare slots zeroed");
     }
 
     std::printf("\n%s\n", failures ? "FAILED" : "PASSED");

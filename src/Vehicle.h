@@ -17,6 +17,7 @@
 
 #include <glm/glm.hpp>
 
+#include <iterator>
 #include <vector>
 
 class TrackPath;
@@ -56,8 +57,14 @@ inline constexpr VehicleSpec kVehicleSpecs[] = {
     // runs in multiple in service, and the two sets keep their own air, engines and
     // safety systems - see Consist.
     {"NSB Class 93 x2 (Talent)", 70000.0f, 41.5f, 2.75f, 3.80f, 2.50f, 30.00f, 3, BodyClass93, 2},
+    {"NSB Class 93 x3 (Talent)", 70000.0f, 41.5f, 2.75f, 3.80f, 2.50f, 30.00f, 3, BodyClass93, 3},
 };
-inline constexpr int kNumVehicleSpecs = 6;
+// Counted off the table rather than written down beside it. A hand-kept number that falls
+// behind the array makes the last entry unreachable everywhere at once - the start screen,
+// the EBANER_VEHICLE clamp and the spawn clamp all read this one - and nothing warns. The
+// cast keeps it an `int`: std::clamp is a single-type template and every caller passes
+// ints alongside it.
+inline constexpr int kNumVehicleSpecs = static_cast<int>(std::size(kVehicleSpecs));
 
 // Gravity on the vehicle resolved at its current pose. The along-track part is
 // "free" (it drives acceleration up/down grades); the remainder is reacted by the

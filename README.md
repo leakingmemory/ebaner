@@ -125,8 +125,9 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   held in **emergency with the reservoir full and the engines off**; the cab's speed and
   duplex air gauges and the combined lever animate with the sim, mirrored on a HUD.
 - **Coupled sets (multiple working)** — a Class 93 runs in multiple, and the start
-  screen offers **two sets coupled** as well as one: 83.6 m over the couplers, 140 t,
-  12 axles, four car bodies, four cabs and four diesels (`src/Consist.h`). Every train
+  screen offers **two and three sets coupled** as well as one: 83.6 m over the couplers,
+  140 t, 12 axles, four car bodies, four cabs and four diesels, or 125.7 m, 210 t, 18
+  axles, six car bodies, six cabs and six diesels for 1836 kW (`src/Consist.h`). Every train
   is a **consist**, a single set being a consist of one, so there is no separate code
   path for the common case. A consist owns the *motion* — a coupled train has one
   speed, and every set's pulling and braking adds into it — and nothing else: each set
@@ -139,7 +140,7 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   not run over the link at all: any set whose own safety device trips puts the *whole
   train* into emergency, on its own account, whether or not anything was commanding it
   — and the HUD names the set that did it. Only the cabs at the two **ends** of the
-  train drive; the pair at the coupler are shut down and refuse the reverser, though
+  train drive; the cabs at the couplers are shut down and refuse the reverser, though
   they can still be sat in with `V`. The reverser interlock is read across the whole
   train, so a cab in gear in each set is the interlock case and holds the brakes on.
   Each set carries its own place on the network and crosses its own turnouts, so a
@@ -152,10 +153,13 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   whose loudness tracks the airflow — a subdued charge on apply and a prominent,
   brighter vent on release — fading as the pressure equalizes and with camera
   distance to the bogies, plus a valve click at each change of the handle or the
-  safety. The two diesels get a **muffled idle drone** (a firing thrum at the ~35 Hz
+  safety. Each diesel gets a **muffled idle drone** (a firing thrum at the ~35 Hz
   idle firing rate with a soft combustion knock, heavily low-passed for the
-  insulated character, the two ends slightly detuned so they beat), following each
-  engine's rpm and faded by distance to its end. While a compressor charges the
+  insulated character, each detuned a little further than the last so several of them
+  beat rather than doubling into one), following its own rpm and faded by distance to
+  the car body it sits in. The synth holds **six** of them, so a three-set train is
+  heard as six separate engines and not as one loud one; a voice no engine is driving
+  is exactly inert, so the ceiling costs nothing when the train is shorter. While a compressor charges the
   reservoir it adds a higher, muffled **pump hum** and loads its engine down a touch
   (a small, audible idle droop). Under all of it is the **wheel on the rail** — see
   below (`src/Audio.cpp`).
@@ -937,7 +941,7 @@ the corresponding sources (national rail register + NVDB roads + OSM enrichment)
 | `EBANER_NOCARVE`    | Skip carving railway cuttings into the terrain.               |
 | `EBANER_NOOVERLAY`  | Ignore the `overlay/` track edits (link fixes).               |
 | `EBANER_EDMODE`     | `ebaner-trackedit` only: start in this mode, by its menu name. |
-| `EBANER_VEHICLE`    | Skip the start screen and preselect a vehicle (`0`–`5`; `5` = two Class 93 sets coupled). |
+| `EBANER_VEHICLE`    | Skip the start screen and preselect a vehicle (`0`–`6`; `5` = two Class 93 sets coupled, `6` = three). |
 | `EBANER_AUDIO_DUMP` | Render a scripted brake sequence to the given WAV and exit.   |
 | `EBANER_AUDIO_DUMP_ENGINE` | Render an engine start/idle/stop to the given WAV, exit. |
 | `EBANER_AUDIO_DUMP_CROSSING` | Render a crossing bell activating/falling silent, exit. |
@@ -949,7 +953,7 @@ A per-engine/per-bogie driveline split, hydrodynamic (retarder) braking through 
 converter, wheelslip/slip-control, a detented reverser gate / key interlock (no
 reversing above zero speed), brake-pipe/triple-valve propagation and
 multi-unit consist braking, per-wheel grip-vs-slip and overturn at speed,
-terrain-grounded derailment, carriage bodies and multi-car consists (couplers),
+terrain-grounded derailment, hauled carriage stock,
 and streamed/dynamic tile loading.
 
 ## License

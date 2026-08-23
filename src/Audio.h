@@ -51,10 +51,16 @@ public:
     Audio& operator=(const Audio&) = delete;
 
     void init();                              // open the device (silent on failure / headless)
-    // The engines a train can be heard as separate voices. Two per Class 93 set, so
-    // two sets coupled fill it: walking the length of the train, the near engines
+    // The engines a train can be heard as separate voices. Two per Class 93 set, so a
+    // three-set train fills it: walking the length of the train, the near engines
     // swell and the far ones recede rather than the whole train being one sound.
-    static constexpr int kMaxEngines = 4;
+    //
+    // A slot no engine is driving is exactly inert, not merely quiet: render() bails on
+    // it before it touches the shared noise generator, and its two envelopes are zero
+    // plus zero for ever - so widening this cannot shift a sample of anything already
+    // sounding. It costs six flops and a predicted branch per sample, which is why the
+    // ceiling is set by the longest train there is and not trimmed to the common case.
+    static constexpr int kMaxEngines = 6;
     // Main thread, per sim frame. `brakeGain` attenuates the brake sound by camera
     // distance to the bogies; `engGain` does the same per engine, one entry per engine
     // on the train (extra entries ignored, missing ones silent); `rollGain` the
