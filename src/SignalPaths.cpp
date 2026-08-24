@@ -299,10 +299,18 @@ bool routeStartPose(const SignalPath& p, const std::vector<TrackPoly>& polys,
     const SectionInterval& iv0 = p.parts.front();
     const glm::dvec3 a = fracToWorld(polys, iv0.trackId, iv0.from);
     if (a.x == 0.0 && a.y == 0.0) return false; // stale/missing track
-    // A small step toward `to` gives the travel direction leaving the border.
-    const double f1 = iv0.from + (iv0.to - iv0.from) * 0.02;
-    const glm::dvec3 b = fracToWorld(polys, iv0.trackId, f1);
-    glm::dvec2 d(b.x - a.x, b.y - a.y);
+    // The direction of travel leaving the border: the tangent there, taken the way the
+    // first interval runs.
+    //
+    // It used to be the chord to a point 2 per cent along that interval, and that made
+    // the answer depend on how long the route happened to be. Two routes leaving the same
+    // border the same way - which is one signal governing both - measured over different
+    // lengths of track, and on a curve those chords point differently. Where that crossed
+    // a bucket boundary in the dedupe key below, the one signal came out as two masts in
+    // the same spot, drawn one inside the other and showing whatever their own routes
+    // said. Which of them won a given pixel was up to the depth buffer, so a signal
+    // cleared for one road appeared to take the other's danger as it was approached.
+    glm::dvec2 d = trackTangent(polys, iv0.trackId, iv0.from, iv0.to >= iv0.from ? +1 : -1);
     const double L = glm::length(d);
     if (L < 1e-6) return false;
     world = a;
