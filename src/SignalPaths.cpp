@@ -755,31 +755,66 @@ void walkAhead(const std::vector<TrackPoly>& polys, const TrackJunctions& juncti
         if (cand.empty()) return; // a dead end, or nothing legal to take
         std::size_t take = 0;
         if (cand.size() > 1) {
-            // A turnout: follow the leg it is set to. Anything the switches cannot resolve
-            // - an unregistered fan, a broken point - ends the walk.
-            const int t = turnoutAt(net, fracToWorld(polys, track, stopFrac));
-            if (t < 0 || net.state(t) == SwitchState::Broken) return;
-            const std::uint32_t siding = net.turnouts()[t].sidingTrack;
+            // The points on this node, and the road out they leave open.
+            //
+            // A node can carry more than one set of points: where a throat ladder or a
+            // double junction brings several track ends together on one spot, each is
+            // detected separately and they sit at the same place. The road out is then not
+            // one turnout's business but all of theirs together, and it can be a move
+            // across two of them - off one branch and straight onto another - which is
+            // exactly what the interlocking already sets up when it throws both to their
+            // diverging legs for one movement.
+            //
+            // Anything they cannot settle between them - an unregistered fan, a broken
+            // point, or two roads out with equal claim - ends the walk rather than guessing.
+            const glm::dvec3 nodeW = fracToWorld(polys, track, stopFrac);
+            std::vector<std::uint32_t> thrown; // branches set to their diverging leg
+            std::vector<std::uint32_t> branch; // every branch here, however it is set
+            bool anyPoints = false;
+            for (std::size_t i = 0; i < net.turnouts().size(); ++i) {
+                const Turnout& to = net.turnouts()[i];
+                if (to.mainPath < 0) continue; // inert: nothing is set here
+                if (planarDist(nodeW, to.world) > kAtTurnout) continue;
+                if (net.state(static_cast<int>(i)) == SwitchState::Broken) return;
+                anyPoints = true;
+                branch.push_back(to.sidingTrack);
+                if (net.state(static_cast<int>(i)) == SwitchState::Diverging)
+                    thrown.push_back(to.sidingTrack);
+            }
+            if (!anyPoints) return;
+            auto has = [](const std::vector<std::uint32_t>& v, std::uint32_t id) {
+                return std::find(v.begin(), v.end(), id) != v.end();
+            };
+            // The one candidate satisfying `ok`, or -1 for none and -1 for several.
+            auto sole = [&](auto&& ok) {
+                int found = -1;
+                for (std::size_t i = 0; i < cand.size(); ++i) {
+                    if (!ok(cand[i])) continue;
+                    if (found >= 0) return -1; // several: do not guess
+                    found = static_cast<int>(i);
+                }
+                return found;
+            };
             int pick = -1;
-            if (net.state(t) == SwitchState::Diverging) {
-                // Set to the branch: only the branch will do. If it is not among the roads
-                // out of here, this turnout is set away from us and there is nowhere to go.
-                for (std::size_t i = 0; i < cand.size(); ++i)
-                    if (cand[i].track == siding) pick = static_cast<int>(i);
+            if (has(thrown, track)) {
+                // We came in along a branch whose points are set to us. Another branch set
+                // the same way is a move across the node; otherwise we join the road
+                // through.
+                pick = sole([&](const Next& c) {
+                    return c.track != track && has(thrown, c.track);
+                });
+                if (pick < 0) pick = sole([&](const Next& c) { return !has(branch, c.track); });
+            } else if (!thrown.empty()) {
+                // Set to a branch: only that branch will do. If it is not among the roads
+                // out of here, the points are set away from us and there is nowhere to go.
+                pick = sole([&](const Next& c) { return has(thrown, c.track); });
             } else {
-                // Set straight: the through leg. Carrying on along the track we are already
-                // on is that leg wherever the turnout sits on it - which is the usual case,
-                // and the one that matters where a slip connector branches off the main.
-                // Approaching from the branch instead, the through leg is the one road out
-                // that is not the branch.
-                for (std::size_t i = 0; i < cand.size(); ++i)
-                    if (cand[i].track == track) pick = static_cast<int>(i);
-                if (pick < 0)
-                    for (std::size_t i = 0; i < cand.size(); ++i)
-                        if (cand[i].track != siding) {
-                            if (pick >= 0) { pick = -1; break; } // several: do not guess
-                            pick = static_cast<int>(i);
-                        }
+                // Everything straight: the road through. Carrying on along the track we
+                // are already on is that road wherever the points sit on it, which is the
+                // usual case; coming off a branch instead, it is the one road out that is
+                // not a branch.
+                pick = sole([&](const Next& c) { return c.track == track; });
+                if (pick < 0) pick = sole([&](const Next& c) { return !has(branch, c.track); });
             }
             if (pick < 0) return;
             take = static_cast<std::size_t>(pick);
