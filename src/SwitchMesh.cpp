@@ -15,7 +15,9 @@
 
 #include "SwitchNetwork.h"
 
+#include <algorithm>
 #include <cmath>
+#include <tuple>
 #include <cstdio>
 
 namespace {
@@ -104,13 +106,33 @@ void SwitchMesh::build(const SwitchNetwork& net, const glm::vec3& centre,
     const glm::vec3 UP(0, 0, 1);
     const auto& turnouts = net.turnouts();
     int stands = 0;
+    // One stand per set of points. Where several track ends meet on one node - a throat
+    // ladder, a double junction - the detector reads the same points once for every end
+    // that touches them, so the network holds several turnouts at one spot with the same
+    // road through and the same road diverging, differing only in which branch track's
+    // end was seen. They are one set of points, and they were drawing one stand inside
+    // another: 127 of the stands in this dataset stood on top of one that was already
+    // there, and resolving the throats that never resolved before would have made it 408.
+    //
+    // Deduped in the drawing rather than in the network, because the branch track id the
+    // copies differ by is not spare - walkAhead matches it against the road it is about
+    // to take, and dropping a copy would leave a move it could no longer name. Nothing
+    // addresses a stand by index, so the drawing is free to show one where the routing
+    // keeps several.
+    std::vector<std::tuple<long, long, int, int>> shown;
+    shown.reserve(turnouts.size());
     for (std::size_t idx = 0; idx < turnouts.size(); ++idx) {
         const Turnout& t = turnouts[idx];
-        if (t.mainPath < 0) continue; // inert turnout (a crossing) — no working switch
+        if (t.mainPath < 0) continue; // inert turnout (a crossing): no working switch
         if (radius > 0.0f &&
             std::hypot(static_cast<float>(t.world.x - origin.x) - centre.x,
                        static_cast<float>(t.world.y - origin.y) - centre.y) > radius)
             continue;
+        const std::tuple<long, long, int, int> key{std::lround(t.world.x * 2.0),
+                                                   std::lround(t.world.y * 2.0),
+                                                   t.mainPath, t.sidingPath};
+        if (std::find(shown.begin(), shown.end(), key) != shown.end()) continue;
+        shown.push_back(key);
         ++stands;
         const SwitchState st = net.state(static_cast<int>(idx));
         const SwitchType ty = net.type(static_cast<int>(idx));
