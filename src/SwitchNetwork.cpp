@@ -277,8 +277,6 @@ void SwitchNetwork::build(const TerrainData& data,
     int resolved = 0;
     for (Turnout& t : turnouts_) {
         const glm::dvec2 X(t.world.x - origin_.x, t.world.y - origin_.y);
-        const bool isConn = t.sidingTrack >= kRailIdBase; // an editor-added slip connector
-
         int siding = -1, main = -1;
         double bestSide = 0.3, bestMain = 0.7; // required direction agreement
         float sMain = 0.0f, sSiding = 0.0f;
@@ -322,12 +320,24 @@ void SwitchNetwork::build(const TerrainData& data,
                 }
             }
             // Main: the through track, tangent parallel to `thru` at X. It must pass
-            // *through* the point, so a path that ends here (the connecting rail itself,
-            // whose end sits on the crossed track) is never the main — otherwise at a
-            // shallow slip the near-parallel connector could win and the switch would
-            // collapse to main == siding.
+            // *through* the point, so a path that ends here is never the main - it has
+            // no toe side and no frog side, and nothing to route a train along.
+            //
+            // This used to be asked only of editor-added slip connectors, and everywhere
+            // else a path that merely ended at the point could win. It generally did: a
+            // turnout's `thru` is taken off the track ends meeting there, so a path
+            // ending at X lies exactly along it and scores 1.0000, while the road that
+            // genuinely runs through scores a shade less for its curvature. The end-path
+            // then either fell to the through-check below or came out equal to the
+            // siding, and either way the switch went inert - so at a throat where four
+            // track ends meet on one node not one of the points resolved, and nothing
+            // reading down the line could get past it.
+            //
+            // Excluding them costs no resolution that was being made: an end-path sits
+            // within 2.5 m of its own end, and the through-check below wants 5 m of track
+            // either side, so it was thrown out a few lines later regardless.
             const double m = std::abs(glm::dot(tan, t.thru));
-            if ((!isConn || !(nearFront || nearBack)) && m > bestMain) {
+            if (!(nearFront || nearBack) && m > bestMain) {
                 bestMain = m;
                 main = pi;
                 sMain = s;
