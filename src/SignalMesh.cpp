@@ -20,13 +20,21 @@
 namespace {
 const glm::vec3 kBody{0.10f, 0.10f, 0.11f};   // near-black cast housing
 const glm::vec3 kLampOn{1.0f, 0.90f, 0.62f};  // warm incandescent white
-const glm::vec3 kLampOff{0.20f, 0.20f, 0.20f}; // dark, unlit lamp position
 const glm::vec3 kRedOn{1.0f, 0.14f, 0.10f};    // main signal: danger
-const glm::vec3 kRedOff{0.24f, 0.10f, 0.10f};
 const glm::vec3 kGreenOn{0.15f, 1.0f, 0.35f};  // main signal: proceed
-const glm::vec3 kGreenOff{0.10f, 0.22f, 0.13f};
 const glm::vec3 kAmberOn{1.0f, 0.62f, 0.05f};  // distant signal: expect stop
-const glm::vec3 kAmberOff{0.26f, 0.17f, 0.06f};
+// An unlit lens is dark glass in a dark housing, so these sit barely above the body and
+// carry only a hint of the colour they would show. They were much stronger, and on a
+// three-lamp head that told a lie at a particular range: a lit lens is blown up to a
+// minimum apparent size (see track.vert) and an unlit one is not, so beyond about 170 m
+// the two greens of a clear grew until they met and covered the red lens between them.
+// Coming in past that the greens shrank back to life size and the red was uncovered - a
+// clear signal that appeared to take a red lamp as it was approached. It is uncovered
+// either way; what is fixed here is that there is no longer a red lamp to see.
+const glm::vec3 kLampOff{0.15f, 0.15f, 0.15f};
+const glm::vec3 kRedOff{0.15f, 0.105f, 0.105f};
+const glm::vec3 kGreenOff{0.10f, 0.155f, 0.115f};
+const glm::vec3 kAmberOff{0.16f, 0.13f, 0.08f};
 // Head half-heights. A main signal's three lamps need the taller head; two lamps sit in the
 // shorter one, which is what the simple station signals and the siding masts carry.
 constexpr float kThreeLampHalfH = 0.72f;
