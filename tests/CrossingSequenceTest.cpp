@@ -1473,6 +1473,81 @@ int main(int argc, char** argv) {
               "a signal ahead facing the other way is not what it repeats");
     }
 
+    // The walk across a node, which is where a distant stops being about aspects and
+    // starts being about geometry. Every case here comes from something that was
+    // actually wrong: the distants for track 2 at Mosjoen warned of a stop for days
+    // with nothing at all wrong with the signalling, because the walk gave up at the
+    // throat and nothing ahead reads exactly as a signal at danger.
+    std::puts("\nWhat a distant can see past the end of its own track:");
+    {
+        // Two roads arriving from the south and one leaving north - a throat, in the
+        // smallest arrangement that has the shape that matters. Track 1 and track 2
+        // both END at the node, both pointing into it; track 3 begins there.
+        std::vector<TrackPoly> polys(3);
+        polys[0].id = 1;
+        for (int i = 0; i <= 10; ++i) polys[0].pts.push_back({i * 100.0, 0.0, 0.0});
+        polys[1].id = 2;   // converging on the same node from a little to one side
+        for (int i = 0; i <= 10; ++i)
+            polys[1].pts.push_back({i * 100.0, 40.0 - i * 4.0, 0.0});
+        polys[2].id = 3;   // the road on
+        for (int i = 0; i <= 10; ++i) polys[2].pts.push_back({1000.0 + i * 100.0, 0.0, 0.0});
+        const TrackJunctions junctions = trackJunctions(polys);
+        const SwitchNetwork none;  // no points registered anywhere
+
+        auto mast = [&](std::uint32_t track, double frac, int dir) {
+            SignalPlacement p;
+            p.kind = SignalKind::Entry;
+            p.at = {track, frac};
+            p.forward = trackTangent(polys, track, frac, dir);
+            p.world = fracToWorld(polys, track, frac);
+            p.aspect = SignalAspect::Clear;
+            return p;
+        };
+
+        // Track 2's tangent where it ends points the same way we are travelling, so it
+        // reads as a road out - but there is no track beyond its end. Admitting it made
+        // a plain two-road node look like a turnout, and with no points registered the
+        // walk gave up rather than guess. It must be seen for what it is and passed by.
+        std::vector<SignalPlacement> ps{mast(3, 0.5, +1)};
+        std::vector<SectionInterval> walked;
+        const int hit = firstMainSignalAhead(polys, junctions, none, ps, 1, 0.1, +1,
+                                             kDistantReach, &walked);
+        check(hit == 0, "the walk carries on across the node and finds the signal beyond");
+        bool reachedThree = false;
+        for (const SectionInterval& iv : walked)
+            if (iv.trackId == 3) reachedThree = true;
+        check(reachedThree, "and the road it took really is the one that continues");
+
+        // Whereas two roads that both genuinely lead on is a turnout, and with nothing
+        // registered to say which way it is set the walk stops rather than pick one.
+        std::vector<TrackPoly> fork(3);
+        fork[0] = polys[0];
+        fork[1] = polys[2];
+        fork[2].id = 4;    // a second road leaving the same node
+        for (int i = 0; i <= 10; ++i)
+            fork[2].pts.push_back({1000.0 + i * 100.0, i * 30.0, 0.0});
+        const TrackJunctions forkJ = trackJunctions(fork);
+        std::vector<SignalPlacement> fps{mast(3, 0.5, +1)};
+        fps[0].forward = trackTangent(fork, 3, 0.5, +1);
+        fps[0].world = fracToWorld(fork, 3, 0.5);
+        check(firstMainSignalAhead(fork, forkJ, none, fps, 1, 0.1, +1, kDistantReach) < 0,
+              "a real fork with no points registered stops the walk, rather than guessing");
+
+        // A signal standing where the walk begins is the one being read from, not one
+        // to read - otherwise a distant would repeat the mast it hangs on.
+        std::vector<SignalPlacement> here{mast(1, 0.1, +1), mast(3, 0.5, +1)};
+        check(firstMainSignalAhead(polys, junctions, none, here, 1, 0.1, +1,
+                                   kDistantReach) == 1,
+              "the signal at the walk's own start is stepped over");
+
+        // And the reach is a reach: the signal is 1400 m along, so a shorter look does
+        // not find it, and finding nothing is not the same as there being nothing.
+        check(firstMainSignalAhead(polys, junctions, none, ps, 1, 0.1, +1, 500.0) < 0,
+              "a signal beyond the reach is not seen");
+        check(firstMainSignalAhead(polys, junctions, none, ps, 1, 0.1, +1, 4000.0) == 0,
+              "...and is seen once the reach is long enough to get there");
+    }
+
     // Two routes over one road: a chain or a head-on.
     //
     // Overlapping is not by itself a conflict. An entry route finishes on the platform road
