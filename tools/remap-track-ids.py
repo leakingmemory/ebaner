@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Re-anchor the overlay after an export has renumbered track ids.
 
-The overlay pins every edit to <trackId>:<frac>. Main-line ids are stable - they
+The overlay pins its edits to a track id, though not always in the same shape:
+the signalling files write <trackId>:<frac> or a bare hex field, and the vertex
+edits - elev and move - name their track in bare decimal. Main-line ids are stable - they
 come from the national survey, ordered by banenavn and chainage - but siding ids
 are a running counter over GPKG features in PBF file order, and an id is burned
 even for a siding the elevation filter then drops. So any churn in the source
@@ -17,6 +19,11 @@ Usage:
 
 <ref> is either a previous dataset root or a fingerprint file written by an
 earlier run. Add --dry-run to report without touching anything.
+
+Against a fingerprint of the same export this is idempotent. Against an older
+dataset it is not: an id that moved can be both one track's old number and
+another's new one, so a second pass would move it again. Where only part of the
+overlay is still on the old numbering, name the files with --files.
 """
 
 import argparse
@@ -35,6 +42,7 @@ SYNTHETIC_ID_MIN = 0xD0000000
 # happily reads the digits of "0.849372" as a track id.
 ANCHOR_RE = re.compile(r'^([0-9a-f]{1,8})((?::[0-9.]+)+)$')
 HEX_RE = re.compile(r'^[0-9a-f]{1,8}$')
+DEC_RE = re.compile(r'^[0-9]+$')
 
 
 def read_tracks(root):
@@ -155,25 +163,38 @@ def build_map(ref_prints, new_prints):
 
 
 def ids_in_line(tokens):
-    """[(token index, id)] for the id-bearing fields of one overlay line."""
+    """[(token index, id, base)] for the id-bearing fields of one overlay line.
+
+    Two bases are in play, so the base travels with the field. The signalling
+    files write a track in hex; the vertex edits - elev and move - write theirs
+    in decimal, because they sit side by side naming the same points and one
+    number for a track was enough.
+    """
     found = []
     for i, tok in enumerate(tokens):
         m = ANCHOR_RE.match(tok)
         if m:
-            found.append((i, int(m.group(1), 16)))
+            found.append((i, int(m.group(1), 16), 16))
     if not tokens:
         return found
     kw = tokens[0]
     if kw in ('border', 'switch') and len(tokens) > 1 and HEX_RE.match(tokens[1]):
         # switch <hex> <x> <y> motor [lock <sectionId> ...] - the lock ids are
         # decimal section ids and must not be touched.
-        found.append((1, int(tokens[1], 16)))
+        found.append((1, int(tokens[1], 16), 16))
     elif kw == 'noswitch':
         # noswitch <x> <y> <radius> [<hex>] [all]
         for i, tok in enumerate(tokens[4:], start=4):
             if tok != 'all' and HEX_RE.match(tok):
-                found.append((i, int(tok, 16)))
-    return [(i, v) for i, v in found if v < SYNTHETIC_ID_MIN]
+                found.append((i, int(tok, 16), 16))
+    elif kw == 'elev' and len(tokens) >= 5 and DEC_RE.match(tokens[4]):
+        # elev <x> <y> <z> [<trackid> [<fromz>]] - decimal, picks between
+        # coincident points of different tracks.
+        found.append((4, int(tokens[4]), 10))
+    elif kw == 'move' and len(tokens) >= 8 and DEC_RE.match(tokens[7]):
+        # move <ax> <ay> <az> <bx> <by> <bz> [<trackid>] - decimal, as elev's is.
+        found.append((7, int(tokens[7]), 10))
+    return [(i, v, b) for i, v, b in found if v < SYNTHETIC_ID_MIN]
 
 
 def rewrite_line(line, mapping, stats):
@@ -183,10 +204,14 @@ def rewrite_line(line, mapping, stats):
     spans = [(m.start(), m.end(), m.group()) for m in re.finditer(r'\S+', line)]
     tokens = [s[2] for s in spans]
     edits = []
-    for idx, old in ids_in_line(tokens):
+    for idx, old, base in ids_in_line(tokens):
         if old in mapping and mapping[old] != old:
             start, end, tok = spans[idx]
-            new_tok = f"{mapping[old]:x}" + tok[len(f"{old:x}"):]
+            if base == 16:
+                # Keep the ":frac" tail byte for byte; only the id field moves.
+                new_tok = f"{mapping[old]:x}" + tok[len(f"{old:x}"):]
+            else:
+                new_tok = str(mapping[old])
             edits.append((start, end, new_tok))
             stats['remapped'] += 1
         elif old in mapping:
@@ -212,6 +237,14 @@ def main():
     ap.add_argument('--overlay', help='overlay directory (default <to>/overlay)')
     ap.add_argument('--fingerprint', help='write the new fingerprint here '
                                           '(default <overlay>/track-fingerprint.txt)')
+    ap.add_argument('--files', nargs='+', metavar='NAME',
+                    help='restrict the rewrite to these overlay files. Needed when only '
+                         'part of the overlay is still on the old numbering: the map is '
+                         'not idempotent against a dataset reference, so re-running it '
+                         'over files already remapped would move them a second time.')
+    ap.add_argument('--no-fingerprint', action='store_true',
+                    help='do not rewrite the fingerprint (use with --files, when the '
+                         'fingerprint already describes the target export)')
     ap.add_argument('--dry-run', action='store_true')
     args = ap.parse_args()
 
@@ -245,6 +278,8 @@ def main():
     for name in sorted(os.listdir(overlay)):
         if not name.endswith('.txt') or name == 'track-fingerprint.txt':
             continue
+        if args.files and name not in args.files:
+            continue
         path = os.path.join(overlay, name)
         with open(path) as fh:
             lines = fh.readlines()
@@ -264,6 +299,9 @@ def main():
               + ' '.join(f"{i:x}" for i in sorted(stats['unknown_ids'])))
 
     fp_path = args.fingerprint or os.path.join(overlay, 'track-fingerprint.txt')
+    if args.no_fingerprint:
+        print(f"\nfingerprint left as it is ({fp_path})")
+        return
     if args.dry_run:
         print(f"\n--dry-run: nothing written (would refresh {fp_path})")
     else:
