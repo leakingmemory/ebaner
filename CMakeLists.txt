@@ -175,6 +175,12 @@ add_executable(ebaner-trackedit
 add_dependencies(ebaner-trackedit shaders)
 target_link_libraries(ebaner-trackedit PRIVATE ebaner_engine)
 
+add_executable(ebaner-dumptrack
+    tools/dumptrack_main.cpp)
+add_dependencies(ebaner-dumptrack shaders)
+target_link_libraries(ebaner-dumptrack PRIVATE ebaner_engine)
+target_include_directories(ebaner-dumptrack PRIVATE src)
+
 # ---- tests ----------------------------------------------------------------
 # They run against a real terrainmapper export, since everything here is shaped by
 # what the data is actually like; there is no synthetic dataset to check against.

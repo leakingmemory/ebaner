@@ -1,3 +1,7 @@
 /build/
 *.spv
 /.idea/
+
+# Per-machine Claude Code settings (permission grants); the skills alongside
+# it are shared and do belong in the repo.
+.claude/settings.local.json
