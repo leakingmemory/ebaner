@@ -480,7 +480,17 @@ int advanceVias(const RouteCtx& ctx, int viaIdx, std::uint32_t track, double a, 
 }
 
 constexpr int kRouteRawCap = 16; // raw walks collected before de-duplication
-constexpr int kRouteMaxTracks = 8; // a "mini" path spans few tracks; bounds the search
+// How many tracks one route may run along. This is a guard against a search that
+// never ends, not a statement about how long a route can be: the `budget` below is
+// what actually bounds the work, and on a plain line the walk is linear, so raising
+// this costs nothing measurable.
+//
+// It used to be 8, which suited routes inside a station - across a throat and stop.
+// A line block is not that shape. The plain line is cut wherever the medium changes,
+// so Trofors to Eiterstraum is 17 tracks of tunnel, bridge and open ground for one
+// road with no turnout on it, and the search ran out of depth halfway and reported
+// no route at all. In the editor that reads as "these two borders do not connect".
+constexpr int kRouteMaxTracks = 64;
 
 // Walk `track` from `entryFrac` toward `dir`; at each junction ahead either finish (if the
 // destination lies ahead on the end track) or cross onto a connected track, but only via

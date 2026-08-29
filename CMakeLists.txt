@@ -199,6 +199,14 @@ target_include_directories(TrackEditTest PRIVATE src)
 add_test(NAME track-edit COMMAND TrackEditTest "${EBANER_TEST_DATASET}")
 set_tests_properties(track-edit PROPERTIES SKIP_RETURN_CODE 77)
 
+# A block-length signal route: needs the real network, so it skips without one.
+add_executable(SignalRouteTest tests/SignalRouteTest.cpp)
+add_dependencies(SignalRouteTest shaders)
+target_link_libraries(SignalRouteTest PRIVATE ebaner_engine)
+target_include_directories(SignalRouteTest PRIVATE src)
+add_test(NAME signal-route COMMAND SignalRouteTest "${EBANER_TEST_DATASET}")
+set_tests_properties(signal-route PROPERTIES SKIP_RETURN_CODE 77)
+
 # The crossing sequence is pure logic and needs no export, so it always runs.
 add_executable(CrossingSequenceTest tests/CrossingSequenceTest.cpp)
 add_dependencies(CrossingSequenceTest shaders)
