@@ -1112,7 +1112,21 @@ int main(int argc, char** argv) {
     // outside the station it serves, and would otherwise cluster as a station of its own.
     std::vector<glm::vec2> stationAt; // station -> scene-relative centre
     {
-        constexpr double kStationSpan = 800.0; // m
+        // How far apart two routes' platform ends may lie and still be one place.
+        //
+        // This is measured against the length of a station, not the gap between them,
+        // and it was too small for the former: the widest cluster on the line already
+        // reaches 1073 m, and only holds together because a four-track station has
+        // routes ending at intermediate points that chain it. A passing loop has no
+        // such middle. At Eiterstraum the inbound routes end at opposite ends of an
+        // 1081 m loop - 855 m apart - so the station came out as two clusters, and
+        // since the picker offers the one nearest the station being worked, the two
+        // routes in the other half could never be offered at all.
+        //
+        // There is a lot of room to be generous: at 900 m and above the line settles
+        // at eight stations and the nearest two are 10.7 km apart, so the threshold
+        // can sit an order of magnitude below the gap it must not bridge.
+        constexpr double kStationSpan = 1500.0; // m
         // A route may name its station outright, and that overrules the geometry. Those
         // are held back from the clustering below and placed afterwards: a branch running
         // two kilometres out to an industrial siding otherwise clusters as a place of its
