@@ -35,22 +35,34 @@
 #include "TerrainData.h"
 #include "TrackCircuits.h"
 #include "TrackGraph.h"
+#include "TrackPath.h"
+#include "SwitchNetwork.h"
+#include "SwitchTypes.h"
+#include "SignalPaths.h"
 
 namespace {
 
 void usage() {
     std::puts(
-        "usage: ebaner-dumptrack <datasetRoot> [--near <x> <y> <radius>] [<trackIdHex> ...]\n"
+        "usage: ebaner-dumptrack <datasetRoot> [--near <x> <y> <radius>]\n"
+        "                       [--switches <x> <y> <radius>] [--route <a> <b>]\n"
+        "                       [<trackIdHex> ...]\n"
         "\n"
         "  --near x y radius     list the tracks whose geometry comes within radius\n"
         "                        metres of a point, nearest first\n"
         "  <trackIdHex> ...      print every vertex of those tracks, in order, as\n"
         "                        \"PT <x> <y> <z>\"\n"
+        "  --switches x y radius list the turnouts the sim builds around a point, with\n"
+        "                        the branch track each is keyed on and whether an\n"
+        "                        authored `switch ... motor` override reaches it\n"
         "  --route <a> <b>       ask the editor's own search for a route between two\n"
         "                        borders, each written <trackIdHex>:<frac>. Prints the\n"
         "                        count it found - 0 means the editor will refuse to\n"
         "                        build it, more than 1 means it wants a via - and the\n"
-        "                        intervals when there is exactly one.\n"
+        "                        intervals when there is exactly one, followed by the\n"
+        "                        switches it needs and whether each can be worked from\n"
+        "                        the panel - one manual switch on the road is enough to\n"
+        "                        refuse the whole route.\n"
         "\n"
         "Heights are after track-edits.txt is applied, which is the only form worth\n"
         "deriving anything from.");
@@ -84,6 +96,8 @@ int main(int argc, char** argv) {
     }
 
     std::vector<std::pair<Border, Border>> routeQs;
+    bool haveSw = false;
+    double sx = 0.0, sy = 0.0, sr = 0.0;
     bool haveNear = false;
     double nx = 0.0, ny = 0.0, nr = 0.0;
     std::vector<std::uint32_t> ids;
@@ -95,6 +109,11 @@ int main(int argc, char** argv) {
             nx = std::atof(argv[++i]);
             ny = std::atof(argv[++i]);
             nr = std::atof(argv[++i]);
+        } else if (std::strcmp(argv[i], "--switches") == 0 && i + 3 < argc) {
+            haveSw = true;
+            sx = std::atof(argv[++i]);
+            sy = std::atof(argv[++i]);
+            sr = std::atof(argv[++i]);
         } else if (std::strcmp(argv[i], "--route") == 0 && i + 2 < argc) {
             auto parse = [](const char* t) {
                 Border b;
@@ -114,7 +133,7 @@ int main(int argc, char** argv) {
             ids.push_back(static_cast<std::uint32_t>(std::strtoul(argv[i], nullptr, 16)));
         }
     }
-    if (!haveNear && ids.empty() && routeQs.empty()) { usage(); return 2; }
+    if (!haveNear && ids.empty() && routeQs.empty() && !haveSw) { usage(); return 2; }
 
     // The terrain window is small on purpose: the rail network is read whole
     // whatever ground is loaded, and this asks only about rail.
@@ -146,6 +165,48 @@ int main(int argc, char** argv) {
         }
     }
 
+    if (haveSw) {
+        // Built exactly the way the sim builds it, suppressions and all - the point of
+        // this is to show what the sim sees, not what the editor thought it wrote.
+        const std::vector<TrackPath> paths = buildTrackPaths(data);
+        SwitchNetwork net;
+        net.build(data, paths, loadSwitchSuppressions(root));
+        const std::vector<SwitchTypeOverride> ovr = loadSwitchTypes(root);
+        applySwitchTypes(net, ovr);
+        const std::vector<Turnout>& tos = net.turnouts();
+        std::printf("%11s %11s %9s %6s %8s  %s\n",
+                    "x", "y", "branch", "main", "type", "override");
+        for (std::size_t i = 0; i < tos.size(); ++i) {
+            const double d = std::hypot(tos[i].world.x - sx, tos[i].world.y - sy);
+            if (d > sr) continue;
+            // Why an override did or did not reach this turnout. A `switch` line keys on
+            // the branch track *and* the position, so a line can sit right on top of a
+            // turnout and still not apply because the branch is read as another track.
+            const char* why = "none within 3 m";
+            double nearestWrongBranch = 1e30;
+            std::uint32_t wrongId = 0;
+            for (const SwitchTypeOverride& o : ovr) {
+                const double od = std::hypot(tos[i].world.x - o.world.x,
+                                             tos[i].world.y - o.world.y);
+                if (od > 3.0) continue;
+                if (o.sidingTrack == tos[i].sidingTrack) { why = "applied"; break; }
+                if (od < nearestWrongBranch) { nearestWrongBranch = od; wrongId = o.sidingTrack; }
+            }
+            char buf[96];
+            if (std::strcmp(why, "none within 3 m") == 0 && nearestWrongBranch < 1e29) {
+                std::snprintf(buf, sizeof(buf),
+                              "line here keys on branch %x, not %x", wrongId,
+                              tos[i].sidingTrack);
+                why = buf;
+            }
+            std::printf("%11.2f %11.2f %9x %6d %8s  %s\n",
+                        tos[i].world.x, tos[i].world.y, tos[i].sidingTrack,
+                        tos[i].mainPath,
+                        net.type(static_cast<int>(i)) == SwitchType::Motor ? "MOTOR" : "manual",
+                        why);
+        }
+    }
+
     if (!routeQs.empty()) {
         // The search wants polylines in the graph's order, the way the editor builds
         // them - not the raw track list, which is why this goes through TrackGraph.
@@ -156,6 +217,10 @@ int main(int argc, char** argv) {
                 polys.push_back({graph.pointTrack[i], {}});
             polys.back().pts.push_back(graph.pointWorld[i]);
         }
+        const std::vector<TrackPath> paths = buildTrackPaths(data);
+        SwitchNetwork net;
+        net.build(data, paths, loadSwitchSuppressions(root));
+        applySwitchTypes(net, loadSwitchTypes(root));
         for (const auto& [a, b] : routeQs) {
             std::vector<SectionInterval> r;
             const int n = findSignalRoute(polys, a, b, r, {});
@@ -164,6 +229,21 @@ int main(int argc, char** argv) {
             for (const SectionInterval& iv : r)
                 std::printf(" %x:%g:%g", iv.trackId, iv.from, iv.to);
             std::printf("\n");
+            if (n != 1) continue;
+            SignalPath p;
+            p.start = a;
+            p.end = b;
+            p.parts = r;
+            const std::vector<PathSwitch> reqs = pathSwitchRequirements(p, net, polys);
+            std::printf("  needs %zu switch(es)\n", reqs.size());
+            for (const PathSwitch& ps : reqs) {
+                const Turnout& t = net.turnouts()[ps.turnout];
+                const bool motor = net.type(ps.turnout) == SwitchType::Motor;
+                std::printf("    branch %-8x at %11.2f %11.2f  %-6s%s\n",
+                            t.sidingTrack, t.world.x, t.world.y,
+                            motor ? "MOTOR" : "manual",
+                            motor ? "" : "   <-- the panel will refuse the route here");
+            }
         }
     }
 
