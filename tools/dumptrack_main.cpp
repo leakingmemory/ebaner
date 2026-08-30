@@ -33,6 +33,8 @@
 #include <vector>
 
 #include "TerrainData.h"
+#include "TrackCircuits.h"
+#include "TrackGraph.h"
 
 namespace {
 
@@ -44,6 +46,11 @@ void usage() {
         "                        metres of a point, nearest first\n"
         "  <trackIdHex> ...      print every vertex of those tracks, in order, as\n"
         "                        \"PT <x> <y> <z>\"\n"
+        "  --route <a> <b>       ask the editor's own search for a route between two\n"
+        "                        borders, each written <trackIdHex>:<frac>. Prints the\n"
+        "                        count it found - 0 means the editor will refuse to\n"
+        "                        build it, more than 1 means it wants a via - and the\n"
+        "                        intervals when there is exactly one.\n"
         "\n"
         "Heights are after track-edits.txt is applied, which is the only form worth\n"
         "deriving anything from.");
@@ -76,6 +83,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    std::vector<std::pair<Border, Border>> routeQs;
     bool haveNear = false;
     double nx = 0.0, ny = 0.0, nr = 0.0;
     std::vector<std::uint32_t> ids;
@@ -87,6 +95,17 @@ int main(int argc, char** argv) {
             nx = std::atof(argv[++i]);
             ny = std::atof(argv[++i]);
             nr = std::atof(argv[++i]);
+        } else if (std::strcmp(argv[i], "--route") == 0 && i + 2 < argc) {
+            auto parse = [](const char* t) {
+                Border b;
+                const char* c = std::strchr(t, ':');
+                b.trackId = static_cast<std::uint32_t>(std::strtoul(t, nullptr, 16));
+                b.frac = c ? std::atof(c + 1) : 0.0;
+                return b;
+            };
+            const Border a = parse(argv[++i]);
+            const Border b = parse(argv[++i]);
+            routeQs.push_back({a, b});
         } else if (std::strcmp(argv[i], "-h") == 0 ||
                    std::strcmp(argv[i], "--help") == 0) {
             usage();
@@ -95,7 +114,7 @@ int main(int argc, char** argv) {
             ids.push_back(static_cast<std::uint32_t>(std::strtoul(argv[i], nullptr, 16)));
         }
     }
-    if (!haveNear && ids.empty()) { usage(); return 2; }
+    if (!haveNear && ids.empty() && routeQs.empty()) { usage(); return 2; }
 
     // The terrain window is small on purpose: the rail network is read whole
     // whatever ground is loaded, and this asks only about rail.
@@ -124,6 +143,27 @@ int main(int argc, char** argv) {
             std::printf("%8.2f %10x %5u %8zu %9s  %.2f .. %.2f\n",
                         d, s->trackId, s->trackType, s->pts.size(),
                         mediumName(s->medium), z0, z1);
+        }
+    }
+
+    if (!routeQs.empty()) {
+        // The search wants polylines in the graph's order, the way the editor builds
+        // them - not the raw track list, which is why this goes through TrackGraph.
+        const TrackGraph graph = buildTrackGraph(data);
+        std::vector<TrackPoly> polys;
+        for (std::size_t i = 0; i < graph.pointWorld.size(); ++i) {
+            if (polys.empty() || polys.back().id != graph.pointTrack[i])
+                polys.push_back({graph.pointTrack[i], {}});
+            polys.back().pts.push_back(graph.pointWorld[i]);
+        }
+        for (const auto& [a, b] : routeQs) {
+            std::vector<SectionInterval> r;
+            const int n = findSignalRoute(polys, a, b, r, {});
+            std::printf("ROUTE %x:%g -> %x:%g  found %d",
+                        a.trackId, a.frac, b.trackId, b.frac, n);
+            for (const SectionInterval& iv : r)
+                std::printf(" %x:%g:%g", iv.trackId, iv.from, iv.to);
+            std::printf("\n");
         }
     }
 
