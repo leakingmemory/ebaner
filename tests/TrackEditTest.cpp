@@ -412,7 +412,30 @@ int main(int argc, char** argv) {
         const VehicleSpec* onePtr = nullptr;
         for (const VehicleSpec& v : kVehicleSpecs)
             if (v.body == BodyClass93 && v.units == 1) onePtr = &v;
-        const float startS = 0.5f * run->length();
+        // Where the train stands has to be straight, and found rather than assumed.
+        // A body hangs between its bogies, so in a curve it sits inside the centreline
+        // by the versine of the bogie spacing - and where the curvature is *changing*,
+        // two neighbouring bodies sit inside by different amounts, so the distance
+        // between their centres is no longer the spacing they were built with. That is
+        // track geometry talking, not the coupling rule these checks are about.
+        //
+        // The midpoint of the longest path used to serve as the site, and it is not
+        // stable: the longest path grows every time a break in the line is linked up.
+        // Joining the last two gaps between Trofors and Majavatn added 25 km to it and
+        // moved the midpoint into a transition curve, where the centre-to-centre
+        // distance came up 57 mm short of the coupler spacing against a 50 mm bound -
+        // a failure that says nothing at all about couplers.
+        const float kSite = 300.0f; // longer than any consist built below
+        float startS = 0.5f * run->length();
+        for (float s = 0.0f; s + kSite < run->length(); s += 10.0f) {
+            bool straight = true;
+            for (float o = 0.0f; o <= kSite && straight; o += 5.0f)
+                straight = std::abs(run->poseAt(s + o).curvature) < 1.0f / 5000.0f;
+            if (straight) {
+                startS = s + 0.5f * kSite;
+                break;
+            }
+        }
         char what[96];
 
         // Every expectation is taken from a single set actually built, not from
