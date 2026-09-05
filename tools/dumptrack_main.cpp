@@ -60,9 +60,9 @@ void usage() {
         "                        count it found - 0 means the editor will refuse to\n"
         "                        build it, more than 1 means it wants a via - and the\n"
         "                        intervals when there is exactly one, followed by the\n"
-        "                        switches it needs and whether each can be worked from\n"
-        "                        the panel - one manual switch on the road is enough to\n"
-        "                        refuse the whole route.\n"
+        "                        switches it needs, the position each needs, and whether\n"
+        "                        it is already there. A manual switch on the road only\n"
+        "                        refuses the route if the route would have to move it.\n"
         "\n"
         "Heights are after track-edits.txt is applied, which is the only form worth\n"
         "deriving anything from.");
@@ -239,10 +239,20 @@ int main(int argc, char** argv) {
             for (const PathSwitch& ps : reqs) {
                 const Turnout& t = net.turnouts()[ps.turnout];
                 const bool motor = net.type(ps.turnout) == SwitchType::Motor;
-                std::printf("    branch %-8x at %11.2f %11.2f  %-6s%s\n",
+                // A manual switch on the road is not by itself a refusal. trySetRoute
+                // skips any turnout that already sits where the path wants it, so a
+                // trailing stub the route runs straight past costs nothing. It refuses
+                // only when a switch that has to *move* cannot be moved from the panel.
+                const SwitchState now = net.state(ps.turnout);
+                const char* need = ps.need == SwitchState::Straight ? "straight" : "diverging";
+                const bool mustMove = now != ps.need;
+                std::printf("    branch %-8x at %11.2f %11.2f  %-6s  needs %-9s  %s\n",
                             t.sidingTrack, t.world.x, t.world.y,
-                            motor ? "MOTOR" : "manual",
-                            motor ? "" : "   <-- the panel will refuse the route here");
+                            motor ? "MOTOR" : "manual", need,
+                            !mustMove ? "(already there)"
+                                      : motor ? "(the panel throws it)"
+                                              : "<-- must move, and only by hand: the panel "
+                                                "will refuse the route");
             }
         }
     }
