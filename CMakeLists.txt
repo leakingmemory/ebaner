@@ -111,6 +111,7 @@ add_library(ebaner_engine STATIC
     src/TxpGraph.cpp
     src/TxpNetwork.cpp
     src/SignalPaths.cpp
+    src/LineBlock.cpp
     src/SignalMesh.cpp
     src/SpeedLimits.cpp
     src/SpeedSignMesh.cpp
@@ -206,6 +207,16 @@ target_link_libraries(SignalRouteTest PRIVATE ebaner_engine)
 target_include_directories(SignalRouteTest PRIVATE src)
 add_test(NAME signal-route COMMAND SignalRouteTest "${EBANER_TEST_DATASET}")
 set_tests_properties(signal-route PROPERTIES SKIP_RETURN_CODE 77)
+
+# The line block between two stations: the block signals and the direction lock. Needs the
+# real geometry for the roads, but synthesises the block signals themselves, so it does not
+# wait on anything being committed to the overlay repository.
+add_executable(LineBlockTest tests/LineBlockTest.cpp)
+add_dependencies(LineBlockTest shaders)
+target_link_libraries(LineBlockTest PRIVATE ebaner_engine)
+target_include_directories(LineBlockTest PRIVATE src)
+add_test(NAME line-block COMMAND LineBlockTest "${EBANER_TEST_DATASET}")
+set_tests_properties(line-block PROPERTIES SKIP_RETURN_CODE 77)
 
 # The crossing sequence is pure logic and needs no export, so it always runs.
 add_executable(CrossingSequenceTest tests/CrossingSequenceTest.cpp)

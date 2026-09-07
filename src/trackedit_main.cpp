@@ -29,6 +29,7 @@
 #include "SwitchMesh.h"
 #include "SwitchNetwork.h"
 #include "SignalMesh.h"
+#include "LineBlock.h"
 #include "SignalPaths.h"
 #include "CrossingMesh.h"
 #include "AvalancheMesh.h"
@@ -287,7 +288,7 @@ int main(int argc, char** argv) {
     enum class EdMode {
         Geometry, NewSidings, MovePoints, Circuits, Switches, SignalPaths, ExitSignals,
         EntrySignals,
-        DistantSignals, SimpleEntries, Crossings, FlagPosts, TxpPositions,
+        DistantSignals, BlockSignals, SimpleEntries, Crossings, FlagPosts, TxpPositions,
         AvalancheSignals
     };
     EdMode mode = EdMode::Geometry;
@@ -390,6 +391,14 @@ int main(int argc, char** argv) {
     bool distantDirty = false;       // unsaved distant-signal changes
     int selDistant = -1;             // selected distant (index into distantSignals)
     int nextDistantId = 1;           // auto-increment distant id
+    // Block signals: a main signal on a border out on the line, worked by nobody. It
+    // carries no route - the road it governs is the signal path already leaving its border
+    // the way it faces - so, like a distant, none of the route-mode bindings apply.
+    std::vector<BlockSignal> blockSignals = loadBlockSignals(datasetRoot);
+    bool blockDirty = false;         // unsaved block-signal changes
+    int selBlock = -1;               // selected block signal (index into blockSignals)
+    int nextBlockId = 1;             // auto-increment block-signal id
+    for (const BlockSignal& b : blockSignals) nextBlockId = std::max(nextBlockId, b.id + 1);
     // Simple entry signals: red/green, no circuits, one green per station.
     std::vector<SimpleEntrySignal> simpleEntries = loadSimpleEntrySignals(datasetRoot);
     std::vector<SignalStation> simpleEntryStation;
@@ -445,7 +454,7 @@ int main(int argc, char** argv) {
     // what the operator will pick from when setting a route - so creating one opens this
     // straight away, pre-filled with the auto default.
     enum class NameTarget { None, Section, Path, Exit, ExitRoute, Entry, EntryApproach,
-                           Distant, Simple, Crossing, Flag, Txp, Avalanche };
+                           Distant, Block, Simple, Crossing, Flag, Txp, Avalanche };
     NameTarget namingWhat = NameTarget::None;
     int namingIdx = -1;              // index into whichever collection that names
     int nextSectionId = 1;           // auto-increment section id
@@ -478,6 +487,9 @@ int main(int argc, char** argv) {
         else if (what == NameTarget::Distant && idx >= 0 &&
                  idx < static_cast<int>(distantSignals.size()))
             cur = &distantSignals[idx].name;
+        else if (what == NameTarget::Block && idx >= 0 &&
+                 idx < static_cast<int>(blockSignals.size()))
+            cur = &blockSignals[idx].name;
         else if (what == NameTarget::Simple && idx >= 0 &&
                  idx < static_cast<int>(simpleEntries.size()))
             cur = &simpleEntries[idx].name;
@@ -531,9 +543,31 @@ int main(int argc, char** argv) {
     };
     // A distant stands at a plain point rather than on a route, so it is placed directly and
     // appended after the merge - it must never fold onto a dwarf's pole.
+    // The line block, resolved the way the viewer resolves it, so the editor shows what
+    // the sim will do rather than what was drawn.
+    auto resolveBlocks = [&]() {
+        return resolveLineBlocks(blockSignals, signalPaths, polys, tc);
+    };
     auto allPlacements = [&]() {
-        std::vector<SignalPlacement> out =
-            mergeSignals(signalPlacements(signalPaths, polys), mainPlacements());
+        const LineBlocks lb = resolveBlocks();
+        std::vector<char> blockRoad(signalPaths.size(), 0);
+        for (const BlockRoad& br : lb.roads)
+            if (br.road >= 0) blockRoad[br.road] = 1;
+        std::vector<SignalPlacement> dwarfs = signalPlacements(signalPaths, polys);
+        // As in the viewer: a block signal's road must not also raise a dwarf beside it.
+        dropBlockRoads(dwarfs, blockRoad);
+        std::vector<SignalPlacement> out = mergeSignals(dwarfs, mainPlacements());
+        for (std::size_t i = 0; i < blockSignals.size(); ++i) {
+            if (lb.roads[i].road < 0) continue;
+            SignalPlacement sp;
+            if (!routeStartPose(signalPaths[lb.roads[i].road], polys, sp.world, sp.forward))
+                continue;
+            sp.kind = SignalKind::Block;
+            sp.at = blockSignals[i].at;
+            sp.side = blockSignals[i].side;
+            sp.paths.push_back(lb.roads[i].road);
+            out.push_back(std::move(sp));
+        }
         for (std::size_t i = 0; i < distantSignals.size(); ++i) {
             const DistantSignal& d = distantSignals[i];
             const glm::dvec3 w = fracToWorld(polys, d.trackId, d.frac);
@@ -543,6 +577,7 @@ int main(int argc, char** argv) {
             sp.world = w;
             sp.forward = trackTangent(polys, d.trackId, d.frac, d.dir);
             sp.at = {d.trackId, d.frac};
+            sp.side = d.side; // the viewer has always drawn this; the editor did not
             sp.paths.push_back(static_cast<int>(i));
             out.push_back(std::move(sp));
         }
@@ -859,6 +894,64 @@ int main(int argc, char** argv) {
                     lns.push_back({scv(sw, 0.3f), rc});
                     lns.push_back({scv(sw, 7.0f), rc});
                     pts.push_back({scv(sw, 7.0f), rc});
+                }
+            }
+        } else if (mode == EdMode::BlockSignals) {
+            const glm::dvec3 o = data.sceneOrigin();
+            auto scv = [&](glm::dvec3 w, float lift) {
+                return glm::vec3(float(w.x - o.x), float(w.y - o.y), float(w.z - o.z) + lift);
+            };
+            // Every border in reach, so there is somewhere visible to put one.
+            for (std::size_t i = 0; i < tc.borders.size(); ++i) {
+                const glm::dvec3 w = fracToWorld(polys, tc.borders[i].trackId,
+                                                 tc.borders[i].frac);
+                if (w.x == 0.0 && w.y == 0.0) continue;
+                const glm::vec3 col = static_cast<int>(i) == selBorder
+                                          ? glm::vec3(1.0f, 1.0f, 1.0f)
+                                          : glm::vec3(0.35f, 0.55f, 0.85f);
+                lns.push_back({scv(w, 0.0f), col});
+                lns.push_back({scv(w, 2.0f), col});
+            }
+            const LineBlocks lb = resolveBlocks();
+            for (std::size_t i = 0; i < blockSignals.size(); ++i) {
+                const BlockSignal& b = blockSignals[i];
+                const glm::dvec3 w = fracToWorld(polys, b.at.trackId, b.at.frac);
+                if (w.x == 0.0 && w.y == 0.0) continue;
+                const bool sel = static_cast<int>(i) == selBlock;
+                // Orange when it resolved to no road: it will stand at danger for ever, and
+                // that has to be visible without reading the log.
+                const bool ok = lb.roads[i].road >= 0;
+                const glm::vec3 col = sel   ? glm::vec3(1.0f, 1.0f, 1.0f)
+                                      : ok  ? glm::vec3(0.45f, 0.95f, 0.55f)
+                                            : glm::vec3(1.0f, 0.45f, 0.2f);
+                lns.push_back({scv(w, 0.3f), col});
+                lns.push_back({scv(w, 6.0f), col});
+                pts.push_back({scv(w, 6.0f), col});
+                const glm::dvec2 f = trackTangent(polys, b.at.trackId, b.at.frac, b.dir);
+                const glm::dvec2 pp(-f.y, f.x);
+                const glm::dvec3 tip(w.x + f.x * 18.0, w.y + f.y * 18.0, w.z);
+                lns.push_back({scv(w, 1.2f), col});
+                lns.push_back({scv(tip, 1.2f), col});
+                for (double side : {-1.0, 1.0}) {
+                    const glm::dvec3 bk(tip.x - f.x * 5.0 + pp.x * 2.5 * side,
+                                        tip.y - f.y * 5.0 + pp.y * 2.5 * side, tip.z);
+                    lns.push_back({scv(tip, 1.2f), col});
+                    lns.push_back({scv(bk, 1.2f), col});
+                }
+                // The selected one draws the road it governs - the block it protects, which
+                // is the one thing about a block signal that cannot be seen from its mast.
+                if (!sel || !ok) continue;
+                const SignalPath& road = signalPaths[lb.roads[i].road];
+                for (const SectionInterval& iv : road.parts) {
+                    glm::dvec3 prev = fracToWorld(polys, iv.trackId, iv.from);
+                    if (prev.x == 0.0 && prev.y == 0.0) continue;
+                    for (int k = 1; k <= 24; ++k) {
+                        const double t = iv.from + (iv.to - iv.from) * k / 24.0;
+                        const glm::dvec3 c = fracToWorld(polys, iv.trackId, t);
+                        lns.push_back({scv(prev, 1.0f), glm::vec3(0.3f, 1.0f, 0.5f)});
+                        lns.push_back({scv(c, 1.0f), glm::vec3(0.3f, 1.0f, 0.5f)});
+                        prev = c;
+                    }
                 }
             }
         } else if (mode == EdMode::SignalPaths || mode == EdMode::ExitSignals ||
@@ -1953,6 +2046,7 @@ int main(int argc, char** argv) {
                                                  "Switches", "Signal paths",
                                                  "Exit signals", "Entry signals",
                                                  "Distant signals",
+                                                 "Block signals",
                                                  "Simple entry signals",
                                                  "Level crossings", "Flag posts",
                                                  "TXP positions",
@@ -1970,6 +2064,7 @@ int main(int argc, char** argv) {
                : sel == "Exit signals"       ? EdMode::ExitSignals
                : sel == "Entry signals"      ? EdMode::EntrySignals
                : sel == "Distant signals"    ? EdMode::DistantSignals
+               : sel == "Block signals"      ? EdMode::BlockSignals
                : sel == "Simple entry signals" ? EdMode::SimpleEntries
                : sel == "Level crossings"    ? EdMode::Crossings
                : sel == "Flag posts"         ? EdMode::FlagPosts
@@ -2070,6 +2165,7 @@ int main(int argc, char** argv) {
                                : namingWhat == NameTarget::ExitRoute  ? "exit route"
                                : namingWhat == NameTarget::EntryApproach ? "entry approach"
                                : namingWhat == NameTarget::Entry      ? "entry signal"
+                               : namingWhat == NameTarget::Block      ? "block signal"
                                : namingWhat == NameTarget::Distant    ? "distant signal"
                                : namingWhat == NameTarget::Simple ? "simple entry signal"
                                : namingWhat == NameTarget::Crossing ? "level crossing"
@@ -2083,6 +2179,7 @@ int main(int argc, char** argv) {
                               : namingWhat == NameTarget::Exit       ? "E"
                               : namingWhat == NameTarget::EntryApproach ? "A"
                               : namingWhat == NameTarget::Entry      ? "N"
+                              : namingWhat == NameTarget::Block      ? "B"
                               : namingWhat == NameTarget::Distant    ? "D"
                               : namingWhat == NameTarget::Simple     ? "SE"
                               : namingWhat == NameTarget::Crossing   ? "X"
@@ -2135,6 +2232,14 @@ int main(int argc, char** argv) {
                     std::printf("[trackedit] %s %d named \"%s\" (Ctrl+S to save)\n", what,
                                 d.id, d.name.c_str());
                     rebuildOverlay();
+                } else if (namingWhat == NameTarget::Block && namingIdx >= 0 &&
+                    namingIdx < static_cast<int>(blockSignals.size())) {
+                    BlockSignal& b = blockSignals[namingIdx];
+                    b.name = g_nameBuf.empty() ? (pfx + std::to_string(b.id)) : g_nameBuf;
+                    blockDirty = true;
+                    std::printf("[trackedit] %s %d named \"%s\" (Ctrl+S to save)\n", what,
+                                b.id, b.name.c_str());
+                    rebuildOverlay();
                 } else if (namingWhat == NameTarget::Section && namingIdx >= 0 &&
                            namingIdx < static_cast<int>(tc.sections.size())) {
                     Section& sec = tc.sections[namingIdx];
@@ -2177,6 +2282,9 @@ int main(int argc, char** argv) {
             else if (namingWhat == NameTarget::Distant && namingIdx >= 0 &&
                      namingIdx < static_cast<int>(distantSignals.size()))
                 nid = distantSignals[namingIdx].id;
+            else if (namingWhat == NameTarget::Block && namingIdx >= 0 &&
+                     namingIdx < static_cast<int>(blockSignals.size()))
+                nid = blockSignals[namingIdx].id;
             else if (namingWhat == NameTarget::Simple && namingIdx >= 0 &&
                      namingIdx < static_cast<int>(simpleEntries.size()))
                 nid = simpleEntries[namingIdx].id;
@@ -2287,6 +2395,7 @@ int main(int argc, char** argv) {
         if ((mode == EdMode::Circuits || mode == EdMode::Switches ||
              mode == EdMode::SignalPaths || mode == EdMode::ExitSignals ||
              mode == EdMode::EntrySignals || mode == EdMode::DistantSignals ||
+             mode == EdMode::BlockSignals ||
              mode == EdMode::SimpleEntries || mode == EdMode::Crossings ||
              mode == EdMode::FlagPosts || mode == EdMode::TxpPositions ||
              mode == EdMode::NewSidings || mode == EdMode::MovePoints ||
@@ -2889,7 +2998,63 @@ int main(int argc, char** argv) {
                 rebuildStructs();
                 rebuildOverlay();
             }
+            // B: walk the post across the line. Independent of the facing, as everywhere
+            // else - turning a head round should not move its post.
+            if (kB && !prevB) {
+                if (haveSel) {
+                    DistantSignal& d = distantSignals[selDistant];
+                    d.side = -d.side;
+                    distantDirty = true;
+                    pathMsg = std::string("post stands ") + (d.side < 0 ? "left" : "right");
+                    rebuildStructs();
+                } else {
+                    pathMsg = "right-click a distant signal first, then B";
+                }
+                pathMsgUntil = glfwGetTime() + 3.0;
+                rebuildOverlay();
+            }
             if (kF2 && !prevF2 && haveSel) beginNaming(NameTarget::Distant, selDistant);
+        } else if (mode == EdMode::BlockSignals) { // --- Block signals mode ---
+            const bool haveSel =
+                selBlock >= 0 && selBlock < static_cast<int>(blockSignals.size());
+            // F: turn it round. Which way it faces decides which road it governs, so this
+            // is not cosmetic - it picks the other of the border's two roads.
+            if (kF && !prevF) {
+                if (haveSel) {
+                    BlockSignal& b = blockSignals[selBlock];
+                    b.dir = -b.dir;
+                    blockDirty = true;
+                    pathMsg = std::string("governs movements toward ") +
+                              (b.dir > 0 ? "+frac" : "-frac");
+                    rebuildStructs();
+                } else {
+                    pathMsg = "right-click a block signal first, then F";
+                }
+                pathMsgUntil = glfwGetTime() + 3.0;
+                rebuildOverlay();
+            }
+            if (kB && !prevB) {
+                if (haveSel) {
+                    BlockSignal& b = blockSignals[selBlock];
+                    b.side = -b.side;
+                    blockDirty = true;
+                    pathMsg = std::string("post stands ") + (b.side < 0 ? "left" : "right");
+                    rebuildStructs();
+                } else {
+                    pathMsg = "right-click a block signal first, then B";
+                }
+                pathMsgUntil = glfwGetTime() + 3.0;
+                rebuildOverlay();
+            }
+            if (kX && !prevX && haveSel) {
+                blockSignals.erase(blockSignals.begin() + selBlock);
+                selBlock = -1;
+                blockDirty = true;
+                std::printf("[trackedit] block signal removed (Ctrl+S to save)\n");
+                rebuildStructs();
+                rebuildOverlay();
+            }
+            if (kF2 && !prevF2 && haveSel) beginNaming(NameTarget::Block, selBlock);
         } else if (mode == EdMode::SimpleEntries) { // --- Simple entry signals mode ---
             const bool haveSel =
                 selSimple >= 0 && selSimple < static_cast<int>(simpleEntries.size());
@@ -3406,7 +3571,7 @@ int main(int argc, char** argv) {
                                                 removeExisting.end(), char(1)));
         if (kSave && !prevS && mode == EdMode::Circuits &&
             (circuitsDirty || pathsDirty || exitDirty || exitRoutesDirty || entryDirty ||
-             entryApproachesDirty)) {
+             entryApproachesDirty || blockDirty)) {
             // Circuits mode: save the sensing sections to their own overlay file. A border
             // move also rewrites every route anchored to it, so write those too - otherwise
             // the overlays would silently disagree on the next load, and there would be no
@@ -3429,6 +3594,18 @@ int main(int argc, char** argv) {
                     pathsDirty = false;
                 } else {
                     std::fprintf(stderr, "[trackedit] failed to write signal-paths file\n");
+                }
+            }
+            // A block signal stands on a border, so a border move carries it along with the
+            // routes anchored there and it has to be written from this mode too.
+            if (blockDirty) {
+                if (writeBlockSignals(datasetRoot, blockSignals)) {
+                    std::printf("[trackedit] saved %zu block signal(s) -> "
+                                "%s/overlay/block-signals.txt\n", blockSignals.size(),
+                                datasetRoot.c_str());
+                    blockDirty = false;
+                } else {
+                    std::fprintf(stderr, "[trackedit] failed to write block-signals file\n");
                 }
             }
             if (exitDirty) {
@@ -3613,6 +3790,15 @@ int main(int argc, char** argv) {
             } else {
                 std::fprintf(stderr, "[trackedit] failed to write distant signals\n");
             }
+        } else if (kSave && !prevS && mode == EdMode::BlockSignals && blockDirty) {
+            if (writeBlockSignals(datasetRoot, blockSignals)) {
+                std::printf("[trackedit] saved %zu block signal(s) to "
+                            "%s/overlay/block-signals.txt\n", blockSignals.size(),
+                            datasetRoot.c_str());
+                blockDirty = false;
+            } else {
+                std::fprintf(stderr, "[trackedit] failed to write block signals\n");
+            }
         } else if (kSave && !prevS && mode == EdMode::SignalPaths && pathsDirty) {
             // Signal-paths mode: save the mini signal paths to their own overlay file.
             if (writeSignalPaths(datasetRoot, signalPaths)) {
@@ -3796,6 +3982,18 @@ int main(int argc, char** argv) {
                     const int nr = moveBorderFrac(exitRoutes, polys, t, oldF, circFrac);
                     if (na > 0) entryApproachesDirty = true;
                     const int ny = moveBorderFrac(entrySignals, polys, t, oldF, circFrac);
+                    // A block signal stands *on* a border, so moving one takes the signal
+                    // with it. Nothing can break here the way a route can - the signal has
+                    // no road of its own - but leaving it behind would strand it on a
+                    // fraction that is no longer a border and silently stop it resolving.
+                    int nb = 0;
+                    for (BlockSignal& b : blockSignals) {
+                        if (b.at.trackId != t) continue;
+                        if (std::abs(b.at.frac - oldF) > sameFracTol(polys, t)) continue;
+                        b.at.frac = circFrac;
+                        ++nb;
+                    }
+                    if (nb > 0) blockDirty = true;
                     circuitsDirty = true;
                     if (np > 0) pathsDirty = true;
                     if (ne > 0) exitDirty = true;
@@ -3804,7 +4002,9 @@ int main(int argc, char** argv) {
                     moveArmed = false;
                     rebuildStructs(); // signals stand at route starts: re-place them
                     pathMsg = "border moved (" + std::to_string(nc) + " circuit + " +
-                              std::to_string(np + ne + nr + ny) + " route value(s))";
+                              std::to_string(np + ne + nr + ny) + " route value(s)" +
+                              (nb > 0 ? ", " + std::to_string(nb) + " block signal(s)" : "") +
+                              ")";
                     std::printf("[trackedit] border moved on %#x %.6f -> %.6f (%d circuit, %d "
                                 "path, %d exit, %d exit-route, %d entry value(s); "
                                 "Ctrl+S to save)\n",
@@ -3843,6 +4043,27 @@ int main(int argc, char** argv) {
                 std::printf("[trackedit] distant signal %d on %#x at %.6f (Ctrl+S to save)\n",
                             distantSignals[selDistant].id, circTrack, circFrac);
                 beginNaming(NameTarget::Distant, selDistant);
+            }
+            rebuildOverlay();
+        } else if (!g_mouseCaptured && mL && !prevML && mode == EdMode::BlockSignals) {
+            // Snapped to a border, unlike a distant: a block signal divides one block
+            // section from the next, so away from a border there is nothing for it to mean.
+            if (borderHover >= 0) {
+                BlockSignal b;
+                b.id = nextBlockId++;
+                b.name = "B" + std::to_string(b.id);
+                b.at = tc.borders[borderHover];
+                blockSignals.push_back(std::move(b));
+                selBlock = static_cast<int>(blockSignals.size()) - 1;
+                blockDirty = true;
+                rebuildStructs();
+                std::printf("[trackedit] block signal %d on border %#x at %.6f "
+                            "(F to turn it round, Ctrl+S to save)\n",
+                            blockSignals[selBlock].id, b.at.trackId, b.at.frac);
+                beginNaming(NameTarget::Block, selBlock);
+            } else {
+                pathMsg = "a block signal stands on a track-circuit border";
+                pathMsgUntil = glfwGetTime() + 3.0;
             }
             rebuildOverlay();
         } else if (!g_mouseCaptured && mL && !prevML && mode == EdMode::TxpPositions) {
@@ -4061,6 +4282,34 @@ int main(int argc, char** argv) {
                                    (clip.y / clip.w * 0.5f + 0.5f) * fbh);
                 const float dpx = glm::length(px - cur);
                 if (dpx < best) { best = dpx; selDistant = static_cast<int>(i); }
+            }
+            rebuildOverlay();
+        } else if (!g_mouseCaptured && mR && !prevMR && mode == EdMode::BlockSignals) {
+            // Nearest block signal to the cursor. Two stand on one border facing opposite
+            // ways, so the pick is over the mast positions rather than the border.
+            double mx = 0.0, my = 0.0;
+            glfwGetCursorPos(window, &mx, &my);
+            int winw = fbw, winh = fbh;
+            glfwGetWindowSize(window, &winw, &winh);
+            const glm::vec2 cur(static_cast<float>(mx) * fbw / std::max(winw, 1),
+                                static_cast<float>(my) * fbh / std::max(winh, 1));
+            const glm::dvec3 o = data.sceneOrigin();
+            float best = 24.0f; // px
+            selBlock = -1;
+            for (std::size_t i = 0; i < blockSignals.size(); ++i) {
+                const BlockSignal& b = blockSignals[i];
+                const glm::dvec3 w = fracToWorld(polys, b.at.trackId, b.at.frac);
+                if (w.x == 0.0 && w.y == 0.0) continue;
+                // Nudged along the facing so the two masts at one border can be told apart.
+                const glm::dvec2 t = trackTangent(polys, b.at.trackId, b.at.frac, b.dir);
+                const glm::vec4 clip = viewProj * glm::vec4(
+                    float(w.x - o.x + t.x * 6.0), float(w.y - o.y + t.y * 6.0),
+                    float(w.z - o.z) + 2.0f, 1.0f);
+                if (clip.w <= 0.0f) continue;
+                const glm::vec2 px((clip.x / clip.w * 0.5f + 0.5f) * fbw,
+                                   (clip.y / clip.w * 0.5f + 0.5f) * fbh);
+                const float dpx = glm::length(px - cur);
+                if (dpx < best) { best = dpx; selBlock = static_cast<int>(i); }
             }
             rebuildOverlay();
         } else if (!g_mouseCaptured && mR && !prevMR && mode == EdMode::TxpPositions) {
@@ -4749,6 +4998,65 @@ int main(int argc, char** argv) {
             appendText(tv,
                        "click: place  right-click: select  T: +track  B: barriers  F2/X",
                        x, 40.0f + 7 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
+          } else if (mode == EdMode::BlockSignals) { // --- Block signals mode HUD ---
+            appendText(tv, "MODE: BLOCK SIGNALS (Esc menu to switch)", x, 40.0f + 3 * lh,
+                       sc, glm::vec3(1.0f, 0.75f, 0.3f), fbw, fbh);
+            const bool haveSel =
+                selBlock >= 0 && selBlock < static_cast<int>(blockSignals.size());
+            const LineBlocks lb = resolveBlocks();
+            char selnm[96] = "";
+            if (haveSel)
+                std::snprintf(selnm, sizeof(selnm), "  sel: %s",
+                              blockSignals[selBlock].name.c_str());
+            std::snprintf(buf, sizeof(buf), "BLOCK SIGNALS %zu   LINES %zu%s",
+                          blockSignals.size(), lb.lines.size(), selnm);
+            appendText(tv, buf, x, 40.0f + 4 * lh, sc,
+                       haveSel ? glm::vec3(1.0f, 0.9f, 0.3f) : glm::vec3(0.9f, 0.85f, 0.7f),
+                       fbw, fbh);
+            // Which road the selected one resolved to. That is the whole of its
+            // configuration and none of it is visible from the mast: it carries no route,
+            // so a signal facing the wrong way silently governs nothing at all.
+            if (haveSel) {
+                const BlockRoad& br = lb.roads[selBlock];
+                if (br.road < 0)
+                    std::snprintf(buf, sizeof(buf),
+                                  "governs %s   NO ROAD - no signal path leaves this "
+                                  "border that way; it will stay at danger",
+                                  blockSignals[selBlock].dir > 0 ? "+frac" : "-frac");
+                else
+                    std::snprintf(buf, sizeof(buf),
+                                  "governs %s   road \"%s\"  %zu section(s) ahead",
+                                  blockSignals[selBlock].dir > 0 ? "+frac" : "-frac",
+                                  signalPaths[br.road].name.c_str(), br.sections.size());
+                appendText(tv, buf, x, 40.0f + 5 * lh, sc,
+                           br.road < 0 ? glm::vec3(1.0f, 0.55f, 0.4f)
+                                       : glm::vec3(0.6f, 1.0f, 0.7f),
+                           fbw, fbh);
+                if (br.line >= 0) {
+                    const LineBlock& L = lb.lines[br.line];
+                    std::snprintf(buf, sizeof(buf),
+                                  "line \"%s\"  %zu section(s)  %zu signal(s)%s",
+                                  L.name.c_str(), L.sections.size(), L.signals.size(),
+                                  L.sound ? "" : "   UNSOUND - held at danger");
+                    appendText(tv, buf, x, 40.0f + 6 * lh, sc,
+                               L.sound ? glm::vec3(0.8f, 0.95f, 0.8f)
+                                       : glm::vec3(1.0f, 0.55f, 0.3f),
+                               fbw, fbh);
+                }
+            }
+            std::snprintf(buf, sizeof(buf), "UNSAVED %s   %s", blockDirty ? "yes" : "no",
+                          blockDirty ? "Ctrl+S to save" : "");
+            appendText(tv, buf, x, 40.0f + 7 * lh, sc,
+                       blockDirty ? glm::vec3(1.0f, 0.6f, 0.3f) : glm::vec3(0.6f, 0.9f, 0.6f),
+                       fbw, fbh);
+            if (glfwGetTime() < pathMsgUntil && !pathMsg.empty())
+                appendText(tv, pathMsg, x, 40.0f + 8 * lh, sc, glm::vec3(1.0f, 0.55f, 0.4f),
+                           fbw, fbh);
+            appendText(tv,
+                       g_mouseCaptured
+                           ? "BLOCK SIGNALS: press Tab to free the cursor"
+                           : "BLOCK SIGNALS: click a border   F=turn  B=side  F2/X",
+                       x, 40.0f + 9 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
           } else if (mode == EdMode::SimpleEntries) { // --- Simple entry signals HUD ---
             appendText(tv, "MODE: SIMPLE ENTRY SIGNALS (Esc menu to switch)", x,
                        40.0f + 3 * lh, sc, glm::vec3(1.0f, 0.75f, 0.3f), fbw, fbh);
@@ -4812,7 +5120,9 @@ int main(int argc, char** argv) {
                 else
                     std::snprintf(buf, sizeof(buf), "reads %s   sees %s signal",
                                   d.dir > 0 ? "+frac" : "-frac",
-                                  pl[hit].kind == SignalKind::Entry ? "an entry" : "an exit");
+                                  pl[hit].kind == SignalKind::Entry   ? "an entry"
+                                  : pl[hit].kind == SignalKind::Block ? "a block"
+                                                                      : "an exit");
                 appendText(tv, buf, x, 40.0f + 5 * lh, sc,
                            hit < 0 ? glm::vec3(1.0f, 0.55f, 0.4f) : glm::vec3(0.6f, 1.0f, 0.7f),
                            fbw, fbh);
@@ -4828,7 +5138,7 @@ int main(int argc, char** argv) {
             appendText(tv,
                        g_mouseCaptured
                            ? "DISTANT SIGNALS: press Tab to free the cursor"
-                           : "DISTANT SIGNALS: click any spot on a track   F=flip",
+                           : "DISTANT SIGNALS: click any spot on a track   F=flip  B=side",
                        x, 40.0f + 8 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
             // Name labels beside each one, since a distant is a bare point otherwise.
             for (const DistantSignal& d : distantSignals) {

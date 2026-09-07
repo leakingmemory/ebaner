@@ -18,6 +18,7 @@
 #include "RoadMesh.h"
 #include "SignalMesh.h"
 #include "Script.h"
+#include "LineBlock.h"
 #include "SignalPaths.h"
 #include <cassert>
 
@@ -664,8 +665,46 @@ int main(int argc, char** argv) {
             signalPlacements(entrySignals, polys, SignalKind::Entry);
         mainPlacements.insert(mainPlacements.end(), entries.begin(), entries.end());
     }
+    // Block signals out on the line. They carry no route of their own: each governs the
+    // signal path already authored from its border facing its way, and that road is what it
+    // opens before it clears - so the line block is resolved here, before the placements
+    // are built, and its answer decides both.
+    const std::vector<BlockSignal> blockSignals = loadBlockSignals(datasetRoot);
+    const LineBlocks lineBlocks =
+        resolveLineBlocks(blockSignals, signalPaths, polys, circuits);
+    for (const std::string& n : lineBlocks.notes) std::printf("[Block] %s\n", n.c_str());
+    // Which mini paths belong to a block signal, so nothing else may work them.
+    std::vector<char> blockRoad(signalPaths.size(), 0);
+    for (const BlockRoad& br : lineBlocks.roads)
+        if (br.road >= 0) blockRoad[br.road] = 1;
+    std::vector<SignalPlacement> dwarfPlacements = signalPlacements(signalPaths, polys);
+    // A block signal's road already has a dwarf built from it, since every mini path gets
+    // one. Left in place, opening that road to clear the block signal would light a
+    // shunting signal beside it and offer it on the map as something to set by hand.
+    dropBlockRoads(dwarfPlacements, blockRoad);
     std::vector<SignalPlacement> sigPlacements =
-        mergeSignals(signalPlacements(signalPaths, polys), mainPlacements);
+        mergeSignals(dwarfPlacements, mainPlacements);
+    // Appended after the merge like the distants rather than merged as a main: there is
+    // nothing at a block signal's border for it to share a pole with any more.
+    std::vector<int> blockPlacement(blockSignals.size(), -1);
+    for (std::size_t i = 0; i < blockSignals.size(); ++i) {
+        if (lineBlocks.roads[i].road < 0) continue; // no road: nothing to stand for
+        const SignalPath& road = signalPaths[lineBlocks.roads[i].road];
+        SignalPlacement sp;
+        if (!routeStartPose(road, polys, sp.world, sp.forward)) continue;
+        sp.kind = SignalKind::Block;
+        sp.at = blockSignals[i].at;
+        sp.side = blockSignals[i].side;
+        sp.paths.push_back(lineBlocks.roads[i].road);
+        blockPlacement[i] = static_cast<int>(sigPlacements.size());
+        sigPlacements.push_back(std::move(sp));
+    }
+    for (std::size_t li = 0; li < lineBlocks.lines.size(); ++li) {
+        const LineBlock& L = lineBlocks.lines[li];
+        std::printf("[Block] line %zu %-10s %zu signal(s), %zu section(s)%s\n", li,
+                    L.name.c_str(), L.signals.size(), L.sections.size(),
+                    L.sound ? "" : "  UNSOUND - held at danger");
+    }
     // Distant signals stand at a plain point rather than on a route, so they are placed
     // directly and appended after the merge - one must never fold onto a dwarf's pole.
     const std::vector<DistantSignal> distantSignals = loadDistantSignals(datasetRoot);
@@ -773,8 +812,11 @@ int main(int argc, char** argv) {
         const glm::dvec3 org = data.sceneOrigin();
         for (std::size_t k = 0; k < sigPlacements.size(); ++k) {
             const SignalPlacement& sp = sigPlacements[k];
+            // A block signal counts with the mains: one at danger inside a crossing's
+            // approach holds a train short of it just as a station's signal does, and the
+            // crossing has no business ringing for a train that cannot reach it.
             if (sp.kind != SignalKind::Dwarf && sp.kind != SignalKind::Entry &&
-                sp.kind != SignalKind::Exit)
+                sp.kind != SignalKind::Exit && sp.kind != SignalKind::Block)
                 continue;
             float s = 0.0f;
             const int road = crossingTrackUnder(
@@ -977,6 +1019,12 @@ int main(int argc, char** argv) {
     // per-switch occupancy lock guards them from there).
     std::vector<char> routeSet(signalPaths.size(), 0);
     int routeArm = -1; // placement armed by a first click, awaiting its destination
+    // What the line blocks are holding, and what their signals last decided. The claim on a
+    // line outlives the route that made it: the route is given up as the train enters its
+    // last circuit, and the train is then out on the line with nothing else on record
+    // saying which way it went.
+    std::vector<LineBlockState> lineState(lineBlocks.lines.size());
+    BlockOutcome blockOut;
 
     // --- Main-signal routes ---------------------------------------------------------------
     // Everything a main signal can be asked to authorise, exit or entry alike, resolved once
@@ -1233,6 +1281,19 @@ int main(int argc, char** argv) {
                 for (const int id : c.beyond) std::printf(" %d", id);
                 std::printf("\n");
             }
+            for (std::size_t li = 0; li < lineBlocks.lines.size(); ++li) {
+                const LineBlock& L = lineBlocks.lines[li];
+                std::printf("[Block] line %2zu \"%s\"%s sections", li, L.name.c_str(),
+                            L.sound ? "" : " UNSOUND");
+                for (const int id : L.sections) std::printf(" %d", id);
+                std::printf(" ends");
+                for (const Border& b : L.ends) std::printf(" %x:%g", b.trackId, b.frac);
+                for (const int i : L.signals)
+                    std::printf(" | \"%s\" %+d road \"%s\"", blockSignals[i].name.c_str(),
+                                lineBlocks.roads[i].align,
+                                signalPaths[lineBlocks.roads[i].road].name.c_str());
+                std::printf("\n");
+            }
         }
     }
     // A departure the interlocking is holding. Its circuits are locked so no other main
@@ -1260,16 +1321,10 @@ int main(int argc, char** argv) {
         const glm::dvec3 org = switchNet.sceneOrigin();
         for (std::size_t si = 0; si < circuits.sections.size(); ++si) {
             for (const SectionInterval& iv : circuits.sections[si].parts) {
-                const glm::dvec3 a = fracToWorld(polys, iv.trackId, iv.from);
-                if (a.x == 0.0 && a.y == 0.0) continue; // track gone (stale overlay)
                 SecRun run;
                 run.section = static_cast<int>(si);
-                constexpr int kSteps = 32;
-                for (int k = 0; k <= kSteps; ++k) {
-                    const double f = iv.from + (iv.to - iv.from) * k / kSteps;
-                    const glm::dvec3 w = fracToWorld(polys, iv.trackId, f);
+                for (const glm::dvec3& w : sampleSectionRun(polys, iv))
                     run.pts.push_back(glm::vec2(w.x - org.x, w.y - org.y));
-                }
                 if (run.pts.size() >= 2) secRuns.push_back(std::move(run));
             }
         }
@@ -1287,14 +1342,8 @@ int main(int argc, char** argv) {
     Script script;
     script.run(datasetRoot);
 
-    // Squared planar distance from p to segment ab (for occupancy tests).
-    auto pointSegDist2 = [](glm::vec2 p, glm::vec2 a, glm::vec2 b) {
-        const glm::vec2 ab = b - a;
-        const float L2 = glm::dot(ab, ab);
-        const float t = L2 > 1e-6f ? glm::clamp(glm::dot(p - a, ab) / L2, 0.0f, 1.0f) : 0.0f;
-        const glm::vec2 c = a + ab * t;
-        return glm::dot(p - c, p - c);
-    };
+    // Occupancy is measured with runSegDist2 (TrackCircuits.h), which cuts a section off
+    // exactly at its own borders rather than letting the lateral tolerance wrap round them.
     // Recompute which sections hold a wheelset. Tolerance keeps an axle on the right
     // track without bleeding onto a parallel one (track centres are >4 m apart).
     auto computeOccupancy = [&](std::vector<char>& occ) {
@@ -1310,16 +1359,22 @@ int main(int argc, char** argv) {
             const std::vector<VehicleFrame> a = t.axleFrames();
             axles.insert(axles.end(), a.begin(), a.end());
         }
-        constexpr float kTol2 = 2.5f * 2.5f;
+        constexpr double kTol2 = kOccupancyTolM * kOccupancyTolM;
         for (const SecRun& run : secRuns) {
             if (occ[run.section]) continue;
             bool hit = false;
-            for (std::size_t i = 1; i < run.pts.size() && !hit; ++i)
+            for (std::size_t i = 1; i < run.pts.size() && !hit; ++i) {
+                // The first and last samples of a run sit exactly on its section's borders.
+                const bool openA = i == 1;
+                const bool openB = i + 1 == run.pts.size();
                 for (const VehicleFrame& ax : axles)
-                    if (pointSegDist2(glm::vec2(ax.pos), run.pts[i - 1], run.pts[i]) < kTol2) {
+                    if (runSegDist2(glm::dvec2(ax.pos.x, ax.pos.y),
+                                    glm::dvec2(run.pts[i - 1]), glm::dvec2(run.pts[i]),
+                                    openA, openB) < kTol2) {
                         hit = true;
                         break;
                     }
+            }
             if (hit) occ[run.section] = 1;
         }
     };
@@ -1987,6 +2042,10 @@ int main(int argc, char** argv) {
     // Set a route: move its switches into position, lock the path and clear its signal.
     // Everything is validated before anything moves, so a refused route changes nothing.
     auto trySetRoute = [&](int pi) {
+        if (pi >= 0 && pi < static_cast<int>(blockRoad.size()) && blockRoad[pi]) {
+            setMapMsg("That road is worked by a block signal");
+            return;
+        }
         if (const std::string occ = occupiedIn(pi); !occ.empty()) {
             setMapMsg("Route " + pathName(pi) + " occupied: " + occ);
             return;
@@ -2040,6 +2099,10 @@ int main(int argc, char** argv) {
                   true);
     };
     auto cancelRoute = [&](int pi) {
+        if (pi >= 0 && pi < static_cast<int>(blockRoad.size()) && blockRoad[pi]) {
+            setMapMsg("That road is worked by a block signal");
+            return;
+        }
         routeSet[pi] = 0;
         switchesChanged = true;
         g_mapDirty = true;
@@ -2072,6 +2135,18 @@ int main(int argc, char** argv) {
         for (int id : mainCandidates[ri].beyond)
             if (secOccupiedById(id)) occ += (occ.empty() ? "" : ", ") + secName(id);
         if (!occ.empty()) return {"occupied", "occupied: " + occ};
+        // Is the plain line beyond the station spoken for? This is the one test that can
+        // see a train the routes have forgotten: a MainRoute is erased as its last circuit
+        // is entered, so once a train is out on the line the conflict loop below has
+        // nothing left to compare against. Two trains cleared toward each other would not
+        // collide - the block signals stop them - but they would come to a stand facing
+        // each other with no way out, which is not a state working normally should reach.
+        {
+            std::string brief;
+            const std::string why = lineBlockRefusal(lineBlocks, lineState, dep, signalPaths,
+                                                     secOccupiedById, &brief);
+            if (!why.empty()) return {brief, why};
+        }
         // Where another departure already holds road we want, two things make it a
         // conflict, and sharing by itself is not one of them.
         //
@@ -2152,6 +2227,16 @@ int main(int argc, char** argv) {
         mr.locked = pathSections(dep, circuits);
         mr.beyond = mainCandidates[ri].beyond;
         mainRoutes.push_back(std::move(mr));
+        // Whichever line blocks this departure runs onto are now set its way, and stay so
+        // until the line is genuinely clear - not until this route ends.
+        for (std::size_t li = 0; li < lineBlocks.lines.size(); ++li) {
+            if (lineState[li].claimed != 0) continue;
+            if (lineBlockDirection(lineBlocks, static_cast<int>(li), dep, signalPaths) == 0)
+                continue;
+            std::printf("[Block] line %s claimed by %s\n", lineBlocks.lines[li].name.c_str(),
+                        exitRouteName(ri).c_str());
+        }
+        claimLineBlocks(lineBlocks, lineState, dep, signalPaths, exitRouteName(ri));
         switchesChanged = true;
         g_mapDirty = true;
         char buf[96];
@@ -2166,6 +2251,9 @@ int main(int argc, char** argv) {
         for (std::size_t pi = 0; pi < signalPaths.size(); ++pi)
             if (routeSet[pi] && routeContains(mr->departure, signalPaths[pi])) routeSet[pi] = 0;
         mainRoutes.erase(mainRoutes.begin() + (mr - mainRoutes.data()));
+        // The line block's claim is deliberately not dropped here. Cancelling the route
+        // says nothing about whether a train already went; the per-frame step releases the
+        // line when it is actually clear, which is the only thing that can know.
         switchesChanged = true;
         g_mapDirty = true;
         setMapMsg("Route " + exitRouteName(ri) + " cancelled");
@@ -2539,6 +2627,10 @@ int main(int argc, char** argv) {
         // and its switches are released (the per-switch occupancy lock guards them now).
         if (occupancyChanged) {
             for (std::size_t pi = 0; pi < signalPaths.size(); ++pi) {
+                // A block signal's road is written afresh every step from the state of the
+                // line; releasing it here as well would only fight that and log a release
+                // every frame the train is on it.
+                if (blockRoad[pi]) continue;
                 if (!routeSet[pi] || occupiedIn(static_cast<int>(pi)).empty()) continue;
                 routeSet[pi] = 0;
                 switchesChanged = true;
@@ -2668,7 +2760,40 @@ int main(int argc, char** argv) {
                 }
             }
         }
-        if (occupancyChanged || switchesChanged || simpleSignalsChanged || flagsChanged) {
+        // The line blocks are stepped before the aspect guard rather than inside it. A
+        // claim can be released by occupancy alone, with no route and no switch moving, and
+        // the route picker reads the claims later in this frame - so deciding them under
+        // the guard would hand it a stale answer for one frame.
+        bool blocksChanged = false;
+        if (!lineBlocks.empty()) {
+            const std::vector<int> wasClaimed = [&] {
+                std::vector<int> v;
+                for (const LineBlockState& st : lineState) v.push_back(st.claimed);
+                return v;
+            }();
+            auto routeInto = [&](int li) {
+                for (const MainRoute& mr : mainRoutes)
+                    if (lineBlockDirection(lineBlocks, li, mr.departure, signalPaths) != 0)
+                        return true;
+                return false;
+            };
+            blocksChanged = stepLineBlocks(lineBlocks, lineState, signalPaths, switchNet,
+                                           polys, secOccupiedById, routeInto, blockOut);
+            // A block signal's road is its own to open and close, and it does so before the
+            // head is given its green - so there is no step, not one, at which a block
+            // signal shows clear over a road that is not set.
+            for (std::size_t pi = 0; pi < signalPaths.size(); ++pi)
+                if (blockRoad[pi]) routeSet[pi] = blockOut.roadSet[pi];
+            for (std::size_t li = 0; li < lineState.size(); ++li) {
+                if (lineState[li].claimed == wasClaimed[li]) continue;
+                if (lineState[li].claimed == 0)
+                    std::printf("[Block] line %s released (clear)\n",
+                                lineBlocks.lines[li].name.c_str());
+            }
+            if (blocksChanged) g_mapDirty = true;
+        }
+        if (occupancyChanged || switchesChanged || simpleSignalsChanged || flagsChanged ||
+            blocksChanged) {
             switchesChanged = false;
             simpleSignalsChanged = false;
             // What each main signal shows: danger unless a route it governs is set and has
@@ -2690,6 +2815,12 @@ int main(int argc, char** argv) {
                 exitAspects[pi] = !manned  ? SignalAspect::Dark
                                   : green  ? SignalAspect::Clear
                                            : SignalAspect::Stop;
+            }
+            // The block signals out on the line, decided above from the state of the line
+            // rather than from anything a dispatcher did.
+            for (std::size_t i = 0; i < blockPlacement.size(); ++i) {
+                const int k = blockPlacement[i];
+                if (k >= 0 && i < blockOut.aspect.size()) exitAspects[k] = blockOut.aspect[i];
             }
             bool aspectsMoved = updateSignalAspects(sigPlacements, signalPaths, switchNet,
                                                     polys, circuits, secOccupied, routeSet,

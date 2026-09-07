@@ -162,6 +162,29 @@ std::vector<DistantSignal> loadDistantSignals(const std::string& datasetRoot);
 bool writeDistantSignals(const std::string& datasetRoot,
                          const std::vector<DistantSignal>& ds);
 
+// A block signal (blokksignal): a main signal standing out on the plain line between two
+// stations, where a track-circuit border cuts the line into block sections. Nobody works
+// it - it follows the interlocking on its own, clearing when a movement has been
+// authorised its way and the block ahead of it is empty. See LineBlock.h.
+//
+// It carries no route of its own. The road it governs is the signal path already authored
+// from its border facing its way, which is the same road the block signal opens before it
+// clears - so there is one description of that road rather than two that can drift apart.
+// Stored in `overlay/block-signals.txt`:
+//   block <id> "<name>" <trackHex>:<frac> <+|-> [left]
+struct BlockSignal {
+    int id = 0;
+    std::string name;
+    // On a border, unlike a distant's plain point: a block signal only means anything
+    // where one block section ends and the next begins.
+    Border at;
+    int dir = 1;  // +1 governs movements toward increasing frac, -1 the other way
+    int side = 1; // +1 right of that direction, -1 left; independent of it
+};
+std::vector<BlockSignal> loadBlockSignals(const std::string& datasetRoot);
+bool writeBlockSignals(const std::string& datasetRoot,
+                       const std::vector<BlockSignal>& bs);
+
 // What a signal displays. A dwarf uses the fixed reference lamp plus one lamp on the arc:
 // Stop = horizontal pair, TrainOnTrack = 45 deg (a train stands in the route's circuits),
 // Clear = vertical. A main signal reads the same values as its Norwegian aspects: Stop is
@@ -179,7 +202,7 @@ enum class SignalAspect { Stop, TrainOnTrack, Clear, ClearReduced, Dark };
 // moves, one of the two tall main signals - the exit protecting a route out of the station,
 // the entry authorising one in - or the distant that repeats, from braking distance, what
 // the first main signal ahead is showing. Both mains carry the same three-lamp head; only
-// the entry's danger aspect flashes, while every distant lamp does.
+// the entry's and the block signal's danger aspects flash, while every distant lamp does.
 //
 // StationEntry is the simple entry signal (SimpleEntrySignals.h): a main signal's mast
 // under a short head carrying two steady lamps, red over green - stop or go, and dark
@@ -187,7 +210,12 @@ enum class SignalAspect { Stop, TrainOnTrack, Clear, ClearReduced, Dark };
 // flash to tell apart. It is a kind of its own rather than reusing Entry because `paths`
 // below indexes whichever collection `kind` names, and those are different collections -
 // which is exactly the confusion `kind` is here to prevent.
-enum class SignalKind { Dwarf, Exit, Entry, Distant, StationEntry };
+//
+// Block is the blokksignal out on the line (BlockSignal above, LineBlock.h): the same
+// three-lamp head as an exit, with a steady red rather than an entry's flashing one, and
+// nobody working it. Its `paths` index the *mini paths* it opens, since that is the road
+// it governs - so it is the one main kind whose `paths` read against `signalPaths`.
+enum class SignalKind { Dwarf, Exit, Entry, Distant, StationEntry, Block };
 
 // Where a signal sits: the on-track start point of a route and its initial travel
 // direction (a signal governs movements leaving that point in that direction).

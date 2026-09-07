@@ -54,6 +54,43 @@ double polyLength(const std::vector<glm::dvec3>& pts) {
     return L;
 }
 
+double runSegDist2(glm::dvec2 p, glm::dvec2 a, glm::dvec2 b, bool openA, bool openB) {
+    const glm::dvec2 ab = b - a;
+    const double L2 = glm::dot(ab, ab);
+    if (L2 <= 1e-12) return glm::dot(p - a, p - a); // degenerate sample: it is just a point
+    double t = glm::dot(p - a, ab) / L2;
+    constexpr double kFar = 1e30;
+    // Judged in metres rather than on the sign of `t`. A point sitting exactly on a border
+    // - which is precisely where the interesting cases are, and where a run's own last
+    // sample sits - computes t = 1 give or take an ulp, and half the time that is 1 + 1e-16.
+    // Read as "outside", it threw the point away and left it a whole sample step from
+    // anything: a section that could not see a train standing on its own boundary.
+    constexpr double kEndEps = 1e-3; // m
+    const double L = std::sqrt(L2);
+    if (t < 0.0) { if (openA && -t * L > kEndEps) return kFar; t = 0.0; }
+    if (t > 1.0) { if (openB && (t - 1.0) * L > kEndEps) return kFar; t = 1.0; }
+    const glm::dvec2 c = a + ab * t;
+    return glm::dot(p - c, p - c);
+}
+
+std::vector<glm::dvec3> sampleSectionRun(const std::vector<TrackPoly>& polys,
+                                         const SectionInterval& iv) {
+    std::vector<glm::dvec3> out;
+    const glm::dvec3 a = fracToWorld(polys, iv.trackId, iv.from);
+    if (a.x == 0.0 && a.y == 0.0) return out; // track gone (stale overlay)
+    double trackLen = 0.0;
+    for (const TrackPoly& tp : polys)
+        if (tp.id == iv.trackId) trackLen = polyLength(tp.pts);
+    const double spanM = trackLen * std::abs(iv.to - iv.from);
+    const int steps = std::max(2, static_cast<int>(std::ceil(spanM / kOccupancySampleM)));
+    out.reserve(static_cast<std::size_t>(steps) + 1);
+    for (int k = 0; k <= steps; ++k) {
+        const double f = iv.from + (iv.to - iv.from) * static_cast<double>(k) / steps;
+        out.push_back(fracToWorld(polys, iv.trackId, f));
+    }
+    return out;
+}
+
 glm::dvec3 fracToWorld(const std::vector<TrackPoly>& polys, std::uint32_t trackId,
                        double frac) {
     const std::vector<glm::dvec3>* pts = findPoly(polys, trackId);

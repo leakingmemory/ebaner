@@ -41,6 +41,9 @@ constexpr float kThreeLampHalfH = 0.72f;
 constexpr float kTwoLampHalfH = 0.52f;
 // How far from the track centre a post stands, whichever side it is on.
 constexpr float kStandoffM = 3.5f;
+// How far a block signal steps back along its own approach, off the border it stands on,
+// so the pair reading opposite ways there are two poles rather than one drawn twice.
+constexpr float kBlockStandoffM = 0.5f;
 } // namespace
 
 void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 origin) {
@@ -127,8 +130,23 @@ void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 o
         // the basis vector every head and housing below is built on and mirroring that
         // would turn the signal inside out rather than move it across the line.
         const float off = kStandoffM * static_cast<float>(s.side < 0 ? -1 : 1);
-        const glm::vec3 B(static_cast<float>(s.world.x - origin.x) + R.x * off,
-                          static_cast<float>(s.world.y - origin.y) + R.y * off,
+        // A block signal steps half a metre back from the border it stands on, onto the
+        // approach side. Every other kind is alone at its border, but a block signal has an
+        // opposite number reading the other way at the same one, and the two are normally
+        // put back to back on the same side of the line so a single cable run serves both.
+        // Without this they would be one pole in two places: same point, same offset, drawn
+        // twice.
+        //
+        // *Back*, not forward. A head looks down its own approach - it is built facing -F -
+        // so two signals stepped forward end up nose to nose, each standing in the other's
+        // sightline with its back to the train it governs. Stepped back they stand shoulder
+        // to shoulder with the border between them, each looking out along its own approach
+        // with nothing in the way, which is also where a signal protecting a block belongs:
+        // before the joint, where the train can still stop at it.
+        const glm::vec3 ahead = s.kind == SignalKind::Block ? -F * kBlockStandoffM
+                                                            : glm::vec3(0.0f);
+        const glm::vec3 B(static_cast<float>(s.world.x - origin.x) + R.x * off + ahead.x,
+                          static_cast<float>(s.world.y - origin.y) + R.y * off + ahead.y,
                           static_cast<float>(s.world.z - origin.z));
 
         // A distant signal on its own post out on the line: a short mast under the head.
@@ -167,9 +185,11 @@ void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 o
             const float hd = 0.15f;
             const float hh = s.twoLamp ? kTwoLampHalfH : kThreeLampHalfH;
             const glm::vec3 C = B + UP * (mastH + hh);
-            // An entry signal shows its danger as a flashing red; every other lamp on the
-            // head, and every lamp on an exit signal, is steady.
-            const bool flashDanger = s.kind == SignalKind::Entry;
+            // An entry signal and a block signal show their danger as a flashing red; an
+            // exit signal's is steady. Only the red flashes - the greens are solid on every
+            // head, so what the flash marks is the stop, not the signal.
+            const bool flashDanger =
+                s.kind == SignalKind::Entry || s.kind == SignalKind::Block;
             if (s.twoLamp) {
                 twoLampHead(C, R, F, s.aspect, flashDanger);
             } else {

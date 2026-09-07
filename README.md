@@ -629,6 +629,59 @@ read as permission the main is not giving. It never reads the signal it hangs on
 there is no main signal ahead within reach it warns of a stop, which is what a station with
 no exit signal means for a train being let into it.
 
+**Block signals (*blokksignal*).** A main signal standing out on the plain line between two
+stations, worked by nobody. Majavatn to Svenningdal is 31 km — the longest gap on this line
+— and one train at a time over that is a waste of it, so a track-circuit border cuts the
+line in two and a block signal stands at that border facing each way. A train may then
+follow another onto the line, held at the block signal until the one in front is clear of
+the section beyond it.
+
+It carries **no route of its own**. The road it governs is the signal path already authored
+from its border facing its way, and that same road is what it opens before it clears — one
+description of the road rather than two that can drift apart. Author it with **Block
+signals** from the Esc menu and **click a border** (not a free point: away from one there is
+nothing for it to divide); **right-click** selects, **F** turns it round — which picks the
+*other* of the border's two roads, so it is not cosmetic — **B** walks the post across the
+line, **F2** names, **X** deletes, **Ctrl+S** saves to `overlay/block-signals.txt`.
+
+```
+block <id> "<name>" <trackHex>:<frac> <+|-> [left]
+```
+
+Its head is an exit signal's — three lamps, solid greens — but **the red flashes**, as an
+entry signal's does. The two masts at one border are normally put back to back on the same
+side of the line, one cable run serving both, and each stands **0.5 m back down its own
+approach** so the pair is two poles a metre apart with the joint between them rather than
+one pole drawn twice in the same place. Back rather than forward, because a head looks down
+its own approach: stepped forward the two would stand nose to nose, each in the other's
+sightline with its back to the train it governs.
+
+A signal that resolves to no road draws orange and says so in the HUD: it is not an error
+that stops anything, it simply stands at danger for ever, which is the safe way to fail.
+The line block itself is not authored at all — it is what the roads already say. The
+section ahead of the northbound signal plus the section ahead of the southbound one is the
+whole of the plain line, and the far ends of those two roads are the borders where the
+stations' own signals stand.
+
+**The line takes a direction.** Two trains cleared toward each other from opposite ends do
+not collide — the block signals stop them — but they come to a stand nose to nose with no
+way out, and normal working should not be able to reach that state at all. So the first
+departure onto the line **claims** it, and a departure the other way is refused for as long
+as the claim stands. A second train the *same* way is not refused: that is the following
+move the block signal exists to protect.
+
+The claim outlives the route that made it, and it has to. A route is given up as its last
+circuit is entered, and by then the train is out on the line with nothing else on record
+saying which way it went — so the claim is released only when the line is genuinely clear:
+no route into it, and no circuit on it occupied. A train that reached the line without a
+route at all has no direction on record, and nothing is let out against it.
+
+Nothing about a block signal appears in the traffic manager. There is no hold, no override
+and no way to set its road by hand — the map refuses it, and the dwarf that would otherwise
+stand on the same border is taken away, so there is nothing there to click. A distant reads
+one exactly as it reads a station's signals; that costs no code at all, because the distant
+walk counts everything that is not a dwarf or another distant.
+
 **Level crossings.** Secured by lights, and optionally by half-barriers too. Pick **Level
 crossings** from the Esc menu and **click a point on any track**; **right-click** selects,
 **T** then a click adds another track the same crossing spans, **B** toggles the variant

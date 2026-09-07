@@ -48,6 +48,10 @@ std::string distantsFile(const std::string& root) {
     return root + "/overlay/distant-signals.txt";
 }
 
+std::string blocksFile(const std::string& root) {
+    return root + "/overlay/block-signals.txt";
+}
+
 // Parse a `<trackHex>:<frac>` border token.
 bool parseBorder(const std::string& tok, Border& b) {
     const auto c = tok.find(':');
@@ -405,6 +409,59 @@ bool writeDistantSignals(const std::string& datasetRoot,
         f << "distant " << d.id << ' ' << quoteName(d.name) << ' ' << std::hex << d.trackId
           << std::dec << ':' << d.frac << ' ' << (d.dir < 0 ? '-' : '+');
         if (d.side < 0) f << " left";
+        f << '\n';
+    }
+    return static_cast<bool>(f);
+}
+
+std::vector<BlockSignal> loadBlockSignals(const std::string& datasetRoot) {
+    std::vector<BlockSignal> out;
+    std::ifstream f(blocksFile(datasetRoot));
+    if (!f) return out;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        std::istringstream is(line);
+        std::string kind, atTok, dirTok;
+        BlockSignal b;
+        is >> kind >> b.id;
+        if (kind != "block") continue;
+        readName(is, b.name);
+        is >> atTok >> dirTok;
+        if (atTok.empty() || !parseBorder(atTok, b.at)) continue;
+        b.dir = dirTok == "-" ? -1 : 1;
+        // Optional side flag, peeked exactly as a distant's is: a file without one is left
+        // where the reader found it rather than losing the next token to a failed read.
+        const std::streampos after = is.tellg();
+        std::string sideTok;
+        if (is >> sideTok) {
+            if (sideTok == "left") b.side = -1;
+            else if (sideTok == "right") b.side = 1;
+            else { is.clear(); is.seekg(after); }
+        }
+        out.push_back(std::move(b));
+    }
+    return out;
+}
+
+bool writeBlockSignals(const std::string& datasetRoot,
+                       const std::vector<BlockSignal>& bs) {
+    std::error_code ec;
+    fs::create_directories(datasetRoot + "/overlay", ec);
+    std::ofstream f(blocksFile(datasetRoot), std::ios::trunc);
+    if (!f) return false;
+    f << "# ebaner block signals (blokksignal). A main signal out on the line between two\n"
+         "# stations, standing on a track-circuit border and worked by nobody: it clears\n"
+         "# itself when a movement has been authorised its way and the block ahead is\n"
+         "# empty, and goes back to danger behind every train.\n"
+         "# block <id> \"<name>\" <trackHex>:<frac> <+|-> [left]\n"
+         "# + governs movements toward increasing frac; the post stands right of that\n"
+         "# unless it says left. The road it governs is not written here - it is the\n"
+         "# signal path already authored from this border facing this way.\n";
+    for (const BlockSignal& b : bs) {
+        f << "block " << b.id << ' ' << quoteName(b.name) << ' ' << std::hex << b.at.trackId
+          << std::dec << ':' << b.at.frac << ' ' << (b.dir < 0 ? '-' : '+');
+        if (b.side < 0) f << " left";
         f << '\n';
     }
     return static_cast<bool>(f);
@@ -847,6 +904,10 @@ int firstMainSignalAhead(const std::vector<TrackPoly>& polys, const TrackJunctio
                   double bestAt = 0.0;
                   for (std::size_t k = 0; k < placements.size(); ++k) {
                       const SignalPlacement& sp = placements[k];
+                      // Named by what is *not* a main signal, so a new kind counts as one
+                      // unless it says otherwise. A block signal out on the line is read
+                      // by the distant on its approach exactly as a station's signals are,
+                      // and that is the whole of what makes it so - do not add it here.
                       if (sp.kind == SignalKind::Dwarf || sp.kind == SignalKind::Distant)
                           continue;
                       if (sp.at.trackId != track) continue;
