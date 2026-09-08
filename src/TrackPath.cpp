@@ -35,7 +35,10 @@ constexpr float kCantSmoothM = 22.0f; // cant-transition smoothing window (m)
 TrackPath::TrackPath(std::uint32_t trackId, std::uint8_t trackType,
                      const std::vector<glm::vec3>& pts,
                      const std::vector<std::uint16_t>& speed,
-                     const std::vector<std::uint8_t>& medium)
+                     const std::vector<std::uint8_t>& medium,
+                     const std::vector<std::uint32_t>& ptTrack,
+                     const std::vector<float>& ptFrac,
+                     const std::vector<float>& ptSeam)
     : speed_(speed), medium_(medium), trackId_(trackId), trackType_(trackType) {
     const int n = static_cast<int>(pts.size());
     // Control points with reflected phantom endpoints, so span i interpolates
@@ -122,6 +125,139 @@ TrackPath::TrackPath(std::uint32_t trackId, std::uint8_t trackType,
         }
         table_[i].cant = (cnt > 0) ? sum / static_cast<float>(cnt) : raw[i];
     }
+
+    buildTrackRuns(ptTrack, ptFrac, ptSeam);
+}
+
+// The track/fraction bridge: one run per maximal stretch of points sharing a track.
+//
+// The subtlety is the seam. Concatenation drops each segment's first point as a duplicate
+// of the node it shares with the one before, so a track's points here begin at its *second*
+// one - tens of metres in. A border authored at fraction 0 or 1 on that track sits at the
+// dropped point, so the run reaches back one index to the seam and carries the true end
+// fraction there. Without that, a border at either end of a chained track resolves to
+// wherever its second point happens to be.
+void TrackPath::buildTrackRuns(const std::vector<std::uint32_t>& ptTrack,
+                               const std::vector<float>& ptFrac,
+                               const std::vector<float>& ptSeam) {
+    const int n = static_cast<int>(ctrl_.size()) - 2; // surveyed points, less the phantoms
+    if (n < 2 || static_cast<int>(ptTrack.size()) != n ||
+        static_cast<int>(ptFrac.size()) != n)
+        return; // no bridge; every query below fails cleanly
+
+    const std::vector<float> sOf = pointArcLengths();
+    if (static_cast<int>(sOf.size()) != n) return;
+
+    for (int i = 0; i < n;) {
+        int j = i;
+        while (j + 1 < n && ptTrack[j + 1] == ptTrack[i]) ++j; // maximal run [i, j]
+
+        TrackRun r;
+        r.trackId = ptTrack[i];
+        const int first = static_cast<int>(runPts_.size());
+
+        // Where the run starts. After the first run the previous point is the seam - this
+        // track's own end, dropped from the geometry as a duplicate of the node before it -
+        // so take it, at the fraction the chaining recorded. It cannot be inferred from the
+        // run: a two-point track whose other point *was* the seam leaves one point and no
+        // direction at all, and there are 2245 of those here, every one a connector or a
+        // stub whose fraction 0 would otherwise land on its fraction 1.
+        if (i > 0 && i < static_cast<int>(ptSeam.size()) && ptSeam[i] >= 0.0f)
+            runPts_.push_back({ptSeam[i], sOf[i - 1]});
+        for (int k = i; k <= j; ++k) runPts_.push_back({ptFrac[k], sOf[k]});
+
+        const int count = static_cast<int>(runPts_.size()) - first;
+        r.frac0 = runPts_[first].frac;
+        r.frac1 = runPts_[first + count - 1].frac;
+        r.s0 = runPts_[first].s;
+        r.s1 = runPts_[first + count - 1].s;
+        r.descending = r.frac0 > r.frac1;
+        runFirst_.push_back(first);
+        runCount_.push_back(count);
+        runs_.push_back(r);
+        i = j + 1;
+    }
+}
+
+std::vector<float> TrackPath::pointArcLengths() const {
+    // Surveyed point i is the start of span i, so it sits at global parameter g = i. The
+    // arc-length table runs the other way (s -> g), so walk it once and read off the s
+    // where g crosses each whole number - the same walk speedPoints() makes.
+    std::vector<float> out;
+    const int n = static_cast<int>(ctrl_.size()) - 2;
+    if (n < 1 || table_.size() < 2) return out;
+    out.reserve(n);
+    std::size_t t = 1;
+    for (int i = 0; i < n; ++i) {
+        const float g = static_cast<float>(i);
+        while (t + 1 < table_.size() && table_[t].g < g) ++t;
+        const Sample& a = table_[t - 1];
+        const Sample& b = table_[t];
+        const float f = (b.g > a.g) ? (g - a.g) / (b.g - a.g) : 0.0f;
+        out.push_back(std::clamp(a.s + f * (b.s - a.s), 0.0f, length_));
+    }
+    return out;
+}
+
+bool TrackPath::fracToS(std::uint32_t trackId, double frac, float& s) const {
+    for (std::size_t ri = 0; ri < runs_.size(); ++ri) {
+        if (runs_[ri].trackId != trackId) continue;
+        const int first = runFirst_[ri], count = runCount_[ri];
+        if (count < 1) return false;
+        if (count == 1) { s = runPts_[first].s; return true; }
+        // Walk the run's own points and bracket the fraction between two of them, then
+        // interpolate arc length across that one span. Linear only within a span, where
+        // the spline's excess over its chord is a few centimetres; never across the whole
+        // track, where it accumulates to metres.
+        //
+        // Negated when the run descends, so the search is written once for one direction.
+        // Written for ascending only, the clamp at the first span reads "anything below
+        // this belongs here", which on a descending run is the *far* end of the track - a
+        // border at fraction 0 then resolved to the wrong end, 43 km out on the longest
+        // path in the dataset.
+        const double sign = runs_[ri].descending ? -1.0 : 1.0;
+        const double key = sign * frac;
+        for (int k = first + 1; k < first + count; ++k) {
+            const double a = sign * runPts_[k - 1].frac;
+            const double b = sign * runPts_[k].frac;
+            // Keep looking while the fraction is still beyond this span - unless this is
+            // the last one, which owns everything past the end.
+            if (key > b && k != first + count - 1) continue;
+            const double t = (b != a) ? std::clamp((key - a) / (b - a), 0.0, 1.0) : 0.0;
+            s = runPts_[k - 1].s +
+                static_cast<float>(t) * (runPts_[k].s - runPts_[k - 1].s);
+            return true;
+        }
+        s = runPts_[first + count - 1].s;
+        return true;
+    }
+    return false;
+}
+
+bool TrackPath::trackAt(float s, std::uint32_t& trackId, double& frac) const {
+    if (runs_.empty()) return false;
+    for (std::size_t ri = 0; ri < runs_.size(); ++ri) {
+        const int first = runFirst_[ri], count = runCount_[ri];
+        const float lo = std::min(runs_[ri].s0, runs_[ri].s1);
+        const float hi = std::max(runs_[ri].s0, runs_[ri].s1);
+        const bool lastRun = ri + 1 == runs_.size();
+        if (!((s >= lo || ri == 0) && (s <= hi || lastRun))) continue;
+        trackId = runs_[ri].trackId;
+        if (count < 2) { frac = runPts_[first].frac; return true; }
+        for (int k = first + 1; k < first + count; ++k) {
+            const float sa = runPts_[k - 1].s, sb = runPts_[k].s;
+            const bool last = k == first + count - 1;
+            if (!((s >= std::min(sa, sb) || k == first + 1) &&
+                  (s <= std::max(sa, sb) || last)))
+                continue;
+            const float t = (sb != sa) ? std::clamp((s - sa) / (sb - sa), 0.0f, 1.0f) : 0.0f;
+            frac = runPts_[k - 1].frac + t * (runPts_[k].frac - runPts_[k - 1].frac);
+            return true;
+        }
+        frac = runPts_[first + count - 1].frac;
+        return true;
+    }
+    return false;
 }
 
 void TrackPath::eval(int span, float u, glm::vec3* p, glm::vec3* d1,
@@ -292,6 +428,7 @@ struct Seg {
     std::vector<glm::vec3> pts;
     std::vector<std::uint16_t> speed;
     std::vector<std::uint8_t> medium;
+    std::vector<float> frac; // each kept point's fraction along this track (planar chords)
     std::uint8_t trackType = 0;
     std::uint32_t trackId = 0;
 };
@@ -344,6 +481,21 @@ std::vector<TrackPath> buildTrackPaths(const TerrainData& data) {
                 }
             }
             if (s.pts.size() < 2) continue;
+            // Where each kept point sits along this track, as the overlay measures it:
+            // planar chord length, normalised. It has to be *that* rule and not the
+            // spline's, because this is the number borders and section intervals are
+            // authored in. Accumulated in double - the scene coordinates are large enough
+            // that a float running sum loses millimetres per step.
+            {
+                std::vector<double> cum(s.pts.size(), 0.0);
+                for (std::size_t k = 1; k < s.pts.size(); ++k)
+                    cum[k] = cum[k - 1] + std::hypot(double(s.pts[k].x) - s.pts[k - 1].x,
+                                                     double(s.pts[k].y) - s.pts[k - 1].y);
+                const double total = cum.back();
+                s.frac.resize(s.pts.size());
+                for (std::size_t k = 0; k < s.pts.size(); ++k)
+                    s.frac[k] = total > 0.0 ? static_cast<float>(cum[k] / total) : 0.0f;
+            }
             if (s.trackType == 0) { // main line: tally speed coverage
                 for (std::uint16_t sp : s.speed) {
                     ++mainVerts;
@@ -466,10 +618,18 @@ std::vector<TrackPath> buildTrackPaths(const TerrainData& data) {
         std::vector<glm::vec3> pts;
         std::vector<std::uint16_t> speed;
         std::vector<std::uint8_t> medium;
+        std::vector<std::uint32_t> ptTrack;
+        std::vector<float> ptFrac;
+        std::vector<float> ptSeam;
         for (std::size_t c = 0; c < chain.size(); ++c) {
             const auto [sg, flip] = chain[c];
             const Seg& s = segs[sg];
             const int n = static_cast<int>(s.pts.size());
+            // The point dropped just below as the shared node is this track's own end -
+            // its first in traversal order, so fraction 0 taken forwards and 1 taken
+            // backwards. Held until a point actually survives the coincidence filter to
+            // carry it, which need not be the very next one.
+            float pendingSeam = (c > 0) ? (flip ? 1.0f : 0.0f) : -1.0f;
             for (int k = 0; k < n; ++k) {
                 if (c > 0 && k == 0) continue; // shared node with previous segment
                 const int kk = flip ? (n - 1 - k) : k;
@@ -488,10 +648,20 @@ std::vector<TrackPath> buildTrackPaths(const TerrainData& data) {
                 speed.push_back(kk < static_cast<int>(s.speed.size()) ? s.speed[kk] : 0);
                 medium.push_back(kk < static_cast<int>(s.medium.size()) ? s.medium[kk]
                                                                         : 0x20);
+                // Which track this point came from and where along it. `s.trackId` is
+                // constant over the segment and becomes meaningful per point only here,
+                // once the chain has put several tracks end to end - exactly as `medium`
+                // does. `kk` is the index into the track's own arrays, so it already
+                // accounts for the chain having taken this segment backwards.
+                ptTrack.push_back(s.trackId);
+                ptFrac.push_back(kk < static_cast<int>(s.frac.size()) ? s.frac[kk] : 0.0f);
+                ptSeam.push_back(pendingSeam);
+                pendingSeam = -1.0f;
             }
         }
         if (pts.size() < 2) continue;
-        paths.emplace_back(segs[i].trackId, segs[i].trackType, pts, speed, medium);
+        paths.emplace_back(segs[i].trackId, segs[i].trackType, pts, speed, medium, ptTrack,
+                           ptFrac, ptSeam);
     }
 
     int modal = 0, modalCount = 0;

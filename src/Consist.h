@@ -160,6 +160,16 @@ public:
     std::vector<VehicleFrame> bodySectionFrames() const;
     // Arc-length offsets of every axle from the *train's* centre.
     std::vector<float> axleOffsets() const;
+    // The stretches of road this train's wheels stand on, for the track circuits.
+    //
+    // From the rear-most axle of the train to its front-most, in one piece per stretch of
+    // road - so the rails *between* two coupled sets are covered too. They lie between two
+    // axles of one train and a counter holds them as surely as it holds the rails under a
+    // bogie; leaving them out would let a section shorter than the gap between two sets
+    // read clear with a train standing over it.
+    //
+    // False if part of the train found no rail under it.
+    bool occupiedSpans(std::vector<PathSpan>& out) const;
 
     // --- uncoupling -------------------------------------------------------------
     // Part the train at the coupler behind set `k` (0-based): sets 0..k stay here and

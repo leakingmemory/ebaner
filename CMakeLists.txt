@@ -112,6 +112,7 @@ add_library(ebaner_engine STATIC
     src/TxpNetwork.cpp
     src/SignalPaths.cpp
     src/LineBlock.cpp
+    src/Occupancy.cpp
     src/SignalMesh.cpp
     src/SpeedLimits.cpp
     src/SpeedSignMesh.cpp
@@ -217,6 +218,33 @@ target_link_libraries(LineBlockTest PRIVATE ebaner_engine)
 target_include_directories(LineBlockTest PRIVATE src)
 add_test(NAME line-block COMMAND LineBlockTest "${EBANER_TEST_DATASET}")
 set_tests_properties(line-block PROPERTIES SKIP_RETURN_CODE 77)
+
+# The track/fraction bridge: authored (track, frac) <-> path arc length, both ways, at every
+# border in the dataset. Needs the real geometry, so it skips without it.
+add_executable(TrackBridgeTest tests/TrackBridgeTest.cpp)
+add_dependencies(TrackBridgeTest shaders)
+target_link_libraries(TrackBridgeTest PRIVATE ebaner_engine)
+target_include_directories(TrackBridgeTest PRIVATE src)
+add_test(NAME track-bridge COMMAND TrackBridgeTest "${EBANER_TEST_DATASET}")
+set_tests_properties(track-bridge PROPERTIES SKIP_RETURN_CODE 77)
+
+# Track circuits decided by overlap rather than by proximity: sections and trains as
+# stretches of road. Needs the real geometry, so it skips without it.
+add_executable(OccupancyTest tests/OccupancyTest.cpp)
+add_dependencies(OccupancyTest shaders)
+target_link_libraries(OccupancyTest PRIVATE ebaner_engine)
+target_include_directories(OccupancyTest PRIVATE src)
+add_test(NAME occupancy COMMAND OccupancyTest "${EBANER_TEST_DATASET}")
+set_tests_properties(occupancy PROPERTIES SKIP_RETURN_CODE 77)
+
+# What a real train hands the circuits: the stretches of road under its body, across
+# turnouts, at a stand, and after being parted in two.
+add_executable(TrainSpanTest tests/TrainSpanTest.cpp src/Vehicle.cpp src/Consist.cpp)
+add_dependencies(TrainSpanTest shaders)
+target_link_libraries(TrainSpanTest PRIVATE ebaner_engine)
+target_include_directories(TrainSpanTest PRIVATE src)
+add_test(NAME train-span COMMAND TrainSpanTest "${EBANER_TEST_DATASET}")
+set_tests_properties(train-span PROPERTIES SKIP_RETURN_CODE 77)
 
 # The crossing sequence is pure logic and needs no export, so it always runs.
 add_executable(CrossingSequenceTest tests/CrossingSequenceTest.cpp)

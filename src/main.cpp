@@ -19,6 +19,7 @@
 #include "SignalMesh.h"
 #include "Script.h"
 #include "LineBlock.h"
+#include "Occupancy.h"
 #include "SignalPaths.h"
 #include <cassert>
 
@@ -1331,6 +1332,15 @@ int main(int argc, char** argv) {
     }
     std::vector<char> secOccupied(circuits.sections.size(), 0);
 
+    // Where every section lies in the coordinates a train runs in, resolved once. This is
+    // what makes occupancy a question about the same road rather than about how near two
+    // things look - see Occupancy.h.
+    const SectionSpans sectionSpans = resolveSectionSpans(circuits, paths);
+    for (const std::string& n : sectionSpans.notes) std::printf("[Circuit] %s\n", n.c_str());
+    std::printf("[Circuit] %zu section(s), %zu placed on the roads%s\n",
+                circuits.sections.size(), sectionSpans.entries.size(),
+                sectionSpans.notes.empty() ? "" : " (see above)");
+
     // Resolve each motor switch's locking set now that circuits + polys exist (from the
     // authored overlay, else the circuits the switch sits within). Gates remote throws.
     applySwitchLocks(switchNet, loadSwitchTypes(datasetRoot), circuits, polys);
@@ -1342,41 +1352,30 @@ int main(int argc, char** argv) {
     Script script;
     script.run(datasetRoot);
 
-    // Occupancy is measured with runSegDist2 (TrackCircuits.h), which cuts a section off
-    // exactly at its own borders rather than letting the lateral tolerance wrap round them.
-    // Recompute which sections hold a wheelset. Tolerance keeps an axle on the right
-    // track without bleeding onto a parallel one (track centres are >4 m apart).
-    auto computeOccupancy = [&](std::vector<char>& occ) {
-        std::fill(occ.begin(), occ.end(), 0);
-        if (trains.empty()) return;
-        // Every train, not just the one being driven. A portion left standing in a
-        // section holds it exactly as surely, and everything the interlocking does -
-        // releasing a route, clearing a signal, refusing to move a switch - is decided
-        // from this occupancy and not from the vehicle, so this one loop is what makes
-        // all of that true of a detached portion as well.
-        std::vector<VehicleFrame> axles;
+    // Which sections hold a train: their road against the trains'.
+    //
+    // Every train, not just the one being driven. A portion left standing in a section holds
+    // it exactly as surely, and everything the interlocking does - releasing a route,
+    // clearing a signal, refusing to move a switch - is decided from this occupancy and not
+    // from the vehicle, so this is what makes all of it true of a detached portion as well.
+    //
+    // A train that ran out of rail under part of itself is worth a word, since it means the
+    // body reaches past a buffer stop and the circuits cannot see all of it.
+    std::vector<PathSpan> trainSpans, oneTrain;
+    bool warnedOffTrack = false; // said once, not sixty times a second
+    auto updateOccupancy = [&](std::vector<char>& occ) {
+        trainSpans.clear();
+        bool offTrack = false;
         for (const Consist& t : trains) {
-            const std::vector<VehicleFrame> a = t.axleFrames();
-            axles.insert(axles.end(), a.begin(), a.end());
+            if (!t.occupiedSpans(oneTrain)) offTrack = true;
+            trainSpans.insert(trainSpans.end(), oneTrain.begin(), oneTrain.end());
         }
-        constexpr double kTol2 = kOccupancyTolM * kOccupancyTolM;
-        for (const SecRun& run : secRuns) {
-            if (occ[run.section]) continue;
-            bool hit = false;
-            for (std::size_t i = 1; i < run.pts.size() && !hit; ++i) {
-                // The first and last samples of a run sit exactly on its section's borders.
-                const bool openA = i == 1;
-                const bool openB = i + 1 == run.pts.size();
-                for (const VehicleFrame& ax : axles)
-                    if (runSegDist2(glm::dvec2(ax.pos.x, ax.pos.y),
-                                    glm::dvec2(run.pts[i - 1]), glm::dvec2(run.pts[i]),
-                                    openA, openB) < kTol2) {
-                        hit = true;
-                        break;
-                    }
-            }
-            if (hit) occ[run.section] = 1;
-        }
+        if (offTrack && !warnedOffTrack)
+            std::printf("[Circuit] part of a train is past the end of the track - the "
+                        "circuits cannot see all of it\n");
+        warnedOffTrack = offTrack;
+        Vehicle::coalesceSpans(trainSpans);
+        computeOccupancy(sectionSpans, trainSpans, occ);
     };
 
     // Traffic-manager 2-D map overlay: the track network (coloured by type) plus a
@@ -2533,7 +2532,7 @@ int main(int argc, char** argv) {
         // Occupancy is a per-frame reading and no frame has run yet, so take it once here:
         // a route set from this hook has to meet the same state one set by keypress would,
         // or it would be granted roads with a train standing on them.
-        computeOccupancy(secOccupied);
+        updateOccupancy(secOccupied);
         const std::string all(pick);
         std::istringstream is(all);
         std::string one;
@@ -2613,7 +2612,7 @@ int main(int argc, char** argv) {
         bool occupancyChanged = false;
         {
             std::vector<char> occ(circuits.sections.size(), 0);
-            computeOccupancy(occ);
+            updateOccupancy(occ);
             if (occ != secOccupied) {
                 secOccupied = occ;
                 occupancyChanged = true;

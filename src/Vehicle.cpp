@@ -465,6 +465,134 @@ bool Vehicle::walkTo(float bodyOffset, int& cp, float& cs, int& nose) const {
     return true;
 }
 
+// The same walk as walkTo, but keeping the road rather than only the destination.
+//
+// walkTo answers "where does this offset land"; a track circuit needs "what did the body
+// pass over on the way", because a section is held by any part of a train standing in it.
+// The loop is walkTo's - if one is ever changed the other has to follow - and the only
+// difference is that each stretch is written out before the walk crosses onto the next
+// path.
+bool Vehicle::walkSpans(float bodyOffset, std::vector<PathSpan>& out) const {
+    if (!paths_ || pathIdx_ < 0) return false;
+    if (!net_) { // no network: one straight stretch on this path
+        const float a = s_;
+        const float b = s_ + static_cast<float>(orient_) * bodyOffset;
+        out.push_back({pathIdx_, std::min(a, b), std::max(a, b)});
+        return true;
+    }
+    int cp = pathIdx_;
+    float cs = s_;
+    int nose = orient_;
+
+    constexpr float kTol = 0.05f;              // "at the junction" slack (m)
+    const std::vector<Turnout>& tos = net_->turnouts();
+    const int walkSign = bodyOffset >= 0.0f ? 1 : -1; // +1 toward nose, -1 toward tail
+    float remaining = std::abs(bodyOffset);
+    int prevCross = -1;                         // don't immediately re-cross a turnout
+
+    auto keep = [&](int path, float from, float to) {
+        if (from == to) return;
+        out.push_back({path, std::min(from, to), std::max(from, to)});
+    };
+
+    for (int guard = 0; guard < 64 && remaining > 1e-4f; ++guard) {
+        const TrackPath& P = (*paths_)[cp];
+        const int arcDir = walkSign * nose;               // path-s direction we move in
+        const float distToEnd = arcDir > 0 ? (P.length() - cs) : cs;
+
+        float bestDist = std::min(remaining, distToEnd);
+        int toPath = -1, toTurn = -1;
+        float toS = 0.0f;
+        for (int i = 0; i < static_cast<int>(tos.size()); ++i) {
+            if (i == prevCross) continue;
+            const Turnout& to = tos[i];
+            if (to.mainPath < 0 || to.sidingPath < 0) continue;
+            const SwitchState st = net_->state(i);
+            if (cp == to.mainPath && st == SwitchState::Diverging && arcDir == to.facingS) {
+                const float dj = (to.sMain - cs) * static_cast<float>(arcDir);
+                const float adv = std::max(dj, 0.0f);
+                if (dj > -kTol && adv <= bestDist) {
+                    bestDist = adv; toPath = to.sidingPath; toS = to.sSiding; toTurn = i;
+                }
+            }
+            if (cp == to.sidingPath) {
+                const bool towardEnd =
+                    static_cast<float>(arcDir) * (to.sSiding < 1.0f ? -1.0f : 1.0f) > 0.0f;
+                const float dj = (to.sSiding - cs) * static_cast<float>(arcDir);
+                const float adv = std::max(dj, 0.0f);
+                if (towardEnd && dj > -kTol && adv <= bestDist) {
+                    bestDist = adv; toPath = to.mainPath; toS = to.sMain; toTurn = i;
+                }
+            }
+        }
+
+        if (toTurn < 0) { // no junction ahead: advance, and stop at a dead end
+            const float adv = std::min(remaining, distToEnd);
+            keep(cp, cs, cs + arcDir * adv);
+            // Short of the offset asked for means the body reaches past the end of the
+            // rails. walkTo swallows that; here it is the caller's business, since a train
+            // whose end is not on any track cannot be sensed by any circuit.
+            return adv >= remaining - 1e-4f;
+        }
+        keep(cp, cs, cs + arcDir * bestDist);
+        cs += arcDir * bestDist;
+        remaining -= bestDist;
+        const glm::vec3 fwdWorld = static_cast<float>(arcDir) * P.poseAt(cs).tangent;
+        const int contArcDir =
+            glm::dot(fwdWorld, (*paths_)[toPath].poseAt(toS).tangent) >= 0.0f ? 1 : -1;
+        cp = toPath;
+        cs = toS;
+        nose = walkSign * contArcDir;
+        prevCross = toTurn;
+    }
+    return remaining <= 1e-4f;
+}
+
+void Vehicle::coalesceSpans(std::vector<PathSpan>& spans) {
+    std::sort(spans.begin(), spans.end(), [](const PathSpan& x, const PathSpan& y) {
+        return x.pathIdx != y.pathIdx ? x.pathIdx < y.pathIdx : x.s0 < y.s0;
+    });
+    std::size_t w = 0;
+    for (std::size_t r = 0; r < spans.size(); ++r) {
+        if (w > 0 && spans[w - 1].pathIdx == spans[r].pathIdx &&
+            spans[r].s0 <= spans[w - 1].s1) {
+            spans[w - 1].s1 = std::max(spans[w - 1].s1, spans[r].s1);
+            continue;
+        }
+        spans[w++] = spans[r];
+    }
+    spans.resize(w);
+}
+
+bool Vehicle::spansBetween(float offsetA, float offsetB, std::vector<PathSpan>& out) const {
+    out.clear();
+    if (!paths_ || pathIdx_ < 0) return false;
+    // Out to each end from the body centre, which is where the walk starts. The two offsets
+    // straddling it is what makes the union of the two walks the stretch between them and
+    // not something longer.
+    const bool a = walkSpans(std::max(offsetA, offsetB), out);
+    const bool b = walkSpans(std::min(offsetA, offsetB), out);
+    // The walks meet at the centre and may cross the same turnouts, so what comes back is
+    // in pieces that touch.
+    coalesceSpans(out);
+    return a && b;
+}
+
+bool Vehicle::occupiedSpans(std::vector<PathSpan>& out) const {
+    out.clear();
+    const std::vector<float> offs = axleOffsets();
+    if (offs.empty()) return false;
+    float lo = offs.front(), hi = offs.front();
+    for (const float o : offs) {
+        lo = std::min(lo, o);
+        hi = std::max(hi, o);
+    }
+    // A derailed set keeps the path and arc length it left the rails at, and so goes on
+    // holding its circuits - the safe direction to be wrong in, and what the geometric
+    // version did with its frozen axle positions.
+    return spansBetween(lo, hi, out);
+}
+
 // Where a point `bodyOffset` along the train from this set's centre lands: which path,
 // where on it, and which way round it faces there. This is how a consist puts the next
 // set down behind this one - the same walk that puts each axle on the rail it is

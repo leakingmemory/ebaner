@@ -79,38 +79,16 @@ bool writeTrackCircuits(const std::string& datasetRoot, const TrackCircuits& tc)
 // Total planar (x,y) length of a polyline.
 double polyLength(const std::vector<glm::dvec3>& pts);
 
-// --- Occupancy against a section's sampled run ---
-// Squared planar distance from `p` to the segment a-b of the polyline a section's interval
-// was sampled into. `openA`/`openB` mark an end of the *whole run* - a section border - and
-// the distance is then not measured round it.
-//
-// The tolerance a caller applies to this is a lateral one: it is there to keep an axle on
-// its own track rather than a parallel one, track centres being more than 4 m apart. Let it
-// wrap round the end of a run and it becomes a longitudinal tolerance too, and the section
-// reads as occupied by a train standing that far outside it. A block signal stands half a
-// metre before the border it protects, with its own section beginning there, so a train
-// pulling up to the signal fell inside that halo and put the section beyond into occupation
-// - the signal dropped to danger just as the driver arrived at it.
-//
-// Neighbouring runs share the border point, so cutting each off at its own end leaves no
-// gap: a train at a border is in the sections either side of it, never in neither.
-double runSegDist2(glm::dvec2 p, glm::dvec2 a, glm::dvec2 b, bool openA, bool openB);
-
-// How near an axle must be to a section's run to count as standing in it. A lateral figure:
-// track centres are more than 4 m apart, so this keeps an axle on its own road.
-inline constexpr double kOccupancyTolM = 2.5;
-// How finely a section's interval is sampled into that run.
-//
-// By distance, not by a fixed number of steps. A fixed count spreads its samples over
-// however long the interval happens to be, and a plain-line block between two stations is
-// kilometres of it: at 32 steps the run over one 7.3 km interval stepped 227 m at a time and
-// its chords cut the curves by 16.5 m, seven times the tolerance above. A train standing
-// there did not register in its own track circuit at all. At 10 m the sagitta is under 0.1 m
-// on any curve a railway has.
+// --- Drawing a section ---
+// How finely a section's interval is sampled into the polyline the traffic-manager map
+// draws its bands along. Occupancy does not use this: it compares arc-length ranges on a
+// path and has nothing to sample (see Occupancy.h). It was a matching tolerance once, and
+// every fault it produced came of that - most lately a fixed step count that put 227 m
+// between samples out on the plain line and left a train there invisible to its own
+// circuit.
 inline constexpr double kOccupancySampleM = 10.0;
-// The polyline an occupancy test matches axles against, for one interval of one section.
-// Empty if the track is missing (a stale overlay). Its first and last points sit exactly on
-// the interval's ends, which is what lets runSegDist2 cut the section off at its borders.
+// The polyline one interval of one section runs along, for drawing it. Empty if the track
+// is missing (a stale overlay). Its first and last points sit exactly on the interval's ends.
 std::vector<glm::dvec3> sampleSectionRun(const std::vector<TrackPoly>& polys,
                                          const SectionInterval& iv);
 // World position at `frac` along a track (interpolated). Returns {0} if id absent.

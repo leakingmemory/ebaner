@@ -13,7 +13,8 @@
 
 #pragma once
 
-#include "TrackPath.h" // TrackPose
+#include "Occupancy.h" // PathSpan
+#include "TrackPath.h"  // TrackPose
 
 #include <glm/glm.hpp>
 
@@ -179,6 +180,26 @@ public:
     // the wheels are and nothing more - axleFrames() already publishes the same thing
     // in world space - and it is what says when each axle reaches a turnout.
     std::vector<float> axleOffsets() const;
+    // The stretches of road this set's wheels stand on, from its rear-most axle to its
+    // front-most, split wherever the body crosses a turnout onto another path. This is what
+    // a track circuit is asked about: a section holds a train when the two overlap.
+    //
+    // Between the outermost axles rather than at each of them. A counter holds a section
+    // from the first axle in to the last out, and per-axle points would let a section
+    // shorter than the gap between two bogies read clear with a train standing on it.
+    //
+    // False if the body ran off the end of the track before it was all placed - a dead end
+    // under part of the train - in which case `out` holds as much of it as there was rail
+    // for. Nothing about the answer depends on which way the train faces or how fast it is
+    // going; a span has two ends and no direction.
+    bool occupiedSpans(std::vector<PathSpan>& out) const;
+    // The road between two offsets along the body, which need not lie within this set: the
+    // walk follows the rails, so a consist uses it to cover its whole length in one go.
+    // The two must straddle the body centre, which is where the walk starts from.
+    bool spansBetween(float offsetA, float offsetB, std::vector<PathSpan>& out) const;
+    // Sort by path and arc length, then coalesce what touches. Published because a consist
+    // gathers its sets' spans and has to do the same to them.
+    static void coalesceSpans(std::vector<PathSpan>& spans);
     // Frame of each underframe body section (0 when <2 bogies, 1 for a carriage,
     // 2 for a 3-bogie module), each oriented by its bogie pair so an articulated
     // module flexes at the middle bogie.
@@ -343,6 +364,9 @@ private:
     // The walk itself: leaves the path, arc-length and nose direction it ends on.
     // False when there is no switch network to walk (the caller gets a straight sample).
     bool walkTo(float bodyOffset, int& cp, float& cs, int& nose) const;
+    // The same walk, recording every stretch it crosses rather than only where it lands.
+    // False if it ran out of track before covering `bodyOffset`.
+    bool walkSpans(float bodyOffset, std::vector<PathSpan>& out) const;
 
     // Resolve turnout crossings between sBefore and s_ on the current path (divert /
     // merge / trailing-break / facing-broken derail). Returns true if it derailed.

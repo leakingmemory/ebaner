@@ -41,7 +41,18 @@ public:
               const std::vector<std::uint16_t>& speed,  // per-point km/h (0=?)
               // Per-point medium (0x20 surface, 0x55 tunnel, 0x54 tube, 0x4C/0x42
               // bridge). Empty means "not known", which reads as surface everywhere.
-              const std::vector<std::uint8_t>& medium = {});
+              const std::vector<std::uint8_t>& medium = {},
+              // Per-point exported track, and that point's fraction along that track's
+              // own polyline. A path chains many tracks head to tail, so these are what
+              // say which one any given point came from and where along it. Empty
+              // disables the track/fraction bridge below; everything else still works.
+              const std::vector<std::uint32_t>& ptTrack = {},
+              const std::vector<float>& ptFrac = {},
+              // At the first surviving point of each chained track, the fraction of the
+              // point that was dropped as a duplicate of the seam before it - which is
+              // that track's own end. -1 everywhere else. Without it a track whose only
+              // other point was the seam has nowhere to put fraction 0.
+              const std::vector<float>& ptSeam = {});
 
     float length() const { return length_; }
     TrackPose poseAt(float s) const;       // s clamped to [0, length]
@@ -72,8 +83,38 @@ public:
                pt.y >= bmin_.y - margin && pt.y <= bmax_.y + margin;
     }
 
+    // The seed segment's id, which chaining makes near-meaningless: a path runs through
+    // many tracks and the seed is generally not even the first of them. Kept because it
+    // names the path in logs; use the bridge below to ask what is actually at a point.
     std::uint32_t trackId() const { return trackId_; }
     std::uint8_t trackType() const { return trackType_; }
+
+    // --- The track/fraction bridge ------------------------------------------------------
+    // Everything authored in the overlay - borders, section intervals, signal anchors - is
+    // written against an exported track and a fraction along it. A train runs in this
+    // path's arc length. These convert, and they have to: the two are different metrics
+    // over different extents, so `s = frac * length` is wrong twice over and drifts by
+    // metres over a kilometre. Every other consumer in the tree bridges the gap by
+    // proximity instead, with tolerances from 2.5 m to 25 m.
+    //
+    // One maximal run of points per track, in the order the path runs through them.
+    // `frac` descends over a run the chaining took backwards, which is decided by whichever
+    // segment happened to seed the chain - so never assume it ascends.
+    struct TrackRun {
+        std::uint32_t trackId = 0;
+        float s0 = 0.0f, s1 = 0.0f;       // arc length at the run's first and last point
+        float frac0 = 0.0f, frac1 = 1.0f; // that track's own fraction there
+        bool descending = false;          // frac0 > frac1
+    };
+    const std::vector<TrackRun>& trackRuns() const { return runs_; }
+
+    // Arc length along this path of `frac` on `trackId`. False if that track is not on
+    // this path. `frac` outside the run's own extent is clamped to it - which is right at
+    // a seam, where the shared point belongs to the neighbour and the run stops a
+    // millimetre short of its own end.
+    bool fracToS(std::uint32_t trackId, double frac, float& s) const;
+    // Which track is at arc length `s`, and where along it. False if the bridge is absent.
+    bool trackAt(float s, std::uint32_t& trackId, double& frac) const;
 
 private:
     // Control points (with reflected phantom endpoints prepended/appended, so
@@ -94,6 +135,24 @@ private:
 
     std::vector<std::uint16_t> speed_; // one per surveyed point (aligned to pts)
     std::vector<std::uint8_t> medium_; // ditto; empty when the caller did not say
+
+    // The bridge. `runPts_` holds (fraction, arc length) for the points of each run in
+    // order, `runs_` indexes into it. A run carries one point more than it contributed to
+    // `ctrl_` when it follows another: the seam point is dropped from the geometry as a
+    // duplicate of its neighbour, but it is that track's own end and a border authored at
+    // fraction 0 or 1 lands exactly there, so the run keeps it.
+    struct RunPoint {
+        float frac = 0.0f;
+        float s = 0.0f;
+    };
+    std::vector<RunPoint> runPts_;
+    std::vector<TrackRun> runs_;
+    std::vector<int> runFirst_, runCount_; // into runPts_, parallel to runs_
+    // Arc length of every surveyed point, which is what places a fraction on the path.
+    std::vector<float> pointArcLengths() const;
+    void buildTrackRuns(const std::vector<std::uint32_t>& ptTrack,
+                        const std::vector<float>& ptFrac,
+                        const std::vector<float>& ptSeam);
 
     std::uint32_t trackId_ = 0;
     std::uint8_t trackType_ = 0;

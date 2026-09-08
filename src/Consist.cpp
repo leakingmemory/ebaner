@@ -496,6 +496,40 @@ std::vector<VehicleFrame> Consist::bodySectionFrames() const {
     return out;
 }
 
+bool Consist::occupiedSpans(std::vector<PathSpan>& out) const {
+    out.clear();
+    if (units_.empty()) return false;
+    bool ok = true;
+
+    // The whole train in one walk, from the first set's centre: back to its rear-most axle,
+    // and forward past every set behind it to the last one's front-most axle. Done this way
+    // rather than set by set because the rails *between* two sets are under the train too,
+    // and only a walk that spans the coupler covers them.
+    const std::vector<float> offs = units_.front().axleOffsets();
+    if (!offs.empty()) {
+        const auto mm = std::minmax_element(offs.begin(), offs.end());
+        const float rear = *mm.first;
+        const float front = static_cast<float>(unitCount() - 1) * unitPitch() + *mm.second;
+        std::vector<PathSpan> whole;
+        if (!units_.front().spansBetween(rear, front, whole)) ok = false;
+        out.insert(out.end(), whole.begin(), whole.end());
+    }
+
+    // And each set on its own account. Normally this is already covered by the walk above,
+    // but the points can split a train - the sets end up on roads that do not lead to one
+    // another, which the coupler loop reports and does not repair - and then the single
+    // walk follows the road the switches happen to be set for rather than the one each set
+    // is actually standing on. Every set holding its own circuits is the safe reading.
+    std::vector<PathSpan> one;
+    for (const Vehicle& u : units_) {
+        if (!u.occupiedSpans(one)) ok = false;
+        out.insert(out.end(), one.begin(), one.end());
+    }
+
+    Vehicle::coalesceSpans(out);
+    return ok;
+}
+
 std::vector<float> Consist::axleOffsets() const {
     // Each set's own offsets, shifted to where that set sits in the train.
     std::vector<float> out;
