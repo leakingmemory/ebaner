@@ -98,6 +98,12 @@ glm::dvec3 fracToWorld(const std::vector<TrackPoly>& polys, std::uint32_t trackI
 // fraction and planar distance. False if the track is absent (outputs untouched).
 bool projectOnTrack(const std::vector<TrackPoly>& polys, std::uint32_t trackId,
                     glm::dvec2 p, double& frac, double& dist);
+// The same, for a caller already holding the polyline. Finding a track by id is a linear
+// scan of every track there is, so a loop that has the points in hand should not go back
+// through the id. `totalLen` skips recomputing the polyline's length when that is known
+// too; pass a negative to have it measured.
+void projectOnPolyline(const std::vector<glm::dvec3>& pts, glm::dvec2 p, double& frac,
+                       double& dist, double totalLen = -1.0);
 // How close two fractions on `trackId` must be to count as the same point (a metric
 // tolerance expressed as a fraction, so it is independent of track length).
 double sameFracTol(const std::vector<TrackPoly>& polys, std::uint32_t trackId);

@@ -118,16 +118,32 @@ public:
     // Set the 2-D text overlay (screen-space triangles) drawn on top each frame.
     void setOverlayText(const std::vector<TextVertex>& vertices);
 
-    // Attach the editor's raw track-network overlay once: `lines` drawn as a line
-    // list, `points` as round point sprites (both `LineVertex`). Used by
-    // ebaner-trackedit; the viewer never calls it (overlay stays empty).
+    // Attach the raw track-network overlay: `lines` drawn as a line list, `points` as
+    // round point sprites (both `LineVertex`). The network does not change while the
+    // program runs, so this is a **once** call - it reallocates and waits for the device,
+    // which is only affordable because of that. The editor re-attaches after each edit;
+    // the viewer attaches the network the first time the traffic-manager map is opened.
+    //
+    // Anything that changes - occupancy bands, switch positions, a highlight - goes
+    // through setMapOverlay instead. Putting it here re-uploaded the whole 4.8 MB network
+    // with a full device wait every time a train crossed a track-circuit border.
     void attachTrackGraph(const std::vector<LineVertex>& lines,
                           const std::vector<LineVertex>& points);
+    // The changing half of the overlay, drawn on top of the attached network. Safe to call
+    // every frame: it writes into a host-visible buffer per in-flight frame, after that
+    // frame's fence, and allocates nothing unless it has to grow.
+    void setMapOverlay(const std::vector<LineVertex>& lines,
+                       const std::vector<LineVertex>& points);
+    // Whether to draw the attached network at all. The editor wants it over the 3-D scene
+    // and leaves this alone; the viewer attaches the network once and hides it while the
+    // map is shut, because otherwise it paints itself over the cab view.
+    void showTrackGraph(bool on) { overlayVisible_ = on; }
 
     // Traffic-manager 2-D map: when enabled, the frame clears to a dark panel and skips
     // the 3-D meshes, drawing only the overlay lines/points + text (with an orthographic
     // top-down pc.viewProj set by the caller).
     void setMapMode(bool on) { mapMode_ = on; }
+
 
     void notifyResize() { framebufferResized_ = true; }
 
@@ -315,10 +331,6 @@ private:
     uint32_t switchIndexCount_ = 0;
 
     // Ground signals (dynamic: recreated when an aspect changes).
-    VkBuffer signalVertexBuffer_ = VK_NULL_HANDLE;
-    VkDeviceMemory signalVertexMemory_ = VK_NULL_HANDLE;
-    VkBuffer signalIndexBuffer_ = VK_NULL_HANDLE;
-    VkDeviceMemory signalIndexMemory_ = VK_NULL_HANDLE;
     uint32_t signalIndexCount_ = 0;
 
     // Editor overlay: static line-list + point-list of the raw track graph.
@@ -351,6 +363,38 @@ private:
     VkDeviceSize textCapacityBytes_ = 0;
     std::vector<TextVertex> pendingTextVertices_;
     uint32_t textVertexCount_ = 0;
+
+    // The changing half of the map overlay, on the same footing as the text: one mapped
+    // host-visible buffer per in-flight frame, written after that frame's fence, grown
+    // only when a frame asks for more than it holds.
+    std::array<VkBuffer, kMaxFramesInFlight> mapLineBuffers_{};
+    std::array<VkDeviceMemory, kMaxFramesInFlight> mapLineMemories_{};
+    std::array<void*, kMaxFramesInFlight> mapLineMapped_{};
+    std::array<VkBuffer, kMaxFramesInFlight> mapPointBuffers_{};
+    std::array<VkDeviceMemory, kMaxFramesInFlight> mapPointMemories_{};
+    std::array<void*, kMaxFramesInFlight> mapPointMapped_{};
+    VkDeviceSize mapLineCapacityBytes_ = 0, mapPointCapacityBytes_ = 0;
+    bool overlayVisible_ = true; // the editor's default; the viewer hides it off-map
+    std::vector<LineVertex> pendingMapLines_, pendingMapPoints_;
+    uint32_t mapLineVertexCount_ = 0, mapPointVertexCount_ = 0;
+    void allocateMapOverlayBuffers(VkDeviceSize lineBytes, VkDeviceSize pointBytes);
+
+    // Signals, crossings and the rest of the lineside furniture: one mapped host-visible
+    // pair per in-flight frame, like the text and the map overlay. This one is not rewritten
+    // every frame - it changes when an aspect changes, or every frame while a barrier is
+    // sweeping - so `signalDirtyFrames_` counts the slots still to be refreshed after a
+    // change, and each is written after its own fence.
+    std::array<VkBuffer, kMaxFramesInFlight> signalVertexBuffers_{};
+    std::array<VkDeviceMemory, kMaxFramesInFlight> signalVertexMemories_{};
+    std::array<void*, kMaxFramesInFlight> signalVertexMapped_{};
+    std::array<VkBuffer, kMaxFramesInFlight> signalIndexBuffers_{};
+    std::array<VkDeviceMemory, kMaxFramesInFlight> signalIndexMemories_{};
+    std::array<void*, kMaxFramesInFlight> signalIndexMapped_{};
+    VkDeviceSize signalVertexCapacityBytes_ = 0, signalIndexCapacityBytes_ = 0;
+    std::vector<TrackVertex> pendingSignalVertices_;
+    std::vector<std::uint32_t> pendingSignalIndices_;
+    int signalDirtyFrames_ = 0;
+    void allocateSignalBuffers(VkDeviceSize vertexBytes, VkDeviceSize indexBytes);
 
     std::vector<VkSemaphore> imageAvailable_;
     std::vector<VkSemaphore> renderFinished_;

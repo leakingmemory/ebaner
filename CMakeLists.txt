@@ -246,6 +246,15 @@ target_include_directories(TrainSpanTest PRIVATE src)
 add_test(NAME train-span COMMAND TrainSpanTest "${EBANER_TEST_DATASET}")
 set_tests_properties(train-span PROPERTIES SKIP_RETURN_CODE 77)
 
+# What deciding every signal's aspect costs. It runs inside a frame on every circuit
+# transition, so this is the net that catches it going back to walking the whole network.
+add_executable(SignallingCostTest tests/SignallingCostTest.cpp)
+add_dependencies(SignallingCostTest shaders)
+target_link_libraries(SignallingCostTest PRIVATE ebaner_engine)
+target_include_directories(SignallingCostTest PRIVATE src)
+add_test(NAME signalling-cost COMMAND SignallingCostTest "${EBANER_TEST_DATASET}")
+set_tests_properties(signalling-cost PROPERTIES SKIP_RETURN_CODE 77)
+
 # The crossing sequence is pure logic and needs no export, so it always runs.
 add_executable(CrossingSequenceTest tests/CrossingSequenceTest.cpp)
 add_dependencies(CrossingSequenceTest shaders)

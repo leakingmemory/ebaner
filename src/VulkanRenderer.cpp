@@ -1340,38 +1340,65 @@ void VulkanRenderer::updateSwitches(const std::vector<TrackVertex>& vertices,
     createSwitchBuffers(vertices, indices);
 }
 
+void VulkanRenderer::allocateSignalBuffers(VkDeviceSize vertexBytes,
+                                          VkDeviceSize indexBytes) {
+    if (signalVertexCapacityBytes_ > 0 || signalIndexCapacityBytes_ > 0)
+        vkDeviceWaitIdle(device_);
+    for (int i = 0; i < kMaxFramesInFlight; ++i) {
+        if (signalVertexMapped_[i]) vkUnmapMemory(device_, signalVertexMemories_[i]);
+        vkDestroyBuffer(device_, signalVertexBuffers_[i], nullptr);
+        vkFreeMemory(device_, signalVertexMemories_[i], nullptr);
+        if (signalIndexMapped_[i]) vkUnmapMemory(device_, signalIndexMemories_[i]);
+        vkDestroyBuffer(device_, signalIndexBuffers_[i], nullptr);
+        vkFreeMemory(device_, signalIndexMemories_[i], nullptr);
+        signalVertexBuffers_[i] = signalIndexBuffers_[i] = VK_NULL_HANDLE;
+        signalVertexMemories_[i] = signalIndexMemories_[i] = VK_NULL_HANDLE;
+        signalVertexMapped_[i] = signalIndexMapped_[i] = nullptr;
+    }
+    signalVertexCapacityBytes_ = vertexBytes;
+    signalIndexCapacityBytes_ = indexBytes;
+    const VkMemoryPropertyFlags host = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    for (int i = 0; i < kMaxFramesInFlight; ++i) {
+        if (signalVertexCapacityBytes_ > 0) {
+            createBuffer(signalVertexCapacityBytes_, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                         host, signalVertexBuffers_[i], signalVertexMemories_[i]);
+            vkMapMemory(device_, signalVertexMemories_[i], 0, signalVertexCapacityBytes_, 0,
+                        &signalVertexMapped_[i]);
+        }
+        if (signalIndexCapacityBytes_ > 0) {
+            createBuffer(signalIndexCapacityBytes_, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, host,
+                         signalIndexBuffers_[i], signalIndexMemories_[i]);
+            vkMapMemory(device_, signalIndexMemories_[i], 0, signalIndexCapacityBytes_, 0,
+                        &signalIndexMapped_[i]);
+        }
+    }
+}
+
 void VulkanRenderer::createSignalBuffers(
     const std::vector<TrackVertex>& vertices,
     const std::vector<std::uint32_t>& indices) {
-    // Idempotent, and the buffers it replaces are retired rather than destroyed:
-    // a frame still in flight may be reading them.
-    retireBuffer(signalIndexBuffer_, signalIndexMemory_);
-    retireBuffer(signalVertexBuffer_, signalVertexMemory_);
-    signalIndexCount_ = static_cast<uint32_t>(indices.size());
-    if (indices.empty() || vertices.empty()) return;
-
-    auto upload = [&](const void* data, VkDeviceSize size, VkBufferUsageFlags usage,
-                      VkBuffer& buffer, VkDeviceMemory& memory) {
-        VkBuffer staging;
-        VkDeviceMemory stagingMem;
-        createBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                     staging, stagingMem);
-        void* mapped;
-        vkMapMemory(device_, stagingMem, 0, size, 0, &mapped);
-        std::memcpy(mapped, data, static_cast<std::size_t>(size));
-        vkUnmapMemory(device_, stagingMem);
-        createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage,
-                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, buffer, memory);
-        copyBuffer(staging, buffer, size);
-        vkDestroyBuffer(device_, staging, nullptr);
-        vkFreeMemory(device_, stagingMem, nullptr);
-    };
-    upload(vertices.data(), sizeof(TrackVertex) * vertices.size(),
-           VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, signalVertexBuffer_, signalVertexMemory_);
-    upload(indices.data(), sizeof(std::uint32_t) * indices.size(),
-           VK_BUFFER_USAGE_INDEX_BUFFER_BIT, signalIndexBuffer_, signalIndexMemory_);
+    // Handed over now, written into each in-flight frame's own buffer in drawFrame after
+    // that frame's fence. This used to stage and submit a copy per call and then drain the
+    // graphics queue twice - the same queue the frame goes to - so every aspect change, and
+    // every frame of a barrier sweeping, serialised the CPU against the GPU.
+    pendingSignalVertices_ = vertices;
+    pendingSignalIndices_ = indices;
+    const VkDeviceSize needV = sizeof(TrackVertex) * vertices.size();
+    const VkDeviceSize needI = sizeof(std::uint32_t) * indices.size();
+    if (needV > signalVertexCapacityBytes_ || needI > signalIndexCapacityBytes_) {
+        VkDeviceSize wantV = std::max<VkDeviceSize>(signalVertexCapacityBytes_, 1u << 18);
+        VkDeviceSize wantI = std::max<VkDeviceSize>(signalIndexCapacityBytes_, 1u << 16);
+        while (wantV < needV) wantV *= 2;
+        while (wantI < needI) wantI *= 2;
+        std::printf("[Renderer] signals: %zu vertices; buffers grown to %llu / %llu\n",
+                    vertices.size(),
+                    static_cast<unsigned long long>(wantV / sizeof(TrackVertex)),
+                    static_cast<unsigned long long>(wantI / sizeof(std::uint32_t)));
+        allocateSignalBuffers(wantV, wantI);
+    }
+    // Every slot has to see the change, not just the one drawn next.
+    signalDirtyFrames_ = kMaxFramesInFlight;
 }
 
 void VulkanRenderer::attachSignals(const std::vector<TrackVertex>& vertices,
@@ -1613,6 +1640,66 @@ void VulkanRenderer::allocateTextBuffers(VkDeviceSize bytes) {
     }
 }
 
+void VulkanRenderer::allocateMapOverlayBuffers(VkDeviceSize lineBytes,
+                                              VkDeviceSize pointBytes) {
+    // Host-visible and permanently mapped, one per in-flight frame - the same shape as the
+    // text overlay. Anything already recorded is still reading the old buffers, so wait
+    // before pulling them out; that only happens when the overlay outgrows its room.
+    if (mapLineCapacityBytes_ > 0 || mapPointCapacityBytes_ > 0) vkDeviceWaitIdle(device_);
+    for (int i = 0; i < kMaxFramesInFlight; ++i) {
+        if (mapLineMapped_[i]) vkUnmapMemory(device_, mapLineMemories_[i]);
+        vkDestroyBuffer(device_, mapLineBuffers_[i], nullptr);
+        vkFreeMemory(device_, mapLineMemories_[i], nullptr);
+        if (mapPointMapped_[i]) vkUnmapMemory(device_, mapPointMemories_[i]);
+        vkDestroyBuffer(device_, mapPointBuffers_[i], nullptr);
+        vkFreeMemory(device_, mapPointMemories_[i], nullptr);
+        mapLineBuffers_[i] = mapPointBuffers_[i] = VK_NULL_HANDLE;
+        mapLineMemories_[i] = mapPointMemories_[i] = VK_NULL_HANDLE;
+        mapLineMapped_[i] = mapPointMapped_[i] = nullptr;
+    }
+    mapLineCapacityBytes_ = lineBytes;
+    mapPointCapacityBytes_ = pointBytes;
+    const VkMemoryPropertyFlags host = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    for (int i = 0; i < kMaxFramesInFlight; ++i) {
+        if (mapLineCapacityBytes_ > 0) {
+            createBuffer(mapLineCapacityBytes_, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, host,
+                         mapLineBuffers_[i], mapLineMemories_[i]);
+            vkMapMemory(device_, mapLineMemories_[i], 0, mapLineCapacityBytes_, 0,
+                        &mapLineMapped_[i]);
+        }
+        if (mapPointCapacityBytes_ > 0) {
+            createBuffer(mapPointCapacityBytes_, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, host,
+                         mapPointBuffers_[i], mapPointMemories_[i]);
+            vkMapMemory(device_, mapPointMemories_[i], 0, mapPointCapacityBytes_, 0,
+                        &mapPointMapped_[i]);
+        }
+    }
+}
+
+void VulkanRenderer::setMapOverlay(const std::vector<LineVertex>& lines,
+                                   const std::vector<LineVertex>& points) {
+    pendingMapLines_ = lines;
+    pendingMapPoints_ = points;
+    // Grown by doubling rather than sized once: how much of this there is depends on how
+    // many circuits and switches are authored around the station being worked, which is
+    // not something a fixed capacity can be picked for.
+    const VkDeviceSize needL = sizeof(LineVertex) * pendingMapLines_.size();
+    const VkDeviceSize needP = sizeof(LineVertex) * pendingMapPoints_.size();
+    if (needL > mapLineCapacityBytes_ || needP > mapPointCapacityBytes_) {
+        VkDeviceSize wantL = std::max<VkDeviceSize>(mapLineCapacityBytes_, 1u << 16);
+        VkDeviceSize wantP = std::max<VkDeviceSize>(mapPointCapacityBytes_, 1u << 14);
+        while (wantL < needL) wantL *= 2;
+        while (wantP < needP) wantP *= 2;
+        std::printf("[Renderer] map overlay: %zu line + %zu point vertices; buffers grown "
+                    "to %llu / %llu\n",
+                    pendingMapLines_.size(), pendingMapPoints_.size(),
+                    static_cast<unsigned long long>(wantL / sizeof(LineVertex)),
+                    static_cast<unsigned long long>(wantP / sizeof(LineVertex)));
+        allocateMapOverlayBuffers(wantL, wantP);
+    }
+}
+
 void VulkanRenderer::createTextResources() {
     createTextPipeline();
     // Enough for an ordinary cab HUD; the traffic-manager map wants several times this,
@@ -1755,10 +1842,12 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageInde
     }
 
     // Ground signals — same track pipeline; dynamic (rebuilt when an aspect changes).
-    if (signalIndexCount_ > 0) {
+    if (signalIndexCount_ > 0 && signalVertexBuffers_[currentFrame_] &&
+        signalIndexBuffers_[currentFrame_]) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, trackPipeline_);
-        vkCmdBindVertexBuffers(cmd, 0, 1, &signalVertexBuffer_, &offset);
-        vkCmdBindIndexBuffer(cmd, signalIndexBuffer_, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &signalVertexBuffers_[currentFrame_], &offset);
+        vkCmdBindIndexBuffer(cmd, signalIndexBuffers_[currentFrame_], 0,
+                             VK_INDEX_TYPE_UINT32);
         vkCmdDrawIndexed(cmd, signalIndexCount_, 1, 0, 0, 0);
     }
 
@@ -1811,18 +1900,33 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageInde
     }
     } // end !mapMode_ (3-D meshes)
 
-    // Editor track-graph overlay: link lines then round geo-point sprites, on top
-    // of the scene (depth-tested against terrain, but not writing depth). Empty in
-    // the viewer, which never attaches a graph.
-    if (overlayLineVertexCount_ > 0) {
+    // Track-graph overlay: link lines then round geo-point sprites, on top of the scene
+    // (depth-tested against terrain, but not writing depth).
+    //
+    // Drawn outside the 3-D branch above, so it appears in both views - which the editor
+    // wants, since it draws the network over the world. The viewer does not: it attaches
+    // the network once and hides it while the map is shut. That is what `overlayVisible_`
+    // is for, and without it the amber-and-cyan network paints itself across the cab view.
+    if (overlayVisible_ && overlayLineVertexCount_ > 0) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, overlayLinePipeline_);
         vkCmdBindVertexBuffers(cmd, 0, 1, &overlayLineVertexBuffer_, &offset);
         vkCmdDraw(cmd, overlayLineVertexCount_, 1, 0, 0);
     }
-    if (overlayPointVertexCount_ > 0) {
+    if (overlayVisible_ && overlayPointVertexCount_ > 0) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, overlayPointPipeline_);
         vkCmdBindVertexBuffers(cmd, 0, 1, &overlayPointVertexBuffer_, &offset);
         vkCmdDraw(cmd, overlayPointVertexCount_, 1, 0, 0);
+    }
+    // The changing half, over the network: occupancy bands, switch diamonds, highlights.
+    if (mapLineVertexCount_ > 0 && mapLineBuffers_[currentFrame_]) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, overlayLinePipeline_);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &mapLineBuffers_[currentFrame_], &offset);
+        vkCmdDraw(cmd, mapLineVertexCount_, 1, 0, 0);
+    }
+    if (mapPointVertexCount_ > 0 && mapPointBuffers_[currentFrame_]) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, overlayPointPipeline_);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &mapPointBuffers_[currentFrame_], &offset);
+        vkCmdDraw(cmd, mapPointVertexCount_, 1, 0, 0);
     }
 
     // 2-D text overlay, drawn last (no depth) so it sits on top.
@@ -1972,6 +2076,29 @@ void VulkanRenderer::drawFrame(const PushConstants& pc) {
         std::memcpy(textVertexMapped_[currentFrame_], pendingTextVertices_.data(),
                     sizeof(TextVertex) * textVertexCount_);
 
+    // Signals: refresh this slot if it has not yet seen the latest build. Unlike the text
+    // this does not change every frame, so only the slots that are behind are written.
+    if (signalDirtyFrames_ > 0) {
+        --signalDirtyFrames_;
+        signalIndexCount_ = static_cast<uint32_t>(pendingSignalIndices_.size());
+        if (signalVertexMapped_[currentFrame_] && !pendingSignalVertices_.empty())
+            std::memcpy(signalVertexMapped_[currentFrame_], pendingSignalVertices_.data(),
+                        sizeof(TrackVertex) * pendingSignalVertices_.size());
+        if (signalIndexMapped_[currentFrame_] && !pendingSignalIndices_.empty())
+            std::memcpy(signalIndexMapped_[currentFrame_], pendingSignalIndices_.data(),
+                        sizeof(std::uint32_t) * pendingSignalIndices_.size());
+    }
+
+    // The changing half of the map overlay, on the same footing.
+    mapLineVertexCount_ = static_cast<uint32_t>(pendingMapLines_.size());
+    if (mapLineVertexCount_ > 0 && mapLineMapped_[currentFrame_])
+        std::memcpy(mapLineMapped_[currentFrame_], pendingMapLines_.data(),
+                    sizeof(LineVertex) * mapLineVertexCount_);
+    mapPointVertexCount_ = static_cast<uint32_t>(pendingMapPoints_.size());
+    if (mapPointVertexCount_ > 0 && mapPointMapped_[currentFrame_])
+        std::memcpy(mapPointMapped_[currentFrame_], pendingMapPoints_.data(),
+                    sizeof(LineVertex) * mapPointVertexCount_);
+
     // A frame has passed, so buffers retired that many frames ago are now unreferenced.
     sweepRetired(/*force=*/false);
 
@@ -2091,6 +2218,12 @@ void VulkanRenderer::cleanup() {
         if (textVertexMemories_[i]) vkUnmapMemory(device_, textVertexMemories_[i]);
         vkDestroyBuffer(device_, textVertexBuffers_[i], nullptr);
         vkFreeMemory(device_, textVertexMemories_[i], nullptr);
+        if (mapLineMapped_[i]) vkUnmapMemory(device_, mapLineMemories_[i]);
+        vkDestroyBuffer(device_, mapLineBuffers_[i], nullptr);
+        vkFreeMemory(device_, mapLineMemories_[i], nullptr);
+        if (mapPointMapped_[i]) vkUnmapMemory(device_, mapPointMemories_[i]);
+        vkDestroyBuffer(device_, mapPointBuffers_[i], nullptr);
+        vkFreeMemory(device_, mapPointMemories_[i], nullptr);
     }
     vkDestroyBuffer(device_, buildingIndexBuffer_, nullptr);
     vkFreeMemory(device_, buildingIndexMemory_, nullptr);
@@ -2102,11 +2235,13 @@ void VulkanRenderer::cleanup() {
         vkDestroyBuffer(device_, switchVertexBuffer_, nullptr);
         vkFreeMemory(device_, switchVertexMemory_, nullptr);
     }
-    if (signalVertexBuffer_ != VK_NULL_HANDLE) {
-        vkDestroyBuffer(device_, signalIndexBuffer_, nullptr);
-        vkFreeMemory(device_, signalIndexMemory_, nullptr);
-        vkDestroyBuffer(device_, signalVertexBuffer_, nullptr);
-        vkFreeMemory(device_, signalVertexMemory_, nullptr);
+    for (int i = 0; i < kMaxFramesInFlight; ++i) {
+        if (signalVertexMapped_[i]) vkUnmapMemory(device_, signalVertexMemories_[i]);
+        vkDestroyBuffer(device_, signalVertexBuffers_[i], nullptr);
+        vkFreeMemory(device_, signalVertexMemories_[i], nullptr);
+        if (signalIndexMapped_[i]) vkUnmapMemory(device_, signalIndexMemories_[i]);
+        vkDestroyBuffer(device_, signalIndexBuffers_[i], nullptr);
+        vkFreeMemory(device_, signalIndexMemories_[i], nullptr);
     }
 
     vkDestroySampler(device_, landSampler_, nullptr);

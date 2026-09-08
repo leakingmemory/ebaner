@@ -185,9 +185,10 @@ bool writeTrackCircuits(const std::string& datasetRoot, const TrackCircuits& tc)
 // ------------------------------------------------------------------ flood-fill
 namespace {
 // Nearest point on a polyline to p: fills the arc-length fraction and distance.
-void projFrac(const std::vector<glm::dvec3>& pts, glm::dvec2 p, double& frac, double& dist) {
+void projFrac(const std::vector<glm::dvec3>& pts, glm::dvec2 p, double& frac, double& dist,
+              double totalLen = -1.0) {
     dist = 1e30; frac = 0.0;
-    const double total = polyLength(pts);
+    const double total = totalLen >= 0.0 ? totalLen : polyLength(pts);
     double acc = 0.0;
     for (std::size_t i = 1; i < pts.size(); ++i) {
         const glm::dvec2 a(pts[i - 1].x, pts[i - 1].y), b(pts[i].x, pts[i].y);
@@ -386,6 +387,12 @@ bool projectOnTrack(const std::vector<TrackPoly>& polys, std::uint32_t trackId,
     if (!pts || pts->size() < 2) return false;
     projFrac(*pts, p, frac, dist);
     return true;
+}
+
+void projectOnPolyline(const std::vector<glm::dvec3>& pts, glm::dvec2 p, double& frac,
+                       double& dist, double totalLen) {
+    if (pts.size() < 2) { frac = 0.0; dist = 1e30; return; }
+    projFrac(pts, p, frac, dist, totalLen);
 }
 
 SectionResult floodSection(const std::vector<TrackPoly>& polys,

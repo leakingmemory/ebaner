@@ -308,6 +308,30 @@ std::vector<PathSwitch> pathSwitchRequirements(const SignalPath& p, const Switch
 bool pathSwitchesAligned(const SignalPath& p, const SwitchNetwork& net,
                          const std::vector<TrackPoly>& polys);
 
+// --- What a route needs, worked out once ---
+// Everything about a route that cannot change while the program runs.
+//
+// pathSwitchRequirements reads the turnouts' *geometry* and never their state, so which
+// turnouts a route crosses and which way each of them must lie is fixed for the life of the
+// program; only the comparison against how they are actually set varies. The same goes for
+// which circuits the route runs through. Deriving either per frame costs a linear scan of
+// every track in the export, per turnout, per leg - and doing it for every route on every
+// occupancy change is what made a train entering a circuit stall the picture.
+//
+// Sections are held as *indices* into TrackCircuits::sections rather than ids, so reading
+// occupancy is a subscript instead of a search.
+struct RouteStatics {
+    std::vector<std::vector<PathSwitch>> switches;
+    std::vector<std::vector<int>> sections;
+    std::size_t size() const { return switches.size(); }
+};
+RouteStatics routeStatics(const std::vector<SignalPath>& paths, const SwitchNetwork& net,
+                          const std::vector<TrackPoly>& polys,
+                          const TrackCircuits& circuits);
+// True if every turnout in `reqs` is set the way the route needs. The cached counterpart of
+// pathSwitchesAligned, and the only part of it that has to be asked again.
+bool switchesAligned(const std::vector<PathSwitch>& reqs, const SwitchNetwork& net);
+
 // The type a new exit route should start out as: C2 if any turnout on the departure needs
 // its diverging leg, else C1. Both the route up to the signal *and* the signal's own route
 // beyond it count - the driver is being told about the whole departure, and the merge onto
@@ -396,9 +420,7 @@ bool routesOppose(const SignalPath& a, const SignalPath& b);
 // only the interlocking knows, so it is passed in rather than decided here; the dwarf rule
 // above stays owned by this function.
 bool updateSignalAspects(std::vector<SignalPlacement>& placements,
-                         const std::vector<SignalPath>& paths, const SwitchNetwork& net,
-                         const std::vector<TrackPoly>& polys,
-                         const TrackCircuits& circuits,
+                         const RouteStatics& statics, const SwitchNetwork& net,
                          const std::vector<char>& secOccupied,
                          const std::vector<char>& routeSet,
                          const std::vector<SignalAspect>& exitAspects = {});

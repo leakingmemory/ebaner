@@ -565,6 +565,7 @@ std::vector<PathSwitch> pathSwitchRequirements(const SignalPath& p, const Switch
     // part of a second.
     struct Leg {
         const std::vector<glm::dvec3>* pts = nullptr; // the track's polyline, or null
+        double len = 0.0;                             // and its length, measured once
         double lo = 0.0, hi = 1.0;                    // the interval, ordered
         double eps = 1e-6;                            // rounding margin at its own ends
         glm::dvec3 endWorld{0.0};                     // where `to` lands, for case (a)
@@ -589,8 +590,8 @@ std::vector<PathSwitch> pathSwitchRequirements(const SignalPath& p, const Switch
         for (const TrackPoly& tp : polys)
             if (tp.id == iv.trackId) { leg.pts = &tp.pts; break; }
         if (!leg.pts || leg.pts->size() < 2) continue; // stale overlay: no such track
-        const double len = polyLength(*leg.pts);
-        leg.eps = len > 1.0 ? kEdgeSlack / len : 1e-6;
+        leg.len = polyLength(*leg.pts);
+        leg.eps = leg.len > 1.0 ? kEdgeSlack / leg.len : 1e-6;
         const glm::dvec3 a = fracToWorld(polys, iv.trackId, iv.from);
         const glm::dvec3 b = fracToWorld(polys, iv.trackId, iv.to);
         leg.endWorld = b;
@@ -601,7 +602,7 @@ std::vector<PathSwitch> pathSwitchRequirements(const SignalPath& p, const Switch
         for (std::size_t j = 0; j < leg.pts->size(); ++j) {
             if (j) acc += std::hypot((*leg.pts)[j].x - (*leg.pts)[j - 1].x,
                                      (*leg.pts)[j].y - (*leg.pts)[j - 1].y);
-            const double f = len > 1e-9 ? acc / len : 0.0;
+            const double f = leg.len > 1e-9 ? acc / leg.len : 0.0;
             if (f > leg.lo && f < leg.hi) cover((*leg.pts)[j]);
         }
     }
@@ -631,9 +632,11 @@ std::vector<PathSwitch> pathSwitchRequirements(const SignalPath& p, const Switch
                 const Leg& leg = legs[k];
                 if (!leg.pts) continue;
                 double frac = 0.0, dist = 0.0;
-                if (!projectOnTrack(polys, p.parts[k].trackId, glm::dvec2(tw.x, tw.y), frac,
-                                    dist))
-                    continue;
+                // The polyline is already in hand, so this must not go back through the
+                // track id: that is a linear scan of every track there is, and doing it
+                // here - inside the loop over every turnout, for every leg - is what the
+                // setup above went to the trouble of hoisting out in the first place.
+                projectOnPolyline(*leg.pts, glm::dvec2(tw.x, tw.y), frac, dist, leg.len);
                 if (dist > kAtTurnout) continue; // this leg doesn't reach the turnout
                 // Only an interior crossing counts, so a route that merely ends at the
                 // turnout imposes no requirement. The margin has to stay well under a
@@ -653,9 +656,33 @@ std::vector<PathSwitch> pathSwitchRequirements(const SignalPath& p, const Switch
 
 bool pathSwitchesAligned(const SignalPath& p, const SwitchNetwork& net,
                          const std::vector<TrackPoly>& polys) {
-    for (const PathSwitch& ps : pathSwitchRequirements(p, net, polys))
+    return switchesAligned(pathSwitchRequirements(p, net, polys), net);
+}
+
+bool switchesAligned(const std::vector<PathSwitch>& reqs, const SwitchNetwork& net) {
+    for (const PathSwitch& ps : reqs)
         if (net.state(ps.turnout) != ps.need) return false;
     return true;
+}
+
+RouteStatics routeStatics(const std::vector<SignalPath>& paths, const SwitchNetwork& net,
+                          const std::vector<TrackPoly>& polys,
+                          const TrackCircuits& circuits) {
+    RouteStatics out;
+    out.switches.reserve(paths.size());
+    out.sections.reserve(paths.size());
+    for (const SignalPath& p : paths) {
+        out.switches.push_back(pathSwitchRequirements(p, net, polys));
+        std::vector<int> idx;
+        for (const int id : pathSections(p, circuits))
+            for (std::size_t si = 0; si < circuits.sections.size(); ++si)
+                if (circuits.sections[si].id == id) {
+                    idx.push_back(static_cast<int>(si));
+                    break;
+                }
+        out.sections.push_back(std::move(idx));
+    }
+    return out;
 }
 
 SignalPath departureRoute(const SignalPath& exitRoute, const SignalPath& exitSignal) {
@@ -761,9 +788,12 @@ void walkAhead(const std::vector<TrackPoly>& polys, const TrackJunctions& juncti
     // nothing reading down the line wants to go round one.
     std::vector<std::uint32_t> visited{track};
     for (int step = 0; step < 256; ++step) {
+        // Finding a track by id is a linear scan of every track in the export, and this is
+        // the innermost thing in the walk - up to 256 steps, for each of the distants, on
+        // every pass. Without the break it paid for all 6100 every single step.
         double lenM = 0.0;
         for (const TrackPoly& tp : polys)
-            if (tp.id == track) lenM = polyLength(tp.pts);
+            if (tp.id == track) { lenM = polyLength(tp.pts); break; }
         if (lenM <= 0.0) return;
         // The nearest junction ahead on this track bounds the span we can see along it.
         double stopFrac = d > 0 ? 1.0 : 0.0;
@@ -981,29 +1011,26 @@ std::vector<int> pathSections(const SignalPath& p, const TrackCircuits& circuits
 }
 
 bool updateSignalAspects(std::vector<SignalPlacement>& placements,
-                         const std::vector<SignalPath>& paths, const SwitchNetwork& net,
-                         const std::vector<TrackPoly>& polys,
-                         const TrackCircuits& circuits,
+                         const RouteStatics& statics, const SwitchNetwork& net,
                          const std::vector<char>& secOccupied,
                          const std::vector<char>& routeSet,
                          const std::vector<SignalAspect>& exitAspects) {
-    // What a dwarf governing `governed` should display.
+    // What a dwarf governing `governed` should display. Everything here is a lookup: which
+    // turnouts the route needs and which circuits it runs through were worked out once, so
+    // what is left is comparing them against how things currently stand.
     auto dwarfAspectFor = [&](const std::vector<int>& governed) {
         SignalAspect want = SignalAspect::Stop;
         for (int pi : governed) {
-            if (pi < 0 || pi >= static_cast<int>(paths.size())) continue;
+            if (pi < 0 || pi >= static_cast<int>(statics.size())) continue;
             // A route set from this signal shows clear (it is dropped the moment a train
             // enters its circuits, so "set" already implies the road ahead is empty).
             if (pi < static_cast<int>(routeSet.size()) && routeSet[pi]) return SignalAspect::Clear;
-            const SignalPath& p = paths[pi];
-            if (!pathSwitchesAligned(p, net, polys)) continue; // not this signal's route
-            bool occupied = false;
-            for (int id : pathSections(p, circuits))
-                for (std::size_t si = 0; si < circuits.sections.size(); ++si)
-                    if (circuits.sections[si].id == id && si < secOccupied.size() &&
-                        secOccupied[si])
-                        occupied = true;
-            if (occupied) want = SignalAspect::TrainOnTrack; // keep looking for a set route
+            if (!switchesAligned(statics.switches[pi], net)) continue; // not this one's road
+            for (const int si : statics.sections[pi])
+                if (si < static_cast<int>(secOccupied.size()) && secOccupied[si]) {
+                    want = SignalAspect::TrainOnTrack; // keep looking for a set route
+                    break;
+                }
         }
         return want;
     };

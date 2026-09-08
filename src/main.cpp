@@ -762,6 +762,10 @@ int main(int argc, char** argv) {
     // The junction graph is geometry, so it cannot change while the viewer runs: build it
     // once here rather than on every distant-signal read.
     const TrackJunctions junctions = trackJunctions(polys);
+    // What every mini path needs of the turnouts and which circuits it runs through, worked
+    // out once. Both are fixed by the geometry, and deriving them per frame is what made a
+    // train entering a circuit stall the picture - see RouteStatics in SignalPaths.h.
+    const RouteStatics pathStatics = routeStatics(signalPaths, switchNet, polys, circuits);
     // The map is a shunting view: it shows the dwarfs and the mini routes they set. An exit
     // signal sharing a dwarf's pole appears as that dwarf; one standing alone has nothing to
     // set there, so the map skips it. These pick the dwarf half of a shared placement.
@@ -1014,6 +1018,9 @@ int main(int argc, char** argv) {
     };
     rebuildSignalBuffer();
     renderer.attachSignals(signalVerts, signalIdx);
+    // The network overlay belongs to the traffic-manager map, and the map starts shut. The
+    // flag defaults on for the editor, which draws the network over the world deliberately.
+    renderer.showTrackGraph(false);
 
     // Route setting (traffic manager): a set route holds its switches and shows its signal
     // clear. It drops as soon as a train enters its circuits (the lock lifts then too; the
@@ -1413,8 +1420,18 @@ int main(int argc, char** argv) {
     // What the cursor is over in the map, so it can be highlighted before it is clicked.
     int hoverSignal = -1, hoverDest = -1, hoverTurnout = -1;
 
+    // The map is drawn in two layers. The rail network is the same 200,000 vertices every
+    // time and is attached once; everything that changes - the occupancy bands, the switch
+    // diamonds, the highlights - is rebuilt here and goes to a buffer meant to be written
+    // every frame. Both used to go together, so a train crossing a circuit border copied
+    // and re-uploaded the whole 4.8 MB network and waited for the device to go idle.
+    bool mapNetworkAttached = false;
     auto buildMapOverlay = [&]() {
-        std::vector<LineVertex> lines = graph.lines;
+        if (!mapNetworkAttached) {
+            renderer.attachTrackGraph(graph.lines, {});
+            mapNetworkAttached = true;
+        }
+        std::vector<LineVertex> lines;
         std::vector<LineVertex> points;
 
         // Track-circuit sections, over the base graph: a 3 m band (two parallel rails)
@@ -1604,7 +1621,7 @@ int main(int argc, char** argv) {
                 points.push_back({glm::vec3(c, 3.5f), rc});
             }
         }
-        renderer.attachTrackGraph(lines, points);
+        renderer.setMapOverlay(lines, points);
     };
 
     // The stations the traffic manager can work, in the order the line runs.
@@ -2559,8 +2576,27 @@ int main(int argc, char** argv) {
     // thread isn't starved (which causes ALSA under-runs) during loading.
     audio.init();
 
+    // Where the frame goes, when asked. There was no timing in here at all, so "there is a
+    // lag" could not be turned into a number - and the two things that caused it were both
+    // several times the frame budget while looking, in the source, like ordinary work.
+    struct Stat {
+        double worst = 0.0, total = 0.0;
+        long n = 0;
+        void add(double ms) { worst = std::max(worst, ms); total += ms; ++n; }
+        void reset() { worst = total = 0.0; n = 0; }
+    };
+    const bool profile = std::getenv("EBANER_PROFILE") != nullptr;
+    Stat pAspects, pDistants, pMesh, pUpload, pMap, pFrame;
+    double profileUntil = glfwGetTime() + 1.0;
+    auto now_ms = [] {
+        return std::chrono::duration<double, std::milli>(
+                   std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    };
+
     double lastTime = glfwGetTime();
     while (!glfwWindowShouldClose(window)) {
+        const double frameT0 = profile ? now_ms() : 0.0;
         glfwPollEvents();
         const double now = glfwGetTime();
         const float dt = static_cast<float>(now - lastTime);
@@ -2714,8 +2750,12 @@ int main(int argc, char** argv) {
             // pivot and an axis per vertex and the vertex has no room for them - so while
             // a barrier is in motion the geometry is remade.
             if (anyPhaseMoved || anyBarrierMoving) {
+                const double tM = profile ? now_ms() : 0.0;
                 rebuildSignalBuffer();
+                if (profile) pMesh.add(now_ms() - tM);
+                const double tU = profile ? now_ms() : 0.0;
                 renderer.updateSignals(signalVerts, signalIdx);
+                if (profile) pUpload.add(now_ms() - tU);
             }
         }
 
@@ -2821,18 +2861,25 @@ int main(int argc, char** argv) {
                 const int k = blockPlacement[i];
                 if (k >= 0 && i < blockOut.aspect.size()) exitAspects[k] = blockOut.aspect[i];
             }
-            bool aspectsMoved = updateSignalAspects(sigPlacements, signalPaths, switchNet,
-                                                    polys, circuits, secOccupied, routeSet,
-                                                    exitAspects);
+            const double tA = profile ? now_ms() : 0.0;
+            bool aspectsMoved = updateSignalAspects(sigPlacements, pathStatics, switchNet,
+                                                    secOccupied, routeSet, exitAspects);
+            if (profile) pAspects.add(now_ms() - tA);
+            const double tD = profile ? now_ms() : 0.0;
             // After the mains have settled, since a distant only repeats what they show.
             // A switch throw reaches here too, and can change what a distant reads without
             // any route having moved.
             if (updateDistantAspects(sigPlacements, polys, junctions, switchNet))
                 aspectsMoved = true;
+            if (profile) pDistants.add(now_ms() - tD);
             if (aspectsMoved || flagsChanged) {
                 flagsChanged = false;
+                const double tM = profile ? now_ms() : 0.0;
                 rebuildSignalBuffer();
+                if (profile) pMesh.add(now_ms() - tM);
+                const double tU = profile ? now_ms() : 0.0;
                 renderer.updateSignals(signalVerts, signalIdx);
+                if (profile) pUpload.add(now_ms() - tU);
             }
         }
 
@@ -2907,11 +2954,18 @@ int main(int argc, char** argv) {
                 g_mapPan = glm::clamp(tmStations[tmStation].at, mapMin, mapMax) - mapCenter;
             }
             tmPinned = false;
+            renderer.showTrackGraph(true);
+            const double tMap = profile ? now_ms() : 0.0;
             buildMapOverlay();
+            if (profile) pMap.add(now_ms() - tMap);
             mapAttached = true;
             g_mapDirty = false;
         } else if (!g_mapMode && mapAttached) {
-            renderer.attachTrackGraph({}, {});
+            // Only the changing half is dropped. The network stays attached for the life
+            // of the program - re-uploading it is what this split exists to avoid - but it
+            // has to be hidden, or it goes on being drawn over the cab view.
+            renderer.setMapOverlay({}, {});
+            renderer.showTrackGraph(false);
             mapAttached = false;
         }
 
@@ -3388,8 +3442,12 @@ int main(int argc, char** argv) {
             if (armedTrain != markedTrain || armedCoupler != markedCoupler) {
                 markedTrain = armedTrain;
                 markedCoupler = armedCoupler;
+                const double tM = profile ? now_ms() : 0.0;
                 rebuildSignalBuffer();
+                if (profile) pMesh.add(now_ms() - tM);
+                const double tU = profile ? now_ms() : 0.0;
                 renderer.updateSignals(signalVerts, signalIdx);
+                if (profile) pUpload.add(now_ms() - tU);
             }
 
             // I: start / stop the diesel engines (both together, edge-triggered).
@@ -3773,6 +3831,27 @@ int main(int argc, char** argv) {
         }
         renderer.drawFrame(pc);
         ++frame;
+        if (profile) {
+            pFrame.add(now_ms() - frameT0);
+            if (glfwGetTime() >= profileUntil) {
+                profileUntil = glfwGetTime() + 1.0;
+                auto line = [](const char* what, const Stat& st) {
+                    if (st.n == 0) return;
+                    std::printf("  %-18s %4ld call(s)  worst %7.2f ms  mean %6.2f\n", what,
+                                st.n, st.worst, st.total / static_cast<double>(st.n));
+                };
+                std::printf("[Profile] over the last second:\n");
+                line("frame", pFrame);
+                line("signal aspects", pAspects);
+                line("distant walks", pDistants);
+                line("mesh rebuild", pMesh);
+                line("mesh upload", pUpload);
+                line("map overlay", pMap);
+                std::fflush(stdout);
+                pFrame.reset(); pAspects.reset(); pDistants.reset();
+                pMesh.reset(); pUpload.reset(); pMap.reset();
+            }
+        }
     }
 
     renderer.waitIdle();
