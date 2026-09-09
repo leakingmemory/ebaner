@@ -980,10 +980,32 @@ int main(int argc, char** argv) {
         return out;
     };
 
-    // Which of the six costs what. They are rebuilt together and one of them dominated.
+    // The dynamic buffer is six meshes laid end to end, and an event nearly always touches
+    // one of them. A barrier sweeping is the case that matters: it moves every frame, and
+    // it changes nothing but its own booms - yet remaking the buffer used to redraw all 220
+    // signal masts, every speed board and every avalanche head along with them. So each
+    // part is rebuilt only when its caller says that part has moved.
+    enum MeshPart : unsigned {
+        PartSignals = 1u << 0,   // the masts: their aspects moved
+        PartCrossings = 1u << 1, // the crossing geometry: a boom is in motion
+        PartRepeats = 1u << 2,   // only re-read what the crossings' repeats show
+        PartFlags = 1u << 3,
+        PartAvalanche = 1u << 4,
+        PartMark = 1u << 5, // the uncoupling mark
+        PartTxp = 1u << 6,
+        PartAll = 0x7fu,
+    };
+    // Which of the parts costs what.
     double mSignals = 0, mCross = 0, mFlag = 0, mAval = 0, mTxp = 0, mConcat = 0;
     const bool meshProf = std::getenv("EBANER_PROFILE") != nullptr;
-    auto rebuildSignalBuffer = [&]() {
+    // The uncoupling mark has no mesh class of its own, so it keeps its geometry here.
+    std::vector<TrackVertex> markVerts;
+    std::vector<std::uint32_t> markIdx;
+    // What the crossings' repeats showed last time they were looked at.
+    CrossingMesh::DistantFor lastDistantFor;
+
+    // Returns whether anything was actually remade - if not, there is nothing to upload.
+    auto rebuildSignalBuffer = [&](unsigned parts) {
         const bool prof = meshProf;
         auto tick = [&] {
             return prof ? std::chrono::duration<double, std::milli>(
@@ -991,86 +1013,118 @@ int main(int argc, char** argv) {
                               .count()
                         : 0.0;
         };
-        double t = tick();
-        signals.build(sigPlacements, data.sceneOrigin());
-        mSignals += tick() - t;
-        t = tick();
-        crossingMesh.build(crossings, crossingSites, crossingStates, paths,
-                           data.sceneOrigin(), crossingDistantFor());
-        mCross += tick() - t;
-        t = tick();
-        signalVerts = signals.vertices();
-        signalIdx = signals.indices();
-        const std::uint32_t base = static_cast<std::uint32_t>(signalVerts.size());
-        signalVerts.insert(signalVerts.end(), crossingMesh.vertices().begin(),
-                           crossingMesh.vertices().end());
-        signalIdx.reserve(signalIdx.size() + crossingMesh.indices().size());
-        for (const std::uint32_t i : crossingMesh.indices()) signalIdx.push_back(i + base);
-
-        mConcat += tick() - t;
-        t = tick();
-        flagMesh.build(flagPosts, flagShown, polys, data.sceneOrigin());
-        mFlag += tick() - t;
-        t = tick();
-        const std::uint32_t fbase = static_cast<std::uint32_t>(signalVerts.size());
-        signalVerts.insert(signalVerts.end(), flagMesh.vertices().begin(),
-                           flagMesh.vertices().end());
-        signalIdx.reserve(signalIdx.size() + flagMesh.indices().size());
-        for (const std::uint32_t i : flagMesh.indices()) signalIdx.push_back(i + fbase);
-
-        // The avalanche signals go in the dynamic bucket beside the rest, though nothing
-        // changes their aspect yet: the day something does, it is this rebuild that draws
-        // it, and there is nothing else to arrange.
-        avalancheMesh.build(avalanches, avalancheShown, polys, data.sceneOrigin());
-        mAval += tick() - t;
-        t = tick();
-        const std::uint32_t abase = static_cast<std::uint32_t>(signalVerts.size());
-        signalVerts.insert(signalVerts.end(), avalancheMesh.vertices().begin(),
-                           avalancheMesh.vertices().end());
-        signalIdx.reserve(signalIdx.size() + avalancheMesh.indices().size());
-        for (const std::uint32_t i : avalancheMesh.indices())
-            signalIdx.push_back(i + abase);
-
-        // A mark over the coupler U is armed on, so that "the nearest one to the camera"
-        // is something the driver can see rather than something he has to trust. Only
-        // the armed one is marked: arming is a keypress and not a hover, so this is
-        // rebuilt on an event and not every frame - and a train that may be uncoupled is
-        // standing still, so the mark stays over the coupler once it is placed.
-        if (armedTrain >= 0 && armedCoupler >= 0 &&
-            static_cast<std::size_t>(armedTrain) < trains.size()) {
-            const Consist& at = trains[static_cast<std::size_t>(armedTrain)];
-            if (armedCoupler + 1 < at.unitCount()) {
-                // Midway between the two sets' centres - see the pick in the loop.
-                const VehicleFrame& a = at.unit(armedCoupler).frame();
-                const glm::vec3 c = 0.5f * (a.pos + at.unit(armedCoupler + 1).frame().pos);
-                const glm::vec3 R = a.right, F = a.tangent, U = a.up;
-                const glm::vec3 amber(1.0f, 0.72f, 0.18f);
-                // A post standing out of the roof over the coupler, with a plate across
-                // it: tall enough to clear the bodies and be read from the ground beside
-                // the train, which is where the man doing the uncoupling is.
-                lampgeom::box(signalVerts, signalIdx, c + U * 3.6f, R, F, U, 0.05f, 0.05f,
-                              1.4f, amber);
-                lampgeom::box(signalVerts, signalIdx, c + U * 5.1f, R, F, U, 0.45f, 0.06f,
-                              0.16f, amber);
+        bool built = false;
+        if (parts & PartSignals) {
+            const double t = tick();
+            signals.build(sigPlacements, data.sceneOrigin());
+            mSignals += tick() - t;
+            built = true;
+        }
+        if (parts & (PartCrossings | PartRepeats)) {
+            const double t = tick();
+            // What a crossing's repeats show follows the points, so an aspect pass has to
+            // look. Looking is cheap; redrawing the crossings is not, and the answer almost
+            // never moves - so the geometry is only remade when it does, or when a boom is
+            // actually swinging.
+            CrossingMesh::DistantFor df = crossingDistantFor();
+            const bool repeatsMoved = df != lastDistantFor;
+            lastDistantFor = std::move(df);
+            if ((parts & PartCrossings) || repeatsMoved) {
+                crossingMesh.build(crossings, crossingSites, crossingStates, paths,
+                                   data.sceneOrigin(), lastDistantFor);
+                built = true;
             }
+            mCross += tick() - t;
         }
+        if (parts & PartFlags) {
+            const double t = tick();
+            flagMesh.build(flagPosts, flagShown, polys, data.sceneOrigin());
+            mFlag += tick() - t;
+            built = true;
+        }
+        if (parts & PartAvalanche) {
+            // The avalanche signals go in the dynamic bucket beside the rest, though
+            // nothing changes their aspect yet - which is why nothing but the initial build
+            // asks for this part. The day something does move them, it must say so here.
+            const double t = tick();
+            avalancheMesh.build(avalanches, avalancheShown, polys, data.sceneOrigin());
+            mAval += tick() - t;
+            built = true;
+        }
+        if (parts & PartMark) {
+            // A mark over the coupler U is armed on, so that "the nearest one to the
+            // camera" is something the driver can see rather than something he has to
+            // trust. Only the armed one is marked: arming is a keypress and not a hover,
+            // so this is rebuilt on an event and not every frame - and a train that may be
+            // uncoupled is standing still, so the mark stays over the coupler once placed.
+            markVerts.clear();
+            markIdx.clear();
+            if (armedTrain >= 0 && armedCoupler >= 0 &&
+                static_cast<std::size_t>(armedTrain) < trains.size()) {
+                const Consist& at = trains[static_cast<std::size_t>(armedTrain)];
+                if (armedCoupler + 1 < at.unitCount()) {
+                    // Midway between the two sets' centres - see the pick in the loop.
+                    const VehicleFrame& a = at.unit(armedCoupler).frame();
+                    const glm::vec3 c =
+                        0.5f * (a.pos + at.unit(armedCoupler + 1).frame().pos);
+                    const glm::vec3 R = a.right, F = a.tangent, U = a.up;
+                    const glm::vec3 amber(1.0f, 0.72f, 0.18f);
+                    // A post standing out of the roof over the coupler, with a plate across
+                    // it: tall enough to clear the bodies and be read from the ground
+                    // beside the train, which is where the man doing the uncoupling is.
+                    lampgeom::box(markVerts, markIdx, c + U * 3.6f, R, F, U, 0.05f, 0.05f,
+                                  1.4f, amber);
+                    lampgeom::box(markVerts, markIdx, c + U * 5.1f, R, F, U, 0.45f, 0.06f,
+                                  0.16f, amber);
+                }
+            }
+            built = true;
+        }
+        if (parts & PartTxp) {
+            const double t = tick();
+            // The TXP appears only where the departure signal is actually being given.
+            std::vector<char> txpShowing(txpPositions.size(), 0);
+            for (std::size_t i = 0; i < txpPositions.size(); ++i) {
+                const auto it = txpShowingAt.find(txpStation[i].name);
+                if (it != txpShowingAt.end() && it->second == static_cast<int>(i))
+                    txpShowing[i] = 1;
+            }
+            txpMesh.build(txpPositions, txpShowing, polys, data.sceneOrigin(), txpLift);
+            mTxp += tick() - t;
+            built = true;
+        }
+        if (!built) return false;
 
-        // The TXP appears only where the departure signal is actually being given.
-        std::vector<char> txpShowing(txpPositions.size(), 0);
-        for (std::size_t i = 0; i < txpPositions.size(); ++i) {
-            const auto it = txpShowingAt.find(txpStation[i].name);
-            if (it != txpShowingAt.end() && it->second == static_cast<int>(i))
-                txpShowing[i] = 1;
+        // Lay them end to end. Each part's indices are relative to its own vertices, so
+        // they are offset by however many vertices came before. Sized once up front: the
+        // buffer is a hundred thousand vertices and growing it five times over copied most
+        // of it five times.
+        const double t = tick();
+        struct Part {
+            const std::vector<TrackVertex>* v;
+            const std::vector<std::uint32_t>* i;
+        };
+        const Part order[] = {{&signals.vertices(), &signals.indices()},
+                              {&crossingMesh.vertices(), &crossingMesh.indices()},
+                              {&flagMesh.vertices(), &flagMesh.indices()},
+                              {&avalancheMesh.vertices(), &avalancheMesh.indices()},
+                              {&markVerts, &markIdx},
+                              {&txpMesh.vertices(), &txpMesh.indices()}};
+        std::size_t nv = 0, ni = 0;
+        for (const Part& p : order) { nv += p.v->size(); ni += p.i->size(); }
+        signalVerts.clear();
+        signalIdx.clear();
+        signalVerts.reserve(nv);
+        signalIdx.reserve(ni);
+        for (const Part& p : order) {
+            const std::uint32_t base = static_cast<std::uint32_t>(signalVerts.size());
+            signalVerts.insert(signalVerts.end(), p.v->begin(), p.v->end());
+            for (const std::uint32_t k : *p.i) signalIdx.push_back(k + base);
         }
-        mTxp += tick() - t;
-        txpMesh.build(txpPositions, txpShowing, polys, data.sceneOrigin(), txpLift);
-        const std::uint32_t tbase = static_cast<std::uint32_t>(signalVerts.size());
-        signalVerts.insert(signalVerts.end(), txpMesh.vertices().begin(),
-                           txpMesh.vertices().end());
-        signalIdx.reserve(signalIdx.size() + txpMesh.indices().size());
-        for (const std::uint32_t i : txpMesh.indices()) signalIdx.push_back(i + tbase);
+        mConcat += tick() - t;
+        return true;
     };
-    rebuildSignalBuffer();
+    rebuildSignalBuffer(PartAll);
     renderer.attachSignals(signalVerts, signalIdx);
     // The network overlay belongs to the traffic-manager map, and the map starts shut. The
     // flag defaults on for the editor, which draws the network over the world deliberately.
@@ -2805,11 +2859,13 @@ int main(int argc, char** argv) {
             // a barrier is in motion the geometry is remade.
             if (anyPhaseMoved || anyBarrierMoving) {
                 const double tM = profile ? now_ms() : 0.0;
-                rebuildSignalBuffer();
+                const bool made = rebuildSignalBuffer(PartCrossings);
                 if (profile) pMesh.add(now_ms() - tM);
-                const double tU = profile ? now_ms() : 0.0;
-                renderer.updateSignals(signalVerts, signalIdx);
-                if (profile) pUpload.add(now_ms() - tU);
+                if (made) {
+                    const double tU = profile ? now_ms() : 0.0;
+                    renderer.updateSignals(signalVerts, signalIdx);
+                    if (profile) pUpload.add(now_ms() - tU);
+                }
             }
         }
 
@@ -2927,13 +2983,23 @@ int main(int argc, char** argv) {
                 aspectsMoved = true;
             if (profile) pDistants.add(now_ms() - tD);
             if (aspectsMoved || flagsChanged) {
+                // The repeats rather than the crossings: a route being set throws points,
+                // and that can change what a repeat reads without any boom moving. The
+                // geometry behind it is only remade if the reading actually changed.
+                unsigned parts = PartRepeats;
+                if (aspectsMoved) parts |= PartSignals;
+                // One flag for two meshes: the same keypress path raises a hand flag and
+                // shows a TXP, and both are drawn from it.
+                if (flagsChanged) parts |= PartFlags | PartTxp;
                 flagsChanged = false;
                 const double tM = profile ? now_ms() : 0.0;
-                rebuildSignalBuffer();
+                const bool made = rebuildSignalBuffer(parts);
                 if (profile) pMesh.add(now_ms() - tM);
-                const double tU = profile ? now_ms() : 0.0;
-                renderer.updateSignals(signalVerts, signalIdx);
-                if (profile) pUpload.add(now_ms() - tU);
+                if (made) {
+                    const double tU = profile ? now_ms() : 0.0;
+                    renderer.updateSignals(signalVerts, signalIdx);
+                    if (profile) pUpload.add(now_ms() - tU);
+                }
             }
         }
 
@@ -3497,11 +3563,13 @@ int main(int argc, char** argv) {
                 markedTrain = armedTrain;
                 markedCoupler = armedCoupler;
                 const double tM = profile ? now_ms() : 0.0;
-                rebuildSignalBuffer();
+                const bool made = rebuildSignalBuffer(PartMark);
                 if (profile) pMesh.add(now_ms() - tM);
-                const double tU = profile ? now_ms() : 0.0;
-                renderer.updateSignals(signalVerts, signalIdx);
-                if (profile) pUpload.add(now_ms() - tU);
+                if (made) {
+                    const double tU = profile ? now_ms() : 0.0;
+                    renderer.updateSignals(signalVerts, signalIdx);
+                    if (profile) pUpload.add(now_ms() - tU);
+                }
             }
 
             // I: start / stop the diesel engines (both together, edge-triggered).
