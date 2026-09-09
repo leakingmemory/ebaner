@@ -50,6 +50,7 @@
 #include "Stations.h"
 #include "Streaming.h"
 #include "TrackPath.h"
+#include "TrainYard.h"
 #include "TunnelMesh.h"
 #include "Audio.h"
 #include "Consist.h"
@@ -95,6 +96,14 @@ bool g_menuOpen = false;    // Escape menu overlay (pauses the sim)
 int g_menuSel = 0;          // highlighted menu item
 bool g_mapMode = false;     // traffic-manager 2-D map view
 bool g_mapDirty = false;    // (re)build the map overlay this frame
+// The Escape menu is a small state machine rather than one flat list: it can now pick a
+// train to drive and place new ones, and each of those is its own list. Out here beside the
+// other pickers because Escape has to be able to back out of a step, and Escape is handled
+// in the key callback.
+enum class MenuStep { Root, PickTrain, PickStation, PickVehicle };
+MenuStep g_menuStep = MenuStep::Root;
+int g_menuSubSel = 0; // highlighted line of whichever sub-list is open
+
 // The traffic manager's route picker, in two steps like the dispatcher's own panel: a
 // station's routes are entries and exits together, and at a worked station there are enough
 // of both that one flat list is long to work and easy to misread - "NO MO NB T2" leaves the
@@ -167,8 +176,13 @@ void keyCallback(GLFWwindow* win, int key, int, int action, int) {
             g_routePickSel = 0;
         } else if (g_routeStep == RoutePickStep::PickKind) {
             g_routeStep = RoutePickStep::None;
+        } else if (g_menuOpen && g_menuStep != MenuStep::Root) {
+            g_menuStep = MenuStep::Root; // back out of a sub-list, not out of the menu
+            g_menuSubSel = 0;
         } else {
             g_menuOpen = !g_menuOpen;
+            g_menuStep = MenuStep::Root;
+            g_menuSubSel = 0;
         }
     }
     if (g_menuOpen) return;
@@ -525,8 +539,8 @@ int main(int argc, char** argv) {
         "\nControls: WASD move, Q/E down/up, mouse look, Shift boost, "
         "C chase vehicle, V driver view (switch cab), I engines start/stop, "
         "Up/Down push vehicle, , / . power/brake lever, Space emergency, "
-        "F/N/R reverser, T throw aimed switch, M mute, Tab release cursor, "
-        "Esc menu\n\n");
+        "F/N/R reverser, T throw aimed switch, U uncouple, M mute, "
+        "Tab release cursor, Esc menu (drive another train, place one)\n\n");
 
     // Directional sun (scene space): from the south-west, fairly high.
     const glm::vec3 sunDir = glm::normalize(glm::vec3(0.4f, -0.5f, 0.75f));
@@ -1937,6 +1951,7 @@ int main(int argc, char** argv) {
     bool prevUncouple = false;
     int markedTrain = -1, markedCoupler = -1; // what the coupler mark is drawn on
     bool prevMenuEnter = false, prevMenuUp = false, prevMenuDown = false;
+    bool prevMenuPgUp = false, prevMenuPgDn = false;
     bool mapAttached = false; // whether the map overlay is currently attached
     bool switchesChanged = true; // a switch moved: re-evaluate the signal aspects
     bool simpleSignalsChanged = true; // a simple entry signal was set (or first frame)
@@ -1945,11 +1960,201 @@ int main(int argc, char** argv) {
     bool flagsChanged = false;
     bool prevMapClick = false; // edge-trigger for the map left-click
     bool prevPickUp = false, prevPickDown = false, prevPickEnter = false;
-    const std::vector<std::string> kMenuItems = {"Traffic manager", "Exit"};
+    const std::vector<std::string> kMenuItems = {"Drive another train",
+                                                "Place a train here",
+                                                "Place a train at a station",
+                                                "Traffic manager", "Exit"};
+    std::vector<std::string> menuList; // what the open sub-list is showing
+    std::string menuNote;              // outcome of the last thing done, shown in the title
+    // Where a train being placed is to go. Settled when the place step is entered, used
+    // when the vehicle is finally chosen.
+    glm::vec2 placeTarget(0.0f);
 
     auto setMapMsg = [&](const std::string& m, bool ok = false) {
         g_mapMsg = m; g_mapMsgOk = ok; g_mapMsgUntil = glfwGetTime() + 3.0;
     };
+
+    // --- More than one train ------------------------------------------------------------
+    //
+    // Every train in `trains` is already stepped every frame and already holds its own
+    // circuits, so a second train needs no simulation work at all. What it needs is the two
+    // ways in: a way to say which one you are driving, and a way to get one onto the line
+    // somewhere other than where the session started. Both are in the Escape menu.
+
+    // Take the controls of train `idx`, sitting in cab `cab`.
+    //
+    // One helper and not four assignments at each site, because `vehicle` is a raw pointer
+    // into `trains` and every input, HUD and camera block downstream reads through it
+    // alongside `g_driverPos`. Setting some of them and not the others reads one train's
+    // handle into another train's cab, and nothing says so.
+    auto driveTrain = [&](int idx, int cab) {
+        if (idx < 0 || idx >= static_cast<int>(trains.size())) return;
+        driverTrain = idx;
+        vehicle = &trains[static_cast<std::size_t>(idx)];
+        g_cabCount = std::max(1, drivercam::count(*vehicle));
+        g_driverPos = std::clamp(cab, 0, g_cabCount - 1);
+        g_chase = false;
+        g_driverYaw = g_driverPitch = 0.0f;
+    };
+
+    // The cab to land in when taking a train over: the one that is in gear if any is, since
+    // that is the end it is being driven from and the end its controls are set at. Cab 0
+    // otherwise, which is the front as it was laid out.
+    auto cabToSitIn = [](const Consist& t) {
+        const int a = t.activeCab();
+        return a >= 0 ? a : 0;
+    };
+
+    // Where a train is, in the words the signalling uses: the track circuit it stands on if
+    // it stands on one, else the nearest station and how far off it is. This is what makes
+    // the picker worth having - a list that says "2 sets, 0 km/h" of every train tells you
+    // nothing about which is the one behind the block signal.
+    auto trainWhere = [&](const Consist& t) {
+        std::vector<PathSpan> spans;
+        std::string where;
+        if (t.occupiedSpans(spans)) {
+            std::vector<char> occ;
+            computeOccupancy(sectionSpans, spans, occ);
+            for (std::size_t i = 0; i < occ.size() && i < circuits.sections.size(); ++i) {
+                if (!occ[i]) continue;
+                if (!where.empty()) where += "+";
+                where += circuits.sections[i].name;
+            }
+        }
+        if (!where.empty()) return where;
+        const glm::vec3 p = t.pose().pos;
+        const glm::dvec3 w(p.x + data.sceneOrigin().x, p.y + data.sceneOrigin().y, 0.0);
+        if (const Station* st = nearestStation(stations, w)) {
+            const double dx = st->world.x - w.x, dy = st->world.y - w.y;
+            char buf[160];
+            std::snprintf(buf, sizeof buf, "%s %+.1f km", st->name.c_str(),
+                          std::sqrt(dx * dx + dy * dy) / 1000.0);
+            return std::string(buf);
+        }
+        return std::string("on the line");
+    };
+
+    // Which line of the station list to open on. The list is 720 long and runs the length
+    // of the country; the one meant is nearly always the nearest.
+    auto stationNearCamera = [&]() {
+        const glm::vec3 c = g_camera.position();
+        const glm::dvec3 w(c.x + data.sceneOrigin().x, c.y + data.sceneOrigin().y, 0.0);
+        const Station* st = nearestStation(stations, w);
+        return st ? static_cast<int>(st - stations.data()) : 0;
+    };
+
+    // The two lists that cannot change, built once. Stations especially: 720 of them, and
+    // the menu is redrawn every frame it is open.
+    const std::vector<std::string> stationLabels = [&] {
+        std::vector<std::string> out;
+        out.reserve(stations.size());
+        for (const Station& st : stations)
+            out.push_back(st.name + (st.isStop() ? "  (stop)" : "") + "  " + st.line);
+        return out;
+    }();
+    const std::vector<std::string> vehicleLabels = [] {
+        std::vector<std::string> out;
+        for (const VehicleSpec& v : kVehicleSpecs) out.push_back(v.name);
+        return out;
+    }();
+
+    // One line per train for the picker.
+    auto trainLabels = [&]() {
+        std::vector<std::string> out;
+        for (std::size_t i = 0; i < trains.size(); ++i) {
+            const Consist& t = trains[i];
+            char buf[256];
+            std::snprintf(buf, sizeof buf, "%d. %d set%s  %3.0f km/h  %s%s",
+                          static_cast<int>(i) + 1, t.unitCount(),
+                          t.unitCount() == 1 ? " " : "s", t.speed() * 3.6f,
+                          trainWhere(t).c_str(),
+                          static_cast<int>(i) == driverTrain ? "   [driving]" : "");
+            out.push_back(buf);
+        }
+        return out;
+    };
+
+    // Put a train of `specIdx` on the nearest main line to `targetXY` (scene coordinates).
+    // Returns what to tell the driver, either way.
+    auto placeTrain = [&](int specIdx, glm::vec2 targetXY) {
+        const VehicleSpec& sp = kVehicleSpecs[std::clamp(specIdx, 0, kNumVehicleSpecs - 1)];
+        const Placement p = placeTrainNear(paths, targetXY, sp);
+        if (p.path == nullptr) return std::string(p.why ? p.why : "nowhere to put it");
+        if (!placementClear(trains, p)) return std::string("a train is already standing there");
+        // On the end and never in the middle: `vehicle` and `armedTrain` are both indexes
+        // into this deque, and a deque moves nothing on push_back.
+        trains.emplace_back(&paths, p.path, sp, p.s);
+        // Without this the sets never divert at a turnout - and nothing says so until one
+        // reaches a switch set against it and runs straight through.
+        trains.back().attachNetwork(&paths, &switchNet);
+        // The composition changed, so the index buffer has to be rebuilt: a vertex refresh
+        // under the old indices draws the trains as a heap and warns nobody.
+        vmesh.build(trains);
+        renderer.attachVehicle(vmesh.vertices(), vmesh.indices(), vmesh.glassFirstIndex());
+        // Placing does not move the driver - you keep whatever you were driving and take
+        // the new one over from the picker when you want it. Unless you were driving
+        // nothing at all, in which case this is what you came for.
+        if (vehicle == nullptr) driveTrain(static_cast<int>(trains.size()) - 1, 0);
+        else vehicle = &trains[static_cast<std::size_t>(driverTrain)];
+        const std::string where = trainWhere(trains.back());
+        std::printf("[Train] placed %s on path %u at %.0f m (%s); %zu train(s) now\n",
+                    sp.name, p.path->trackId(), p.s, where.c_str(), trains.size());
+        std::fflush(stdout);
+        return "placed at " + where;
+    };
+
+    // EBANER_TRAINS="Trofors,Svenningdal" puts a train at each named station before the
+    // first frame. The signalling scenarios worth testing all need two trains a section
+    // apart, and building one of those by hand every time is how they stop being tested.
+    // EBANER_VEHICLE chooses what kind; without it, a single Class 93.
+    if (const char* names = std::getenv("EBANER_TRAINS")) {
+        int spec = menuIndex;
+        if (std::getenv("EBANER_VEHICLE") == nullptr)
+            for (int i = 0; i < kNumVehicleSpecs; ++i)
+                if (kVehicleSpecs[i].body == BodyClass93 && kVehicleSpecs[i].units == 1)
+                    spec = i;
+        std::istringstream is(names);
+        std::string one;
+        while (std::getline(is, one, ',')) {
+            while (!one.empty() && one.front() == ' ') one.erase(one.begin());
+            while (!one.empty() && one.back() == ' ') one.pop_back();
+            if (one.empty()) continue;
+            const Station* st = findStation(stations, one);
+            if (st == nullptr) {
+                std::fprintf(stderr, "[Train] EBANER_TRAINS: no station called \"%s\"\n",
+                             one.c_str());
+                continue;
+            }
+            const std::string note =
+                placeTrain(spec, glm::vec2(st->world.x - data.sceneOrigin().x,
+                                           st->world.y - data.sceneOrigin().y));
+            std::printf("[Train] %s: %s\n", st->name.c_str(), note.c_str());
+        }
+        // Placing seats the driver only when nothing was being driven, which is exactly
+        // the case here when EBANER_VEHICLE was not also given - so skip the start screen.
+        if (vehicle != nullptr) mode = Mode::Sim;
+        std::fflush(stdout);
+    }
+
+    // EBANER_MENU opens the Escape menu at a step, for the same reason EBANER_MAP opens the
+    // traffic manager: a list that is only reachable by keypress cannot be screenshotted or
+    // checked headlessly, and this one is where every train in the world is named.
+    //   EBANER_MENU=1        the root menu
+    //   EBANER_MENU=train    the train picker
+    //   EBANER_MENU=station  the station list, opened where the camera is
+    //   EBANER_MENU=vehicle  the what-to-place list
+    if (const char* m = std::getenv("EBANER_MENU")) {
+        g_menuOpen = true;
+        const std::string which(m);
+        if (which == "train") g_menuStep = MenuStep::PickTrain;
+        else if (which == "station") g_menuStep = MenuStep::PickStation;
+        else if (which == "vehicle") g_menuStep = MenuStep::PickVehicle;
+        if (g_menuStep == MenuStep::PickTrain)
+            g_menuSubSel =
+                std::clamp(driverTrain, 0, std::max(0, static_cast<int>(trains.size()) - 1));
+        else if (g_menuStep == MenuStep::PickStation)
+            g_menuSubSel = stationNearCamera();
+    }
     // Whether the line between two TXP stations holds a train. What the neighbours check
     // before agreeing to a station opening between them.
     //
@@ -3337,22 +3542,102 @@ int main(int argc, char** argv) {
             auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
             const bool mU = down(GLFW_KEY_UP), mD = down(GLFW_KEY_DOWN),
                        mE = down(GLFW_KEY_ENTER);
-            const int n = static_cast<int>(kMenuItems.size());
-            if (mU && !prevMenuUp) g_menuSel = (g_menuSel + n - 1) % n;
-            if (mD && !prevMenuDown) g_menuSel = (g_menuSel + 1) % n;
-            if (mE && !prevMenuEnter) {
-                const std::string& sel = kMenuItems[g_menuSel];
-                if (sel == "Exit") glfwSetWindowShouldClose(window, GLFW_TRUE);
-                else if (sel == "Traffic manager") {
-                    g_mapMode = true; g_mapDirty = true; g_menuOpen = false;
-                    g_mapPan = glm::vec2(0.0f); // start centred on the throat
-                    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL); // click switches
+            const bool mPU = down(GLFW_KEY_PAGE_UP), mPD = down(GLFW_KEY_PAGE_DOWN);
+            // 720 stations is a long way to travel one line at a time, so the sub-lists
+            // take PgUp/PgDn as the start-up station picker does.
+            constexpr int kPageStep = 10;
+
+            // The list on screen, and the selection it moves. Only the train list is
+            // rebuilt while it is open, because only it can change - the speeds on it are
+            // live. The stations and the vehicle names were settled once at load.
+            const bool root = g_menuStep == MenuStep::Root;
+            std::string title = "MENU";
+            if (g_menuStep == MenuStep::PickTrain) title = "DRIVE WHICH TRAIN";
+            else if (g_menuStep == MenuStep::PickStation) title = "PLACE A TRAIN AT";
+            else if (g_menuStep == MenuStep::PickVehicle) title = "WHICH TRAIN TO PLACE";
+            if (root && !menuNote.empty()) title += "  -  " + menuNote;
+
+            if (g_menuStep == MenuStep::PickTrain) menuList = trainLabels();
+            const std::vector<std::string>& list =
+                g_menuStep == MenuStep::PickStation  ? stationLabels
+                : g_menuStep == MenuStep::PickVehicle ? vehicleLabels
+                : root                                ? kMenuItems
+                                                      : menuList;
+            int& sel = root ? g_menuSel : g_menuSubSel;
+            const int n = std::max(1, static_cast<int>(list.size()));
+            if (mU && !prevMenuUp) sel = (sel + n - 1) % n;
+            if (mD && !prevMenuDown) sel = (sel + 1) % n;
+            if (mPU && !prevMenuPgUp) sel = (sel + n - kPageStep % n) % n;
+            if (mPD && !prevMenuPgDn) sel = (sel + kPageStep) % n;
+            sel = std::clamp(sel, 0, n - 1);
+
+            if (mE && !prevMenuEnter && !list.empty()) {
+                if (root) {
+                    const std::string& s2 = kMenuItems[g_menuSel];
+                    menuNote.clear();
+                    if (s2 == "Exit") glfwSetWindowShouldClose(window, GLFW_TRUE);
+                    else if (s2 == "Traffic manager") {
+                        g_mapMode = true; g_mapDirty = true; g_menuOpen = false;
+                        g_mapPan = glm::vec2(0.0f); // start centred on the throat
+                        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL); // click switches
+                        g_firstMouse = true;
+                    } else if (s2 == "Drive another train") {
+                        if (trains.empty()) menuNote = "there are no trains";
+                        else {
+                            g_menuStep = MenuStep::PickTrain;
+                            g_menuSubSel = std::clamp(driverTrain, 0,
+                                                      static_cast<int>(trains.size()) - 1);
+                        }
+                    } else if (s2 == "Place a train here") {
+                        // Where the camera is standing. In a cab that is the train you are
+                        // already driving, which would only ever be refused, so this takes
+                        // the free camera's position and says so if you are not using it.
+                        if (g_driverPos >= 0 || g_chase)
+                            menuNote = "step out of the cab first (V), then place it where "
+                                       "you are standing";
+                        else {
+                            placeTarget = glm::vec2(g_camera.position());
+                            g_menuStep = MenuStep::PickVehicle;
+                            g_menuSubSel = 0;
+                        }
+                    } else if (s2 == "Place a train at a station") {
+                        g_menuStep = MenuStep::PickStation;
+                        g_menuSubSel = stationNearCamera();
+                    }
+                } else if (g_menuStep == MenuStep::PickTrain) {
+                    const int idx = g_menuSubSel;
+                    driveTrain(idx, cabToSitIn(trains[static_cast<std::size_t>(idx)]));
+                    // Into the cab, which means out of the map if that is where you were.
+                    g_mapMode = false;
+                    g_menuOpen = false;
+                    g_menuStep = MenuStep::Root;
+                    glfwSetInputMode(window, GLFW_CURSOR,
+                                     g_mouseCaptured ? GLFW_CURSOR_DISABLED
+                                                     : GLFW_CURSOR_NORMAL);
                     g_firstMouse = true;
+                    std::printf("[Train] now driving %d of %zu (%d set(s)) from cab %d\n",
+                                idx + 1, trains.size(), vehicle->unitCount(), g_driverPos);
+                    std::fflush(stdout);
+                } else if (g_menuStep == MenuStep::PickStation) {
+                    const Station& st = stations[static_cast<std::size_t>(g_menuSubSel)];
+                    placeTarget = glm::vec2(st.world.x - data.sceneOrigin().x,
+                                            st.world.y - data.sceneOrigin().y);
+                    g_menuStep = MenuStep::PickVehicle;
+                    g_menuSubSel = 0;
+                } else if (g_menuStep == MenuStep::PickVehicle) {
+                    menuNote = placeTrain(g_menuSubSel, placeTarget);
+                    // Placed from the start screen, the vehicle picker is still behind the
+                    // menu - and choosing from it clears every train there is. Having put
+                    // one on the line is answering that question, so leave the start screen.
+                    if (vehicle != nullptr) mode = Mode::Sim;
+                    g_menuStep = MenuStep::Root;
+                    g_menuSubSel = 0;
                 }
             }
             prevMenuUp = mU; prevMenuDown = mD; prevMenuEnter = mE;
+            prevMenuPgUp = mPU; prevMenuPgDn = mPD;
             std::vector<TextVertex> tv;
-            appendMenu(tv, "MENU", kMenuItems, g_menuSel, fbw, fbh);
+            appendMenu(tv, title, list, sel, fbw, fbh);
             renderer.setOverlayText(tv);
         } else if (g_mapMode && !vehicle) {
             // --- Traffic-manager 2-D map with no vehicle spawned (entered from the
@@ -3531,13 +3816,20 @@ int main(int argc, char** argv) {
                         trains.push_back(std::move(*rear));
                         // The driver keeps the cab he is sitting in, wherever it has
                         // ended up. Not in one, he keeps the portion whose identity was
-                        // preserved - the front, which is still where it was.
+                        // preserved - the front, which is still where it was. Either way
+                        // he can now step into the other portion from the menu.
+                        int stay = driverTrain, cab = g_driverPos;
                         if (nearTrain == driverTrain && g_driverPos >= 2 * (k + 1)) {
-                            driverTrain = static_cast<int>(trains.size()) - 1;
-                            g_driverPos -= 2 * (k + 1);
+                            stay = static_cast<int>(trains.size()) - 1;
+                            cab = g_driverPos - 2 * (k + 1);
                         }
-                        vehicle = &trains[static_cast<std::size_t>(driverTrain)];
-                        g_cabCount = std::max(1, drivercam::count(*vehicle));
+                        const bool wasChasing = g_chase;
+                        const bool wasOutside = g_driverPos < 0;
+                        driveTrain(stay, std::max(0, cab));
+                        // driveTrain seats the driver, which is right when he was in a
+                        // cab and wrong when he was stood beside the train watching.
+                        if (wasOutside) g_driverPos = -1;
+                        g_chase = wasChasing;
                         // The composition changed, so the index buffer has to be rebuilt
                         // too - a vertex refresh under the old indices draws a heap of
                         // triangles and says nothing about it.

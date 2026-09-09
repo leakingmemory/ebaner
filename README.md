@@ -148,6 +148,22 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   its own; the coupler is measured every step and a train the points have split says
   so. Sets being separate objects with separate state is also what makes coupling and
   uncoupling in the world a later addition rather than a rewrite.
+- **More than one train** — every train in the world is simulated, whether or not anyone
+  is driving it. There is no dead-man device, so a portion left in gear under power goes
+  on running by itself indefinitely, holds its own track circuits, forces its own switches
+  and is heard from the lineside as it passes; the interlocking reads occupancy and not
+  the driver's train, so everything it does is as true of an unattended one. `Esc` opens
+  the menu, and from it: **drive another train**, which lists every train there is with its
+  speed and the track circuit it is standing on — `TRO T1`, `SGD-TRO` — and seats you in
+  the cab that is in gear, or the front one if none is; and **place a train**, either where
+  you are standing or at any of the 720 stations, opened on the nearest to you. Placing is
+  refused rather than fudged when the line will not hold the train (what has to fit is the
+  outer *axles*: 60 m of line takes a Class 93 with its ends hanging over, 30 m does not),
+  when there is no line near what was asked for, and when a train is already standing on
+  the spot. `EBANER_TRAINS="Trofors,Svenningdal"` does the same before the first frame, and
+  `EBANER_MENU=train` opens the picker, so a two-train scenario for the signalling can be
+  set up and screenshotted without touching the keyboard. Placing a train never moves the
+  driver: you keep what you were driving and take the new one over when you want it.
   With an audio backend
   (PulseAudio or PortAudio), the brake air is **synthesized** in real time: a hiss
   whose loudness tracks the airflow — a subdued charge on apply and a prominent,

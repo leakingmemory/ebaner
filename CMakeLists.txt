@@ -154,6 +154,7 @@ add_executable(ebaner
     src/VehicleMesh.cpp
     src/Vehicle.cpp
     src/Consist.cpp
+    src/TrainYard.cpp
     src/Audio.cpp)
 add_dependencies(ebaner shaders)
 target_link_libraries(ebaner PRIVATE ebaner_engine)
@@ -286,3 +287,13 @@ add_dependencies(UncoupleTest shaders)
 target_link_libraries(UncoupleTest PRIVATE ebaner_engine)
 target_include_directories(UncoupleTest PRIVATE src)
 add_test(NAME uncouple COMMAND UncoupleTest)
+
+# Placing a train: where one fits on the line, and refusing a spot that will not hold it
+# or already has a train standing on it. No dataset - a kilometre of straight TrackPath
+# built in the test is the whole world, as in UncoupleTest.
+add_executable(TrainYardTest tests/TrainYardTest.cpp src/Vehicle.cpp src/Consist.cpp
+    src/TrainYard.cpp)
+add_dependencies(TrainYardTest shaders)
+target_link_libraries(TrainYardTest PRIVATE ebaner_engine)
+target_include_directories(TrainYardTest PRIVATE src)
+add_test(NAME train-yard COMMAND TrainYardTest)
