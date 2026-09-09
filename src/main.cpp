@@ -903,55 +903,102 @@ int main(int argc, char** argv) {
     // What each crossing repeat is standing for: the road the points lead to from where it
     // is, worked out here because this is where the junctions and the switch states are.
     // Re-derived with the mesh, so it follows a thrown switch as well as a phase change.
+    // Where each of a crossing's repeat masts stands, worked out once.
+    //
+    // A repeat is placed in path space, and the walk that decides what it repeats runs in
+    // track space, so the mast has to be put back onto a track first. Which track that is,
+    // where along it, and which way a train reading the mast is travelling are all fixed by
+    // the geometry - only which road the points are set for changes.
+    //
+    // It used to be redone on every rebuild, and it found its track by walking all 6119 of
+    // them and looking each one up *by id*, which walks all 6119 again. Squared, per mast,
+    // several times per crossing: 60 ms of it, on every circuit change and on every frame
+    // of a barrier sweeping, which is what the driver saw as the picture stopping.
+    struct RepeatAnchor {
+        bool valid = false;
+        std::uint32_t track = 0;
+        double frac = 0.0;
+        int dir = 1;
+    };
+    std::vector<std::vector<RepeatAnchor>> repeatAnchors(crossings.size());
+    for (std::size_t ci = 0; ci < crossings.size(); ++ci) {
+        const CrossingSite& site = crossingSites[ci];
+        // Nothing to resolve where the crossing has one track: a repeat there can only ever
+        // be about the road it stands on.
+        if (crossings[ci].tracks.size() < 2) continue;
+        repeatAnchors[ci].assign(2 * site.tracks.size(), RepeatAnchor{});
+        for (std::size_t t = 0; t < site.tracks.size(); ++t) {
+            if (site.tracks[t].path < 0) continue;
+            const TrackPath& p = paths[site.tracks[t].path];
+            for (int sideIdx = 0; sideIdx < 2; ++sideIdx) {
+                const float side = sideIdx == 0 ? -1.0f : 1.0f;
+                const float s = site.tracks[t].s + side * site.distantM;
+                if (s < 0.0f || s > p.length()) continue;
+                const glm::vec3 at = p.poseAt(s).pos;
+                const glm::dvec3 w(at.x + data.sceneOrigin().x,
+                                   at.y + data.sceneOrigin().y, 0.0);
+                std::uint32_t bestTrack = 0;
+                double bestFrac = 0.0, bestD = 6.0;
+                for (const TrackPoly& tp : polys) {
+                    // On the polyline in hand, never back through its id.
+                    if (tp.pts.size() < 2) continue;
+                    double frac = 0.0, dist = 0.0;
+                    projectOnPolyline(tp.pts, glm::dvec2(w.x, w.y), frac, dist);
+                    if (dist < bestD) { bestD = dist; bestTrack = tp.id; bestFrac = frac; }
+                }
+                if (bestD >= 6.0) continue;
+                // Heading toward the crossing: the repeat on the -s side reads a train
+                // running in +s, and the walk goes the way that train is going.
+                const glm::dvec2 tang = trackTangent(polys, bestTrack, bestFrac, +1);
+                const glm::vec3 fwd = p.poseAt(s).tangent;
+                RepeatAnchor a;
+                a.valid = true;
+                a.track = bestTrack;
+                a.frac = bestFrac;
+                a.dir = (tang.x * fwd.x + tang.y * fwd.y) * side >= 0.0 ? -1 : +1;
+                repeatAnchors[ci][2 * t + static_cast<std::size_t>(sideIdx)] = a;
+            }
+        }
+    }
+
+    // What each repeat is currently showing. All that is left to do per rebuild is follow
+    // the points, which is the only part of it that can change.
     auto crossingDistantFor = [&]() {
         CrossingMesh::DistantFor out(crossings.size());
         for (std::size_t ci = 0; ci < crossings.size(); ++ci) {
+            if (repeatAnchors[ci].empty()) continue;
             const CrossingSite& site = crossingSites[ci];
-            // Nothing to resolve where the crossing has one track: a repeat there can only
-            // ever be about the road it stands on.
-            if (crossings[ci].tracks.size() < 2) continue;
-            out[ci].assign(2 * site.tracks.size(), -1);
-            for (std::size_t t = 0; t < site.tracks.size(); ++t) {
-                if (site.tracks[t].path < 0) continue;
-                const TrackPath& p = paths[site.tracks[t].path];
-                for (int sideIdx = 0; sideIdx < 2; ++sideIdx) {
-                    const float side = sideIdx == 0 ? -1.0f : 1.0f;
-                    const float s = site.tracks[t].s + side * site.distantM;
-                    if (s < 0.0f || s > p.length()) continue;
-                    // The mast is placed in path space; the walk runs in track space, so
-                    // the point has to be put back onto a track to start from.
-                    const glm::vec3 at = p.poseAt(s).pos;
-                    const glm::dvec3 w(at.x + data.sceneOrigin().x,
-                                       at.y + data.sceneOrigin().y, 0.0);
-                    std::uint32_t bestTrack = 0;
-                    double bestFrac = 0.0, bestD = 6.0;
-                    for (const TrackPoly& tp : polys) {
-                        double frac = 0.0, dist = 0.0;
-                        if (!projectOnTrack(polys, tp.id, glm::dvec2(w.x, w.y), frac, dist))
-                            continue;
-                        if (dist < bestD) { bestD = dist; bestTrack = tp.id; bestFrac = frac; }
-                    }
-                    if (bestD >= 6.0) continue;
-                    // Heading toward the crossing: the repeat on the -s side reads a train
-                    // running in +s, and the walk goes the way that train is going.
-                    const glm::dvec2 tang = trackTangent(polys, bestTrack, bestFrac, +1);
-                    const glm::vec3 fwd = p.poseAt(s).tangent;
-                    const int dir =
-                        (tang.x * fwd.x + tang.y * fwd.y) * side >= 0.0 ? -1 : +1;
-                    out[ci][2 * t + static_cast<std::size_t>(sideIdx)] =
-                        crossingTrackAhead(crossings[ci], polys, junctions, switchNet,
-                                           bestTrack, bestFrac, dir,
-                                           site.distantM + 200.0);
-                }
+            out[ci].assign(repeatAnchors[ci].size(), -1);
+            for (std::size_t slot = 0; slot < repeatAnchors[ci].size(); ++slot) {
+                const RepeatAnchor& a = repeatAnchors[ci][slot];
+                if (!a.valid) continue;
+                out[ci][slot] =
+                    crossingTrackAhead(crossings[ci], polys, junctions, switchNet, a.track,
+                                       a.frac, a.dir, site.distantM + 200.0);
             }
         }
         return out;
     };
 
+    // Which of the six costs what. They are rebuilt together and one of them dominated.
+    double mSignals = 0, mCross = 0, mFlag = 0, mAval = 0, mTxp = 0, mConcat = 0;
+    const bool meshProf = std::getenv("EBANER_PROFILE") != nullptr;
     auto rebuildSignalBuffer = [&]() {
+        const bool prof = meshProf;
+        auto tick = [&] {
+            return prof ? std::chrono::duration<double, std::milli>(
+                              std::chrono::steady_clock::now().time_since_epoch())
+                              .count()
+                        : 0.0;
+        };
+        double t = tick();
         signals.build(sigPlacements, data.sceneOrigin());
+        mSignals += tick() - t;
+        t = tick();
         crossingMesh.build(crossings, crossingSites, crossingStates, paths,
                            data.sceneOrigin(), crossingDistantFor());
+        mCross += tick() - t;
+        t = tick();
         signalVerts = signals.vertices();
         signalIdx = signals.indices();
         const std::uint32_t base = static_cast<std::uint32_t>(signalVerts.size());
@@ -960,7 +1007,11 @@ int main(int argc, char** argv) {
         signalIdx.reserve(signalIdx.size() + crossingMesh.indices().size());
         for (const std::uint32_t i : crossingMesh.indices()) signalIdx.push_back(i + base);
 
+        mConcat += tick() - t;
+        t = tick();
         flagMesh.build(flagPosts, flagShown, polys, data.sceneOrigin());
+        mFlag += tick() - t;
+        t = tick();
         const std::uint32_t fbase = static_cast<std::uint32_t>(signalVerts.size());
         signalVerts.insert(signalVerts.end(), flagMesh.vertices().begin(),
                            flagMesh.vertices().end());
@@ -971,6 +1022,8 @@ int main(int argc, char** argv) {
         // changes their aspect yet: the day something does, it is this rebuild that draws
         // it, and there is nothing else to arrange.
         avalancheMesh.build(avalanches, avalancheShown, polys, data.sceneOrigin());
+        mAval += tick() - t;
+        t = tick();
         const std::uint32_t abase = static_cast<std::uint32_t>(signalVerts.size());
         signalVerts.insert(signalVerts.end(), avalancheMesh.vertices().begin(),
                            avalancheMesh.vertices().end());
@@ -1009,6 +1062,7 @@ int main(int argc, char** argv) {
             if (it != txpShowingAt.end() && it->second == static_cast<int>(i))
                 txpShowing[i] = 1;
         }
+        mTxp += tick() - t;
         txpMesh.build(txpPositions, txpShowing, polys, data.sceneOrigin(), txpLift);
         const std::uint32_t tbase = static_cast<std::uint32_t>(signalVerts.size());
         signalVerts.insert(signalVerts.end(), txpMesh.vertices().begin(),
@@ -3854,6 +3908,25 @@ int main(int argc, char** argv) {
         }
     }
 
+    if (profile) {
+        // Whatever has not been reported yet, so a short headless run still says something.
+        auto line = [](const char* what, const Stat& st) {
+            if (st.n == 0) return;
+            std::printf("  %-18s %4ld call(s)  worst %7.2f ms  mean %6.2f\n", what, st.n,
+                        st.worst, st.total / static_cast<double>(st.n));
+        };
+        std::printf("[Profile] at exit:\n");
+        std::printf("  mesh parts (total ms): signals %.1f  crossings %.1f  concat %.1f  "
+                    "flags %.1f  avalanche %.1f  txp+rest %.1f\n",
+                    mSignals, mCross, mConcat, mFlag, mAval, mTxp);
+        line("frame", pFrame);
+        line("signal aspects", pAspects);
+        line("distant walks", pDistants);
+        line("mesh rebuild", pMesh);
+        line("mesh upload", pUpload);
+        line("map overlay", pMap);
+        std::fflush(stdout);
+    }
     renderer.waitIdle();
     renderer.cleanup();
     g_renderer = nullptr;
