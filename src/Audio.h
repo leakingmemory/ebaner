@@ -86,6 +86,18 @@ public:
     // bell keeps an even rhythm no matter what the frame rate does. Driving one strike
     // per frame would make the bell speed up and stutter with the graphics.
     void setCrossingBell(float gain) { bellGain_.store(gain, std::memory_order_relaxed); }
+    // Two trains meeting: a Scharfenberg engaging, or a collision. One call per event
+    // from the main thread, not a per-frame level, because that is what it is - the
+    // synth is clocked on the audio thread from there, as the bell and the frog knocks
+    // are, so the hit keeps its shape whatever the frame rate is doing.
+    //
+    // `severity` [0,1] carries the whole character: a light couple is a short bright
+    // clack of two heads engaging, and a heavy one is a low crash with a tail on it, and
+    // everything between is between. `gain` is the camera-distance attenuation, worked
+    // out at the call site rather than here, because the trains that met are not
+    // necessarily the train being listened to - a collision thirty kilometres away must
+    // not be heard through the near train's envelope.
+    void impact(float severity, float gain);
     // Main thread: the wheel/rail state. `update` fills this from the Vehicle; it is
     // public so the synth can be driven straight from known numbers and measured,
     // which is the only way to check that speed, weight and load do what they claim.
@@ -110,6 +122,10 @@ public:
     // standing, running up to line speed, the same speed at three axle loads, through a
     // curve, and braking to a stand.
     static void dumpRollingTest(const std::string& wavPath);
+    // Two trains meeting, across the whole range: two coupler heads clacking together at
+    // walking pace, through a rough shunt, to a train being wrecked. The one voice, heard
+    // at the severities the sim will actually hand it.
+    static void dumpImpactTest(const std::string& wavPath);
 
 private:
     // Shared main -> audio thread (lock-free).
@@ -136,6 +152,13 @@ private:
     std::atomic<unsigned> impacts_{0};      // wheels over a frog, counted since the start
     std::atomic<float> rollGain_{0.0f};     // camera distance attenuation [0,1]
     std::atomic<bool> railborne_{true};     // false when derailed: no rail to roar on
+
+    // --- Two trains meeting ------------------------------------------------------
+    // A count, like the frog knocks, so the audio thread hears every one exactly once
+    // however the frame rate falls; the severity and gain of the latest go with it.
+    std::atomic<unsigned> bangs_{0};
+    std::atomic<float> bangSeverity_{0.0f};
+    std::atomic<float> bangGain_{0.0f};
 
     // Main-thread only.
     int lastCmd_ = 0;
@@ -203,6 +226,14 @@ private:
     // depending on whether a wheel had just crossed a switch - which makes the roar
     // unrepeatable and two renders impossible to compare.
     std::uint32_t jointRng_ = 0x9e3779b9u;
+    // The coupling clunk / collision crash, same shape as the knock above but with its
+    // character taken from the severity latched when it fired rather than from the
+    // speed of the train: the hit is over long before either train's speed means
+    // anything again, and in a collision they are both about to stop dead.
+    unsigned lastBangs_ = 0;
+    float bangEnv_ = 0.0f, bangLp_ = 0.0f, bangThud_ = 0.0f;
+    float bangSev_ = 0.0f, bangHeard_ = 0.0f;
+    std::uint32_t bangRng_ = 0x2545f491u;
     float sqLow_ = 0.0f, sqBand_ = 0.0f;         // squeal resonance
     float sqPhase_ = 0.0f, sqSlip_ = 0.0f;       // its tone and the stick-slip cycle
     unsigned lastEvents_ = 0;

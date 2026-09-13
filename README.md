@@ -191,7 +191,13 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   standing four metres apart on the two roads of a passing loop are as far apart as they
   ought to be; where a turnout lies between two ends, the distance is a walk that follows
   the points. Coupling is the one thing that takes a train *out* of the world, so it also
-  puts right every index and pointer that named it.
+  puts right every index and pointer that named it. You hear all of it: one **synthesized
+  voice** covers the whole range, with the closing speed moving the thud's pitch down, the
+  noise darker and the decay longer together — two coupler heads clacking at walking pace
+  is a fifth of a second and bright, a wreck is over a second and mostly low end. It is
+  heard from where the trains met rather than through the near train's envelope, so a
+  collision thirty kilometres away is thirty kilometres away.
+  `EBANER_AUDIO_DUMP_IMPACT=out.wav` renders the range offline, as the other voices have.
 - **More than one train** — every train in the world is simulated, whether or not anyone
   is driving it. There is no dead-man device, so a portion left in gear under power goes
   on running by itself indefinitely, holds its own track circuits, forces its own switches

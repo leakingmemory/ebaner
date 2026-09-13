@@ -273,6 +273,10 @@ int main(int argc, char** argv) {
         Audio::dumpTest(dump);
         return EXIT_SUCCESS;
     }
+    if (const char* dump = std::getenv("EBANER_AUDIO_DUMP_IMPACT")) {
+        Audio::dumpImpactTest(dump);
+        return EXIT_SUCCESS;
+    }
     if (const char* dump = std::getenv("EBANER_AUDIO_DUMP_ENGINE")) {
         Audio::dumpEngineTest(dump);
         return EXIT_SUCCESS;
@@ -3957,6 +3961,17 @@ int main(int argc, char** argv) {
                     const Contact c = findContact(trains[i], trains[j]);
                     if (c.kind == ContactKind::None) continue;
                     met = true;
+                    // Heard from where it happened, not through the near train's
+                    // envelope: two trains meeting thirty kilometres away are two
+                    // trains meeting thirty kilometres away. Carries further than the
+                    // brake hiss - it is the loudest thing either train will ever do.
+                    const glm::vec3 hit = trains[j].frame().pos;
+                    const float d = glm::distance(g_camera.position(), hit);
+                    // The square root opens the quiet end out: a coupling at walking
+                    // pace is a fraction of a collision in energy but it is not a
+                    // fraction of it in audibility, and it should still be a clack.
+                    audio.impact(std::sqrt(std::clamp(c.closing / 8.0f, 0.0f, 1.0f)),
+                                 glm::clamp((300.0f - d) / 260.0f, 0.0f, 1.0f));
                     if (c.kind == ContactKind::Crash) {
                         std::printf("[Collision] two trains met at %.1f m/s (%.0f km/h) - "
                                     "%d and %d set(s) derailed\n",

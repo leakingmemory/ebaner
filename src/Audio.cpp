@@ -408,6 +408,38 @@ void Audio::render(float* out, int n) {
             }
         }
 
+        // Two trains meeting. One voice for the whole range, because it is one event:
+        // severity moves the pitch of the thud down, the noise darker and the decay
+        // longer all at once, which is the difference between two coupler heads
+        // clacking together and a train being wrecked.
+        float bang = 0.0f;
+        {
+            const unsigned nb = bangs_.load(std::memory_order_relaxed);
+            if (nb != lastBangs_) {
+                lastBangs_ = nb;
+                bangSev_ = std::clamp(bangSeverity_.load(std::memory_order_relaxed),
+                                      0.0f, 1.0f);
+                bangHeard_ = std::clamp(bangGain_.load(std::memory_order_relaxed),
+                                        0.0f, 1.0f);
+                bangEnv_ = 1.0f;
+                bangThud_ = 0.0f;
+            }
+            if (bangEnv_ > 1e-4f) {
+                bangRng_ = bangRng_ * 1664525u + 1013904223u;
+                const float bn = static_cast<float>(bangRng_ >> 8) / 8388608.0f - 1.0f;
+                // Darker the harder it was: a light clack is metal on metal, a crash is
+                // mostly the low end of everything at once.
+                bangLp_ += (bn - bangLp_) * (0.50f - 0.35f * bangSev_);
+                const float thud = std::sin(2.0f * kPi * bangThud_);
+                bangThud_ += (90.0f - 50.0f * bangSev_) / fs;
+                if (bangThud_ > 1.0f) bangThud_ -= 1.0f;
+                bang = (bangLp_ * (0.45f + 0.55f * bangSev_) + thud * 0.9f) * bangEnv_ *
+                       (0.25f + 0.75f * bangSev_) * bangHeard_;
+                // 50 ms for a touch, half a second for a wreck.
+                bangEnv_ *= std::exp(-1.0f / ((0.05f + 0.45f * bangSev_ * bangSev_) * fs));
+            }
+        }
+
         // Curve squeal: stick-slip as the flange is dragged across the railhead. A
         // near-tone, because it is one wheel mode ringing, and gated hard - the sim
         // hands over a zero unless the curve is genuinely tight and unbalanced, and a
@@ -453,7 +485,7 @@ void Audio::render(float* out, int n) {
         const float rollMix = 0.75f;
         float s = muted ? 0.0f
                         : (hiss * 1.2f + click * 0.9f) * envEnv_ + engine * 0.30f +
-                              comp * 0.22f + bell * 0.34f +
+                              comp * 0.22f + bell * 0.34f + bang * 0.55f +
                               (roll * 0.45f + joints * 0.30f + squeal * 0.16f +
                                brakeRub * 0.16f) * rollMix;
         s = std::clamp(s, -1.0f, 1.0f);
@@ -475,6 +507,14 @@ void Audio::setRolling(const RollingSample& r) {
     railborne_.store(on, std::memory_order_relaxed);
     rollGain_.store(std::clamp(r.gain, 0.0f, 1.0f), std::memory_order_relaxed);
     impacts_.store(r.impacts, std::memory_order_relaxed);
+}
+
+void Audio::impact(float severity, float gain) {
+    // Severity and gain first, then the count: the audio thread latches them when it
+    // sees the count move, so they must already be there when it does.
+    bangSeverity_.store(std::clamp(severity, 0.0f, 1.0f), std::memory_order_relaxed);
+    bangGain_.store(std::clamp(gain, 0.0f, 1.0f), std::memory_order_relaxed);
+    bangs_.fetch_add(1, std::memory_order_release);
 }
 
 void Audio::update(const Consist& sounded, float /*dt*/, float brakeGain,
@@ -860,6 +900,40 @@ void Audio::dumpRollingTest(const std::string& wavPath) {
                     std::clamp(buf[i], -1.0f, 1.0f) * 32767.0f));
         }
     }
+    writeWav(wavPath, pcm, static_cast<int>(fs));
+    std::fprintf(stderr, "audio: wrote %s (%zu samples)\n", wavPath.c_str(), pcm.size());
+}
+
+void Audio::dumpImpactTest(const std::string& wavPath) {
+    const float fs = 44100.0f;
+    Audio a;
+    a.sampleRate_ = fs;
+    // The closing speeds the bands are drawn at, and two either side of them, all heard
+    // from alongside. The severity curve is the caller's, repeated here so this dump is
+    // of what the sim will actually ask for and not of a tidier set of numbers.
+    const float closing[] = {0.3f, 0.8f, 1.4f, 2.5f, 4.0f, 6.0f, 9.0f};
+    std::vector<std::int16_t> pcm;
+    auto run = [&](float seconds) {
+        const int total = static_cast<int>(seconds * fs);
+        float buf[256];
+        for (int done = 0; done < total; done += 256) {
+            const int n = std::min(256, total - done);
+            a.render(buf, n);
+            for (int i = 0; i < n; ++i)
+                pcm.push_back(static_cast<std::int16_t>(
+                    std::clamp(buf[i], -1.0f, 1.0f) * 32767.0f));
+        }
+    };
+    run(0.3f);
+    for (const float v : closing) {
+        a.impact(std::sqrt(std::clamp(v / 8.0f, 0.0f, 1.0f)), 1.0f);
+        std::fprintf(stderr, "  %.1f m/s (%.0f km/h)\n", v, v * 3.6f);
+        run(1.7f); // long enough that a heavy one's tail is not cut off by the next
+    }
+    // And one at a distance, which is what most of them will be.
+    a.impact(1.0f, 0.15f);
+    std::fprintf(stderr, "  a wreck, a long way off\n");
+    run(1.5f);
     writeWav(wavPath, pcm, static_cast<int>(fs));
     std::fprintf(stderr, "audio: wrote %s (%zu samples)\n", wavPath.c_str(), pcm.size());
 }
