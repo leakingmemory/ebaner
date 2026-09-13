@@ -155,6 +155,7 @@ add_executable(ebaner
     src/Vehicle.cpp
     src/Consist.cpp
     src/TrainYard.cpp
+    src/Coupling.cpp
     src/Audio.cpp)
 add_dependencies(ebaner shaders)
 target_link_libraries(ebaner PRIVATE ebaner_engine)
@@ -297,3 +298,20 @@ add_dependencies(TrainYardTest shaders)
 target_link_libraries(TrainYardTest PRIVATE ebaner_engine)
 target_include_directories(TrainYardTest PRIVATE src)
 add_test(NAME train-yard COMMAND TrainYardTest)
+
+# The air brake: a pipe that has to be kept full, and bogies that stop the train when it
+# is not. No dataset - a kilometre of straight TrackPath is the whole world, as UncoupleTest.
+add_executable(AirBrakeTest tests/AirBrakeTest.cpp src/Vehicle.cpp src/Consist.cpp)
+add_dependencies(AirBrakeTest shaders)
+target_link_libraries(AirBrakeTest PRIVATE ebaner_engine)
+target_include_directories(AirBrakeTest PRIVATE src)
+add_test(NAME air-brake COMMAND AirBrakeTest)
+
+# Coupling two trains into one, and the collision when it is taken too fast. No dataset -
+# a kilometre of straight TrackPath is the whole world, as UncoupleTest and AirBrakeTest.
+add_executable(CouplingTest tests/CouplingTest.cpp src/Vehicle.cpp src/Consist.cpp
+    src/Coupling.cpp)
+add_dependencies(CouplingTest shaders)
+target_link_libraries(CouplingTest PRIVATE ebaner_engine)
+target_include_directories(CouplingTest PRIVATE src)
+add_test(NAME coupling COMMAND CouplingTest)

@@ -54,6 +54,7 @@
 #include "TunnelMesh.h"
 #include "Audio.h"
 #include "Consist.h"
+#include "Coupling.h"
 #include "Vehicle.h"
 #include "VehicleMesh.h"
 #include "VulkanRenderer.h"
@@ -2000,6 +2001,62 @@ int main(int argc, char** argv) {
     // The cab to land in when taking a train over: the one that is in gear if any is, since
     // that is the end it is being driven from and the end its controls are set at. Cab 0
     // otherwise, which is the front as it was laid out.
+    // Two trains become one: `gone`'s sets go into `keep` and `gone` leaves the world.
+    //
+    // This is the one operation that takes a train *out* of `trains`, which the comment on
+    // that container says never happens - `vehicle` is a raw pointer into it and
+    // driverTrain, armedTrain and markedTrain are raw indices, so every one of them is
+    // wrong the moment an element before it goes. Hence one place that does it, in one
+    // order, and nothing anywhere else touching the container.
+    //
+    // Returns the set index of the new joint, for a caller that wants to do something to
+    // the couplers there.
+    auto coupleTrains = [&](int keep, int gone, bool tail, bool opposed) {
+        const int keepSets = trains[static_cast<std::size_t>(keep)].unitCount();
+        const int goneSets = trains[static_cast<std::size_t>(gone)].unitCount();
+
+        // Where the driver ends up, worked out before anything moves. He is somewhere in
+        // one of these two trains, addressed by a cab index that counts two to a set along
+        // the whole train - so it shifts if sets are inserted ahead of him, and his set is
+        // renumbered from the other end if his train is the one turned round.
+        int newDriver = driverTrain, newCab = g_driverPos;
+        const int oldSet = std::max(0, g_driverPos) / 2, oldLocal = std::max(0, g_driverPos) % 2;
+        if (driverTrain == gone) {
+            newDriver = keep;
+            const int within = opposed ? goneSets - 1 - oldSet : oldSet;
+            newCab = 2 * (within + (tail ? keepSets : 0)) + oldLocal;
+        } else if (driverTrain == keep && !tail) {
+            newCab = 2 * (oldSet + goneSets) + oldLocal;
+        }
+
+        trains[static_cast<std::size_t>(keep)].absorb(
+            std::move(trains[static_cast<std::size_t>(gone)]), tail, opposed);
+        trains.erase(trains.begin() + gone);
+
+        // Everything that was an index into the container, now that one is missing.
+        auto shift = [&](int& idx) {
+            if (idx == gone) idx = -1;
+            else if (idx > gone) --idx;
+        };
+        shift(armedTrain);
+        if (armedTrain < 0) armedCoupler = -1;
+        shift(markedTrain);
+        if (markedTrain < 0) markedCoupler = -1;
+        if (newDriver > gone) --newDriver;
+
+        const bool wasOutside = g_driverPos < 0;
+        const bool wasChasing = g_chase;
+        driveTrain(newDriver, std::max(0, newCab));
+        if (wasOutside) g_driverPos = -1; // he was stood beside it, not sitting in it
+        g_chase = wasChasing;
+
+        // The composition changed, so the index buffer has to be rebuilt - a vertex
+        // refresh under the old indices draws the trains as a heap and says nothing.
+        vmesh.build(trains);
+        renderer.attachVehicle(vmesh.vertices(), vmesh.indices(), vmesh.glassFirstIndex());
+        return tail ? keepSets : goneSets; // the first set on the far side of the joint
+    };
+
     auto cabToSitIn = [](const Consist& t) {
         const int a = t.activeCab();
         return a >= 0 ? a : 0;
@@ -3736,9 +3793,9 @@ int main(int argc, char** argv) {
             }
             prevBrkDown = bD; prevBrkUp = bU; prevBrkEmerg = bE;
             if (vehicle->handlePosition(cab) != prevPos) {
-                std::printf("[Handle] cab %d %s  MR %.1f  BC %.1f bar\n", cab,
-                            vehicle->handleName(cab), vehicle->mrPressure(),
-                            vehicle->bcPressure());
+                std::printf("[Handle] cab %d %s  BP %.1f  BC %.1f  MR %.1f bar\n", cab,
+                            vehicle->handleName(cab), vehicle->bpPressure(),
+                            vehicle->bcPressure(), vehicle->mrPressure());
                 std::fflush(stdout);
             }
 
@@ -3886,6 +3943,51 @@ int main(int argc, char** argv) {
             bool switchForced = false;
             for (Consist& t : trains)
                 switchForced = t.consumeSwitchChanged() || switchForced;
+            // Trains meeting. Until this, nothing in the simulator noticed another train
+            // was there at all: each consist was stepped alone and two driven together
+            // passed through each other in silence. A Class 93's Scharfenberg couples by
+            // being driven into, so there is nothing to arm and nothing to aim - what
+            // decides between a coupling and a wreck is only how fast the gap was closing.
+            //
+            // One contact per frame. Coupling erases an element and three trains meeting
+            // at once would otherwise pull two out from under the same loop.
+            for (std::size_t i = 0; i + 1 < trains.size(); ++i) {
+                bool met = false;
+                for (std::size_t j = i + 1; j < trains.size() && !met; ++j) {
+                    const Contact c = findContact(trains[i], trains[j]);
+                    if (c.kind == ContactKind::None) continue;
+                    met = true;
+                    if (c.kind == ContactKind::Crash) {
+                        std::printf("[Collision] two trains met at %.1f m/s (%.0f km/h) - "
+                                    "%d and %d set(s) derailed\n",
+                                    c.closing, c.closing * 3.6f, trains[i].unitCount(),
+                                    trains[j].unitCount());
+                        std::fflush(stdout);
+                        trains[i].derail();
+                        trains[j].derail();
+                        continue; // nothing is coupled and nothing leaves the container
+                    }
+                    const bool rough = c.kind == ContactKind::Rough;
+                    const int sets = trains[i].unitCount() + trains[j].unitCount();
+                    const int joint = coupleTrains(static_cast<int>(i), static_cast<int>(j),
+                                                   c.aTail, c.opposed);
+                    if (rough) {
+                        // Taken hard enough to shake the drawgear: the hoses at the joint
+                        // part, which every distributor on the train then reads as the
+                        // pipe being lost and answers with its own air. Nothing has to
+                        // command the brakes on - see the air brake.
+                        Consist& t = trains[i];
+                        if (joint > 0) t.unit(joint - 1).burstBrakePipe();
+                        if (joint < t.unitCount()) t.unit(joint).burstBrakePipe();
+                    }
+                    std::printf("[Couple] %s at %.2f m/s (%.1f km/h): one train of %d "
+                                "set(s)%s\n", rough ? "roughly" : "gently", c.closing,
+                                c.closing * 3.6f, sets,
+                                rough ? " - the hoses parted at the joint" : "");
+                    std::fflush(stdout);
+                }
+                if (met) break;
+            }
             if (switchForced) { // a switch was forced/broken
                 switches.build(switchNet, worldCentre, data.loadedRadius());
                 renderer.updateSwitches(switches.vertices(), switches.indices());
@@ -4049,20 +4151,24 @@ int main(int argc, char** argv) {
                 // The driver reads his own set's gauges; a coupled train lists every
                 // set's, because the whole point of them being separate is that they
                 // can differ - and a set low on air is a thing to see coming.
-                std::snprintf(buf, sizeof(buf), "MR %.1f bar   BC %.1f bar",
-                              vehicle->mrPressure(cab), vehicle->bcPressure(cab));
+                std::snprintf(buf, sizeof(buf), "BP %.1f   BC %.1f   MR %.1f bar",
+                              vehicle->bpPressure(cab), vehicle->bcPressure(cab),
+                              vehicle->mrPressure(cab));
                 appendText(tv, buf, x, y, sc, glm::vec3(0.8f, 0.9f, 1.0f), fbw, fbh);
                 y += lh;
                 if (vehicle->unitCount() > 1) {
-                    // Set by set along the train, reservoir over brake cylinder. Just
-                    // the number: spelling out SET each time runs three sets past the
-                    // width of a narrow window for nothing the order does not say.
+                    // Set by set along the train, pipe over brake cylinder. Just the
+                    // number: spelling out SET each time runs three sets past the width
+                    // of a narrow window for nothing the order does not say. A `!` marks
+                    // a set whose pipe is open at a parted coupling, which is the one
+                    // reading here that is a fault rather than a state.
                     std::string per;
                     for (int u = 0; u < vehicle->unitCount(); ++u) {
                         char one[40];
-                        std::snprintf(one, sizeof(one), "%s%d %.1f/%.1f", u ? "   " : "",
-                                      u + 1, vehicle->unit(u).mrPressure(),
-                                      vehicle->unit(u).bcPressure());
+                        std::snprintf(one, sizeof(one), "%s%d %.1f/%.1f%s", u ? "   " : "",
+                                      u + 1, vehicle->unit(u).bpPressure(),
+                                      vehicle->unit(u).bcPressure(),
+                                      vehicle->unit(u).brakePipeCut() ? "!" : "");
                         per += one;
                     }
                     appendText(tv, per, x, y, sc, glm::vec3(0.7f, 0.8f, 0.95f), fbw, fbh);

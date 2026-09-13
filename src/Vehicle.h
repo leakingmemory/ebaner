@@ -107,6 +107,26 @@ enum class EngineState { Off, Starting, Running, Stopping };
 // `emergency` is deliberately not part of the commanded notch: it is the train-wide
 // emergency line, which runs independently of the link so that a set can brake the whole
 // train on its own account even when nothing is commanding it. See Consist.
+// One brake unit: a bogie's distributor, its auxiliary reservoir and its cylinder.
+//
+// The distributor is the whole of the automatic brake in one object. It watches the brake
+// pipe and remembers the highest pressure it has seen (`ctrl`); what it puts in the
+// cylinder is proportional to how far the pipe has fallen *below that memory*, not to the
+// pipe's absolute pressure. That is what makes the brake answer a reduction rather than a
+// number, and what makes a severed pipe - which reads as the largest reduction there is -
+// apply everything with nobody commanding it.
+//
+// The air it uses is its own. Filling the cylinder empties the auxiliary, which refills
+// only from the pipe, so a driver who cycles the brake without giving the pipe time to
+// recharge finds less in it each time. One per bogie so that a later fault can be one
+// bogie's fault.
+struct BrakeUnit {
+    float aux = 0.0f;    // auxiliary reservoir (bar)
+    float bc = 0.0f;     // brake cylinder (bar)
+    float ctrl = 0.0f;   // control reservoir: the highest pipe pressure seen (bar)
+    float bcRate = 0.0f; // d(bc)/dt (bar/s), for the sound
+};
+
 struct LinkCommand {
     int brakeNotch = 5;       // commanded by the active cab (Vehicle::kEmergencyNotch)
     float demand = 0.0f;      // signed traction demand [-1,1], + = train forward
@@ -205,6 +225,11 @@ public:
     // module flexes at the middle bogie.
     std::vector<VehicleFrame> bodySectionFrames() const;
     VehicleState state() const { return state_; }
+    // Put this set on the ground where it stands, carrying the speed it had into the
+    // slide. What running off the end of the track already does to itself, exposed so
+    // that a collision can do it too - there is nothing different about being wrecked
+    // by another train than by a buffer stop.
+    void derail() { derailFreeze(); }
     float speed() const; // m/s
 
     TrackPose pose() const;
@@ -289,10 +314,32 @@ public:
     // is the double knock heard passing over a switch. One count per axle per turnout.
     unsigned railImpacts() const { return railImpacts_; }
     float mrPressure() const { return mrPres_; } // main reservoir (bar)
-    float bcPressure() const { return bcPres_; } // brake cylinder (bar)
+    float bpPressure() const { return bp_; }     // brake pipe, this set's length (bar)
+    // Brake cylinder (bar). One number for a set that has one per bogie: the mean, since
+    // that is what its share of the braking is proportional to and what a gauge shows.
+    float bcPressure() const;
     // Rate of brake-cylinder pressure change (bar/s): + charging (apply), −
-    // venting (release), 0 when equalized/released. Drives the air-brake sound.
-    float bcRate() const { return bcRate_; }
+    // venting (release), 0 when equalized/released. The local air, at the bogies.
+    float bcRate() const;
+    // Rate of brake-pipe pressure change (bar/s), same sign convention. This is the
+    // train line, and it is the loud one: a service reduction or an emergency dump is
+    // heard the length of the train, where a cylinder filling is heard at the bogie.
+    float bpRate() const { return bpRate_; }
+    // The brake units, one per bogie, for the gauges and for later fault modelling.
+    int brakeUnitCount() const { return static_cast<int>(brakes_.size()); }
+    const BrakeUnit& brakeUnit(int i) const { return brakes_[static_cast<std::size_t>(i)]; }
+    // Cut this set's brake pipe to atmosphere, as parting a coupling does. Nothing
+    // commands the brakes on afterwards - the distributors see the pipe gone and apply
+    // from their own air, which is the property the whole arrangement exists to have.
+    void burstBrakePipe();
+    // Close the cock again, as a shunter does by hand after parting a train. Until this
+    // is done the pipe cannot hold air and the brakes cannot be released.
+    void closeBrakePipeCock();
+    bool brakePipeCut() const { return pipeCut_; }
+    // Move air into or out of this set's length of pipe, as the hose to the next set
+    // does. Only the consist calls this - it is the one thing about the brake that is
+    // not a set's own business, because the pipe is one pipe.
+    void nudgeBrakePipe(float dBar);
     // Let air out of this set's main reservoir, down to the given pressure. A set can
     // lose its air on its own account - a leak, a compressor that has stopped - and
     // that is the fault its low-reservoir safety device exists to catch, so it has to
@@ -395,10 +442,12 @@ private:
     float physV_ = 0.0f;                // m/s, + = the direction the train faces
     int cmdNotch_ = kEmergencyNotch;    // what the digital link last commanded
     bool trainEmerg_ = true;            // the train-wide emergency line, last step
-    // Air-brake state (bar). Starts held: reservoir full, emergency applied.
+    // Air-brake state (bar). Starts held: reservoir full, pipe empty, brakes applied.
     float mrPres_;                      // main reservoir pressure
-    float bcPres_;                      // brake cylinder pressure
-    float bcRate_ = 0.0f;               // d(bcPres_)/dt (bar/s), for the sound
+    float bp_ = 0.0f;                   // brake pipe, this set's length of it
+    float bpRate_ = 0.0f;               // d(bp_)/dt (bar/s), for the sound
+    std::vector<BrakeUnit> brakes_;     // one per bogie
+    bool pipeCut_ = false;              // the pipe is open to atmosphere (a parted hose)
     int brakeNotch_[2] = {kEmergencyNotch, kEmergencyNotch}; // per-cab handle (brake side)
     int powerNotch_[2] = {0, 0};        // per-cab handle (power side, 0 = neutral)
     int reverser_[2] = {0, 0};          // per-cab R/N/F (-1/0/+1)

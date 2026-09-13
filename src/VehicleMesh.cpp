@@ -705,7 +705,7 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
 
                 // Live brake state drives the dials and the lever position.
                 const float spd = vehicle.speed();
-                const float mrP = vehicle.mrPressure();
+                const float bpP = vehicle.bpPressure();
                 const float bcP = vehicle.bcPressure();
                 const int cab = cabNegY ? 0 : 1;
                 const int handle = vehicle.handlePosition(cab); // +brake / 0 / -power
@@ -840,13 +840,18 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                 }
 
                 // Centre facet: two round analog dials over a row of buttons. Left
-                // dial = speedometer; right dial = duplex air gauge (main reservoir
-                // red needle + brake cylinder dark needle). Needles track the sim.
+                // dial = speedometer; right dial = duplex air gauge (brake pipe red
+                // needle + brake cylinder dark needle). Needles track the sim.
+                //
+                // Pipe and cylinder, not reservoir and cylinder: those are the two a
+                // driver actually watches, because between them they say what the brake
+                // is doing and what it has left to do it with. The reservoir is a
+                // background quantity and lives on the HUD.
                 facet(-xc, xc);
                 discFace(C, u, v, n, -0.12f, 0.06f, 0.09f, 0.01f, c93::kGauge);
                 discFace(C, u, v, n, 0.12f, 0.06f, 0.09f, 0.01f, c93::kGauge);
                 needle(C, u, v, n, -0.12f, 0.06f, 0.076f, spd / 40.0f, c93::kDash);  // speed (0..40 m/s)
-                needle(C, u, v, n, 0.12f, 0.06f, 0.072f, mrP / 10.0f, c93::kRed);    // reservoir
+                needle(C, u, v, n, 0.12f, 0.06f, 0.072f, bpP / 10.0f, c93::kRed);    // brake pipe
                 needle(C, u, v, n, 0.12f, 0.06f, 0.078f, bcP / 10.0f, c93::kDash);   // brake cylinder
                 for (const float gx : {-0.12f, 0.12f})
                     discFace(C, u, v, n, gx, 0.06f, 0.015f, 0.02f, c93::kDash); // hubs (over needle roots)

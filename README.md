@@ -98,13 +98,28 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   resistance, and if it runs off the end of its track it derails and is slowed to a
   stop by ground friction proportional to its weight. A single **combined
   power/brake lever** per cab (`,` toward power N → P1–P5, `.` toward brake N → B1–B4
-  → Emergency, Space slams emergency) drives both a simple **air-brake** and the
-  traction. On the brake side a main reservoir feeds a notched direct brake: each
-  notch laps the brake-cylinder pressure to a target from the reservoir, producing a
-  braking force capped by wheel–rail adhesion that also holds the vehicle at rest.
-  The reservoir holds enough air for many applications; cycling the brakes slowly
-  draws it down and, once depleted, the cylinders can no longer fully charge and the
-  brakes fade. On the power side the vehicle **drives** through a modelled
+  → Emergency, Space slams emergency) drives both a real **automatic air brake**
+  and the traction. The brake is failsafe, which is to say it is applied by *losing*
+  air rather than by being given any: a **brake pipe** runs the length of the train
+  charged to 5 bar, and every bogie carries its own **distributor**, its own small
+  **auxiliary reservoir** and its own **cylinder**. The distributor watches the pipe
+  and remembers the highest pressure it has seen; what it puts in its cylinder is
+  proportional to how far the pipe has fallen *below that memory*, filled from its own
+  auxiliary. So the handle commands the pipe, not the brake — `B1` is the smallest
+  reduction that does anything (0.4 bar, giving ≈1.0 bar of cylinder) and `B4` is full
+  service (1.5 bar, 3.8 bar of cylinder) — and **a pipe that is cut applies everything
+  with nobody commanding it**. Part a coupling and both halves stop. The emergency
+  position dumps the pipe instead of reducing it, which the distributors read as the
+  largest reduction there is and answer through a wider port, so it goes on sooner,
+  faster and to the stop. The Class 93 works that pipe **electrically**: the handle
+  does not make a reduction at the front and wait for it to travel, it tells an EP
+  valve on every unit to vent or recharge its own length of pipe in step — which is
+  what makes the brake quick, and changes nothing about what the distributors then do.
+  An auxiliary is sized so that emptying it into its cylinder equalises at full-
+  application pressure, so a second application made before the pipe has recharged is
+  weaker than the first: cycling the brake down a long descent wears it out, because
+  the auxiliaries refill from the pipe far more slowly than the cylinders empty.
+  Braking force is capped by wheel–rail adhesion and also holds the vehicle at rest. On the power side the vehicle **drives** through a modelled
   **diesel-hydraulic transmission** (per the real Di 93): a **torque converter** for
   launch (torque multiplication while it slips, so the revs flare then couple) feeding
   a **5-speed automatic gearbox** that shifts on road speed (the engine steps down at
@@ -121,9 +136,12 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   end, 2 × 306 kW): start them with `I` (both crank to idle ~700 rpm together, shown as
   a rev-counter bar per engine on the left cab LCD; they are two Cummins N14E-R, 14 L,
   full power at 1500 rpm), they rev up under power, and their compressors refill the
-  reservoir at idle — which also lifts it back above the low-air safety trip. It starts
-  held in **emergency with the reservoir full and the engines off**; the cab's speed and
-  duplex air gauges and the combined lever animate with the sim, mirrored on a HUD.
+  reservoir at idle — which also lifts it back above the low-air safety trip. It starts as
+  stock left overnight does: **reservoir full, brake pipe empty and the brakes therefore
+  hard on**, engines off — releasing means charging the pipe, which is what the engines
+  are for. The cab's speed and **duplex air gauges** (brake pipe in red against brake
+  cylinder, the two a driver actually watches) and the combined lever animate with the
+  sim, mirrored on a HUD that carries the reservoir as well.
 - **Coupled sets (multiple working)** — a Class 93 runs in multiple, and the start
   screen offers **two and three sets coupled** as well as one: 83.6 m over the couplers,
   140 t, 12 axles, four car bodies, four cabs and four diesels, or 125.7 m, 210 t, 18
@@ -134,9 +152,12 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   keeps its **own air system, its own compressor, its own low-reservoir safety device,
   its own engines and its own two cabs**. Two mechanisms run over that, and they are
   deliberately not the same one. The **digital link** carries the driving cab's brake
-  notch and power demand to every set, which then works out its own brake-cylinder
-  pressure from its own reservoir and its own tractive effort from its own engines, so
-  two sets in different states of charge brake differently. The **emergency line** does
+  notch and power demand to every set, whose EP valve works its own length of the brake
+  pipe from its own reservoir and whose bogies then each fill their own cylinder from
+  their own auxiliary, so two sets in different states of charge brake differently. The
+  pipe itself is one pipe: air crosses the couplings, so a set whose own valve is doing
+  nothing still loses its pipe when the set in front dumps, and a burst at one end
+  reaches the other in finite time. The **emergency line** does
   not run over the link at all: any set whose own safety device trips puts the *whole
   train* into emergency, on its own account, whether or not anything was commanding it
   — and the HUD names the set that did it. Only the cabs at the two **ends** of the
@@ -148,6 +169,24 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   its own; the coupler is measured every step and a train the points have split says
   so. Sets being separate objects with separate state is also what makes coupling and
   uncoupling in the world a later addition rather than a rewrite.
+- **Coupling, and collision** — two trains now know each other exists, which until
+  recently they did not: each consist was stepped alone and two driven together passed
+  through each other in silence. A Class 93's **Scharfenberg** couples by being driven
+  into, so there is nothing to arm and nothing to aim at — and the collision is not a
+  separate mechanism but the same contact judged by a bigger number. What decides is the
+  **closing rate**, not either train's speed: one catching another at 12 km/h while that
+  one runs at 11 is closing at 1 and couples gently. Under **5 km/h** the couplers engage
+  and the two become one train, momentum conserved rather than speed — a light set shunted
+  by a heavy one leaves faster than the heavy one arrived. Between 5 and **14 km/h** they
+  still engage, but the shock parts the brake hoses at the joint, and every distributor on
+  the new train reads that as the pipe being lost and applies from its own auxiliary, with
+  nothing commanding it. Above that it is not a coupling: every set of both trains goes on
+  the ground, the same free-body slide that running off the end of the track already gave
+  them. The gap is measured **along the rails** and not through the air, so two trains
+  standing four metres apart on the two roads of a passing loop are as far apart as they
+  ought to be; where a turnout lies between two ends, the distance is a walk that follows
+  the points. Coupling is the one thing that takes a train *out* of the world, so it also
+  puts right every index and pointer that named it.
 - **More than one train** — every train in the world is simulated, whether or not anyone
   is driving it. There is no dead-man device, so a portion left in gear under power goes
   on running by itself indefinitely, holds its own track circuits, forces its own switches

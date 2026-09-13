@@ -119,6 +119,9 @@ public:
     // --- the whole train --------------------------------------------------------
     VehicleState state() const;
     float speed() const { return std::abs(v_); }  // m/s
+    // Signed, in the train's own facing. What speed() throws away, and what two trains
+    // meeting need: a closing rate cannot be worked out from two magnitudes.
+    float velocity() const { return v_; }
     float mass() const;                           // kg, every set
     float length() const;                         // m, over the couplers
     float width() const { return lead().width(); }
@@ -139,7 +142,12 @@ public:
     // gauges); the HUD lists every set's separately.
     float mrPressure(int cab = 0) const;
     float bcPressure(int cab = 0) const;
-    float bcRate() const;                   // loudest airflow over the train, for sound
+    float bcRate() const;
+    // The train line: its pressure at the given cab's set, and the loudest airflow in it
+    // anywhere on the train. This is the prominent brake sound - a reduction or a dump is
+    // heard the length of the train, where a cylinder filling is heard at the bogie.
+    float bpPressure(int cab = 0) const;
+    float bpRate() const;                   // loudest airflow over the train, for sound
     float tractiveEffort() const { return tractiveEffort_; }
     float brakeForce() const { return brakeForce_; }
     unsigned railImpacts() const;           // every wheel of every set
@@ -198,6 +206,28 @@ public:
     // How many couplers there are: one fewer than there are sets.
     int couplerCount() const { return std::max(0, unitCount() - 1); }
     static constexpr float kUncoupleMaxSpeed = 0.15f; // m/s, "at a stand"
+
+    // Where this train ends: the outer face of its first (`tail` false) or last set,
+    // with the set's own facing folded in. What another train's end is measured against.
+    struct End {
+        int pathIdx = -1;
+        float s = 0.0f;   // arc length of the coupler face along that path
+        int outward = 0;  // +1 if leaving this train means increasing s, else -1
+    };
+    End end(bool tail) const;
+
+    // Take `other`'s sets into this train, at the end given by `tail`. `reverseOther`
+    // where the two met nose to nose and its sets therefore run the other way.
+    //
+    // Nothing moves, exactly as nothing moves in uncoupleAfter: both halves already
+    // stand where they stand and only need to be adjacent, so this does not lay them
+    // out again. The merged speed is by momentum, which is the one quantity that cannot
+    // simply be carried across - two trains had two of it and a train has one.
+    void absorb(Consist&& other, bool tail, bool reverseOther);
+
+    // Put every set of this train on the ground. A collision, or anything else that
+    // ends the train's day where it stands.
+    void derail();
 
     // Nose-to-nose over the Scharfenberg heads of two coupled sets. A modelling choice:
     // the real gap is small and the couplers are drawn closed, so this is what keeps the

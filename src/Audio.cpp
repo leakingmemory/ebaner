@@ -480,14 +480,29 @@ void Audio::setRolling(const RollingSample& r) {
 void Audio::update(const Consist& sounded, float /*dt*/, float brakeGain,
                    const EngineVoice* engines, int engineCount, float rollGain) {
     const Consist& v = sounded; // everything below asks the train, not a set
-    const float rate = v.bcRate();
-    // The release (venting to atmosphere) is the prominent sound; the filling
-    // (charging the cylinders) is quieter, as in reality.
-    const float amp = (rate < 0.0f)
-                          ? std::min(std::fabs(rate) / 1.5f, 1.0f)          // release
-                          : std::min(std::fabs(rate) / 5.0f, 1.0f) * 0.5f;  // apply
+    // Two different sounds of air, and the brake makes both at once.
+    //
+    // The train line is the one you hear: it runs the length of the train, and a
+    // reduction or a dump is a long loud rush from everywhere at once. The cylinders are
+    // local - a bogie filling is a short sigh under your feet - so they are quieter, and
+    // they matter mostly for the moment after the pipe has gone quiet again.
+    //
+    // Venting to atmosphere is prominent and bright; charging is subdued and dull. That
+    // holds for both, which is why the pipe recharging after a release is the soft fill
+    // you hear a long way into the platform.
+    const float bpR = v.bpRate();
+    const float bcR = v.bcRate();
+    const float pipeAmp = (bpR < 0.0f)
+                              ? std::min(std::fabs(bpR) / 3.0f, 1.0f)          // vent
+                              : std::min(std::fabs(bpR) / 1.6f, 1.0f) * 0.40f; // charge
+    const float cylAmp = (bcR < 0.0f)
+                             ? std::min(std::fabs(bcR) / 1.6f, 1.0f) * 0.55f   // exhaust
+                             : std::min(std::fabs(bcR) / 6.0f, 1.0f) * 0.30f;  // fill
+    const float amp = std::max(pipeAmp, cylAmp);
     amp_.store(amp, std::memory_order_relaxed);
-    brightness_.store(rate < 0.0f ? 1.0f : 0.0f, std::memory_order_relaxed);
+    // Bright if whichever of the two is louder is venting rather than filling.
+    const float loud = (pipeAmp >= cylAmp) ? bpR : bcR;
+    brightness_.store(loud < 0.0f ? 1.0f : 0.0f, std::memory_order_relaxed);
     envGain_.store(std::clamp(brakeGain, 0.0f, 1.0f), std::memory_order_relaxed);
     // Every voice handed in gets a slot, up to what the synth holds. A slot nothing is
     // driving is silent rather than absent, so a train losing engines - a set uncoupled

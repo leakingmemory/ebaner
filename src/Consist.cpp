@@ -28,6 +28,11 @@ constexpr float kAdhesionMu = 0.20f;   // wheel/rail adhesion under braking
 // crossing a turnout lands on the junction's arc-length exactly, which moves it by up
 // to a few centimetres; a set taken away by the points moves by metres.
 constexpr float kCouplerSlack = 1.5f;  // m
+// How fast air crosses a coupling, as a fraction of the difference per second. Generous
+// on purpose: a Class 93 set is 41 m and the whole train a few of them, so the real
+// delay end to end is a fraction of a second and the point of modelling it is that it is
+// not zero, not that it is long.
+constexpr float kPipeCoupling = 3.0f;
 } // namespace
 
 Consist::Consist(const std::vector<TrackPath>* paths, const TrackPath* path,
@@ -187,6 +192,68 @@ bool Consist::mayUncouple(int k, const char*& why) const {
     return true;
 }
 
+Consist::End Consist::end(bool tail) const {
+    End e;
+    if (units_.empty()) return e;
+    // The set at that end of the train, and which way its own nose points along its
+    // path. Set 0 is the front as the train is laid out, so leaving by the front means
+    // travelling against that set's facing.
+    // The sets are laid out nose to tail, each one ahead of the last in its own facing
+    // (layOut walks forward by the pitch), so units_.back() is always the front of the
+    // train however the train faces, and units_.front() the rear.
+    const Vehicle& u = tail ? units_.back() : units_.front();
+    const int outward = tail ? u.orientation() : -u.orientation();
+    e.pathIdx = u.pathIdx();
+    // The coupler face, not the end of the body: the head stands half the coupler gap
+    // proud of it, so two sets standing at the coupled pitch have their faces touching
+    // and a gap measured between two such faces is zero when they are together.
+    e.s = u.s() + static_cast<float>(outward) * (0.5f * u.length() + 0.5f * kCouplerGap);
+    e.outward = outward;
+    return e;
+}
+
+void Consist::absorb(Consist&& other, bool tail, bool reverseOther) {
+    if (other.units_.empty()) return;
+    // Momentum, in a frame both trains agree on. Each carries its speed in its own
+    // facing, and after this there is one facing - this train's - so the other's has to
+    // be read into it first. Two trains met at a closing speed have between them less
+    // momentum than either had alone, and a light set shunted by a heavy one leaves
+    // faster than the heavy one arrived; taking the mean of the speeds would get both
+    // of those wrong.
+    const float mA = mass(), mB = other.mass();
+    const float vB = reverseOther ? -other.v_ : other.v_;
+    if (mA + mB > 0.0f) v_ = (mA * v_ + mB * vB) / (mA + mB);
+
+    std::vector<Vehicle> add = std::move(other.units_);
+    if (reverseOther) std::reverse(add.begin(), add.end());
+    if (tail) {
+        units_.insert(units_.end(), std::make_move_iterator(add.begin()),
+                      std::make_move_iterator(add.end()));
+    } else {
+        // Onto the front: the incoming sets go ahead of set 0, so this train's own
+        // numbering shifts along behind them. Nothing about where anything stands
+        // changes - only which index it answers to.
+        add.insert(add.end(), std::make_move_iterator(units_.begin()),
+                   std::make_move_iterator(units_.end()));
+        units_ = std::move(add);
+    }
+    // The hoses are coupled up again at the joint, so the two lengths of pipe become
+    // one; update()'s diffusion pass carries air across it from the next step. A rough
+    // coupling bursts them again afterwards, which is the caller's business.
+    for (Vehicle& u : units_) u.closeBrakePipeCock();
+    // Whichever half was held stays held: coupling to a portion standing in emergency
+    // does not release it, and the reverser cycle that clears the hold is now one
+    // sequence for one train.
+    if (other.hold_ != UncoupleHold::None && hold_ == UncoupleHold::None)
+        hold_ = other.hold_;
+    tractiveEffort_ = brakeForce_ = 0.0f;
+}
+
+void Consist::derail() {
+    for (Vehicle& u : units_) u.derail();
+    v_ = 0.0f;
+}
+
 std::optional<Consist> Consist::uncoupleAfter(int k) {
     const char* why = nullptr;
     if (!mayUncouple(k, why)) return std::nullopt;
@@ -210,6 +277,13 @@ std::optional<Consist> Consist::uncoupleAfter(int k) {
     setPowerNotch(cabCount() - 1, 0);
     rear.setBrakeNotch(0, Vehicle::kEmergencyNotch);
     rear.setPowerNotch(0, 0);
+
+    // And the brake hoses come apart, which is not a command but an event: both open
+    // ends dump to atmosphere, every distributor on both portions sees the pipe gone and
+    // puts its auxiliary into its cylinder. Nothing had to tell them to. This is the
+    // failsafe doing exactly what it is for, and it is why parting a train is safe.
+    units_.back().burstBrakePipe();
+    rear.units_.front().burstBrakePipe();
 
     // Both portions come away held, whatever their reversers happen to say. Asking the
     // reversers here would be the bug: a portion already at Neutral would be released
@@ -239,7 +313,15 @@ void Consist::update(float dt, float pushInput) {
             hold_ = UncoupleHold::AtNeutral;
         } else if (hold_ == UncoupleHold::AtNeutral) {
             hold_ = UncoupleHold::None;
-            std::printf("[Uncouple] reverser cycled through N - brakes released\n");
+            // The cocks go back on at the same moment. Parting the train opened the pipe
+            // at the break and it has been open ever since - that is why the portion has
+            // been standing here with its brakes on. Closing it is a shunter's job on the
+            // ground, and cycling the reverser is this simulator's stand-in for having
+            // gone and done it; what follows is a pipe that has to be charged from empty,
+            // which is why releasing after a split is not instant.
+            for (Vehicle& u : units_) u.closeBrakePipeCock();
+            std::printf("[Uncouple] reverser cycled through N - cocks closed, pipe "
+                        "recharging\n");
             std::fflush(stdout);
         }
     }
@@ -280,9 +362,28 @@ void Consist::update(float dt, float pushInput) {
     if (state() == VehicleState::OnRail)
         v_ += (gravForce + pushInput * kPushForce) / totalMass * dt;
 
+    // The brake pipe is one pipe. Each set works its own length of it, but the hoses
+    // between them are open, so air moves from the fuller length to the emptier. That is
+    // what makes the pipe continuous over the whole train and what gives a disturbance at
+    // one end a finite time to reach the other - a coupled set whose own valve is doing
+    // nothing still loses its pipe when the set in front dumps.
+    //
+    // The ends of the train are closed cocks and hold whatever is in them. It is only
+    // when a coupling is parted that an end is opened to atmosphere, and uncoupleAfter
+    // does that explicitly.
+    for (int pass = 0; pass < 2; ++pass) // both directions, so it is not order-dependent
+        for (std::size_t i = 1; i < units_.size(); ++i) {
+            Vehicle& a = units_[pass ? units_.size() - i : i - 1];
+            Vehicle& b = units_[pass ? units_.size() - i - 1 : i];
+            const float flow = kPipeCoupling * (b.bpPressure() - a.bpPressure()) * dt;
+            a.nudgeBrakePipe(flow);
+            b.nudgeBrakePipe(-flow);
+        }
+
     // Step every set's own subsystems and collect what each is contributing. This is
-    // where the sets stay independent: each laps its own brake cylinder from its own
-    // reservoir and revs its own engines.
+    // where the sets stay independent: each works its own length of pipe from its own
+    // reservoir, each bogie's distributor fills its own cylinder from its own auxiliary,
+    // and each set revs its own engines.
     float totalTE = 0.0f, totalBrake = 0.0f;
     for (Vehicle& u : units_) {
         const UnitStep st = u.stepSubsystems(dt, cmd, v_);
@@ -405,6 +506,21 @@ float Consist::bcRate() const {
     for (const Vehicle& u : units_)
         if (std::abs(u.bcRate()) > std::abs(r)) r = u.bcRate();
     return r;
+}
+
+float Consist::bpRate() const {
+    // The loudest length of pipe. Under EP every set vents at once so they agree, but a
+    // pipe that has been cut at one end does not, and then the sound belongs to the end
+    // that is actually losing air.
+    float r = 0.0f;
+    for (const Vehicle& u : units_)
+        if (std::abs(u.bpRate()) > std::abs(r)) r = u.bpRate();
+    return r;
+}
+
+float Consist::bpPressure(int cab) const {
+    const int u = (cab >= 0 && cab < cabCount()) ? cab / 2 : 0;
+    return units_[static_cast<std::size_t>(u)].bpPressure();
 }
 
 unsigned Consist::railImpacts() const {

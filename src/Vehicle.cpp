@@ -34,18 +34,54 @@ constexpr float kDavisB = 0.0001f;   // flange/track, per unit weight, s/m
 constexpr float kDragCd = 1.0f;      // aerodynamic drag coefficient (bluff box)
 constexpr float kAirDensity = 1.225f; // kg/m^3
 
-// Air brake (all pressures in bar). A notched direct brake: each handle notch
-// commands a brake-cylinder target the local system laps onto from the main
-// reservoir; a governed compressor keeps the reservoir charged.
+// Air brake (all pressures in bar).
+//
+// An automatic air brake, which is to say a failsafe one: the brake pipe runs the length
+// of the train charged to kBPRelease, and it is *losing* pipe pressure that applies the
+// brakes. Each brake unit - one per bogie - keeps its own auxiliary reservoir and its own
+// distributor, and when the pipe falls the distributor puts its own stored air into its
+// own cylinder. Nothing has to be commanded and no wire has to be intact, which is why a
+// train whose pipe bursts stops instead of running away.
+//
+// The Class 93 works that pipe electrically. The handle does not make a reduction at the
+// front and wait for it to travel; it tells an EP valve on every unit to vent or recharge
+// its own length of pipe, all in step. That is what makes the brake quick, and it changes
+// nothing about what the distributors then do.
 constexpr float kMRCapacity = 8.0f;      // main reservoir full / compressor cut-out
 constexpr float kMRCutIn = 6.5f;         // compressor cut-in
-constexpr float kBCFullService = 3.4f;   // brake cylinder at full service (B4)
-constexpr float kBCEmergency = 3.8f;     // brake cylinder in emergency
-constexpr float kBCApplyRate = 1.5f;     // service apply rate (bar/s)
-constexpr float kBCEmergRate = 6.0f;     // emergency apply rate (bar/s)
-constexpr float kBCReleaseRate = 1.2f;   // release rate (bar/s)
+constexpr float kBPRelease = 5.0f;       // brake pipe fully charged, brakes off
+constexpr float kBPMinReduction = 0.4f;  // the smallest reduction that does anything
+constexpr float kBPFullService = 3.5f;   // full service: a 1.5 bar reduction
+constexpr float kBCMax = 3.8f;           // cylinder at full service and at emergency
+// Bar of cylinder per bar of pipe drop, so that a full-service reduction gives kBCMax.
+// Emergency needs no separate case: the distributor simply sees a 5 bar drop instead of
+// 1.5, so it applies sooner, faster and to the stop, which is what emergency is.
+constexpr float kBCPerBPDrop = kBCMax / (kBPRelease - kBPFullService);
+constexpr float kAuxCapacity = 5.0f;     // auxiliary reservoir, charged from the pipe
+constexpr float kBPVentRate = 2.5f;      // EP valve venting the pipe (bar/s)
+constexpr float kBPEmergVentRate = 8.0f; // emergency: the pipe dumped wide open (bar/s)
+constexpr float kBPChargeRate = 1.6f;    // EP valve recharging from the main reservoir
+constexpr float kMRPerBP = 0.05f;        // MR bar spent per bar of pipe charged
+// The auxiliary refills slowly - far more slowly than the cylinder empties. That
+// asymmetry is the whole of brake fade: a driver who makes and releases applications
+// faster than this gets less air each time, which is what running away down a long
+// descent actually is.
+constexpr float kAuxChargeRate = 0.35f;  // auxiliary reservoir refilling from the pipe
+constexpr float kBCApplyRate = 2.5f;     // cylinder filling from the auxiliary (bar/s)
+// A distributor has an emergency portion: below a full-service reduction it opens a
+// wider port and fills the cylinder faster. Without it emergency and full service reach
+// the same pressure at the same speed and differ only in the pipe, which is not what
+// pulling the handle to the stop feels like or does.
+constexpr float kBCEmergApplyRate = 6.0f;
+constexpr float kBCReleaseRate = 1.6f;   // cylinder exhausting to atmosphere (bar/s)
+// Auxiliary bar spent per bar of cylinder, which is the ratio of the two volumes. A real
+// auxiliary is sized so that emptying it into the cylinder *equalises* at the full-
+// application pressure - that is what sets kBCMax in the first place, and it is why a
+// second application made before the pipe has recharged is weaker than the first. Derived
+// rather than picked, because picking it silently caps how hard the brake can ever go on:
+// at 0.55 an emergency reached 3.2 bar and looked like a tuning choice.
+constexpr float kAuxPerBC = kAuxCapacity / kBCMax - 1.0f; // 0.316
 constexpr float kCompRate = 0.20f;       // compressor recharge (bar/s)
-constexpr float kMRPerBC = 0.04f;        // MR bar spent per bar of BC charged
 constexpr float kMRLeak = 0.001f;        // reservoir leak (bar/s)
 constexpr float kFullServiceDecel = 1.3f; // deceleration at full service (m/s^2)
 constexpr float kAdhesionMu = 0.20f;     // wheel/rail grip cap on brake force
@@ -79,12 +115,16 @@ constexpr float kRevSpeedCap = 11.0f;    // m/s (~40 km/h) reverse power cut
 constexpr float kRpmSlew = 900.0f;       // rpm/s engine speed rate limit under power
 constexpr float kRpmToRad = 2.0f * 3.14159265358979f / 60.0f; // rev/min -> rad/s
 
-// Brake-cylinder target (bar) for a handle notch: 0 release, 1..4 graduated
-// service up to full service, emergency a touch higher.
-float targetBC(int notch) {
-    if (notch <= 0) return 0.0f;
-    if (notch >= Vehicle::kEmergencyNotch) return kBCEmergency;
-    return kBCFullService * static_cast<float>(notch) / 4.0f;
+// What the handle asks the pipe to stand at (bar). Release leaves it fully charged;
+// B1 is the smallest reduction that does anything at all and B4 is full service;
+// emergency asks for nothing left. The handle commands the *pipe* - it does not command
+// a cylinder pressure, and it cannot: what each cylinder does with a given reduction is
+// its own distributor's business, and on a set whose auxiliaries are low it will be less.
+float targetBP(int notch) {
+    if (notch <= 0) return kBPRelease;
+    if (notch >= Vehicle::kEmergencyNotch) return 0.0f;
+    const float span = (kBPRelease - kBPFullService) - kBPMinReduction;
+    return kBPRelease - (kBPMinReduction + span * static_cast<float>(notch - 1) / 3.0f);
 }
 } // namespace
 
@@ -102,9 +142,45 @@ Vehicle::Vehicle(const TrackPath* path, const VehicleSpec& spec, float s,
       bodyStyle_(spec.body),
       name_(spec.name),
       physV_(initialSpeed),
-      mrPres_(kMRCapacity),   // reservoir starts at capacity
-      bcPres_(kBCEmergency),  // brakes start in emergency (held)
-      engineCount_(spec.body == BodyClass93 ? 2 : 0) {} // one diesel per cab end
+      mrPres_(kMRCapacity), // reservoir starts at capacity
+      engineCount_(spec.body == BodyClass93 ? 2 : 0) { // one diesel per cab end
+    // One brake unit per bogie - three on a Class 93. A vehicle with no bogies at all
+    // still gets one, because something has to brake it and a bare wheelset has a shoe.
+    brakes_.resize(static_cast<std::size_t>(std::max(1, bogieCount_)));
+    // It starts as a vehicle stabled overnight does: reservoir full, pipe empty, and
+    // therefore the brakes hard on, held by the auxiliaries the distributors were left
+    // charged with. Releasing means charging the pipe, which is what the engines are for.
+    for (BrakeUnit& b : brakes_) {
+        b.aux = kAuxCapacity;
+        b.ctrl = kBPRelease;
+        b.bc = kBCMax;
+    }
+}
+
+float Vehicle::bcPressure() const {
+    if (brakes_.empty()) return 0.0f;
+    float sum = 0.0f;
+    for (const BrakeUnit& b : brakes_) sum += b.bc;
+    return sum / static_cast<float>(brakes_.size());
+}
+
+float Vehicle::bcRate() const {
+    // The loudest of them, not the mean: the sound of air moving is the sound of the
+    // one that is moving most, and averaging would quieten a single cylinder venting.
+    float r = 0.0f;
+    for (const BrakeUnit& b : brakes_)
+        if (std::abs(b.bcRate) > std::abs(r)) r = b.bcRate;
+    return r;
+}
+
+void Vehicle::burstBrakePipe() {
+    pipeCut_ = true;
+    bp_ = 0.0f;
+}
+
+void Vehicle::closeBrakePipeCock() { pipeCut_ = false; }
+
+void Vehicle::nudgeBrakePipe(float dBar) { bp_ = std::max(0.0f, bp_ + dBar); }
 
 void Vehicle::attachNetwork(const std::vector<TrackPath>* paths, SwitchNetwork* net) {
     paths_ = paths;
@@ -779,20 +855,66 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
     else if (mrPres_ >= kMRSafetyReset) safetyBrake_ = false;
     const int effNotch = effectiveNotch();
 
-    // Air brake: lap the brake-cylinder pressure toward the notch target, charging
-    // from (and spending) this set's own main reservoir on apply, venting on release;
-    // its own governed compressor recharges it. Two sets in different states of charge
-    // therefore brake differently, which is the point of each keeping its own air.
-    const float bcBefore = bcPres_;
-    const float tgt = targetBC(effNotch);
-    if (tgt > bcPres_) {
-        const float rate = (effNotch >= kEmergencyNotch) ? kBCEmergRate : kBCApplyRate;
-        const float reach = std::min(tgt, mrPres_); // capped by reservoir pressure
-        const float before = bcPres_;
-        bcPres_ = std::min(reach, bcPres_ + rate * dt);
-        mrPres_ -= kMRPerBC * std::max(0.0f, bcPres_ - before);
-    } else if (tgt < bcPres_) {
-        bcPres_ = std::max(tgt, bcPres_ - kBCReleaseRate * dt);
+    // The EP valve on this set: it vents its own length of pipe to atmosphere, or
+    // recharges it from its own main reservoir, toward what the handle asks for. Every
+    // set does this at the same moment from the same command, which is the whole point
+    // of an electro-pneumatic brake - the reduction happens along the whole train at
+    // once instead of travelling from the front.
+    //
+    // Venting is faster than charging, and emergency far faster than either. That
+    // asymmetry is not a detail: it is why a brake goes on smartly and comes off slowly,
+    // and why an emergency application cannot be taken back.
+    const float bpBefore = bp_;
+    // A pipe that has been cut is open to atmosphere and stays open until somebody
+    // closes the cock. The EP valve cannot charge against it - trying only feeds the
+    // leak - so the pipe simply empties and the distributors do the rest. This is what
+    // separates a burst hose from a momentary bleed, and it is the fault the whole
+    // arrangement is built around.
+    const float bpWant = pipeCut_ ? 0.0f : targetBP(effNotch);
+    if (pipeCut_) {
+        bp_ = std::max(0.0f, bp_ - kBPEmergVentRate * dt);
+    } else if (bpWant < bp_) {
+        const float rate = (effNotch >= kEmergencyNotch) ? kBPEmergVentRate : kBPVentRate;
+        bp_ = std::max(bpWant, bp_ - rate * dt);
+    } else if (bpWant > bp_) {
+        // Charged from the main reservoir and limited by it: a set whose reservoir has
+        // run down cannot fill its pipe, so it cannot release.
+        const float reach = std::min(bpWant, mrPres_);
+        const float before = bp_;
+        bp_ = std::min(reach, bp_ + kBPChargeRate * dt);
+        mrPres_ -= kMRPerBP * std::max(0.0f, bp_ - before);
+    }
+    bp_ = std::max(0.0f, bp_);
+
+    // The distributors, one per bogie. Each is on its own: it compares the pipe against
+    // its own memory of it and moves its own cylinder with its own stored air.
+    for (BrakeUnit& b : brakes_) {
+        const float bcBefore = b.bc;
+        // The control reservoir follows the pipe up and holds on the way down. Holding
+        // is what makes the brake answer the *reduction*; following up is what recharges
+        // the memory so the next reduction is measured from a full pipe again.
+        b.ctrl = std::max(b.ctrl, std::min(bp_, kBPRelease));
+        const float want = std::clamp((b.ctrl - bp_) * kBCPerBPDrop, 0.0f, kBCMax);
+        if (want > b.bc) {
+            // Filling from the auxiliary, and limited by it. An auxiliary drawn down by
+            // repeated applications cannot fill its cylinder, and the brake fades.
+            const float rate = (bp_ < kBPFullService - 0.1f) ? kBCEmergApplyRate
+                                                             : kBCApplyRate;
+            const float reach = std::min(want, b.aux);
+            const float before = b.bc;
+            b.bc = std::min(reach, b.bc + rate * dt);
+            b.aux = std::max(0.0f, b.aux - kAuxPerBC * std::max(0.0f, b.bc - before));
+        } else if (want < b.bc) {
+            b.bc = std::max(want, b.bc - kBCReleaseRate * dt); // exhausts to atmosphere
+        }
+        b.bc = std::max(0.0f, b.bc);
+        // The auxiliary refills from the pipe, never from the cylinder, and only while
+        // the pipe stands above it. This is what makes releasing and recharging one act.
+        if (bp_ > b.aux) {
+            const float room = std::min(kAuxCapacity, bp_) - b.aux;
+            b.aux += std::min(room, kAuxChargeRate * dt);
+        }
+        b.bcRate = (dt > 1e-6f) ? (b.bc - bcBefore) / dt : 0.0f;
     }
     mrPres_ -= kMRLeak * dt;
     // Engine-driven compressors recharge only while the engines idle, scaled by how
@@ -814,12 +936,17 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
         else if (mrPres_ < kMRCutIn) compOn_ = true;
     }
     compActive_ = (running > 0 && compOn_); // drives the sound + engine load
-    bcPres_ = std::max(0.0f, bcPres_);
-    bcRate_ = (dt > 1e-6f) ? (bcPres_ - bcBefore) / dt : 0.0f; // airflow, for sound
+    bpRate_ = (dt > 1e-6f) ? (bp_ - bpBefore) / dt : 0.0f; // train-line airflow, for sound
 
-    // Friction-brake force, capped by wheel/rail adhesion on this set's own weight.
-    brakeForce_ = std::min((bcPres_ / kBCFullService) * mass_ * kFullServiceDecel,
-                           kAdhesionMu * mass_ * kG);
+    // Friction-brake force: each bogie brakes its own share of the set's weight with its
+    // own cylinder, and the sum is capped by wheel/rail adhesion on the whole of it. One
+    // bogie with no air therefore costs exactly its share and no more, which is the
+    // reason for keeping them apart.
+    const float share = mass_ / static_cast<float>(std::max<std::size_t>(1, brakes_.size()));
+    float bf = 0.0f;
+    for (const BrakeUnit& b : brakes_)
+        bf += (b.bc / kBCMax) * share * kFullServiceDecel;
+    brakeForce_ = std::min(bf, kAdhesionMu * mass_ * kG);
 
     UnitStep out;
     // Back into the physical frame for the train to add up.
