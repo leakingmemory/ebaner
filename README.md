@@ -144,8 +144,22 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   sim, mirrored on a HUD that carries the reservoir as well.
 - **NSB Di 4 (Henschel)** — a second machine, and a quite different one: a
   **diesel-electric** Co'Co' locomotive, five of which Henschel built in 1981 for this very
-  line. One Pielstick 16 PA4 V 200 VG of 2460 kW turning an alternator, six traction motors,
-  115 t, 20.75 m, 140 km/h, on **six axles in two three-axle bogies**. Nothing about it is
+  line. An **EMD 16-645E3B** of 2450 kW at 900 rev/min turning an alternator into **three-
+  phase asynchronous** traction motors from Brown Boveri and NEBB — the first in revenue
+  service anywhere — 120 t, 20.8 m, 140 km/h, on **six axles in two three-axle bogies**.
+  It is a **full-width welded carbody** with the roof at **one height end to end**, and a
+  nose at each end that has a **chin**: the front reaches furthest forward at a knee a
+  little over half way up, rakes back above that to the roof edge, and tucks back *in*
+  below it to a short skirt over the buffer beam. The hatch and radiator panels are
+  **recessed** between the cantrails, which is what reads as a lower roof from the side and
+  from a bridge. Head on, the **flanks tumble home**: the roof is about seven tenths of the
+  body's width with the shoulders chamfered down to the sides, which is also why an overhead
+  photograph shows red either side of the grey. The flanks carry **cream bands**, there is a
+  **yellow snowplough** at each end — on this line not an ornament — and it couples the older
+  way, on **side buffers and a screw coupling** rather than the railcar's centre Scharfenberg.
+  Modelled from photographs and a side elevation, after two attempts from memory got it
+  wrong in different ways — first a hood unit, then a wedge pointed in *plan* when the folds
+  actually run across the locomotive. Nothing about it is
   the Class 93 in different paint. Where a torque converter and five gears make the railcar's
   pull *step* as it shifts, a generator makes one continuous curve of three straight pieces —
   **flat** below a corner speed, where the motors' current is the limit; **P / v** above it,

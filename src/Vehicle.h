@@ -71,6 +71,12 @@ struct VehicleSpec {
     float wheelRadius = 0.42f;       // m; sets the axle centre height as well as gearing
     float drivenFrac = 1.0f;         // of the weight, on driven axles
     float startTE = 0.0f;            // N, the flat low-speed limit (electric drive)
+    // The engine's own speeds. A governed speed belongs to an engine and not to the
+    // program: an EMD 645 turns 900 at full power where the railcar's Cummins turns 1500,
+    // and borrowing one for the other puts the revs and the sound half as fast again as
+    // they should be. Defaulted to the Class 93's, so its rows do not move.
+    float idleRpm = 700.0f;
+    float governedRpm = 1500.0f; // Vehicle::kMaxRpm, which is declared below this
 };
 
 // The vehicles offered on the start screen.
@@ -92,11 +98,17 @@ inline constexpr VehicleSpec kVehicleSpecs[] = {
      2, 2, DriveHydraulic, 612000.0f, 0.42f, 0.67f, 0.0f},
     // NSB Di 4: Henschel, 1981, five built for Nordlandsbanen - this line. A Co'Co', so
     // six axles in two three-axle bogies and every one of them driven, which is what lets
-    // a 115 t locomotive put down 314 kN without slipping. One Pielstick 16 PA4 V 200 VG
-    // turning an alternator, 2460 kW, 140 km/h, 1.10 m wheels. The wheelbase here is the
-    // bogie's outer axle to outer axle, so the middle axle falls on its centre.
-    {"NSB Di 4 (Henschel)", 115000.0f, 20.75f, 3.10f, 4.30f, 3.80f, 11.00f, 2, BodyDi4, 1,
-     3, 1, DriveElectric, 2460000.0f, 0.55f, 1.00f, 314000.0f},
+    // a 120 t locomotive put down 360 kN without slipping. One EMD 16-645E3B of 2450 kW at
+    // 900 rev/min turning an alternator, into three-phase asynchronous traction motors
+    // from Brown Boveri and NEBB - the first in revenue service anywhere. 140 km/h on
+    // 1.10 m wheels.
+    //
+    // The wheelbase here is the bogie's outer axle to outer axle, and the real bogie is
+    // asymmetric: 1.85 m then 2.00 m. Spread evenly over the 3.85 m instead, which puts
+    // the middle axle 75 mm from where it belongs and is not a thing anyone can see.
+    // Bogie centres follow from 15.60 m between the outer axles.
+    {"NSB Di 4 (Henschel)", 120000.0f, 20.80f, 3.176f, 4.35f, 3.85f, 11.75f, 2, BodyDi4, 1,
+     3, 1, DriveElectric, 2450000.0f, 0.55f, 1.00f, 360000.0f, 315.0f, 900.0f},
 };
 // Counted off the table rather than written down beside it. A hand-kept number that falls
 // behind the array makes the last entry unreachable everywhere at once - the start screen,
@@ -480,6 +492,7 @@ private:
     float length_, width_, height_, wheelbase_, bogieSpacing_;
     int bogieCount_;
     // What the machine is, taken from its spec rather than from a shared constant.
+    float idleRpm_ = 700.0f, governedRpm_ = kMaxRpm;
     int axlesPerBogie_ = 2, drive_ = DriveNone;
     float powerW_ = 0.0f, wheelRadius_ = 0.42f, drivenFrac_ = 1.0f, startTE_ = 0.0f;
     int bodyStyle_;

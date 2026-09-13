@@ -43,15 +43,46 @@ constexpr float kUnderframeHalfHeight = 0.15f; // thickness/2 (m)
 // hood and a cab at each end, in the NSB red and black of its day.
 namespace di4 {
 const glm::vec3 kBody(0.62f, 0.11f, 0.12f);   // NSB red
-const glm::vec3 kRoof(0.26f, 0.26f, 0.28f);   // grey roof
+const glm::vec3 kRoof(0.60f, 0.61f, 0.62f);   // light grey engine-room roof
+const glm::vec3 kCabRoof(0.17f, 0.17f, 0.18f);// the cab roofs, near black
 const glm::vec3 kSkirt(0.14f, 0.14f, 0.15f);  // solebar and valance
 const glm::vec3 kGlass(0.13f, 0.15f, 0.18f);  // cab glazing
 const glm::vec3 kFrame(0.10f, 0.10f, 0.11f);  // window surrounds, handrails
 const glm::vec3 kLight(0.95f, 0.93f, 0.80f);  // headlight lens
 const glm::vec3 kGrille(0.20f, 0.20f, 0.21f); // radiator and engine-room louvres
-constexpr float kCabLen = 2.30f;              // each cab, along the loco
-constexpr float kHoodDrop = 0.35f;            // the hood roof sits below the cab roof
-constexpr float kBodyRise = 0.20f;            // underframe top to body floor
+const glm::vec3 kStripe(0.91f, 0.86f, 0.70f);  // the cream bands along the sides
+const glm::vec3 kPlough(0.86f, 0.70f, 0.09f); // the snowplough, yellow
+// The end is raked in *elevation*: the plough end of the nose stands furthest forward and
+// the front leans back as it rises, folding along horizontal lines. Not a wedge pointed in
+// plan - that was the first attempt at this and it is the wrong axis altogether.
+// The end profile, taken off a side elevation drawn over a render. The roof runs at one
+// height for the whole length - there is no step down behind the cab, and what looks like
+// a lower roof in photographs is the hatch panel *recessed* between the cantrails.
+//
+// The nose has a chin. Its furthest-forward point is the knee, a little over half way up:
+// above it the screen rakes back to the roof edge, and below it the front tucks back in
+// again to a short vertical skirt above the buffer beam. Getting that the other way up -
+// furthest forward at the bottom, setting back all the way to the roof - is what makes it
+// look like a wedge instead of a locomotive.
+constexpr float kCabLen = 2.60f;    // cab, from the body end to the point of the nose
+constexpr float kRoofEdgeAt = 0.91f; // roof edge, back from the nose point
+constexpr float kChinAt = 0.55f;     // the chin's kink and the skirt, likewise
+constexpr float kKneeFrac = 0.57f;   // knee height, of the body's above the floor
+constexpr float kChinFrac = 0.33f;   // and the kink below it
+constexpr float kNoseWFrac = 0.96f;  // the front is a touch narrower than the body
+// Seen head on the roof is much narrower than the body, with the shoulders chamfered down
+// to the sides - the flanks tumble home at the top. Taken off a front elevation drawn over
+// a render: the roof is about seven tenths of the body's width, and the chamfer takes a
+// fifth of the body's height. It is also why the grey roof panel has red either side of it
+// in an overhead photograph, which is the shoulder and not a stripe.
+constexpr float kRoofWFrac = 0.69f;
+constexpr float kShoulderFrac = 0.20f;
+constexpr float kRoofThick = 0.10f;
+constexpr float kBodyRise = 0.20f;   // underframe top to body floor
+// The older coupling: side buffers on 1.75 m centres and a screw coupling between them,
+// not the centre Scharfenberg the railcar carries.
+constexpr float kBufferHalfSpacing = 0.875f;
+constexpr float kBufferR = 0.19f;
 } // namespace di4
 
 // NSB Class 93 (Bombardier Talent) exterior, classic NSB livery.
@@ -891,74 +922,161 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
     // end); everything else draws a bare underframe/floor plate. A carriage has
     // one full-length plate; a 3-bogie module two half plates hinging over the
     // shared middle bogie (each section oriented by its own bogie pair).
-    // NSB Di 4: a full-width hood with a cab at each end. One rigid body on two bogies,
-    // so unlike the Class 93 this is drawn once for the whole locomotive rather than once
-    // per articulated section - `f` is the body centre and `halfLen` reaches to each end.
+    // NSB Di 4. A full-width welded carbody, one roof height end to end, with a nose at
+    // each end that has a chin: the front reaches furthest forward at a knee a little over
+    // half way up, rakes back above it to the roof edge, and tucks back in below it to a
+    // short skirt over the buffer beam. See the profile constants above.
+    //
+    // The roof looks lower between the cabs in photographs because the hatch and radiator
+    // panels are recessed between the cantrails, not because the roof steps down.
+    //
+    // One rigid body on two bogies, so this is drawn once for the whole locomotive: `f` is
+    // the body centre and `halfLen` reaches to the nose knee at each end.
     auto emitDi4 = [&](const VehicleFrame& f, float halfLen) {
         const glm::vec3 X = f.right, Y = f.tangent, Z = f.up;
         const float hw = 0.5f * vehicle.width();
-        const float z0 = frameTopZ + di4::kBodyRise; // underframe top
-        // The spec's height is over the railhead, which is how a locomotive is quoted and
-        // not how the mesh measures - everything here is above the pose bed, which sits a
-        // rail's height below that. Getting this wrong loses most of a metre and the thing
-        // looks like a shunter.
+        const float hwN = hw * di4::kNoseWFrac;
+        const float z0 = frameTopZ + di4::kBodyRise; // underframe top / body floor
+        // Quoted over the railhead, which is not where the mesh measures from: everything
+        // here is above the pose bed, a railhead below that.
         const float roofZ = wheelset::kRailTopZ + vehicle.height();
-        const float cabH = roofZ - 0.06f - z0; // less the roof slab
-        const float hoodH = cabH - di4::kHoodDrop;      // the hood is lower
+        const float bodyH = roofZ - z0;
+        const float zKnee = z0 + bodyH * di4::kKneeFrac;
+        const float zChin = z0 + bodyH * di4::kChinFrac;
+        const float zSh = roofZ - bodyH * di4::kShoulderFrac; // where the flanks tumble in
+        const float hwRoof = hw * di4::kRoofWFrac;
+        // The body's half-width at a height: square-sided up to the shoulder and then
+        // chamfered in to the roof. Everything that touches the outside of the locomotive
+        // goes through this, so the nose inherits the same shoulder the flanks have.
+        auto hwAt = [&](float z, float scale) {
+            const float w = z <= zSh ? hw
+                                     : hw + (hwRoof - hw) * (z - zSh) / (roofZ - zSh);
+            return w * scale;
+        };
         auto P = [&](float lx, float ly, float lz) { return f.pos + X * lx + Y * ly + Z * lz; };
+        const glm::vec3 core = P(0.0f, 0.0f, z0 + 0.5f * bodyH); // for outward normals
 
-        // Underframe: a full-length solebar slab the body sits on.
+        // Underframe: a full-length solebar slab the body stands on.
         emitBox(X, Y, Z, P(0.0f, 0.0f, frameTopZ + 0.5f * di4::kBodyRise), hw * 0.98f,
-                halfLen, 0.5f * di4::kBodyRise, di4::kSkirt);
+                halfLen - di4::kChinAt, 0.5f * di4::kBodyRise, di4::kSkirt);
 
-        // The hood between the cabs, and a cab at each end.
-        const float hoodHalf = halfLen - di4::kCabLen;
-        emitBox(X, Y, Z, P(0.0f, 0.0f, z0 + 0.5f * hoodH), hw * 0.94f, hoodHalf,
-                0.5f * hoodH, di4::kBody);
-        emitBox(X, Y, Z, P(0.0f, 0.0f, z0 + hoodH), hw * 0.90f, hoodHalf, 0.06f,
-                di4::kRoof);
-        // Engine-room louvres down each side of the hood, which is most of what breaks
-        // up a hood side and the easiest way to read the length of it.
-        for (const float sx : {-1.0f, 1.0f})
-            for (int i = -2; i <= 2; ++i)
-                emitBox(X, Y, Z,
-                        P(sx * hw * 0.945f, static_cast<float>(i) * hoodHalf * 0.34f,
-                          z0 + 0.62f * hoodH),
-                        0.02f, hoodHalf * 0.13f, 0.22f * hoodH, di4::kGrille);
-
-        for (const float so : {-1.0f, 1.0f}) { // one cab at each end
-            const float cy = so * (halfLen - 0.5f * di4::kCabLen);
-            emitBox(X, Y, Z, P(0.0f, cy, z0 + 0.5f * cabH), hw * 0.94f,
-                    0.5f * di4::kCabLen, 0.5f * cabH, di4::kBody);
-            emitBox(X, Y, Z, P(0.0f, cy, z0 + cabH), hw * 0.96f,
-                    0.5f * di4::kCabLen + 0.04f, 0.06f, di4::kRoof);
-            // Windscreen, and a side window each side. Set proud of the body so they
-            // read as glass rather than as paint, with a dark surround behind.
-            const float wz = z0 + cabH * 0.68f;
-            emitBox(X, Y, Z, P(0.0f, cy + so * (0.5f * di4::kCabLen + 0.01f), wz),
-                    hw * 0.76f, 0.02f, 0.32f, di4::kFrame);
-            emitBox(X, Y, Z, P(0.0f, cy + so * (0.5f * di4::kCabLen + 0.03f), wz),
-                    hw * 0.70f, 0.02f, 0.28f, di4::kGlass);
-            for (const float sx : {-1.0f, 1.0f})
-                emitBox(X, Y, Z, P(sx * (hw * 0.95f), cy - so * 0.35f, wz), 0.02f, 0.42f,
-                        0.26f, di4::kGlass);
-            // Headlights: a pair low on the end, and one high above the windscreen.
-            for (const float sx : {-1.0f, 1.0f})
-                emitBox(X, Y, Z,
-                        P(sx * hw * 0.62f, cy + so * (0.5f * di4::kCabLen + 0.02f),
-                          z0 + 0.28f * cabH),
-                        0.12f, 0.03f, 0.12f, di4::kLight);
+        // The body between the two roof edges, at one height, and its roof.
+        const float yEdge = halfLen - di4::kRoofEdgeAt;
+        emitBox(X, Y, Z, P(0.0f, 0.0f, z0 + 0.5f * (zSh - z0)), hw, yEdge,
+                0.5f * (zSh - z0), di4::kBody);
+        for (const float sx : {-1.0f, 1.0f}) // the shoulders
+            quadN(P(sx * hw, -yEdge, zSh), P(sx * hw, yEdge, zSh),
+                  P(sx * hwRoof, yEdge, roofZ), P(sx * hwRoof, -yEdge, roofZ), di4::kBody,
+                  core);
+        emitBox(X, Y, Z, P(0.0f, 0.0f, roofZ - 0.5f * di4::kRoofThick), hwRoof, yEdge,
+                0.5f * di4::kRoofThick, di4::kBody);
+        // The hatch and radiator panels, recessed into that roof between the cantrails -
+        // which is what reads as a lower roof from the side and from a bridge.
+        const float flat = halfLen - di4::kCabLen;
+        emitBox(X, Y, Z, P(0.0f, 0.0f, roofZ - di4::kRoofThick - 0.03f), hwRoof * 0.88f,
+                flat, 0.04f, di4::kRoof);
+        for (int i = -2; i <= 2; ++i)
             emitBox(X, Y, Z,
-                    P(0.0f, cy + so * (0.5f * di4::kCabLen + 0.02f), z0 + cabH * 0.93f),
-                    0.14f, 0.03f, 0.09f, di4::kLight);
-            // Buffer beam and coupler stub.
-            emitBox(X, Y, Z, P(0.0f, so * (halfLen + 0.05f), frameTopZ + 0.10f), hw,
-                    0.08f, 0.18f, di4::kSkirt);
-            emitBox(X, Y, Z, P(0.0f, so * (halfLen + 0.22f), frameTopZ + 0.06f), 0.16f,
-                    0.20f, 0.12f, di4::kFrame);
+                    P(0.0f, static_cast<float>(i) * flat * 0.33f,
+                      roofZ - di4::kRoofThick - 0.015f),
+                    hwRoof * 0.74f, flat * 0.12f, 0.03f, di4::kGrille);
+
+        // Cream bands along the red sides.
+        for (const float sx : {-1.0f, 1.0f})
+            for (const float fz : {0.40f, 0.52f, 0.60f})
+                emitBox(X, Y, Z, P(sx * (hw + 0.006f), 0.0f, z0 + bodyH * fz), 0.010f,
+                        flat * 0.99f, 0.050f, di4::kStripe);
+
+        for (const float so : {-1.0f, 1.0f}) { // a nose at each end
+            const float yE = so * yEdge;                        // roof edge
+            const float yK = so * halfLen;                      // the knee, furthest out
+            const float yC = so * (halfLen - di4::kChinAt);     // chin kink and skirt
+
+            // The three panels of the front, bottom up: skirt, chin, screen.
+            quadN(P(-hwN, yC, z0), P(hwN, yC, z0), P(hwN, yC, zChin), P(-hwN, yC, zChin),
+                  di4::kSkirt, core);
+            quadN(P(-hwN, yC, zChin), P(hwN, yC, zChin), P(hwN, yK, zKnee),
+                  P(-hwN, yK, zKnee), di4::kBody, core);
+            // The screen, in two panels so it folds at the shoulder as the flanks do.
+            const float nf = di4::kNoseWFrac;
+            auto yAtZ = [&](float z) { // along the rake, from the knee up to the roof edge
+                return yK + (yE - yK) * (z - zKnee) / (roofZ - zKnee);
+            };
+            const float ySh = yAtZ(zSh);
+            quadN(P(-hwAt(zKnee, nf), yK, zKnee), P(hwAt(zKnee, nf), yK, zKnee),
+                  P(hwAt(zSh, nf), ySh, zSh), P(-hwAt(zSh, nf), ySh, zSh), di4::kBody, core);
+            quadN(P(-hwAt(zSh, nf), ySh, zSh), P(hwAt(zSh, nf), ySh, zSh),
+                  P(hwAt(roofZ, nf), yE, roofZ), P(-hwAt(roofZ, nf), yE, roofZ),
+                  di4::kBody, core);
+            // The windscreen, inset into that top panel and stood a little proud of it.
+            {
+                auto face = [&](float u, float v) {
+                    const glm::vec3 lo = P((u * 2.0f - 1.0f) * hwN * 0.92f, yK, zKnee);
+                    const glm::vec3 hi = P((u * 2.0f - 1.0f) * hwN * 0.92f, yE, roofZ);
+                    return lo + (hi - lo) * v + Y * (so * 0.02f);
+                };
+                quadN(face(0.02f, 0.16f), face(0.98f, 0.16f), face(0.98f, 0.90f),
+                      face(0.02f, 0.90f), di4::kGlass, core);
+            }
+            // Sides, tiled to follow the two folds rather than cutting across them.
+            for (const float sx : {-1.0f, 1.0f}) {
+                quadN(P(sx * hw, yE, z0), P(sx * hwN, yC, z0), P(sx * hwN, yC, zChin),
+                      P(sx * hw, yE, zChin), di4::kBody, core);
+                quadN(P(sx * hw, yE, zChin), P(sx * hwN, yC, zChin), P(sx * hwN, yK, zKnee),
+                      P(sx * hw, yE, zKnee), di4::kBody, core);
+                quadN(P(sx * hw, yE, zKnee), P(sx * hwAt(zKnee, nf), yK, zKnee),
+                      P(sx * hwAt(zSh, nf), ySh, zSh), P(sx * hw, yE, zSh), di4::kBody,
+                      core);
+                quadN(P(sx * hw, yE, zSh), P(sx * hwAt(zSh, nf), ySh, zSh),
+                      P(sx * hwAt(roofZ, nf), yE, roofZ), P(sx * hwRoof, yE, roofZ),
+                      di4::kBody, core);
+            }
+            // The roof over the nose, and the floor pan under it.
+            quadN(P(-hwRoof, yE, roofZ), P(hwRoof, yE, roofZ),
+                  P(hwAt(roofZ, nf), yE, roofZ), P(-hwAt(roofZ, nf), yE, roofZ),
+                  di4::kBody, core);
+            quadN(P(-hw, yE, z0), P(hw, yE, z0), P(hwN, yC, z0), P(-hwN, yC, z0),
+                  di4::kSkirt, core);
+
+            // Marker lights: a cluster high under the roof edge, a pair on the chin.
+            emitBox(X, Y, Z, P(0.0f, yE + so * 0.10f, roofZ - 0.16f), hw * 0.30f, 0.09f,
+                    0.06f, di4::kLight);
+            for (const float sx : {-1.0f, 1.0f})
+                emitBox(X, Y, Z, P(sx * hwN * 0.60f, so * (halfLen - 0.22f),
+                                   zChin + 0.30f * (zKnee - zChin)),
+                        0.11f, 0.16f, 0.09f, di4::kLight);
+
+            // A door a side behind the cab, and a cab side window.
+            for (const float sx : {-1.0f, 1.0f}) {
+                emitBox(X, Y, Z, P(sx * (hw - 0.004f), so * (flat - 0.45f),
+                                   z0 + 0.44f * bodyH),
+                        0.014f, 0.40f, 0.44f * bodyH, di4::kFrame);
+                emitBox(X, Y, Z, P(sx * (hw - 0.002f), so * (flat + 0.75f),
+                                   z0 + bodyH * 0.72f),
+                        0.014f, 0.52f, 0.24f, di4::kGlass);
+            }
+
+            // Buffer beam, coupler and the snowplough - which on this line is not an
+            // ornament. It hangs below the skirt, ahead of the knee.
+            emitBox(X, Y, Z, P(0.0f, yC + so * 0.06f, frameTopZ + 0.02f), hw, 0.07f, 0.18f,
+                    di4::kSkirt);
+            // Side buffers on 1.75 m centres with a screw coupling slung between them:
+            // the older arrangement, which does not couple itself by being driven into.
+            for (const float sx : {-1.0f, 1.0f})
+                emitBox(X, Y, Z,
+                        P(sx * di4::kBufferHalfSpacing, yC + so * 0.19f, frameTopZ + 0.02f),
+                        di4::kBufferR, 0.16f, di4::kBufferR, di4::kFrame);
+            emitBox(X, Y, Z, P(0.0f, yC + so * 0.14f, frameTopZ - 0.14f), 0.07f, 0.11f,
+                    0.09f, di4::kFrame);
+            quadN(P(-hw * 0.92f, so * (halfLen + 0.05f), frameTopZ - 0.62f),
+                  P(hw * 0.92f, so * (halfLen + 0.05f), frameTopZ - 0.62f),
+                  P(hw * 0.80f, yC, frameTopZ + 0.06f), P(-hw * 0.80f, yC, frameTopZ + 0.06f),
+                  di4::kPlough, P(0.0f, so * halfLen, frameTopZ - 1.3f));
+            emitBox(X, Y, Z, P(0.0f, so * (halfLen - 0.14f), frameTopZ - 0.44f), hw * 0.86f,
+                    0.17f, 0.13f, di4::kPlough);
         }
-        // Fuel tank slung between the bogies, which is what fills the gap under a
-        // locomotive and what makes it read as heavy rather than as a coach.
+        // Fuel tank slung between the bogies: 5200 litres, and what makes a locomotive
+        // read as heavy rather than as a coach.
         emitBox(X, Y, Z, P(0.0f, 0.0f, frameTopZ - 0.34f), hw * 0.62f, halfLen * 0.30f,
                 0.32f, di4::kSkirt);
     };

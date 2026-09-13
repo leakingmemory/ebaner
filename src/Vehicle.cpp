@@ -148,6 +148,8 @@ Vehicle::Vehicle(const TrackPath* path, const VehicleSpec& spec, float s,
       wheelRadius_(spec.wheelRadius),
       drivenFrac_(spec.drivenFrac),
       startTE_(spec.startTE),
+      idleRpm_(spec.idleRpm),
+      governedRpm_(spec.governedRpm),
       bodyStyle_(spec.body),
       name_(spec.name),
       physV_(initialSpeed),
@@ -394,14 +396,14 @@ float Vehicle::engineRpm(int i) const {
 
 EngineState Vehicle::engineState(int i) const {
     if (i < 0 || i >= engineCount_ || engineRpm_[i] <= 0.0f) return EngineState::Off;
-    if (engineRpm_[i] >= kIdleRpm * 0.99f) return EngineState::Running;
+    if (engineRpm_[i] >= idleRpm_ * 0.99f) return EngineState::Running;
     return engineOn_ ? EngineState::Starting : EngineState::Stopping;
 }
 
 bool Vehicle::enginesRunning() const {
     if (engineCount_ == 0) return false;
     for (int i = 0; i < engineCount_; ++i)
-        if (engineRpm_[i] < kIdleRpm * 0.99f) return false;
+        if (engineRpm_[i] < idleRpm_ * 0.99f) return false;
     return true;
 }
 
@@ -798,10 +800,10 @@ void Vehicle::updateElectricDrive(float demandSigned, float demand, bool powerin
     // The governor answers the notch and nothing else - there is no geared speed for the
     // engine to be dragged to, which is why a diesel-electric revs up standing still.
     const float rpmWant =
-        powering ? kIdleRpm + demand * (kGovernedRpm - kIdleRpm) : kIdleRpm;
+        powering ? idleRpm_ + demand * (governedRpm_ - idleRpm_) : idleRpm_;
     float rpm = engineRpm_[0];
     rpm += std::clamp(rpmWant - rpm, -kRpmSlew * dt, kRpmSlew * dt);
-    rpm = std::clamp(rpm, kIdleRpm, kGovernedRpm);
+    rpm = std::clamp(rpm, idleRpm_, governedRpm_);
     for (int i = 0; i < engineCount_; ++i) engineRpm_[i] = rpm;
     if (!powering) return;
 
@@ -845,11 +847,11 @@ void Vehicle::updateTraction(float demandSigned, float demand, bool powering,
     // Engine speed: the converter keeps the revs up off a throttle-set floor while it
     // slips at low road speed (the launch flare), then tracks the geared speed as it
     // couples; each upshift drops the geared speed, so the revs step down.
-    const float floorRpm = kIdleRpm + demand * (kConvFloorRpm - kIdleRpm);
-    const float rpmWant = std::clamp(std::max(rpmLock, floorRpm), kIdleRpm, kGovernedRpm);
+    const float floorRpm = idleRpm_ + demand * (kConvFloorRpm - idleRpm_);
+    const float rpmWant = std::clamp(std::max(rpmLock, floorRpm), idleRpm_, governedRpm_);
     float rpm = engineRpm_[0];
     rpm += std::clamp(rpmWant - rpm, -kRpmSlew * dt, kRpmSlew * dt);
-    rpm = std::clamp(rpm, kIdleRpm, kGovernedRpm);
+    rpm = std::clamp(rpm, idleRpm_, governedRpm_);
     for (int i = 0; i < engineCount_; ++i) engineRpm_[i] = rpm;
 
     // Torque converter: speed ratio -> torque ratio (stall multiplication at low
@@ -897,7 +899,7 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
     // compressor loads its engine down a little (compActive_ is last frame's value).
     if (!powering) {
         const float rpmTarget =
-            engineOn_ ? kIdleRpm - (compActive_ ? kCompLoadDrop : 0.0f) : 0.0f;
+            engineOn_ ? idleRpm_ - (compActive_ ? kCompLoadDrop : 0.0f) : 0.0f;
         for (int i = 0; i < engineCount_; ++i) {
             if (engineRpm_[i] < rpmTarget)
                 engineRpm_[i] = std::min(rpmTarget, engineRpm_[i] + kStartRate * dt);
@@ -987,7 +989,7 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
     // out and hunt.
     int running = 0;
     for (int i = 0; i < engineCount_; ++i)
-        if (engineRpm_[i] >= kIdleRpm * 0.9f) ++running;
+        if (engineRpm_[i] >= idleRpm_ * 0.9f) ++running;
     if (running > 0 && compOn_)
         mrPres_ += kCompRate * (static_cast<float>(running) / engineCount_) * dt;
     mrPres_ = std::clamp(mrPres_, 0.0f, kMRCapacity);
