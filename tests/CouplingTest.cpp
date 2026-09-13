@@ -253,6 +253,58 @@ int main() {
               "nothing couples to a wreck afterwards");
     }
 
+    std::puts("\nShunting nose-first in F, and getting out of it again");
+    {
+        // The sequence a driver actually uses: sit in the cab facing the unit you are
+        // coupling to, reverser in F, drive on, couple. That cab is at the joint the
+        // moment it happens, so it is shut down while he is sitting in it with the
+        // reverser in gear - and if that reverser stays where it is, the train is driven
+        // from a coupler and no end cab can be brought into gear without making two.
+        World w;
+        Consist a = w.train(1, 400.0f, 0.0f);
+        const float pitch = a.unit(0).length() + Consist::kCouplerGap;
+        Consist b = w.train(1, 400.0f + pitch, 0.0f);
+        a.setReverser(1, 1); // the cab at a's +s end: the one facing b
+        check(a.activeCab() == 1, "before: he is in the cab facing the other unit, in F",
+              a.activeCab(), 1);
+        check(!a.emergencyLine(), "  one cab in gear, so no interlock");
+
+        const Contact c = findContact(a, b);
+        a.absorb(std::move(b), c.aTail, c.opposed);
+
+        check(a.cabCount() == 4, "coupled: four cabs", a.cabCount(), 4);
+        check(!a.cabDrivable(1), "  the cab he shunted from is now at the joint");
+        check(a.reverser(1) == 0, "  and coupling took its reverser out of gear",
+              a.reverser(1), 0);
+        check(a.activeCab() < 0, "  nothing is in gear now");
+        check(a.emergencyLine(), "  so the interlock holds the train, which is right");
+
+        // And now the thing that could not be done before: walk to an end cab, take it
+        // out of Neutral, and drive the whole consist.
+        a.setReverser(0, 1);
+        check(a.activeCab() == 0, "an end cab goes into gear", a.activeCab(), 0);
+        check(!a.emergencyLine(), "  exactly one in gear: the interlock lets go");
+        check(a.reverser(1) == 0, "  and the coupler cab has stayed out of it",
+              a.reverser(1), 0);
+
+        // A shut-down cab still refuses to be put *into* gear - that rule has not gone.
+        a.setReverser(1, 1);
+        check(a.reverser(1) == 0, "a cab at a coupler cannot be put into gear",
+              a.reverser(1), 0);
+        check(a.activeCab() == 0, "  so there is still exactly one driving cab",
+              a.activeCab(), 0);
+    }
+    {
+        // Centring is always allowed, however the cab got into gear. Without this the
+        // fix above would depend on absorb having caught every case.
+        World w;
+        Consist a = w.train(2, 400.0f, 0.0f);
+        a.setReverser(0, 1);
+        check(a.reverser(0) == 1, "an end cab of a two-set train is in gear", a.reverser(0), 1);
+        a.setReverser(0, 0);
+        check(a.reverser(0) == 0, "and can always be centred again", a.reverser(0), 0);
+    }
+
     std::printf("\n%s\n", failures == 0 ? "all ok" : "FAILURES");
     return failures == 0 ? 0 : 1;
 }

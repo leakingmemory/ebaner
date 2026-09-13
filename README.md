@@ -161,8 +161,13 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   not run over the link at all: any set whose own safety device trips puts the *whole
   train* into emergency, on its own account, whether or not anything was commanding it
   — and the HUD names the set that did it. Only the cabs at the two **ends** of the
-  train drive; the cabs at the couplers are shut down and refuse the reverser, though
-  they can still be sat in with `V`. The reverser interlock is read across the whole
+  train drive; the cabs at the couplers are shut down and refuse to be put *into* gear,
+  though they can still be sat in with `V` and their reversers can always be **centred** —
+  a cab is shut down by being coupled to, which can happen while somebody is sitting in it
+  in gear, so a rule that refused every change would strand that reverser and leave the
+  train being driven from a coupler. Coupling therefore centres the reverser and takes the
+  power off every cab that is no longer at an end, which is what shutting a cab down means.
+  The reverser interlock is read across the whole
   train, so a cab in gear in each set is the interlock case and holds the brakes on.
   Each set carries its own place on the network and crosses its own turnouts, so a
   switch thrown under the train does to the trailing set what it would do to a train on

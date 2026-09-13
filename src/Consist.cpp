@@ -122,9 +122,17 @@ const char* Consist::handleName(int cab) const {
     return (cab >= 0 && cab < cabCount()) ? units_[cab / 2].handleName(cab % 2) : "N";
 }
 void Consist::setReverser(int cab, int dir) {
-    // A shut-down cab refuses the reverser: it is coupled to another set nose to nose
-    // and is not a driving position.
-    if (cabDrivable(cab)) units_[cab / 2].setReverser(cab % 2, dir);
+    if (cab < 0 || cab >= cabCount()) return;
+    // A shut-down cab refuses to be put *into* gear: it is coupled to another set nose to
+    // nose and is not a driving position. Coming out of gear is always allowed, and the
+    // difference matters. A cab is shut down by being coupled to, which can happen while
+    // somebody is sitting in it with the reverser in F - that is exactly what shunting one
+    // unit onto another from the cab facing it is - and a rule that refused every change
+    // would leave that reverser stuck in gear with no way to centre it. The train would
+    // then be driven by a cab at a coupler, and putting a real end cab into gear would
+    // make two and trip the interlock, which is a corner nobody can get out of.
+    if (dir != 0 && !cabDrivable(cab)) return;
+    units_[cab / 2].setReverser(cab % 2, dir);
 }
 int Consist::reverser(int cab) const {
     return (cab >= 0 && cab < cabCount()) ? units_[cab / 2].reverser(cab % 2) : 0;
@@ -236,6 +244,20 @@ void Consist::absorb(Consist&& other, bool tail, bool reverseOther) {
         add.insert(add.end(), std::make_move_iterator(units_.begin()),
                    std::make_move_iterator(units_.end()));
         units_ = std::move(add);
+    }
+    // Every cab that is no longer at an end of the train has just been shut down, and
+    // shutting a cab down centres its reverser and takes its power off. Two of them are
+    // the pair either side of the new joint, and one of those is very likely the cab the
+    // shunt was driven from - still in gear, because it was in gear a moment ago when it
+    // was an end cab and there was no reason for it not to be.
+    //
+    // Leaving them as they were is what makes coupling nose-first unworkable: the train
+    // would be driven from a cab at a coupler, and no end cab could be brought into gear
+    // without making two and tripping the interlock.
+    for (int c = 0; c < cabCount(); ++c) {
+        if (cabDrivable(c)) continue;
+        units_[static_cast<std::size_t>(c / 2)].setReverser(c % 2, 0);
+        units_[static_cast<std::size_t>(c / 2)].setPowerNotch(c % 2, 0);
     }
     // The hoses are coupled up again at the joint, so the two lengths of pipe become
     // one; update()'s diffusion pass carries air across it from the next step. A rough
