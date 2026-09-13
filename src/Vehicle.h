@@ -24,10 +24,24 @@
 class TrackPath;
 class SwitchNetwork;
 
-// How the body is drawn on top of the running gear.
+// How the body is drawn on top of the running gear. Only the drawing: what a vehicle *is*
+// - how many engines, what turns the wheels, how many axles a bogie carries - is in the
+// spec below and not read off this. It used to be, and that is why there could only ever
+// be one real vehicle.
 enum VehicleBodyStyle {
     BodyUnderframe = 0, // bare floor plate per section (a base to build on)
     BodyClass93 = 1,    // NSB Class 93 (Bombardier Talent) exterior
+    BodyDi4 = 2,        // NSB Di 4 (Henschel) diesel-electric locomotive
+};
+
+// What turns the wheels. Two machines that could hardly be less alike: one puts its engine
+// through a torque converter and a gearbox, so its pull steps as it changes gear; the other
+// turns a generator and its motors pull flat to a corner speed and then fall away as 1/v,
+// holding the rated power. Neither is a special case of the other.
+enum DriveKind {
+    DriveNone = 0,      // unpowered: a wagon, a carriage, a bare wheelset
+    DriveHydraulic = 1, // torque converter + 5-speed box (Class 93)
+    DriveElectric = 2,  // prime mover -> alternator -> traction motors (Di 4)
 };
 
 // A selectable rail vehicle type. The running gear is described by a bogie count
@@ -45,6 +59,18 @@ struct VehicleSpec {
     int   bogieCount;   // 0 bare axle, 1 bogie, 2 end bogies, 3 end + middle
     int   body;         // VehicleBodyStyle
     int   units;        // sets coupled into one train (1 = a single set)
+
+    // What the vehicle *is*, as against how it is drawn. These were file-scope constants
+    // in Vehicle.cpp shared by every vehicle there would ever be, which is workable
+    // exactly as long as there is one. Defaulted, so the rows above stay as they were and
+    // only a machine has to say anything.
+    int   axlesPerBogie = 2;         // 3 on a Co'Co'
+    int   engines = 0;               // prime movers; 0 is unpowered
+    int   drive = DriveNone;         // DriveKind
+    float powerW = 0.0f;             // rated at the engine, W
+    float wheelRadius = 0.42f;       // m; sets the axle centre height as well as gearing
+    float drivenFrac = 1.0f;         // of the weight, on driven axles
+    float startTE = 0.0f;            // N, the flat low-speed limit (electric drive)
 };
 
 // The vehicles offered on the start screen.
@@ -53,12 +79,24 @@ inline constexpr VehicleSpec kVehicleSpecs[] = {
     {"Dual-axle bogie", 4000.0f, 2.60f, 2.50f, 1.05f, 1.80f, 0.00f, 1, BodyUnderframe, 1},
     {"Carriage (two bogies)", 34000.0f, 25.0f, 3.00f, 1.30f, 2.50f, 18.00f, 2, BodyUnderframe, 1},
     {"Articulated (3 bogies)", 45000.0f, 30.0f, 2.70f, 1.30f, 2.50f, 22.00f, 3, BodyUnderframe, 1},
-    {"NSB Class 93 (Talent)", 70000.0f, 41.5f, 2.75f, 3.80f, 2.50f, 30.00f, 3, BodyClass93, 1},
+    // 2 x 306 kW through a torque converter and five gears, 0.84 m wheels, four of its
+    // six axles driven. These were the file-scope constants every vehicle shared.
+    {"NSB Class 93 (Talent)", 70000.0f, 41.5f, 2.75f, 3.80f, 2.50f, 30.00f, 3, BodyClass93, 1,
+     2, 2, DriveHydraulic, 612000.0f, 0.42f, 0.67f, 0.0f},
     // Two sets coupled: the figures stay per set and `units` says how many. A Class 93
     // runs in multiple in service, and the two sets keep their own air, engines and
     // safety systems - see Consist.
-    {"NSB Class 93 x2 (Talent)", 70000.0f, 41.5f, 2.75f, 3.80f, 2.50f, 30.00f, 3, BodyClass93, 2},
-    {"NSB Class 93 x3 (Talent)", 70000.0f, 41.5f, 2.75f, 3.80f, 2.50f, 30.00f, 3, BodyClass93, 3},
+    {"NSB Class 93 x2 (Talent)", 70000.0f, 41.5f, 2.75f, 3.80f, 2.50f, 30.00f, 3, BodyClass93, 2,
+     2, 2, DriveHydraulic, 612000.0f, 0.42f, 0.67f, 0.0f},
+    {"NSB Class 93 x3 (Talent)", 70000.0f, 41.5f, 2.75f, 3.80f, 2.50f, 30.00f, 3, BodyClass93, 3,
+     2, 2, DriveHydraulic, 612000.0f, 0.42f, 0.67f, 0.0f},
+    // NSB Di 4: Henschel, 1981, five built for Nordlandsbanen - this line. A Co'Co', so
+    // six axles in two three-axle bogies and every one of them driven, which is what lets
+    // a 115 t locomotive put down 314 kN without slipping. One Pielstick 16 PA4 V 200 VG
+    // turning an alternator, 2460 kW, 140 km/h, 1.10 m wheels. The wheelbase here is the
+    // bogie's outer axle to outer axle, so the middle axle falls on its centre.
+    {"NSB Di 4 (Henschel)", 115000.0f, 20.75f, 3.10f, 4.30f, 3.80f, 11.00f, 2, BodyDi4, 1,
+     3, 1, DriveElectric, 2460000.0f, 0.55f, 1.00f, 314000.0f},
 };
 // Counted off the table rather than written down beside it. A hand-kept number that falls
 // behind the array makes the last entry unreachable everywhere at once - the start screen,
@@ -375,6 +413,11 @@ public:
     float wheelbase() const { return wheelbase_; }
     float bogieSpacing() const { return bogieSpacing_; }
     int bogieCount() const { return bogieCount_; }
+    int axlesPerBogie() const { return axlesPerBogie_; }
+    int drive() const { return drive_; }
+    // Rolling radius (m). Sets the axle centre height as well as the gearing, so the
+    // body of a locomotive on 1.10 m wheels stands higher than a railcar on 0.84 m ones.
+    float wheelRadius() const { return wheelRadius_; }
     int bodyStyle() const { return bodyStyle_; }
     const char* name() const { return name_; }
     const TrackPath* path() const { return path_; }
@@ -387,6 +430,10 @@ private:
     // `powering` whether traction is live, `reverse` whether the reverser is in R.
     void updateTraction(float demandSigned, float demand, bool powering, bool reverse,
                         float dt);
+    // The diesel-electric drive, for a vehicle whose spec says so. Kept apart from the
+    // hydraulic one above rather than folded into it: they share almost nothing.
+    void updateElectricDrive(float demandSigned, float demand, bool powering,
+                             bool reverse, float dt);
     // Arc-length offsets of each bogie centre from the body centre (s_).
     std::vector<float> bogieCentres() const;
     // Half the span between the body's two support points (the two end bogies for
@@ -432,6 +479,9 @@ private:
     float mass_;
     float length_, width_, height_, wheelbase_, bogieSpacing_;
     int bogieCount_;
+    // What the machine is, taken from its spec rather than from a shared constant.
+    int axlesPerBogie_ = 2, drive_ = DriveNone;
+    float powerW_ = 0.0f, wheelRadius_ = 0.42f, drivenFrac_ = 1.0f, startTE_ = 0.0f;
     int bodyStyle_;
     const char* name_;
 

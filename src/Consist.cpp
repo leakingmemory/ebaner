@@ -150,7 +150,10 @@ int Consist::activeCab() const {
 }
 
 bool Consist::interlockEmergency() const {
-    return lead().bodyStyle() == BodyClass93 && activeCab() < 0;
+    // Any machine with engines and cabs, rather than one named body style: the rule is
+    // about there being exactly one driving position in charge, which is as true of a
+    // locomotive as of a railcar. An unpowered vehicle has nothing to interlock.
+    return lead().engineCount() > 0 && activeCab() < 0;
 }
 
 int Consist::trippedUnit() const {

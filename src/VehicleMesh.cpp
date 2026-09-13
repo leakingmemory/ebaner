@@ -39,6 +39,21 @@ constexpr float kFrameHalfHeight = 0.18f; // vertical (m)
 // Carriage underframe (floor plate) resting on the two bogies.
 constexpr float kUnderframeHalfHeight = 0.15f; // thickness/2 (m)
 
+// NSB Di 4 (Henschel, 1981) - the Nordlandsbanen locomotive. A Co'Co' with a full-width
+// hood and a cab at each end, in the NSB red and black of its day.
+namespace di4 {
+const glm::vec3 kBody(0.62f, 0.11f, 0.12f);   // NSB red
+const glm::vec3 kRoof(0.26f, 0.26f, 0.28f);   // grey roof
+const glm::vec3 kSkirt(0.14f, 0.14f, 0.15f);  // solebar and valance
+const glm::vec3 kGlass(0.13f, 0.15f, 0.18f);  // cab glazing
+const glm::vec3 kFrame(0.10f, 0.10f, 0.11f);  // window surrounds, handrails
+const glm::vec3 kLight(0.95f, 0.93f, 0.80f);  // headlight lens
+const glm::vec3 kGrille(0.20f, 0.20f, 0.21f); // radiator and engine-room louvres
+constexpr float kCabLen = 2.30f;              // each cab, along the loco
+constexpr float kHoodDrop = 0.35f;            // the hood roof sits below the cab roof
+constexpr float kBodyRise = 0.20f;            // underframe top to body floor
+} // namespace di4
+
 // NSB Class 93 (Bombardier Talent) exterior, classic NSB livery.
 namespace c93 {
 const glm::vec3 kBody(0.72f, 0.73f, 0.75f);  // silver-grey car body
@@ -85,6 +100,12 @@ const glm::vec3 kEngBar(0.30f, 0.78f, 0.36f);  // engine progress-bar fill (gree
 // gangway, there are two nose ends facing each other over their couplers.
 void VehicleMesh::emitUnit(const Vehicle& vehicle) {
     const glm::vec2 uv(0.0f);
+    // This vehicle's wheels. A locomotive on 1.10 m wheels stands higher than a railcar
+    // on 0.84 m ones, and everything above - the bogie frame, the underframe, the body -
+    // is measured up from the axle centre, so the radius has to be the vehicle's own and
+    // not a constant shared by all of them.
+    const float wheelR = vehicle.wheelRadius();
+    const float axleZ = wheelset::kRailTopZ + wheelR;
     auto push = [&](const glm::vec3& p, const glm::vec3& n, const glm::vec3& c) {
         vertices_.push_back({p, n, c, uv, -1.0f});
     };
@@ -92,7 +113,7 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
     // One wheelset (axle + two wheels) at the given on-rail frame.
     auto emitWheelset = [&](const VehicleFrame& fr) {
         const glm::vec3 X = fr.right, Y = fr.tangent, Z = fr.up;
-        const glm::vec3 origin = fr.pos + Z * wheelset::kAxleCentreAboveBed;
+        const glm::vec3 origin = fr.pos + Z * axleZ;
         auto worldPt = [&](float lx, float ly, float lz) {
             return origin + X * lx + Y * ly + Z * lz;
         };
@@ -141,8 +162,8 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
             }
         };
         emitCyl(0.0f, kAxleRadius, kAxleHalf, kAxleCol);
-        emitCyl(-kGauge * 0.5f, wheelset::kWheelRadius, kWheelWidth * 0.5f, kWheelCol);
-        emitCyl(kGauge * 0.5f, wheelset::kWheelRadius, kWheelWidth * 0.5f, kWheelCol);
+        emitCyl(-kGauge * 0.5f, wheelR, kWheelWidth * 0.5f, kWheelCol);
+        emitCyl(kGauge * 0.5f, wheelR, kWheelWidth * 0.5f, kWheelCol);
     };
 
     // Solid box centred at c with half-extents (hx,hy,hz) along frame axes X,Y,Z.
@@ -177,8 +198,7 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
     for (const VehicleFrame& fr : vehicle.axleFrames()) emitWheelset(fr);
 
     // Height of a bogie frame box centre / its top above the pose bed.
-    const float frameCentreZ =
-        wheelset::kAxleCentreAboveBed + wheelset::kWheelRadius;
+    const float frameCentreZ = axleZ + wheelR;
     const float frameTopZ = frameCentreZ + kFrameHalfHeight;
 
     // A bogie frame box (low steel box above the wheels, spanning the wheelbase).
@@ -871,6 +891,78 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
     // end); everything else draws a bare underframe/floor plate. A carriage has
     // one full-length plate; a 3-bogie module two half plates hinging over the
     // shared middle bogie (each section oriented by its own bogie pair).
+    // NSB Di 4: a full-width hood with a cab at each end. One rigid body on two bogies,
+    // so unlike the Class 93 this is drawn once for the whole locomotive rather than once
+    // per articulated section - `f` is the body centre and `halfLen` reaches to each end.
+    auto emitDi4 = [&](const VehicleFrame& f, float halfLen) {
+        const glm::vec3 X = f.right, Y = f.tangent, Z = f.up;
+        const float hw = 0.5f * vehicle.width();
+        const float z0 = frameTopZ + di4::kBodyRise; // underframe top
+        // The spec's height is over the railhead, which is how a locomotive is quoted and
+        // not how the mesh measures - everything here is above the pose bed, which sits a
+        // rail's height below that. Getting this wrong loses most of a metre and the thing
+        // looks like a shunter.
+        const float roofZ = wheelset::kRailTopZ + vehicle.height();
+        const float cabH = roofZ - 0.06f - z0; // less the roof slab
+        const float hoodH = cabH - di4::kHoodDrop;      // the hood is lower
+        auto P = [&](float lx, float ly, float lz) { return f.pos + X * lx + Y * ly + Z * lz; };
+
+        // Underframe: a full-length solebar slab the body sits on.
+        emitBox(X, Y, Z, P(0.0f, 0.0f, frameTopZ + 0.5f * di4::kBodyRise), hw * 0.98f,
+                halfLen, 0.5f * di4::kBodyRise, di4::kSkirt);
+
+        // The hood between the cabs, and a cab at each end.
+        const float hoodHalf = halfLen - di4::kCabLen;
+        emitBox(X, Y, Z, P(0.0f, 0.0f, z0 + 0.5f * hoodH), hw * 0.94f, hoodHalf,
+                0.5f * hoodH, di4::kBody);
+        emitBox(X, Y, Z, P(0.0f, 0.0f, z0 + hoodH), hw * 0.90f, hoodHalf, 0.06f,
+                di4::kRoof);
+        // Engine-room louvres down each side of the hood, which is most of what breaks
+        // up a hood side and the easiest way to read the length of it.
+        for (const float sx : {-1.0f, 1.0f})
+            for (int i = -2; i <= 2; ++i)
+                emitBox(X, Y, Z,
+                        P(sx * hw * 0.945f, static_cast<float>(i) * hoodHalf * 0.34f,
+                          z0 + 0.62f * hoodH),
+                        0.02f, hoodHalf * 0.13f, 0.22f * hoodH, di4::kGrille);
+
+        for (const float so : {-1.0f, 1.0f}) { // one cab at each end
+            const float cy = so * (halfLen - 0.5f * di4::kCabLen);
+            emitBox(X, Y, Z, P(0.0f, cy, z0 + 0.5f * cabH), hw * 0.94f,
+                    0.5f * di4::kCabLen, 0.5f * cabH, di4::kBody);
+            emitBox(X, Y, Z, P(0.0f, cy, z0 + cabH), hw * 0.96f,
+                    0.5f * di4::kCabLen + 0.04f, 0.06f, di4::kRoof);
+            // Windscreen, and a side window each side. Set proud of the body so they
+            // read as glass rather than as paint, with a dark surround behind.
+            const float wz = z0 + cabH * 0.68f;
+            emitBox(X, Y, Z, P(0.0f, cy + so * (0.5f * di4::kCabLen + 0.01f), wz),
+                    hw * 0.76f, 0.02f, 0.32f, di4::kFrame);
+            emitBox(X, Y, Z, P(0.0f, cy + so * (0.5f * di4::kCabLen + 0.03f), wz),
+                    hw * 0.70f, 0.02f, 0.28f, di4::kGlass);
+            for (const float sx : {-1.0f, 1.0f})
+                emitBox(X, Y, Z, P(sx * (hw * 0.95f), cy - so * 0.35f, wz), 0.02f, 0.42f,
+                        0.26f, di4::kGlass);
+            // Headlights: a pair low on the end, and one high above the windscreen.
+            for (const float sx : {-1.0f, 1.0f})
+                emitBox(X, Y, Z,
+                        P(sx * hw * 0.62f, cy + so * (0.5f * di4::kCabLen + 0.02f),
+                          z0 + 0.28f * cabH),
+                        0.12f, 0.03f, 0.12f, di4::kLight);
+            emitBox(X, Y, Z,
+                    P(0.0f, cy + so * (0.5f * di4::kCabLen + 0.02f), z0 + cabH * 0.93f),
+                    0.14f, 0.03f, 0.09f, di4::kLight);
+            // Buffer beam and coupler stub.
+            emitBox(X, Y, Z, P(0.0f, so * (halfLen + 0.05f), frameTopZ + 0.10f), hw,
+                    0.08f, 0.18f, di4::kSkirt);
+            emitBox(X, Y, Z, P(0.0f, so * (halfLen + 0.22f), frameTopZ + 0.06f), 0.16f,
+                    0.20f, 0.12f, di4::kFrame);
+        }
+        // Fuel tank slung between the bogies, which is what fills the gap under a
+        // locomotive and what makes it read as heavy rather than as a coach.
+        emitBox(X, Y, Z, P(0.0f, 0.0f, frameTopZ - 0.34f), hw * 0.62f, halfLen * 0.30f,
+                0.32f, di4::kSkirt);
+    };
+
     const std::vector<VehicleFrame> sections = vehicle.bodySectionFrames();
     if (!sections.empty()) {
         const float halfLen =
@@ -878,6 +970,8 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
         for (std::size_t i = 0; i < sections.size(); ++i) {
             if (vehicle.bodyStyle() == BodyClass93) {
                 emitClass93(sections[i], halfLen, i == 0, i == 1); // WC in the 2nd car
+            } else if (vehicle.bodyStyle() == BodyDi4) {
+                emitDi4(sections[i], halfLen);
             } else {
                 const glm::vec3 centre =
                     sections[i].pos + sections[i].up * (frameTopZ + kUnderframeHalfHeight);
@@ -968,7 +1062,7 @@ void VehicleMesh::sortGlass() {
                 return std::abs(c.x - g.x) < 0.005f && std::abs(c.y - g.y) < 0.005f &&
                        std::abs(c.z - g.z) < 0.005f;
             };
-            return eq(c93::kBand) || eq(c93::kGlass);
+            return eq(c93::kBand) || eq(c93::kGlass) || eq(di4::kGlass);
         };
         std::vector<std::uint32_t> opaque, glass;
         opaque.reserve(indices_.size());

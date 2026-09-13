@@ -142,6 +142,26 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   are for. The cab's speed and **duplex air gauges** (brake pipe in red against brake
   cylinder, the two a driver actually watches) and the combined lever animate with the
   sim, mirrored on a HUD that carries the reservoir as well.
+- **NSB Di 4 (Henschel)** — a second machine, and a quite different one: a
+  **diesel-electric** Co'Co' locomotive, five of which Henschel built in 1981 for this very
+  line. One Pielstick 16 PA4 V 200 VG of 2460 kW turning an alternator, six traction motors,
+  115 t, 20.75 m, 140 km/h, on **six axles in two three-axle bogies**. Nothing about it is
+  the Class 93 in different paint. Where a torque converter and five gears make the railcar's
+  pull *step* as it shifts, a generator makes one continuous curve of three straight pieces —
+  **flat** below a corner speed, where the motors' current is the limit; **P / v** above it,
+  which is all the power there is spread over the speed; and never above what six driven
+  axles can hold. The corner is not a number anyone chose: it is simply where the first two
+  cross, at 2460 kW × 0.85 ÷ 314 kN ≈ 24 km/h, and moves wherever the rating and the starting
+  effort put it. So it pulls away hard and then runs out of pull, which is what a heavy diesel
+  loco does and what the railcar does not. It hauls nothing yet — a train of *unlike* vehicles
+  is its own job — so it runs light engine, and it has no cab to sit in: drive it from the
+  chase camera and the HUD.
+  Making room for it meant the simulator stopping treating one vehicle as the only possible
+  one. Engine count, power, wheel size, driven fraction, starting effort and axles-per-bogie
+  were file-scope constants shared by every vehicle there would ever be; they are now the
+  vehicle's own, in its row of the table, and `body` went back to meaning only which mesh to
+  draw. The reverser interlock likewise asks whether a thing has engines rather than whether
+  it is a Class 93.
 - **Coupled sets (multiple working)** — a Class 93 runs in multiple, and the start
   screen offers **two and three sets coupled** as well as one: 83.6 m over the couplers,
   140 t, 12 axles, four car bodies, four cabs and four diesels, or 125.7 m, 210 t, 18

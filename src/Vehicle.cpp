@@ -111,6 +111,9 @@ constexpr float kShiftDwell = 0.4f;      // s of cut traction across an upshift
 constexpr float kTractionMu = 0.33f;     // wheel/rail adhesion under power
 constexpr float kDrivenFrac = 0.67f;     // fraction of weight on driven axles (~4/6)
 constexpr float kEta = 0.9f;             // driveline efficiency
+// Alternator, rectifier and six traction motors between the crankshaft and the rail.
+// Lower than a mechanical driveline's, which is the price of having no gearbox.
+constexpr float kElectricEta = 0.85f;
 constexpr float kRevSpeedCap = 11.0f;    // m/s (~40 km/h) reverse power cut
 constexpr float kRpmSlew = 900.0f;       // rpm/s engine speed rate limit under power
 constexpr float kRpmToRad = 2.0f * 3.14159265358979f / 60.0f; // rev/min -> rad/s
@@ -139,11 +142,17 @@ Vehicle::Vehicle(const TrackPath* path, const VehicleSpec& spec, float s,
       wheelbase_(spec.wheelbase),
       bogieSpacing_(spec.bogieSpacing),
       bogieCount_(spec.bogieCount),
+      axlesPerBogie_(std::max(1, spec.axlesPerBogie)),
+      drive_(spec.drive),
+      powerW_(spec.powerW),
+      wheelRadius_(spec.wheelRadius),
+      drivenFrac_(spec.drivenFrac),
+      startTE_(spec.startTE),
       bodyStyle_(spec.body),
       name_(spec.name),
       physV_(initialSpeed),
       mrPres_(kMRCapacity), // reservoir starts at capacity
-      engineCount_(spec.body == BodyClass93 ? 2 : 0) { // one diesel per cab end
+      engineCount_(std::min(spec.engines, 2)) { // the rpm array holds two
     // One brake unit per bogie - three on a Class 93. A vehicle with no bogies at all
     // still gets one, because something has to brake it and a bare wheelset has a shoe.
     brakes_.resize(static_cast<std::size_t>(std::max(1, bogieCount_)));
@@ -360,7 +369,7 @@ const char* Vehicle::reverserName(int cab) const {
 }
 
 int Vehicle::localActiveCab() const {
-    if (bodyStyle_ != BodyClass93) return -1;
+    if (engineCount_ == 0) return -1; // nothing to drive from
     int active = -1, count = 0;
     for (int c = 0; c < 2; ++c)
         if (reverser_[c] != 0) { active = c; ++count; }
@@ -464,9 +473,22 @@ std::vector<float> Vehicle::bogieCentres() const {
 
 std::vector<float> Vehicle::axleOffsets() const {
     if (bogieCount_ == 0) return {0.0f}; // single bare axle
+    // Spread evenly across the bogie, whose wheelbase is measured outer axle to outer
+    // axle: two axles are its two ends, and three put one on the centre. A Co'Co' has
+    // three, and six axles have to come out of here and not four - the brake divides the
+    // weight by them, the circuits measure the train by them, and the sound counts them
+    // over the frogs.
+    const int n = std::max(1, axlesPerBogie_);
     const float wb = 0.5f * wheelbase_;
     std::vector<float> out;
-    for (float c : bogieCentres()) { out.push_back(c - wb); out.push_back(c + wb); }
+    out.reserve(static_cast<std::size_t>(n) * bogieCentres().size());
+    for (const float c : bogieCentres())
+        for (int i = 0; i < n; ++i) {
+            const float t = n == 1 ? 0.0f
+                                   : -1.0f + 2.0f * static_cast<float>(i) /
+                                                 static_cast<float>(n - 1);
+            out.push_back(c + t * wb);
+        }
     return out;
 }
 
@@ -759,15 +781,57 @@ std::vector<VehicleFrame> Vehicle::axleFrames() const {
     return out;
 }
 
+// A diesel-electric. The engine does not drive the wheels at all: it turns an alternator
+// at whatever speed the governor is asked for, and the traction motors turn the current
+// into pull. There is nothing to change gear and nothing to slip, so where the hydraulic
+// drive above steps, this is one continuous curve of three straight pieces:
+//
+//   flat below the corner    the motors' current and commutation limit
+//   P / v above it           all the power there is, spread over the speed
+//   never above adhesion     what six axles on 115 tonnes can hold
+//
+// The corner is not authored. It is simply where the first two cross, so changing the
+// rating or the starting effort moves it to where those numbers put it.
+void Vehicle::updateElectricDrive(float demandSigned, float demand, bool powering,
+                                  bool reverse, float dt) {
+    tractiveEffort_ = 0.0f;
+    // The governor answers the notch and nothing else - there is no geared speed for the
+    // engine to be dragged to, which is why a diesel-electric revs up standing still.
+    const float rpmWant =
+        powering ? kIdleRpm + demand * (kGovernedRpm - kIdleRpm) : kIdleRpm;
+    float rpm = engineRpm_[0];
+    rpm += std::clamp(rpmWant - rpm, -kRpmSlew * dt, kRpmSlew * dt);
+    rpm = std::clamp(rpm, kIdleRpm, kGovernedRpm);
+    for (int i = 0; i < engineCount_; ++i) engineRpm_[i] = rpm;
+    if (!powering) return;
+
+    const float sp = std::abs(physV_);
+    const float pRail = demand * powerW_ * kElectricEta;
+    const float teFlat = startTE_ > 0.0f ? startTE_ : std::numeric_limits<float>::max();
+    const float tePower = pRail / std::max(sp, 0.05f);
+    const float teAdh = kTractionMu * drivenFrac_ * mass_ * kG;
+    float TE = std::min(std::min(teFlat, tePower), teAdh);
+    const float dir = demandSigned >= 0.0f ? 1.0f : -1.0f;
+    if (reverse && sp > kRevSpeedCap) TE = 0.0f;
+    tractiveEffort_ = dir * TE;
+}
+
 void Vehicle::updateTraction(float demandSigned, float demand, bool powering,
                              bool reverse, float dt) {
+    // Which machine this is. The two share the notch, the adhesion cap and the reverse
+    // speed cap, and nothing else - a torque converter and a generator are not variants
+    // of one another.
+    if (drive_ == DriveElectric) {
+        updateElectricDrive(demandSigned, demand, powering, reverse, dt);
+        return;
+    }
     tractiveEffort_ = 0.0f;
     if (shiftTimer_ > 0.0f) shiftTimer_ = std::max(0.0f, shiftTimer_ - dt);
 
     const float sp = std::abs(physV_);
     // Engine rev/min if the converter were locked in the current gear (the geared,
     // turbine-side speed). The automatic shifts on this, not the engine speed.
-    const float rpmLock = sp / kWheelRadius * kGearRatio[gear_ - 1] / kRpmToRad;
+    const float rpmLock = sp / wheelRadius_ * kGearRatio[gear_ - 1] / kRpmToRad;
 
     // Automatic gear selection (runs whether or not we are powering, so the gear
     // always matches road speed). An upshift briefly cuts traction so the revs dip.
@@ -797,11 +861,11 @@ void Vehicle::updateTraction(float demandSigned, float demand, bool powering,
     // Tractive effort: the lesser of the geared/converter torque limit, the
     // constant-power hyperbola, and the wheel/rail adhesion cap. Cut across a shift.
     const float we = rpm * kRpmToRad;                  // engine rad/s
-    const float pAvail = demand * kRatedPowerW * kEta; // available power (W)
+    const float pAvail = demand * powerW_ * kEta;      // available power (W)
     const float te = pAvail / std::max(we, 1.0f);      // engine torque (N*m)
-    const float teGeared = te * tr * kGearRatio[gear_ - 1] / kWheelRadius;
+    const float teGeared = te * tr * kGearRatio[gear_ - 1] / wheelRadius_;
     const float tePower = pAvail / std::max(sp, 1.0f); // hyperbola (limits at speed)
-    const float teAdh = kTractionMu * kDrivenFrac * mass_ * kG;
+    const float teAdh = kTractionMu * drivenFrac_ * mass_ * kG;
     float TE = std::min(std::min(teGeared, tePower), teAdh);
     if (shiftTimer_ > 0.0f) TE = 0.0f;                 // unloaded across an upshift
     const float dir = demandSigned >= 0.0f ? 1.0f : -1.0f; // track direction of travel

@@ -315,3 +315,11 @@ add_dependencies(CouplingTest shaders)
 target_link_libraries(CouplingTest PRIVATE ebaner_engine)
 target_include_directories(CouplingTest PRIVATE src)
 add_test(NAME coupling COMMAND CouplingTest)
+
+# What each machine pulls with: a torque converter and gears against a generator and
+# traction motors, and how many axles a bogie carries. No dataset.
+add_executable(TractionTest tests/TractionTest.cpp src/Vehicle.cpp src/Consist.cpp)
+add_dependencies(TractionTest shaders)
+target_link_libraries(TractionTest PRIVATE ebaner_engine)
+target_include_directories(TractionTest PRIVATE src)
+add_test(NAME traction COMMAND TractionTest)
