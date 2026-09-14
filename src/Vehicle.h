@@ -87,6 +87,11 @@ struct VehicleSpec {
     // they should be. Defaulted to the Class 93's, so its rows do not move.
     float idleRpm = 700.0f;
     float governedRpm = 1500.0f; // Vehicle::kMaxRpm, which is declared below this
+    // How long the governor takes to walk the engine from idle to governed speed. On the
+    // machine for the same reason its idle is: a 45-litre two-stroke turning a generator
+    // is not a high-speed railcar diesel under a converter, and one number for both makes
+    // whichever it was not written for feel wrong. Defaulted to the railcar's.
+    float spoolTime = 0.9f;      // s
     int   controls = ControlCombined; // ControlLayout
 };
 
@@ -119,7 +124,7 @@ inline constexpr VehicleSpec kVehicleSpecs[] = {
     // the middle axle 75 mm from where it belongs and is not a thing anyone can see.
     // Bogie centres follow from 15.60 m between the outer axles.
     {"NSB Di 4 (Henschel)", 120000.0f, 20.80f, 3.176f, 4.35f, 3.85f, 11.75f, 2, BodyDi4, 1,
-     3, 1, DriveElectric, 2450000.0f, 0.55f, 1.00f, 360000.0f, 315.0f, 900.0f,
+     3, 1, DriveElectric, 2450000.0f, 0.55f, 1.00f, 360000.0f, 315.0f, 900.0f, 7.0f,
      ControlSeparate},
 };
 // Counted off the table rather than written down beside it. A hand-kept number that falls
@@ -371,6 +376,13 @@ public:
     // Signed traction demand in [-1,1]: direction * effectivePowerNotch/max.
     float tractionDemand() const;
     float tractiveEffort() const { return tractiveEffort_; } // N, + in +s (for HUD)
+    // A diesel-electric is driven on these two and they say different things. The ammeter
+    // is what the driver watches away from a stand, because effort is what current buys;
+    // the engine's own load is effort times speed, and at a crawl that is a fraction of
+    // what the diesel could give however hard the ammeter is pegged.
+    float tractionAmpsFrac() const;  // motor current, of the limit the drive will pass
+    float enginePowerFrac() const;   // rail power, of rated - how hard the diesel works
+    float loadRegulator() const { return load_; } // excitation, 0..1, as it winds on
     // Friction-brake force actually applied last step (N, always >= 0), after the
     // brake-cylinder pressure is turned into shoe force and capped by wheel/rail
     // adhesion. The pressure alone does not say this - the cap bites in emergency -
@@ -511,8 +523,10 @@ private:
     float length_, width_, height_, wheelbase_, bogieSpacing_;
     int bogieCount_;
     // What the machine is, taken from its spec rather than from a shared constant.
-    float idleRpm_ = 700.0f, governedRpm_ = kMaxRpm;
+    float idleRpm_ = 700.0f, governedRpm_ = kMaxRpm, spoolTime_ = 0.9f;
     int controls_ = ControlCombined;
+    float load_ = 0.0f;      // load regulator: excitation as a fraction of full
+    float railPower_ = 0.0f; // W at the rail this step, for the engine-load reading
     int axlesPerBogie_ = 2, drive_ = DriveNone;
     float powerW_ = 0.0f, wheelRadius_ = 0.42f, drivenFrac_ = 1.0f, startTE_ = 0.0f;
     int bodyStyle_;

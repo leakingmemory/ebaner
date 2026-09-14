@@ -124,9 +124,6 @@ const glm::vec3 kNeedleL(0.90f, 0.90f, 0.86f); // a needle on a black face
 const glm::vec3 kRed(0.78f, 0.12f, 0.10f);
 const glm::vec3 kButton(0.26f, 0.26f, 0.28f);
 const glm::vec3 kBlind(0.30f, 0.30f, 0.31f);   // the roller sun blinds over the screens
-// The load meter's full scale. A diesel-electric is driven on its ammeter, and this is the
-// locomotive's starting tractive effort out of kVehicleSpecs - keep the two together.
-constexpr float kLoadFullN = 360000.0f;
 constexpr float kRevFull = 1000.0f; // rev counter full scale, over a 900 rpm governor
 constexpr float kBufferHalfSpacing = 0.875f;
 constexpr float kBufferR = 0.19f;
@@ -1295,7 +1292,10 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
             // Live, off the locomotive.
             const int cab = so < 0.0f ? 0 : 1;
             const float spd = vehicle.speed();
-            const float load = std::abs(vehicle.tractiveEffort()) / di4::kLoadFullN;
+            // The load meter is an ammeter, and the drive itself knows what fraction of
+            // its current limit it is passing - better than dividing effort by a constant
+            // kept in this file that has to be remembered to match the vehicle table.
+            const float load = vehicle.tractionAmpsFrac();
             const float rpm = vehicle.engineRpm(0) / di4::kRevFull;
             const int power = vehicle.powerNotch(cab);
             const int brake = vehicle.brakeNotch(cab);

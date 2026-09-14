@@ -199,6 +199,51 @@ int main() {
               biggestStep, 0.0);
     }
 
+    std::puts("\nEffort is what amperes buy, and at a crawl the diesel is loafing");
+    {
+        // The flat part of the curve is a CURRENT limit, not a power one, and the
+        // consequence is the thing worth checking: power at the rail is effort times
+        // speed, so holding full effort at walking pace uses a fraction of what the
+        // engine has. A locomotive at full revs with its ammeter against the stop and its
+        // diesel barely working is not a bug - it is what a diesel-electric does.
+        struct Point { float kmh, amps, load; };
+        std::vector<Point> pts;
+        for (const float kmh : {2.0f, 5.0f, 10.0f, 30.0f, 80.0f}) {
+            const float v = kmh / 3.6f;
+            Vehicle u(&w.paths[0], *di4, 4000.0f, v);
+            u.attachNetwork(&w.paths, nullptr);
+            u.toggleEngines();
+            LinkCommand cmd;
+            cmd.brakeNotch = 0;
+            cmd.emergency = false;
+            cmd.demand = 1.0f;
+            cmd.powering = true;
+            for (int i = 0; i < 3000; ++i) u.stepSubsystems(1.0f / 60.0f, cmd, v);
+            pts.push_back({kmh, u.tractionAmpsFrac(), u.enginePowerFrac()});
+            std::printf("    %5.0f km/h: amps %3.0f%%, engine load %3.0f%%\n", kmh,
+                        u.tractionAmpsFrac() * 100.0f, u.enginePowerFrac() * 100.0f);
+        }
+        check(pts[0].amps > 0.99f, "at 2 km/h the ammeter is against its limit",
+              pts[0].amps, 1.0);
+        check(pts[0].load < 0.20f, "  and the engine is giving under a fifth of its power",
+              pts[0].load, 0.10);
+        check(pts[1].amps > 0.99f, "at 5 km/h the ammeter is still against it", pts[1].amps,
+              1.0);
+        check(pts[1].load > pts[0].load, "  and the engine is working harder than at 2",
+              pts[1].load, pts[0].load);
+        check(pts[2].load > pts[1].load && pts[2].load < 0.75f,
+              "at 10 km/h harder again, and still not fully loaded", pts[2].load, 0.48);
+        // Past the corner it turns over: the engine is flat out and the current falls
+        // away, because the same power is being spread over more speed.
+        check(pts[3].load > 0.95f, "at 30 km/h the engine is fully loaded", pts[3].load,
+              1.0);
+        check(pts[3].amps < 0.8f, "  and the current has come off its limit", pts[3].amps,
+              0.69);
+        check(pts[4].amps < pts[3].amps, "at 80 km/h less current again", pts[4].amps,
+              pts[3].amps);
+        check(pts[4].load > 0.95f, "  with the engine still flat out", pts[4].load, 1.0);
+    }
+
     std::puts("\nAnd it answers the notch");
     {
         const float full = effortAt(w, *di4, 20.0f, 5);

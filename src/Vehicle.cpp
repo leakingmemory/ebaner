@@ -90,8 +90,12 @@ constexpr float kMRSafetyReset = 6.5f;   // safety clears once recharged above t
 
 // Diesel engines (Cummins N14E-R): crank up to a fixed idle, rev up under power.
 constexpr float kIdleRpm = 700.0f;       // low idle
-constexpr float kStartRate = kIdleRpm / 4.0f; // rpm/s while cranking (~4 s to idle)
-constexpr float kStopRate = kIdleRpm / 3.0f;  // rpm/s while spinning down (~3 s)
+// Cranking and spinning down, as times rather than rates for the same reason as the
+// governor above: a 315 rpm idle reached at a 700 rpm engine's rate arrives in half the
+// time it should, and the start sounds hurried on exactly the machine with the big slow
+// engine.
+constexpr float kCrankTime = 4.0f;       // s, stopped -> idle
+constexpr float kSpinDownTime = 3.0f;    // s, idle -> stopped
 constexpr float kCompLoadDrop = 30.0f;   // idle rpm droop while the compressor pumps
 
 // Transmission: diesel-hydraulic — a torque converter for launch feeding a 5-speed
@@ -115,7 +119,20 @@ constexpr float kEta = 0.9f;             // driveline efficiency
 // Lower than a mechanical driveline's, which is the price of having no gearbox.
 constexpr float kElectricEta = 0.85f;
 constexpr float kRevSpeedCap = 11.0f;    // m/s (~40 km/h) reverse power cut
-constexpr float kRpmSlew = 900.0f;       // rpm/s engine speed rate limit under power
+// The governor's spool time is VehicleSpec::spoolTime, held as a time rather than an
+// rpm/s so it means the same lag on any engine instead of a different one per rev range.
+// It used to be one shared 900 rpm/s, which over the Di 4's 315-to-900 span put a 16-645
+// at full speed in two thirds of a second.
+// The load regulator. Excitation is wound on gradually, both so the engine is never
+// asked for power it has not made yet and so the rail does not get a step of torque -
+// which on a machine with this much starting effort is a wheelslip. It comes off much
+// faster than it goes on, because dropping excitation is only switching it off.
+// Slower than the governor can raise the revs, deliberately: the engine arrives at its
+// notch speed first and the load goes on building for a couple of seconds after, which is
+// what a diesel-electric sounds and feels like from the seat. Wind it on faster than the
+// engine and the regulator stops being visible at all - the revs become the only lag.
+constexpr float kLoadOnRate = 0.11f;     // fraction of full excitation per second
+constexpr float kLoadOffRate = 0.80f;
 constexpr float kRpmToRad = 2.0f * 3.14159265358979f / 60.0f; // rev/min -> rad/s
 
 // What the handle asks the pipe to stand at (bar). Release leaves it fully charged;
@@ -150,6 +167,7 @@ Vehicle::Vehicle(const TrackPath* path, const VehicleSpec& spec, float s,
       startTE_(spec.startTE),
       idleRpm_(spec.idleRpm),
       governedRpm_(spec.governedRpm),
+      spoolTime_(spec.spoolTime),
       controls_(spec.controls),
       bodyStyle_(spec.body),
       name_(spec.name),
@@ -819,25 +837,70 @@ void Vehicle::updateElectricDrive(float demandSigned, float demand, bool powerin
     // down at all, because the clamp put the revs back the same step the cranking block
     // wound them toward zero. The hydraulic path never had either fault - it returns
     // here and lets the shared block do it, which is what this now does too.
-    if (!powering) return;
+    if (!powering) {
+        // Excitation falls away with the notch. The revs are the cranking block's.
+        load_ = std::max(0.0f, load_ - kLoadOffRate * dt);
+        railPower_ = 0.0f;
+        return;
+    }
 
     // The governor answers the notch and nothing else - there is no geared speed for the
     // engine to be dragged to, which is why a diesel-electric revs up standing still.
-    const float rpmWant = idleRpm_ + demand * (governedRpm_ - idleRpm_);
+    const float span = std::max(1.0f, governedRpm_ - idleRpm_);
+    const float slew = span / std::max(0.05f, spoolTime_);
+    const float rpmWant = idleRpm_ + demand * span;
     float rpm = engineRpm_[0];
-    rpm += std::clamp(rpmWant - rpm, -kRpmSlew * dt, kRpmSlew * dt);
+    rpm += std::clamp(rpmWant - rpm, -slew * dt, slew * dt);
     rpm = std::clamp(rpm, idleRpm_, governedRpm_);
     for (int i = 0; i < engineCount_; ++i) engineRpm_[i] = rpm;
 
+    // What the engine is *making*, which is not what the notch asked for until it has got
+    // there. Taking this from the notch instead - as this did - hands the driver full
+    // power the instant he touches the handle, with the engine still at idle underneath
+    // it, and is the whole of why the locomotive answered too quickly. Zero at idle: an
+    // idling engine's output goes on its own auxiliaries, not down the alternator.
+    const float made = std::clamp((rpm - idleRpm_) / span, 0.0f, 1.0f);
+    const float rate = made > load_ ? kLoadOnRate : kLoadOffRate;
+    load_ = std::clamp(load_ + std::clamp(made - load_, -rate * dt, rate * dt), 0.0f, 1.0f);
+
     const float sp = std::abs(physV_);
-    const float pRail = demand * powerW_ * kElectricEta;
-    const float teFlat = startTE_ > 0.0f ? startTE_ : std::numeric_limits<float>::max();
+    const float pRail = load_ * powerW_ * kElectricEta;
+    // Three limits, and which one binds is the whole character of the machine.
+    //
+    // The flat one is a CURRENT limit. Tractive effort is what amperes buy, and there is
+    // a maximum the inverters and the motors will pass, so below the corner speed the
+    // effort is level and the driver is holding the ammeter against its stop. Excitation
+    // scales it because excitation is what sets the current in the first place - the
+    // amps come up with the regulator rather than stepping to the limit.
+    //
+    // The consequence is worth stating because it is not obvious: at a crawl the engine
+    // is barely worked. Power at the rail is effort times speed, and 360 kN at 5 km/h is
+    // 500 kW of the 2450 there are. The locomotive is at full revs, the ammeter is
+    // pegged, and the diesel is loafing - which is why railPower_ is carried out
+    // separately rather than inferred from the notch.
+    const float teFlat =
+        startTE_ > 0.0f ? load_ * startTE_ : std::numeric_limits<float>::max();
     const float tePower = pRail / std::max(sp, 0.05f);
     const float teAdh = kTractionMu * drivenFrac_ * mass_ * kG;
     float TE = std::min(std::min(teFlat, tePower), teAdh);
     const float dir = demandSigned >= 0.0f ? 1.0f : -1.0f;
     if (reverse && sp > kRevSpeedCap) TE = 0.0f;
     tractiveEffort_ = dir * TE;
+    railPower_ = TE * sp;
+}
+
+// Motor current as a fraction of what the drive will pass. Effort is what current buys,
+// so below the corner speed these are the same number - which is what makes an ammeter
+// the gauge a diesel-electric is driven on.
+float Vehicle::tractionAmpsFrac() const {
+    if (startTE_ <= 0.0f) return 0.0f;
+    return std::clamp(std::abs(tractiveEffort_) / startTE_, 0.0f, 1.0f);
+}
+
+// And how hard the diesel is actually being worked, which at low speed is not much.
+float Vehicle::enginePowerFrac() const {
+    if (powerW_ <= 0.0f) return 0.0f;
+    return std::clamp(railPower_ / (powerW_ * kElectricEta), 0.0f, 1.0f);
 }
 
 void Vehicle::updateTraction(float demandSigned, float demand, bool powering,
@@ -872,7 +935,8 @@ void Vehicle::updateTraction(float demandSigned, float demand, bool powering,
     const float floorRpm = idleRpm_ + demand * (kConvFloorRpm - idleRpm_);
     const float rpmWant = std::clamp(std::max(rpmLock, floorRpm), idleRpm_, governedRpm_);
     float rpm = engineRpm_[0];
-    rpm += std::clamp(rpmWant - rpm, -kRpmSlew * dt, kRpmSlew * dt);
+    const float hSlew = (governedRpm_ - idleRpm_) / std::max(0.05f, spoolTime_);
+    rpm += std::clamp(rpmWant - rpm, -hSlew * dt, hSlew * dt);
     rpm = std::clamp(rpm, idleRpm_, governedRpm_);
     for (int i = 0; i < engineCount_; ++i) engineRpm_[i] = rpm;
 
@@ -922,11 +986,12 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
     if (!powering) {
         const float rpmTarget =
             engineOn_ ? idleRpm_ - (compActive_ ? kCompLoadDrop : 0.0f) : 0.0f;
+        const float up = idleRpm_ / kCrankTime, down = idleRpm_ / kSpinDownTime;
         for (int i = 0; i < engineCount_; ++i) {
             if (engineRpm_[i] < rpmTarget)
-                engineRpm_[i] = std::min(rpmTarget, engineRpm_[i] + kStartRate * dt);
+                engineRpm_[i] = std::min(rpmTarget, engineRpm_[i] + up * dt);
             else if (engineRpm_[i] > rpmTarget)
-                engineRpm_[i] = std::max(rpmTarget, engineRpm_[i] - kStopRate * dt);
+                engineRpm_[i] = std::max(rpmTarget, engineRpm_[i] - down * dt);
         }
     }
     if (state_ != VehicleState::OnRail) return {};

@@ -210,6 +210,63 @@ int main() {
               l.c.velocity(), still);
     }
 
+    std::puts("\nPower comes on over seconds, not at the touch of the handle");
+    {
+        // Two lags in series, and they are different things. The governor walks a 45-litre
+        // two-stroke from idle to governed speed, and the load regulator winds excitation
+        // on behind it - slower, so the engine arrives first and the load keeps building
+        // after. Taking available power from the NOTCH rather than from the revs, as this
+        // did, gives the driver everything the instant he touches the handle with the
+        // engine still at idle underneath, which is what made it feel too responsive.
+        Loco l(w, *di4);
+        l.c.setReverser(0, 1);
+        for (int i = 0; i < 8; ++i) { l.c.moveBrake(0, -1); l.run(0.3f); }
+        l.run(10.0f); // pipe charged, brake off, engine idling
+        const float rpmIdle = l.c.lead().engineRpm(0);
+        check(std::abs(rpmIdle - di4->idleRpm) < 1.0f, "idling before the handle moves",
+              rpmIdle, di4->idleRpm);
+
+        for (int i = 0; i < 5; ++i) l.c.movePower(0, +1); // straight to full notch
+        l.run(0.5f);
+        const float teEarly = std::abs(l.c.lead().tractiveEffort());
+        const float excEarly = l.c.lead().loadRegulator();
+        check(teEarly < 0.25f * 360000.0f,
+              "half a second later it is pulling a fraction of what it will", teEarly,
+              0.25 * 360000.0);
+        check(excEarly < 0.25f, "  because excitation has barely started", excEarly, 0.25);
+
+        // The engine gets there first.
+        l.run(7.0f);
+        check(l.c.lead().engineRpm(0) > di4->governedRpm - 5.0f,
+              "at seven seconds the engine is at governed speed",
+              l.c.lead().engineRpm(0), di4->governedRpm);
+        const float excAtRpm = l.c.lead().loadRegulator();
+        check(excAtRpm < 0.99f, "  and the load is STILL winding on behind it", excAtRpm,
+              1.0);
+        check(excAtRpm > excEarly, "  well up on where it was", excAtRpm, excEarly);
+
+        l.run(6.0f);
+        check(l.c.lead().loadRegulator() > 0.99f, "a few seconds more and it is fully on",
+              l.c.lead().loadRegulator(), 1.0);
+    }
+
+    std::puts("\nAnd comes off faster than it went on");
+    {
+        Loco l(w, *di4);
+        l.c.setReverser(0, 1);
+        for (int i = 0; i < 8; ++i) { l.c.moveBrake(0, -1); l.run(0.3f); }
+        for (int i = 0; i < 5; ++i) l.c.movePower(0, +1);
+        l.run(20.0f);
+        check(l.c.lead().loadRegulator() > 0.99f, "fully excited under power",
+              l.c.lead().loadRegulator(), 1.0);
+        for (int i = 0; i < 5; ++i) l.c.movePower(0, -1); // handle back to off
+        l.run(1.5f);
+        check(l.c.lead().loadRegulator() < 0.05f, "a second and a half after shutting off",
+              l.c.lead().loadRegulator(), 0.0);
+        check(std::abs(l.c.lead().tractiveEffort()) < 1.0f, "  and nothing is pulling",
+              l.c.lead().tractiveEffort(), 0.0);
+    }
+
     std::puts("\nThe cab that holds the reverser is the cab that drives");
     {
         Loco l(w, *di4);

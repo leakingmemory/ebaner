@@ -167,7 +167,27 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   axles can hold. The corner is not a number anyone chose: it is simply where the first two
   cross, at 2460 kW × 0.85 ÷ 314 kN ≈ 24 km/h, and moves wherever the rating and the starting
   effort put it. So it pulls away hard and then runs out of pull, which is what a heavy diesel
-  loco does and what the railcar does not. It hauls nothing yet — a train of *unlike* vehicles
+  loco does and what the railcar does not.
+  Nor does the power arrive when the handle moves. **Two lags in series**, and they are
+  different machinery: the **governor** walks a 45-litre two-stroke from its 315 rpm idle to
+  900 over about seven seconds, and behind it the **load regulator** winds excitation on
+  more slowly still, so the engine arrives at its notch speed first and the load goes on
+  building for a couple of seconds after — which is what a diesel-electric sounds like from
+  the seat. Available power is taken from the **revs the engine actually has**, not from the
+  notch; taking it from the notch handed the driver everything the instant he touched the
+  handle with the engine still idling underneath. Excitation comes off far faster than it
+  goes on, because dropping it is only switching it off. The flat part of the curve is a
+  **current** limit — tractive effort is what amperes buy — and the consequence is the part
+  that surprises: rail power is effort × speed, so at **2 km/h with the ammeter against its
+  stop the diesel is giving a tenth of its power**, a quarter at 5 km/h and half at 10, and
+  only past the corner is it fully loaded while the current falls away. Full revs, pegged
+  ammeter, loafing engine is not a fault; it is the machine. The HUD carries all three —
+  `exc`, `amps`, `load` — because the lag is otherwise indistinguishable from a broken
+  locomotive. Not modelled: the engine **bogging** under load and the regulator backing off
+  to catch it, the notch-by-notch **discrete governor steps** of an EMD, and the
+  breakdown-torque region above a second corner where an AC drive's effort falls as 1/v² —
+  that last one left alone because guessing where the second corner sits could leave the
+  locomotive unable to reach its own line speed. It hauls nothing yet — a train of *unlike* vehicles
   is its own job — so it runs light engine. Its **governor answers the notch and nothing
   else** — there is no geared speed dragging the revs, which is why a diesel-electric winds
   up standing still — but only while it is *pulling*: off power the revs belong to the same

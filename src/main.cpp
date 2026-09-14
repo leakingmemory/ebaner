@@ -4325,8 +4325,21 @@ int main(int argc, char** argv) {
                         const char* sn = es == EngineState::Running    ? "RUNNING"
                                          : es == EngineState::Starting ? "STARTING"
                                                                        : "STOPPING";
-                        std::snprintf(buf, sizeof(buf), "ENG %s  %.0f rpm", sn,
-                                      vehicle->engineRpm(0));
+                        // On a diesel-electric the revs are only half the story: the
+                        // load regulator is still winding excitation on after the engine
+                        // has arrived, and at low speed the current limit means the diesel
+                        // is barely worked however hard the ammeter is pegged. Both are
+                        // worth showing, or the lag reads as the locomotive being broken.
+                        if (vehicle->lead().drive() == DriveElectric)
+                            std::snprintf(buf, sizeof(buf),
+                                          "ENG %s  %.0f rpm   exc %3.0f%%  amps %3.0f%%  "
+                                          "load %3.0f%%", sn, vehicle->engineRpm(0),
+                                          vehicle->lead().loadRegulator() * 100.0f,
+                                          vehicle->lead().tractionAmpsFrac() * 100.0f,
+                                          vehicle->lead().enginePowerFrac() * 100.0f);
+                        else
+                            std::snprintf(buf, sizeof(buf), "ENG %s  %.0f rpm", sn,
+                                          vehicle->engineRpm(0));
                     }
                     appendText(tv, buf, x, y, sc, glm::vec3(0.7f, 0.85f, 0.7f), fbw, fbh);
                     y += lh;
