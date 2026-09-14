@@ -83,6 +83,23 @@ constexpr float kNoseWFrac = 0.96f;  // the front is a touch narrower than the b
 // in an overhead photograph, which is the shoulder and not a stripe.
 constexpr float kRoofWFrac = 0.69f;
 constexpr float kShoulderFrac = 0.20f;
+// The cab side glazing, off the side elevation: two lights a side between the windscreen
+// and the cab bulkhead, level with the windscreen and with their heads a little under the
+// shoulder, where the flank is still flat. Aft is the rectangular door window; forward of
+// it, past a narrow pillar, a quarter-light whose leading edge rakes back as it rises, so
+// it stands on the sill as a wedge. All measured forward from the bulkhead.
+constexpr float kSideWinBack = 0.26f;  // door window, rear edge
+constexpr float kSideWinFront = 0.88f; // and its front edge
+constexpr float kQtrBack = 1.06f;      // quarter-light, rear edge - a pillar's width on
+constexpr float kQtrFrontLo = 1.60f;   // its forward corner at the sill
+constexpr float kQtrFrontHi = 1.36f;   // and at the head, which is the rake
+constexpr float kSideWinLo = 1.06f;    // sill and head, above the cab floor
+constexpr float kSideWinHi = 1.90f;
+// Seated eye above the cab floor, and the seat under it. One constant, because the mesh
+// and the camera both need it and a cab whose driver is drawn somewhere other than where
+// he looks from is wrong in a way nothing in it can show.
+constexpr float kEyeAboveFloor = 1.37f;
+constexpr float kSeatCushion = 0.56f;
 constexpr float kRoofThick = 0.10f;
 constexpr float kBodyRise = 0.20f;   // underframe top to body floor
 // The older coupling: side buffers on 1.75 m centres and a screw coupling between them,
@@ -1003,9 +1020,36 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
         // Sides, top and bottom, but no end caps. A box would put a red wall across each
         // cab at yEdge, half a metre in front of the driver's face; the caps were never
         // seen from outside anyway, because the nose panels close those ends.
-        for (const float sx : {-1.0f, 1.0f})
-            quadN(P(sx * hw, -yEdge, z0), P(sx * hw, yEdge, z0), P(sx * hw, yEdge, zSh),
+        // The flanks, cut for the cab glazing at each end. One opening is cut spanning
+        // both lights and the pillar between them is put back inside it, along with the
+        // wedge of bodywork the quarter-light's rake leaves above its leading edge.
+        // Painting glass on an uncut side gives a dark patch and no daylight.
+        const float bulk = halfLen - di4::kCabLen;
+        const float wy0 = bulk + di4::kSideWinBack;  // opening, toward the middle
+        const float wy1 = bulk + di4::kSideWinFront; // door window's forward edge
+        const float qy0 = bulk + di4::kQtrBack;      // quarter-light's rear edge
+        const float qy1 = bulk + di4::kQtrFrontLo;   // and its sill corner: the opening's
+        const float qy2 = bulk + di4::kQtrFrontHi;   // head corner, set back by the rake
+        const float wzL = z0 + di4::kSideWinLo, wzH = z0 + di4::kSideWinHi;
+        for (const float sx : {-1.0f, 1.0f}) {
+            quadN(P(sx * hw, -yEdge, z0), P(sx * hw, yEdge, z0), P(sx * hw, yEdge, wzL),
+                  P(sx * hw, -yEdge, wzL), di4::kBody, core);
+            quadN(P(sx * hw, -yEdge, wzH), P(sx * hw, yEdge, wzH), P(sx * hw, yEdge, zSh),
                   P(sx * hw, -yEdge, zSh), di4::kBody, core);
+            quadN(P(sx * hw, -wy0, wzL), P(sx * hw, wy0, wzL), P(sx * hw, wy0, wzH),
+                  P(sx * hw, -wy0, wzH), di4::kBody, core);
+            for (const float sy : {-1.0f, 1.0f}) {
+                quadN(P(sx * hw, sy * qy1, wzL), P(sx * hw, sy * yEdge, wzL),
+                      P(sx * hw, sy * yEdge, wzH), P(sx * hw, sy * qy1, wzH), di4::kBody,
+                      core);
+                quadN(P(sx * hw, sy * wy1, wzL), P(sx * hw, sy * qy0, wzL),
+                      P(sx * hw, sy * qy0, wzH), P(sx * hw, sy * wy1, wzH), di4::kBody,
+                      core); // the pillar between the two lights
+                quadN(P(sx * hw, sy * qy1, wzL), P(sx * hw, sy * qy2, wzH),
+                      P(sx * hw, sy * qy1, wzH), P(sx * hw, sy * qy1, wzH), di4::kBody,
+                      core); // and the wedge over the rake
+            }
+        }
         quadN(P(-hw, -yEdge, z0), P(hw, -yEdge, z0), P(hw, yEdge, z0), P(-hw, yEdge, z0),
               di4::kBody, core);
         quadN(P(-hw, -yEdge, zSh), P(hw, -yEdge, zSh), P(hw, yEdge, zSh),
@@ -1095,11 +1139,32 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
             // the floor to the ceiling, and the nose reaches half a metre further forward
             // than that line in between - which is precisely where the driver's eye is.
             const float yKn = yK2 - so * 0.05f;
+            // Where the side glazing goes. It sits wholly above the knee, so only the
+            // upper panel is cut; the lower one runs on whole.
+            const float wyR = yB + so * di4::kSideWinBack;
+            const float wyF = yB + so * di4::kSideWinFront;
+            const float qyR = yB + so * di4::kQtrBack;
+            const float qyLo = yB + so * di4::kQtrFrontLo;
+            const float qyHi = yB + so * di4::kQtrFrontHi;
+            const float wzL = zFl + di4::kSideWinLo, wzH = zFl + di4::kSideWinHi;
             for (const float sx : {-1.0f, 1.0f}) {
+                const glm::vec3 outb = mid + X * (sx * 6.0f);
                 quadN(P(sx * ihw, yB, zFl), P(sx * ihw, yFl, zFl), P(sx * ihw, yKn, zKnee),
-                      P(sx * ihw, yB, zKnee), di4::kCabWall, mid + X * (sx * 6.0f));
-                quadN(P(sx * ihw, yB, zKnee), P(sx * ihw, yKn, zKnee), P(sx * ihw, yCe, zC),
-                      P(sx * ihw, yB, zC), di4::kCabWall, mid + X * (sx * 6.0f));
+                      P(sx * ihw, yB, zKnee), di4::kCabWall, outb);
+                // Upper panel, as a frame round the opening: behind it, under it, over it,
+                // and the rest forward to the slanted edge that follows the nose.
+                quadN(P(sx * ihw, yB, zKnee), P(sx * ihw, wyR, zKnee), P(sx * ihw, wyR, zC),
+                      P(sx * ihw, yB, zC), di4::kCabWall, outb);
+                quadN(P(sx * ihw, wyR, zKnee), P(sx * ihw, qyLo, zKnee),
+                      P(sx * ihw, qyLo, wzL), P(sx * ihw, wyR, wzL), di4::kCabWall, outb);
+                quadN(P(sx * ihw, wyR, wzH), P(sx * ihw, qyLo, wzH), P(sx * ihw, qyLo, zC),
+                      P(sx * ihw, wyR, zC), di4::kCabWall, outb);
+                quadN(P(sx * ihw, qyLo, zKnee), P(sx * ihw, yKn, zKnee),
+                      P(sx * ihw, yCe, zC), P(sx * ihw, qyLo, zC), di4::kCabWall, outb);
+                quadN(P(sx * ihw, wyF, wzL), P(sx * ihw, qyR, wzL), P(sx * ihw, qyR, wzH),
+                      P(sx * ihw, wyF, wzH), di4::kCabWall, outb); // pillar
+                quadN(P(sx * ihw, qyLo, wzL), P(sx * ihw, qyHi, wzH), P(sx * ihw, qyLo, wzH),
+                      P(sx * ihw, qyLo, wzH), di4::kCabWall, outb); // wedge over the rake
             }
             quadN(P(-ihw, yB, zFl), P(ihw, yB, zFl), P(ihw, yB, zC), P(-ihw, yB, zC),
                   di4::kCabWall, mid - out);
@@ -1135,19 +1200,50 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                       di4::kBlind, out);
             }
 
-            // A side window each side - the driver's is in a door, which the photographs
-            // show with a window of its own and a rounded head.
+            // One side light: the reveal carrying the lining out to the skin, and the
+            // glass set in the skin. Seven centimetres of nothing between two apertures is
+            // a slot a grazing line of sight goes straight through, which is the fault the
+            // windscreen had; the glass is lapped over its frame here for the same reason.
+            // Written for any four-cornered opening because the quarter-light is not a
+            // rectangle - its leading edge rakes - and a rectangle-only version would have
+            // to special-case it or leave it unlined.
+            auto sideLight = [&](float sx, const float (&wy)[4], const float (&wz)[4]) {
+                const float xi = sx * ihw, xo = sx * (hw - 0.004f);
+                const float xm = 0.5f * (xi + xo);
+                float cy = 0.0f, cz = 0.0f;
+                for (int i = 0; i < 4; ++i) { cy += 0.25f * wy[i]; cz += 0.25f * wz[i]; }
+                for (int i = 0; i < 4; ++i) {
+                    const int j = (i + 1) % 4;
+                    if (std::abs(wy[i] - wy[j]) < 1e-4f && std::abs(wz[i] - wz[j]) < 1e-4f)
+                        continue;
+                    // Each reveal face looks in at the opening, so its reference point is
+                    // pushed well outside along that edge's own outward direction.
+                    const float ey = 0.5f * (wy[i] + wy[j]), ez = 0.5f * (wz[i] + wz[j]);
+                    const glm::vec3 ref =
+                        P(xm, ey + (ey - cy) * 60.0f, ez + (ez - cz) * 60.0f);
+                    quadN(P(xi, wy[i], wz[i]), P(xo, wy[i], wz[i]), P(xo, wy[j], wz[j]),
+                          P(xi, wy[j], wz[j]), di4::kCabWall, ref);
+                }
+                const float gx = sx * (hw - 0.014f);
+                glm::vec3 g[4];
+                for (int i = 0; i < 4; ++i) {
+                    const float dy = wy[i] - cy, dz = wz[i] - cz;
+                    const float l = std::max(1e-4f, std::sqrt(dy * dy + dz * dz));
+                    g[i] = P(gx, wy[i] + 0.016f * dy / l, wz[i] + 0.016f * dz / l);
+                }
+                quadN(g[0], g[1], g[2], g[3], di4::kGlass, mid + X * (sx * 6.0f));
+            };
             for (const float sx : {-1.0f, 1.0f}) {
-                const float wy0 = yB + so * 0.55f, wy1 = yB + so * 1.55f;
-                const float wz0 = zFl + 1.02f, wz1 = zFl + 1.78f;
-                quadN(P(sx * (ihw - 0.006f), wy0, wz0), P(sx * (ihw - 0.006f), wy1, wz0),
-                      P(sx * (ihw - 0.006f), wy1, wz1), P(sx * (ihw - 0.006f), wy0, wz1),
-                      di4::kGlass, mid + X * (sx * 6.0f));
+                const float dy[4] = {wyR, wyF, wyF, wyR};       // the door window
+                const float dz[4] = {wzL, wzL, wzH, wzH};
+                sideLight(sx, dy, dz);
+                const float qy[4] = {qyR, qyLo, qyHi, qyR};     // and the quarter-light
+                const float qz[4] = {wzL, wzL, wzH, wzH};
+                sideLight(sx, qy, qz);
             }
-            // The door frame on the driver's side, standing a little proud of the wall.
-            for (const float dz : {0.90f, 1.90f})
-                emitBox(X, Y, Z, P(dx(1.46f), yB + so * 1.05f, zFl + dz), 0.02f, 0.62f,
-                        0.03f, di4::kFrame);
+            // A grab rail under the driver's window, which is in a door.
+            emitBox(X, Y, Z, P(dx(1.46f), 0.5f * (wyR + wyF), wzL - 0.10f), 0.02f, 0.38f,
+                    0.025f, di4::kFrame);
 
             // The desk: one flat slab across the cab at elbow height, its forward edge
             // under the windscreen sill. A plain table to the left, instruments right.
@@ -1189,7 +1285,7 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
 
             // The eye this is all aimed at - and the same point drivercam::eyePose puts
             // the camera, which is the only reason any of these offsets are what they are.
-            const glm::vec3 eye = P(xD, yCB - so * 0.95f, zFl + 1.25f);
+            const glm::vec3 eye = P(xD, yCB - so * 0.95f, zFl + di4::kEyeAboveFloor);
             const glm::vec3 u = glm::normalize(BR - BL);
             const glm::vec3 v = glm::normalize(TL - BL);
             glm::vec3 n = glm::normalize(glm::cross(u, v));
@@ -1294,10 +1390,12 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
             // flat table in front of it that the photographs show instead of a console.
             auto seat = [&](float sx) {
                 const float sy = yCB - so * 0.95f; // where the eye is, by construction
-                emitBox(X, Y, Z, P(sx, sy, zFl + 0.20f), 0.10f, 0.10f, 0.20f, di4::kDash);
-                emitBox(X, Y, Z, P(sx, sy, zFl + 0.46f), 0.26f, 0.25f, 0.06f, di4::kSeat);
-                emitBox(X, Y, Z, P(sx, sy - so * 0.23f, zFl + 0.80f), 0.26f, 0.05f, 0.34f,
+                emitBox(X, Y, Z, P(sx, sy, zFl + 0.5f * di4::kSeatCushion), 0.10f, 0.10f,
+                        0.5f * di4::kSeatCushion, di4::kDash);
+                emitBox(X, Y, Z, P(sx, sy, zFl + di4::kSeatCushion), 0.26f, 0.25f, 0.06f,
                         di4::kSeat);
+                emitBox(X, Y, Z, P(sx, sy - so * 0.23f, zFl + di4::kSeatCushion + 0.34f),
+                        0.26f, 0.05f, 0.34f, di4::kSeat);
             };
             seat(xD);
             seat(dx(-0.86f));
@@ -1384,15 +1482,15 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                                    zChin + 0.30f * (zKnee - zChin)),
                         0.11f, 0.16f, 0.09f, di4::kLight);
 
-            // A door a side behind the cab, and a cab side window.
-            for (const float sx : {-1.0f, 1.0f}) {
+            // A door a side behind the cab, where the side elevation has it, with the
+            // handrail beside it. The cab side window used to be here too, as a pane laid
+            // on the outside of an uncut flank - too high, too short, and see-through into
+            // nothing. It is a real opening now, cut through skin and lining together
+            // further forward, and drawn with the rest of the cab.
+            for (const float sx : {-1.0f, 1.0f})
                 emitBox(X, Y, Z, P(sx * (hw - 0.004f), so * (flat - 0.45f),
                                    z0 + 0.44f * bodyH),
                         0.014f, 0.40f, 0.44f * bodyH, di4::kFrame);
-                emitBox(X, Y, Z, P(sx * (hw - 0.002f), so * (flat + 0.75f),
-                                   z0 + bodyH * 0.72f),
-                        0.014f, 0.52f, 0.24f, di4::kGlass);
-            }
 
             // Buffer beam, coupler and the snowplough - which on this line is not an
             // ornament. It hangs below the skirt, ahead of the knee.
@@ -1583,7 +1681,8 @@ bool eyePose(const Consist& c, int position, glm::vec3& eye, glm::vec3& forward)
         const float zFl = wheelset::kRailTopZ + 2.0f * v.wheelRadius() + kFrameHalfHeight +
                           di4::kBodyRise; // cab floor = body floor
         const float sy = so * (halfLen - 0.92f) - so * 0.95f; // seat, as in emitDi4Cab
-        eye = f.pos + f.tangent * sy + f.right * (-so * 0.60f) + f.up * (zFl + 1.25f);
+        eye = f.pos + f.tangent * sy + f.right * (-so * 0.60f) +
+              f.up * (zFl + di4::kEyeAboveFloor);
         forward = f.tangent * so;
         return true;
     }

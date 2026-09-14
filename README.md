@@ -178,7 +178,13 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   one is a **load meter**, the traction ammeter the machine is actually driven on and the one
   gauge a Class 93 driver has no use for. Speed, load, main reservoir, brake pipe, brake
   cylinder and engine revs all track the sim, and the combined lever with its yellow collar
-  leans with the handle. `EBANER_CAB=<n>` seats the driver at start-up, because otherwise a
+  leans with the handle. Each side carries **two lights** as well, set between the
+  windscreen and the cab bulkhead and level with the screen, as the side elevation has
+  them: the rectangular **door window**, and forward of it past a narrow pillar a
+  **quarter-light** whose leading edge rakes back as it rises, so it stands on the sill as
+  a wedge. Both are cut through the skin and the lining together with a reveal joining
+  them — the flank used to carry a single pane laid on an *uncut* side, which is a dark
+  patch and no daylight. `EBANER_CAB=<n>` seats the driver at start-up, because otherwise a
   cab is reachable only by keypress and cannot be screenshotted or checked headlessly.
   Fitting the cab is what found the **windscreen a metre too high**: the sill had been scaled
   off the side elevation between the roof and the *buffer beam* rather than the railhead, and
