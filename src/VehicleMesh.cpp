@@ -67,8 +67,14 @@ const glm::vec3 kPlough(0.86f, 0.70f, 0.09f); // the snowplough, yellow
 constexpr float kCabLen = 2.60f;    // cab, from the body end to the point of the nose
 constexpr float kRoofEdgeAt = 0.91f; // roof edge, back from the nose point
 constexpr float kChinAt = 0.55f;     // the chin's kink and the skirt, likewise
-constexpr float kKneeFrac = 0.57f;   // knee height, of the body's above the floor
-constexpr float kChinFrac = 0.33f;   // and the kink below it
+// Where the knee sits decides whether the cab works, because the knee *is* the windscreen
+// sill: put it high and the glass ends up above a seated driver's eye, looking at bodywork.
+// Scaled off the side elevation between the roof and the railhead - measuring to the buffer
+// beam instead, as this first did, shortens the ruler and drives the whole nose up a metre.
+// The winter three-quarter view agrees: sill 2.4 m over rail, screen head 3.4 m, and a good
+// metre of red surround and grey cowl above that before the roof.
+constexpr float kKneeFrac = 0.34f;   // knee height, of the body's above the floor
+constexpr float kChinFrac = 0.04f;   // and the kink below it, just clear of the solebar
 constexpr float kNoseWFrac = 0.96f;  // the front is a touch narrower than the body
 // Seen head on the roof is much narrower than the body, with the shoulders chamfered down
 // to the sides - the flanks tumble home at the top. Taken off a front elevation drawn over
@@ -81,6 +87,30 @@ constexpr float kRoofThick = 0.10f;
 constexpr float kBodyRise = 0.20f;   // underframe top to body floor
 // The older coupling: side buffers on 1.75 m centres and a screw coupling between them,
 // not the centre Scharfenberg the railcar carries.
+// The windscreen within the raked panel, as a fraction of knee to roof. The cab reads
+// these too - the sill is where the desk stops and the console starts, so the inside and
+// the outside have to agree about it or the driver ends up looking at bodywork.
+constexpr float kScreenLoV = 0.02f;
+constexpr float kScreenHiV = 0.52f;
+// Inside. White walls, pillars and ceiling, a dark floor and dark seats, and one flat desk
+// in a mid steel blue that is the only real colour in the cab.
+const glm::vec3 kCabWall(0.86f, 0.86f, 0.84f);
+const glm::vec3 kCabFloor(0.15f, 0.15f, 0.16f);
+const glm::vec3 kDesk(0.20f, 0.27f, 0.42f);
+const glm::vec3 kDash(0.12f, 0.12f, 0.13f);
+const glm::vec3 kSeat(0.11f, 0.11f, 0.12f);
+const glm::vec3 kScreen(0.28f, 0.40f, 0.33f);
+const glm::vec3 kGauge(0.85f, 0.85f, 0.82f);   // the two large faces, pale
+const glm::vec3 kGaugeS(0.09f, 0.09f, 0.10f);  // the small ones, black
+const glm::vec3 kNeedle(0.08f, 0.08f, 0.09f);
+const glm::vec3 kNeedleL(0.90f, 0.90f, 0.86f); // a needle on a black face
+const glm::vec3 kRed(0.78f, 0.12f, 0.10f);
+const glm::vec3 kButton(0.26f, 0.26f, 0.28f);
+const glm::vec3 kBlind(0.30f, 0.30f, 0.31f);   // the roller sun blinds over the screens
+// The load meter's full scale. A diesel-electric is driven on its ammeter, and this is the
+// locomotive's starting tractive effort out of kVehicleSpecs - keep the two together.
+constexpr float kLoadFullN = 360000.0f;
+constexpr float kRevFull = 1000.0f; // rev counter full scale, over a 900 rpm governor
 constexpr float kBufferHalfSpacing = 0.875f;
 constexpr float kBufferR = 0.19f;
 } // namespace di4
@@ -256,6 +286,45 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
         push(p0, n, col); push(p1, n, col); push(p2, n, col); push(p3, n, col);
         indices_.push_back(b + 0); indices_.push_back(b + 1); indices_.push_back(b + 2);
         indices_.push_back(b + 0); indices_.push_back(b + 2); indices_.push_back(b + 3);
+    };
+
+    // --- Instruments ------------------------------------------------------------------
+    // A dashboard is drawn the same way whoever built the locomotive: a flat panel, a round
+    // dial face, and a needle swept across it. These sat inside the Class 93's cab block
+    // and so could not be reached from anywhere else; they are up here now because there is
+    // a second cab to draw and one copy of this is enough. `C,u,v,n` are the panel's centre
+    // and its two in-plane axes with its outward normal - so a gauge is placed in the
+    // panel's own coordinates and does not care how the panel is angled in the cab.
+    auto rectFace = [&](const glm::vec3& C, const glm::vec3& u, const glm::vec3& v,
+                        const glm::vec3& n, float cx, float cy, float hu, float hv, float pr,
+                        const glm::vec3& col) {
+        const glm::vec3 o = C + u * cx + v * cy + n * pr;
+        quadN(o - u * hu - v * hv, o + u * hu - v * hv, o + u * hu + v * hv,
+              o - u * hu + v * hv, col, o - n);
+    };
+    auto discFace = [&](const glm::vec3& C, const glm::vec3& u, const glm::vec3& v,
+                        const glm::vec3& n, float cx, float cy, float r, float pr,
+                        const glm::vec3& col) {
+        const glm::vec3 o = C + u * cx + v * cy + n * pr;
+        const int M = 16;
+        glm::vec3 prev = o + u * r;
+        for (int i = 1; i <= M; ++i) {
+            const float a = 2.0f * kPi * i / M;
+            const glm::vec3 cur = o + u * (r * std::cos(a)) + v * (r * std::sin(a));
+            quadN(o, prev, cur, cur, col, o - n);
+            prev = cur;
+        }
+    };
+    // A gauge needle: value fraction in [0,1] sweeps a 240-degree arc.
+    auto needle = [&](const glm::vec3& C, const glm::vec3& u, const glm::vec3& v,
+                      const glm::vec3& n, float cx, float cy, float r, float frac,
+                      const glm::vec3& col) {
+        const glm::vec3 o = C + u * cx + v * cy + n * 0.016f;
+        const float a = kPi * (210.0f - 240.0f * std::clamp(frac, 0.0f, 1.0f)) / 180.0f;
+        const glm::vec3 dir = u * std::cos(a) + v * std::sin(a);
+        const glm::vec3 perp = -u * std::sin(a) + v * std::cos(a);
+        const glm::vec3 tip = o + dir * r;
+        quadN(o - perp * 0.006f, o + perp * 0.006f, tip, tip, col, o - n);
     };
 
     // One NSB Class 93 car-body section. `f` is the section frame (X=right,
@@ -810,37 +879,6 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                 };
                 auto ptBot = [&](float x) { return P(x, frontY(x), zTab); };
                 auto ptTop = [&](float x) { return P(x, frontY(x) + so * rakeY, zDome); };
-                auto rectFace = [&](const glm::vec3& C, const glm::vec3& u, const glm::vec3& v,
-                                    const glm::vec3& n, float cx, float cy, float hu, float hv,
-                                    float pr, const glm::vec3& col) {
-                    const glm::vec3 o = C + u * cx + v * cy + n * pr;
-                    quadN(o - u * hu - v * hv, o + u * hu - v * hv, o + u * hu + v * hv,
-                          o - u * hu + v * hv, col, o - n);
-                };
-                auto discFace = [&](const glm::vec3& C, const glm::vec3& u, const glm::vec3& v,
-                                    const glm::vec3& n, float cx, float cy, float r, float pr,
-                                    const glm::vec3& col) {
-                    const glm::vec3 o = C + u * cx + v * cy + n * pr;
-                    const int M = 16;
-                    glm::vec3 prev = o + u * r;
-                    for (int i = 1; i <= M; ++i) {
-                        const float a = 2.0f * kPi * i / M;
-                        const glm::vec3 cur = o + u * (r * std::cos(a)) + v * (r * std::sin(a));
-                        quadN(o, prev, cur, cur, col, o - n);
-                        prev = cur;
-                    }
-                };
-                // A gauge needle: value fraction in [0,1] sweeps a 240-degree arc.
-                auto needle = [&](const glm::vec3& C, const glm::vec3& u, const glm::vec3& v,
-                                  const glm::vec3& n, float cx, float cy, float r, float frac,
-                                  const glm::vec3& col) {
-                    const glm::vec3 o = C + u * cx + v * cy + n * 0.016f;
-                    const float a = kPi * (210.0f - 240.0f * std::clamp(frac, 0.0f, 1.0f)) / 180.0f;
-                    const glm::vec3 dir = u * std::cos(a) + v * std::sin(a);
-                    const glm::vec3 perp = -u * std::sin(a) + v * std::cos(a);
-                    const glm::vec3 tip = o + dir * r;
-                    quadN(o - perp * 0.006f, o + perp * 0.006f, tip, tip, col, o - n);
-                };
                 glm::vec3 C, u, v, n;
                 auto facet = [&](float xa, float xb) {
                     const glm::vec3 BL = ptBot(xa), BR = ptBot(xb), TR = ptTop(xb), TL = ptTop(xa);
@@ -962,8 +1000,16 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
 
         // The body between the two roof edges, at one height, and its roof.
         const float yEdge = halfLen - di4::kRoofEdgeAt;
-        emitBox(X, Y, Z, P(0.0f, 0.0f, z0 + 0.5f * (zSh - z0)), hw, yEdge,
-                0.5f * (zSh - z0), di4::kBody);
+        // Sides, top and bottom, but no end caps. A box would put a red wall across each
+        // cab at yEdge, half a metre in front of the driver's face; the caps were never
+        // seen from outside anyway, because the nose panels close those ends.
+        for (const float sx : {-1.0f, 1.0f})
+            quadN(P(sx * hw, -yEdge, z0), P(sx * hw, yEdge, z0), P(sx * hw, yEdge, zSh),
+                  P(sx * hw, -yEdge, zSh), di4::kBody, core);
+        quadN(P(-hw, -yEdge, z0), P(hw, -yEdge, z0), P(hw, yEdge, z0), P(-hw, yEdge, z0),
+              di4::kBody, core);
+        quadN(P(-hw, -yEdge, zSh), P(hw, -yEdge, zSh), P(hw, yEdge, zSh),
+              P(-hw, yEdge, zSh), di4::kBody, core);
         for (const float sx : {-1.0f, 1.0f}) // the shoulders
             quadN(P(sx * hw, -yEdge, zSh), P(sx * hw, yEdge, zSh),
                   P(sx * hwRoof, yEdge, roofZ), P(sx * hwRoof, -yEdge, roofZ), di4::kBody,
@@ -987,6 +1033,276 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                 emitBox(X, Y, Z, P(sx * (hw + 0.006f), 0.0f, z0 + bodyH * fz), 0.010f,
                         flat * 0.99f, 0.050f, di4::kStripe);
 
+        // --- The cab ---------------------------------------------------------------------
+        //
+        // Drawn from three interior photographs of a class of five. Two windscreens of
+        // equal size either side of a narrow centre pillar, roller blinds above them; the
+        // driver on the right, a second seat and a plain flat table on the left; and one
+        // steel-blue desk running the full width of the cab. On it, in front of the driver,
+        // a raised housing raked back at him - the dome - carrying, left to right, a
+        // rectangular display, two large dials and a row of four small gauges.
+        //
+        // The large pair is a speedometer and a load meter. A diesel-electric is driven on
+        // its ammeter: it is what says how hard the generator is being asked to work, and
+        // it is the one gauge a Class 93 driver has no use for.
+        auto emitDi4Cab = [&](float so) {
+            // Inside the lining. Narrow enough to clear the nose, which is the tightest
+            // thing the cab has to fit inside, and used everywhere so the walls are
+            // straight - a wall that tapers has to be mitred into every window in it.
+            const float ihw = hw * di4::kNoseWFrac - 0.01f;
+            const float yB = so * flat;                    // rear bulkhead
+            const float yK2 = so * halfLen;                // the knee, as the nose has it
+            const float yE2 = so * (halfLen - di4::kRoofEdgeAt); // and the roof edge
+            const float yC2 = so * (halfLen - di4::kChinAt);     // and the chin kink
+            const float zGL = zKnee + di4::kScreenLoV * (roofZ - zKnee);  // screen sill
+            const float zGH = zKnee + di4::kScreenHiV * (roofZ - zKnee);  // and its head
+            // The cab floor is the body floor, 1.48 m over the railhead, which is where a
+            // locomotive's is. Everything inside is measured up from it, and the number
+            // that has to come out right is the eye: seated, it must land between the
+            // windscreen sill and its head or the driver is looking at bodywork.
+            const float zFl = z0;
+            const float zC = zGH + 0.30f;         // ceiling, kept clear of the shoulder
+            // The driver's right is at -so: `f.right` is cross(up, tangent), so the sign
+            // that keeps a hand on the same side of the cab flips with the end. The Class
+            // 93 works the same way round and for the same reason.
+            auto dx = [&](float w) { return -so * w; };
+            const float xD = dx(0.60f);                        // the driver's centreline
+            const glm::vec3 mid = P(0.0f, 0.5f * (yB + yE2), 0.5f * (zFl + zC));
+            const glm::vec3 out = Y * (so * 6.0f);             // a point beyond the nose
+
+            // How far forward the skin is at a given height: the vertical skirt, then the
+            // chin's rake, then the screen's. The floor, walls and ceiling all stop against
+            // this rather than at one y, because the nose leans - a lining squared off at
+            // the roof edge leaves the red skin bare beside the driver's shoulder, and one
+            // squared off at the knee stands out through the front of the locomotive.
+            auto yFront = [&](float z) {
+                if (z <= zChin) return yC2;
+                if (z <= zKnee) return yC2 + (yK2 - yC2) * (z - zChin) / (zKnee - zChin);
+                return yK2 + (yE2 - yK2) * (z - zKnee) / (roofZ - zKnee);
+            };
+            const float yFl = yFront(zFl) - so * 0.05f, yCe = yFront(zC) - so * 0.05f;
+            // Shell. A room is seen from within, so every reference point here is outside
+            // its own face and the normals turn inward.
+            // A centimetre and a half up: the body's own underside is at exactly this
+            // height, and two coplanar faces fight for the pixel - which the floor loses,
+            // so the driver stands on red paint.
+            const float zPan = zFl + 0.015f;
+            quadN(P(-ihw, yB, zPan), P(ihw, yB, zPan), P(ihw, yFl, zPan),
+                  P(-ihw, yFl, zPan), di4::kCabFloor, mid + Z * 6.0f);
+            quadN(P(-ihw, yB, zC), P(ihw, yB, zC), P(ihw, yCe, zC), P(-ihw, yCe, zC),
+                  di4::kCabWall, mid - Z * 6.0f);
+            // Two panels a side, folding at the knee. One would be a straight edge from
+            // the floor to the ceiling, and the nose reaches half a metre further forward
+            // than that line in between - which is precisely where the driver's eye is.
+            const float yKn = yK2 - so * 0.05f;
+            for (const float sx : {-1.0f, 1.0f}) {
+                quadN(P(sx * ihw, yB, zFl), P(sx * ihw, yFl, zFl), P(sx * ihw, yKn, zKnee),
+                      P(sx * ihw, yB, zKnee), di4::kCabWall, mid + X * (sx * 6.0f));
+                quadN(P(sx * ihw, yB, zKnee), P(sx * ihw, yKn, zKnee), P(sx * ihw, yCe, zC),
+                      P(sx * ihw, yB, zC), di4::kCabWall, mid + X * (sx * 6.0f));
+            }
+            quadN(P(-ihw, yB, zFl), P(ihw, yB, zFl), P(ihw, yB, zC), P(-ihw, yB, zC),
+                  di4::kCabWall, mid - out);
+            // The white surround, drawn on the nose's own rake and just inside it. A
+            // vertical plane here looks reasonable and is wrong: the skin leans back as it
+            // rises, so a flat lining pokes straight out through the front of the
+            // locomotive over most of its height.
+            const float hwN2 = hw * di4::kNoseWFrac;
+            const float gwI = hwN2 * 0.92f * 0.96f;
+            auto fin = [&](float x, float vv) {
+                return P(x, yK2 + (yE2 - yK2) * vv, zKnee + (roofZ - zKnee) * vv) -
+                       Y * (so * 0.035f);
+            };
+            const float vLo = di4::kScreenLoV, vHi = di4::kScreenHiV;
+            const float vC = (zC - zKnee) / (roofZ - zKnee);
+            quadN(fin(-hwN2, vHi), fin(hwN2, vHi), fin(hwN2, vC), fin(-hwN2, vC),
+                  di4::kCabWall, out);                        // header
+            quadN(fin(-hwN2, 0.0f), fin(hwN2, 0.0f), fin(hwN2, vLo), fin(-hwN2, vLo),
+                  di4::kCabWall, out);                        // sill
+            // and on down the chin, which the desk hides all but a hand's width of.
+            quadN(P(-hwN2, yC2 - so * 0.04f, zChin), P(hwN2, yC2 - so * 0.04f, zChin),
+                  P(hwN2, yK2 - so * 0.04f, zKnee), P(-hwN2, yK2 - so * 0.04f, zKnee),
+                  di4::kCabWall, out);
+            for (const float sx : {-1.0f, 1.0f})              // jambs
+                quadN(fin(sx * gwI, vLo), fin(sx * hwN2, vLo), fin(sx * hwN2, vHi),
+                      fin(sx * gwI, vHi), di4::kCabWall, out);
+            // The centre pillar. Narrow: two big equal panes and little between them.
+            quadN(fin(-0.055f, vLo), fin(0.055f, vLo), fin(0.055f, vHi), fin(-0.055f, vHi),
+                  di4::kCabWall, out);
+            for (const float sx : {-1.0f, 1.0f}) {            // roller blinds
+                const float a = sx > 0.0f ? 0.09f : -gwI, b = sx > 0.0f ? gwI : -0.09f;
+                quadN(fin(a, vHi - 0.17f), fin(b, vHi - 0.17f), fin(b, vHi), fin(a, vHi),
+                      di4::kBlind, out);
+            }
+
+            // A side window each side - the driver's is in a door, which the photographs
+            // show with a window of its own and a rounded head.
+            for (const float sx : {-1.0f, 1.0f}) {
+                const float wy0 = yB + so * 0.55f, wy1 = yB + so * 1.55f;
+                const float wz0 = zFl + 1.02f, wz1 = zFl + 1.78f;
+                quadN(P(sx * (ihw - 0.006f), wy0, wz0), P(sx * (ihw - 0.006f), wy1, wz0),
+                      P(sx * (ihw - 0.006f), wy1, wz1), P(sx * (ihw - 0.006f), wy0, wz1),
+                      di4::kGlass, mid + X * (sx * 6.0f));
+            }
+            // The door frame on the driver's side, standing a little proud of the wall.
+            for (const float dz : {0.90f, 1.90f})
+                emitBox(X, Y, Z, P(dx(1.46f), yB + so * 1.05f, zFl + dz), 0.02f, 0.62f,
+                        0.03f, di4::kFrame);
+
+            // The desk: one flat slab across the cab at elbow height, its forward edge
+            // under the windscreen sill. A plain table to the left, instruments right.
+            const float zD = zFl + 0.86f;
+            const float yDB = so * (halfLen - 1.02f);  // the edge nearest the driver
+            const float yDF = so * (halfLen - 0.16f);  // and the one under the glass
+            const float yDC = 0.5f * (yDB + yDF);
+            emitBox(X, Y, Z, P(0.0f, yDC, zD - 0.025f), ihw - 0.02f,
+                    0.5f * std::abs(yDF - yDB), 0.025f, di4::kDesk);
+            quadN(P(-ihw, yDB, zFl), P(ihw, yDB, zFl), P(ihw, yDB, zD - 0.05f),
+                  P(-ihw, yDB, zD - 0.05f), di4::kDash, out); // kick panel
+            for (int i = -1; i <= 1; ++i)
+                emitBox(X, Y, Z,
+                        P(static_cast<float>(i) * 0.52f, yDB - so * 0.03f, zFl + 0.30f),
+                        0.17f, 0.03f, 0.11f, di4::kButton);
+
+            // The console, standing on the desk in front of the driver with its face raked
+            // back at him. Its top rides just above the windscreen sill - which is why the
+            // sill had to be at the right height before any of this could be placed.
+            const float cW = 0.60f;                   // face half width
+            const float yCB = so * (halfLen - 0.92f); // face, bottom edge
+            const float yCF = so * (halfLen - 0.46f); // face, top edge
+            const float zCB = zD + 0.05f, zCT = zD + 0.30f; // top just under the sightline
+            const float xL = xD + dx(-cW), xR = xD + dx(cW);
+            const glm::vec3 BL = P(xL, yCB, zCB), BR = P(xR, yCB, zCB);
+            const glm::vec3 TR = P(xR, yCF, zCT), TL = P(xL, yCF, zCT);
+            const glm::vec3 FL = P(xL, yDF, zCT), FR = P(xR, yDF, zCT);
+            const glm::vec3 bBL = P(xL, yCB, zD), bBR = P(xR, yCB, zD);
+            const glm::vec3 bFL = P(xL, yDF, zD), bFR = P(xR, yDF, zD);
+            const glm::vec3 cC = 0.25f * (BL + BR + TR + TL);
+            const glm::vec3 hC = 0.125f * (BL + BR + TL + TR + bBL + bBR + FL + FR);
+            quadN(TL, TR, FR, FL, di4::kDash, hC);   // top
+            quadN(FL, FR, bFR, bFL, di4::kDash, hC); // front, toward the glass
+            quadN(bBL, bBR, BR, BL, di4::kDash, hC); // skirt under the face
+            quadN(bBL, BL, TL, FL, di4::kDash, hC);  // cheeks, each a pentagon in two
+            quadN(bBL, FL, bFL, bFL, di4::kDash, hC);
+            quadN(bBR, BR, TR, FR, di4::kDash, hC);
+            quadN(bBR, FR, bFR, bFR, di4::kDash, hC);
+
+            // The eye this is all aimed at - and the same point drivercam::eyePose puts
+            // the camera, which is the only reason any of these offsets are what they are.
+            const glm::vec3 eye = P(xD, yCB - so * 0.95f, zFl + 1.25f);
+            const glm::vec3 u = glm::normalize(BR - BL);
+            const glm::vec3 v = glm::normalize(TL - BL);
+            glm::vec3 n = glm::normalize(glm::cross(u, v));
+            if (glm::dot(n, eye - cC) < 0.0f) n = -n;
+            quadN(BL, BR, TR, TL, di4::kDash, cC - n); // the face itself
+
+            // Live, off the locomotive.
+            const int cab = so < 0.0f ? 0 : 1;
+            const float spd = vehicle.speed();
+            const float load = std::abs(vehicle.tractiveEffort()) / di4::kLoadFullN;
+            const float rpm = vehicle.engineRpm(0) / di4::kRevFull;
+            const int handle = vehicle.handlePosition(cab);
+            const int rev = vehicle.reverser(cab);
+
+            // Across the face as the photographs have it: a plain dial, the rectangular
+            // display with its column of lamps, the speedometer, the load meter, and four
+            // small gauges in a row. Every one of these is emitted whatever it reads - a
+            // needle is a quad that turns, never a quad that appears - because the vehicle
+            // index buffer is fixed at attach time and a mesh that changes size is dropped.
+            discFace(cC, u, v, n, -0.47f, 0.03f, 0.046f, 0.012f, di4::kGaugeS);
+            rectFace(cC, u, v, n, -0.28f, 0.03f, 0.095f, 0.072f, 0.012f, di4::kButton);
+            rectFace(cC, u, v, n, -0.29f, 0.03f, 0.076f, 0.056f, 0.018f, di4::kScreen);
+            for (int i = 0; i < 6; ++i)
+                rectFace(cC, u, v, n, -0.180f, 0.085f - 0.024f * i, 0.009f, 0.009f, 0.016f,
+                         i == 0 ? di4::kRed : di4::kButton);
+            discFace(cC, u, v, n, -0.055f, 0.02f, 0.077f, 0.012f, di4::kGauge);
+            discFace(cC, u, v, n, 0.135f, 0.02f, 0.077f, 0.012f, di4::kGauge);
+            needle(cC, u, v, n, -0.055f, 0.02f, 0.065f, spd / 40.0f, di4::kNeedle);
+            needle(cC, u, v, n, 0.135f, 0.02f, 0.065f, load, di4::kRed);
+            for (const float gx : {-0.055f, 0.135f})
+                discFace(cC, u, v, n, gx, 0.02f, 0.012f, 0.020f, di4::kNeedle);
+            {
+                // Main reservoir, brake pipe, brake cylinder, and the engine's revs.
+                const std::pair<float, float> small[] = {{0.300f, vehicle.mrPressure() / 12.0f},
+                                                         {0.375f, vehicle.bpPressure() / 10.0f},
+                                                         {0.450f, vehicle.bcPressure() / 10.0f},
+                                                         {0.525f, rpm}};
+                for (const auto& g : small) {
+                    discFace(cC, u, v, n, g.first, 0.085f, 0.032f, 0.012f, di4::kGaugeS);
+                    needle(cC, u, v, n, g.first, 0.085f, 0.026f, g.second, di4::kNeedleL);
+                }
+            }
+            for (int i = 0; i < 8; ++i) // switch rows, under the dials and along the top
+                rectFace(cC, u, v, n, -0.50f + 0.085f * i, -0.155f, 0.026f, 0.020f, 0.012f,
+                         di4::kButton);
+            for (int i = 0; i < 6; ++i)
+                rectFace(cC, u, v, n, 0.24f + 0.065f * i, 0.175f, 0.021f, 0.013f, 0.012f,
+                         di4::kButton);
+
+            // The combined lever on the desk at the driver's hand, with the yellow collar
+            // the photographs show, and the reverser to its right. Same swing as the Class
+            // 93's: brake toward the driver, power away from him.
+            //
+            // Where they stand is squeezed between two limits. A lever sits at a third of
+            // the console's distance, so the same sideways offset throws it three times as
+            // far out in the view: level with the console's edge in plan, and it lands at
+            // the edge of the windscreen. Pulling it back toward the driver instead runs
+            // into the camera's 0.5 m near plane, which clips it away silently - it is in
+            // the mesh, it is in front of the eye, and it is simply not drawn.
+            {
+                const float lx = xD + dx(-0.38f), ly = yCB - so * 0.25f;
+                emitBox(X, Y, Z, P(lx, ly, zD + 0.02f), 0.075f, 0.075f, 0.02f, di4::kButton);
+                const float tilt = handle >= 0
+                                       ? 0.5f * static_cast<float>(handle) /
+                                             static_cast<float>(Vehicle::kEmergencyNotch)
+                                       : -0.4f * static_cast<float>(-handle) /
+                                             static_cast<float>(Vehicle::kMaxPowerNotch);
+                const glm::vec3 pv = P(lx, ly, zD + 0.04f);
+                const glm::vec3 dir = Z * std::cos(tilt) - Y * (so * std::sin(tilt));
+                const glm::vec3 Yb = glm::normalize(glm::cross(dir, X));
+                const float L = 0.20f;
+                emitBox(X, Yb, dir, pv + dir * (0.5f * L), 0.022f, 0.022f, 0.5f * L,
+                        di4::kDash);
+                // The yellow collar, wide enough to stand clear of the stick it rings -
+                // eight millimetres proud is a hairline at arm's length.
+                emitBox(X, Yb, dir, pv + dir * (0.72f * L), 0.042f, 0.042f, 0.026f,
+                        di4::kPlough);
+                emitBox(X, Yb, dir, pv + dir * (L + 0.04f), 0.040f, 0.055f, 0.035f,
+                        di4::kDash);
+            }
+            {
+                const float lx = xD + dx(0.38f), ly = yCB - so * 0.25f;
+                emitBox(X, Y, Z, P(lx, ly, zD + 0.02f), 0.06f, 0.06f, 0.02f, di4::kButton);
+                const float tilt = static_cast<float>(rev) * 0.35f;
+                const glm::vec3 pv = P(lx, ly, zD + 0.04f);
+                const glm::vec3 dir = Z * std::cos(tilt) + Y * (so * std::sin(tilt));
+                const glm::vec3 Yb = glm::normalize(glm::cross(dir, X));
+                const float L = 0.14f;
+                emitBox(X, Yb, dir, pv + dir * (0.5f * L), 0.018f, 0.018f, 0.5f * L,
+                        di4::kDash);
+                emitBox(X, Yb, dir, pv + dir * (L + 0.02f), 0.032f, 0.045f, 0.026f,
+                        di4::kButton);
+            }
+            // The writing pad on the desk to the driver's right, and the handset on its
+            // cradle at the left of the console.
+            emitBox(X, Y, Z, P(xD + dx(0.62f), yDB + so * 0.26f, zD + 0.006f), 0.16f, 0.12f,
+                    0.006f, di4::kDash);
+            emitBox(X, Y, Z, P(xD + dx(-0.72f), yCB - so * 0.10f, zD + 0.05f), 0.05f, 0.13f,
+                    0.05f, di4::kDash);
+
+            // Two seats: the driver's on the right, a second on the left, with the plain
+            // flat table in front of it that the photographs show instead of a console.
+            auto seat = [&](float sx) {
+                const float sy = yCB - so * 0.95f; // where the eye is, by construction
+                emitBox(X, Y, Z, P(sx, sy, zFl + 0.20f), 0.10f, 0.10f, 0.20f, di4::kDash);
+                emitBox(X, Y, Z, P(sx, sy, zFl + 0.46f), 0.26f, 0.25f, 0.06f, di4::kSeat);
+                emitBox(X, Y, Z, P(sx, sy - so * 0.23f, zFl + 0.80f), 0.26f, 0.05f, 0.34f,
+                        di4::kSeat);
+            };
+            seat(xD);
+            seat(dx(-0.86f));
+        };
+
         for (const float so : {-1.0f, 1.0f}) { // a nose at each end
             const float yE = so * yEdge;                        // roof edge
             const float yK = so * halfLen;                      // the knee, furthest out
@@ -1003,8 +1319,24 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                 return yK + (yE - yK) * (z - zKnee) / (roofZ - zKnee);
             };
             const float ySh = yAtZ(zSh);
-            quadN(P(-hwAt(zKnee, nf), yK, zKnee), P(hwAt(zKnee, nf), yK, zKnee),
-                  P(hwAt(zSh, nf), ySh, zSh), P(-hwAt(zSh, nf), ySh, zSh), di4::kBody, core);
+            // The raked panel, by (x across, v from the knee up to the roof edge) - the
+            // same parametrisation the glass uses, so the two cannot drift apart.
+            auto fp = [&](float x, float vv) {
+                return P(x, yK + (yE - yK) * vv, zKnee + (roofZ - zKnee) * vv);
+            };
+            const float vSh = (zSh - zKnee) / (roofZ - zKnee);
+            const float gw = hwN * 0.92f * 0.96f; // the aperture's half width
+            // Knee to shoulder as a FRAME, not a panel: sill, head and a jamb each side.
+            // Solid, it reads correctly from outside - the glass stands proud of it - and
+            // is a red wall from the driver's seat, which is the side that matters now.
+            quadN(fp(-hwN, 0.0f), fp(hwN, 0.0f), fp(hwN, di4::kScreenLoV),
+                  fp(-hwN, di4::kScreenLoV), di4::kBody, core);
+            quadN(fp(-hwN, di4::kScreenHiV), fp(hwN, di4::kScreenHiV), fp(hwN, vSh),
+                  fp(-hwN, vSh), di4::kBody, core);
+            for (const float sx : {-1.0f, 1.0f})
+                quadN(fp(sx * gw, di4::kScreenLoV), fp(sx * hwN, di4::kScreenLoV),
+                      fp(sx * hwN, di4::kScreenHiV), fp(sx * gw, di4::kScreenHiV),
+                      di4::kBody, core);
             quadN(P(-hwAt(zSh, nf), ySh, zSh), P(hwAt(zSh, nf), ySh, zSh),
                   P(hwAt(roofZ, nf), yE, roofZ), P(-hwAt(roofZ, nf), yE, roofZ),
                   di4::kBody, core);
@@ -1015,8 +1347,14 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                     const glm::vec3 hi = P((u * 2.0f - 1.0f) * hwN * 0.92f, yE, roofZ);
                     return lo + (hi - lo) * v + Y * (so * 0.02f);
                 };
-                quadN(face(0.02f, 0.16f), face(0.98f, 0.16f), face(0.98f, 0.90f),
-                      face(0.02f, 0.90f), di4::kGlass, core);
+                // Lapped a little over the frame all round rather than butted into it.
+                // Butted, the glass stands two centimetres proud of an aperture exactly
+                // its own size, and that leaves an open slot round the rim that a
+                // grazing line of sight goes straight through into the cab.
+                quadN(face(0.005f, di4::kScreenLoV - 0.012f),
+                      face(0.995f, di4::kScreenLoV - 0.012f),
+                      face(0.995f, di4::kScreenHiV + 0.012f),
+                      face(0.005f, di4::kScreenHiV + 0.012f), di4::kGlass, core);
             }
             // Sides, tiled to follow the two folds rather than cutting across them.
             for (const float sx : {-1.0f, 1.0f}) {
@@ -1074,6 +1412,8 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                   di4::kPlough, P(0.0f, so * halfLen, frameTopZ - 1.3f));
             emitBox(X, Y, Z, P(0.0f, so * (halfLen - 0.14f), frameTopZ - 0.44f), hw * 0.86f,
                     0.17f, 0.13f, di4::kPlough);
+
+            emitDi4Cab(so);
         }
         // Fuel tank slung between the bogies: 5200 litres, and what makes a locomotive
         // read as heavy rather than as a coach.
@@ -1205,8 +1545,14 @@ namespace drivercam {
 
 int count(const Consist& c) {
     const Vehicle& v = c.lead();
-    const int perSet =
-        (v.bodyStyle() == BodyClass93 && v.bodySectionFrames().size() >= 2) ? 2 : 0;
+    // Two cabs either way, but for different reasons: the railcar's are the outer ends of
+    // its two body sections, the locomotive's are the two ends of one rigid body. A Di 4
+    // reported none until now purely because it has a single section, which is why it
+    // could only ever be driven from the chase camera.
+    const int perSet = v.bodyStyle() == BodyDi4 ? 2
+                       : (v.bodyStyle() == BodyClass93 && v.bodySectionFrames().size() >= 2)
+                           ? 2
+                           : 0;
     return perSet * c.unitCount();
 }
 
@@ -1219,6 +1565,29 @@ bool eyePose(const Consist& c, int position, glm::vec3& eye, glm::vec3& forward)
     const Vehicle& v = c.unit(position / 2);
     position %= 2;
     const std::vector<VehicleFrame> sections = v.bodySectionFrames();
+    if (sections.empty()) return false;
+
+    if (v.bodyStyle() == BodyDi4) {
+        // One rigid body with a cab at each end, so both cabs share section 0 and are told
+        // apart by `so` alone. Every offset below is copied from emitDi4Cab and means
+        // nothing on its own: the eye has to land where that put the seat, or the driver
+        // sits inside his own console.
+        const VehicleFrame& f = sections[0];
+        const float halfLen = 0.5f * v.length();
+        const float so = position == 0 ? -1.0f : 1.0f;
+        // The same stack emitUnit builds, and it has to be copied exactly: the bogie frame
+        // centre sits a wheel radius above the axle centre, which is itself a radius above
+        // the railhead, so the radius is counted TWICE. Counting it once puts the eye 55 cm
+        // low - under the desk, inside the console - and the view from there is convincing
+        // enough to be read as a modelling mistake rather than a camera one.
+        const float zFl = wheelset::kRailTopZ + 2.0f * v.wheelRadius() + kFrameHalfHeight +
+                          di4::kBodyRise; // cab floor = body floor
+        const float sy = so * (halfLen - 0.92f) - so * 0.95f; // seat, as in emitDi4Cab
+        eye = f.pos + f.tangent * sy + f.right * (-so * 0.60f) + f.up * (zFl + 1.25f);
+        forward = f.tangent * so;
+        return true;
+    }
+
     if (v.bodyStyle() != BodyClass93 || position < 0 ||
         position >= static_cast<int>(sections.size()))
         return false;

@@ -2197,6 +2197,23 @@ int main(int argc, char** argv) {
         std::fflush(stdout);
     }
 
+    // EBANER_CAB seats the driver in a cab at start-up, for the same reason as the two
+    // below: nothing else in a scripted run ever does. spawnVehicle leaves g_driverPos at
+    // -1, and the only two things that seat a driver are a keypress and the train picker -
+    // so the inside of a cab could not be screenshotted or checked headlessly at all.
+    if (const char* cs = std::getenv("EBANER_CAB")) {
+        if (vehicle != nullptr) {
+            const int n = std::max(1, drivercam::count(*vehicle));
+            g_cabCount = n;
+            g_driverPos = std::clamp(std::atoi(cs), 0, n - 1);
+            g_chase = false;
+            std::printf("[Cab] seated in cab %d of %d\n", g_driverPos, n);
+        } else {
+            std::puts("[Cab] EBANER_CAB: nothing is being driven");
+        }
+        std::fflush(stdout);
+    }
+
     // EBANER_MENU opens the Escape menu at a step, for the same reason EBANER_MAP opens the
     // traffic manager: a list that is only reachable by keypress cannot be screenshotted or
     // checked headlessly, and this one is where every train in the world is named.

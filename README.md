@@ -168,8 +168,25 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   cross, at 2460 kW × 0.85 ÷ 314 kN ≈ 24 km/h, and moves wherever the rating and the starting
   effort put it. So it pulls away hard and then runs out of pull, which is what a heavy diesel
   loco does and what the railcar does not. It hauls nothing yet — a train of *unlike* vehicles
-  is its own job — so it runs light engine, and it has no cab to sit in: drive it from the
-  chase camera and the HUD.
+  is its own job — so it runs light engine.
+  It now has a **cab at each end to sit in**, drawn from three interior photographs of a
+  class of five: two windscreens of equal size either side of a narrow centre pillar with
+  roller blinds above them, the **driver on the right** with a second seat and a plain flat
+  table on the left, and one **steel-blue desk** the full width of the cab. In front of the
+  driver a raised housing rakes back at him carrying, left to right, a rectangular display,
+  two large dials and a row of four small gauges — and on a diesel-electric the second large
+  one is a **load meter**, the traction ammeter the machine is actually driven on and the one
+  gauge a Class 93 driver has no use for. Speed, load, main reservoir, brake pipe, brake
+  cylinder and engine revs all track the sim, and the combined lever with its yellow collar
+  leans with the handle. `EBANER_CAB=<n>` seats the driver at start-up, because otherwise a
+  cab is reachable only by keypress and cannot be screenshotted or checked headlessly.
+  Fitting the cab is what found the **windscreen a metre too high**: the sill had been scaled
+  off the side elevation between the roof and the *buffer beam* rather than the railhead, and
+  the short ruler drove the whole nose up until the glass sat above a seated driver's eye. It
+  is measured from the railhead now, and the sill lands at 2.46 m where the photographs put
+  it. The lining follows the nose's own rake and folds where the nose folds, since a flat one
+  either stands out through the front of the locomotive or leaves bare red paint beside the
+  driver's shoulder.
   Making room for it meant the simulator stopping treating one vehicle as the only possible
   one. Engine count, power, wheel size, driven fraction, starting effort and axles-per-bogie
   were file-scope constants shared by every vehicle there would ever be; they are now the
