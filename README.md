@@ -185,9 +185,17 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   `exc`, `amps`, `load` — because the lag is otherwise indistinguishable from a broken
   locomotive. Not modelled: the engine **bogging** under load and the regulator backing off
   to catch it, the notch-by-notch **discrete governor steps** of an EMD, and the
-  breakdown-torque region above a second corner where an AC drive's effort falls as 1/v² —
-  that last one left alone because guessing where the second corner sits could leave the
-  locomotive unable to reach its own line speed. It hauls nothing yet — a train of *unlike* vehicles
+  breakdown-torque region above a second corner where an AC drive's effort falls as 1/v².
+  And **nothing limits maximum speed** — light engine at full notch it settles around
+  205 km/h against a rating of 140. That is deliberate, and the arithmetic is the reason.
+  Placing the second corner so that 140 km/h came out as the balancing speed would put it
+  at about 52 km/h, which would mean a locomotive that makes full power only between 21
+  and 52 km/h and is two thirds loaded at 80 — a shunter, not the machine that worked the
+  Nordlandsbanen. The absurdity is the finding: **140 km/h is a gearing and certification
+  limit** — traction motor speed, brakes, bogie stability — and not the speed this thing
+  runs out of pull at. A light engine really would go well past it, which is why there is
+  no wall here and no overspeed cutoff. Exceeding a rating is the driver's business, as it
+  is everywhere else in this simulator. It hauls nothing yet — a train of *unlike* vehicles
   is its own job — so it runs light engine. Its **governor answers the notch and nothing
   else** — there is no geared speed dragging the revs, which is why a diesel-electric winds
   up standing still — but only while it is *pulling*: off power the revs belong to the same
@@ -324,8 +332,24 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   whose loudness tracks the airflow — a subdued charge on apply and a prominent,
   brighter vent on release — fading as the pressure equalizes and with camera
   distance to the bogies, plus a valve click at each change of the handle or the
-  safety. Each diesel gets a **muffled idle drone** (a firing thrum at the ~35 Hz
-  idle firing rate with a soft combustion knock, heavily low-passed for the
+  safety. Each diesel gets an **idle drone** whose character is the engine's own, not one
+  set of constants: how fast it beats, how loud it is, how much weight it carries below
+  the firing rate and how much of the bark gets out all travel with the voice, so a
+  locomotive and a railcar in the same train sound like different machines. The firing
+  rate falls out of the cylinder count and the cycle, and it goes the opposite way from
+  intuition — the Class 93's six cylinders firing every *other* revolution at 700 rpm beat
+  35 times a second, while the Di 4's **V16 two-stroke** firing every cylinder every
+  revolution at 315 rpm beats 84. The big slow engine has the faster beat. What makes it
+  sound big is underneath: a V16 is two banks of eight with a manifold each, so it radiates
+  hard at half the firing rate and below, and the Di 4 carries **2.4× the low-end energy**
+  and runs **2–2.8× louder** than the railcar, weighted low (low/mid 1.9 against 1.1 at
+  idle). Measured, not guessed: `EBANER_AUDIO_DUMP_ENGINE` renders the script — off, crank,
+  idle, compressor, full song, shut down — and `EBANER_AUDIO_ENGINE` picks which machine,
+  because "louder and heavier" is a claim about two sounds and cannot be checked by
+  listening to one. The first attempt was 4× and **clipping**; the dump caught both that
+  and a fault of its own, where a single-engine locomotive was sounded through two voices
+  and came out twice as loud as it should. The railcar keeps its **muffled idle drone**
+  (a firing thrum with a soft combustion knock, heavily low-passed for the
   insulated character, each detuned a little further than the last so several of them
   beat rather than doubling into one), following its own rpm and faded by distance to
   the car body it sits in. The synth holds **six** of them, so a three-set train is

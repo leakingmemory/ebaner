@@ -4121,11 +4121,19 @@ int main(int argc, char** argv) {
                 const std::vector<VehicleFrame> secs = t.bodySectionFrames();
                 const int n =
                     std::min<int>(t.engineCount(), static_cast<int>(secs.size()));
-                for (int k = 0; k < n && nGain < Audio::kMaxEngines; ++k)
+                for (int k = 0; k < n && nGain < Audio::kMaxEngines; ++k) {
+                    // The timbre travels with the rpm, from the machine the slot is
+                    // sounding. A slot keeps its filter state between frames, so these
+                    // must change in step with the engine it belongs to or one machine's
+                    // character is smeared onto the next.
+                    const Vehicle& u = t.lead();
                     voices[nGain++] = {
                         t.engineRpm(k),
                         glm::clamp((50.0f - glm::distance(camPos, secs[k].pos)) / 38.0f,
-                                   0.0f, 1.0f)};
+                                   0.0f, 1.0f),
+                        u.firingsPerRev(), u.engineVolume(), u.engineRumble(),
+                        u.engineBright()};
+                }
             }
             // The crossing bell: whichever ringing crossing is loudest from here. A bell
             // carries further than the brakes do, and it is the crossing's own sound

@@ -69,6 +69,14 @@ public:
     struct EngineVoice {
         float rpm = 0.0f;  // rev/min; 0 is a silent slot
         float gain = 0.0f; // [0,1] camera distance attenuation
+        // And what kind of engine it is, carried per voice rather than as one set of
+        // constants, because a train may have more than one kind in it: a locomotive on
+        // the front of a railcar has to sound like a locomotive from the slot it lands
+        // in, and the slots are handed out in train order without regard to machine.
+        float firingsPerRev = 3.0f; // 6-cyl four-stroke; a 16-cyl two-stroke beats 16
+        float volume = 1.0f;
+        float rumble = 0.0f;        // half- and quarter-order weight under the firing
+        float bright = 0.11f;       // insulation low-pass coefficient
     };
     // Main thread, per sim frame. `sounded` is the train the single rolling, brake and
     // compressor voices are taken from - there is one of each and one set of filters
@@ -188,6 +196,15 @@ private:
     float clickEnv_ = 0.0f, clickPhase_ = 0.0f;
     // Per-engine diesel voice state.
     float engPhase_[kMaxEngines] = {};       // firing phase
+    float engSubPhase_[kMaxEngines] = {};    // quarter-order phase, for the big-block weight
+    // The timbre each slot is being driven with, published by the main thread the same
+    // way the rpm is. A slot keeps its filter state, so these change only when the slot
+    // changes machine - and then they change together with the rpm, which is what stops
+    // one engine's character bleeding onto the next.
+    std::atomic<float> engFire_[kMaxEngines]{};
+    std::atomic<float> engVol_[kMaxEngines]{};
+    std::atomic<float> engRum_[kMaxEngines]{};
+    std::atomic<float> engBri_[kMaxEngines]{};
     float engRpmEnv_[kMaxEngines] = {};      // smoothed rpm
     float engGainEnv_[kMaxEngines] = {};     // smoothed distance gain
     float engLp_[kMaxEngines] = {};          // insulation low-pass

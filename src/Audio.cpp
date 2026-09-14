@@ -208,11 +208,17 @@ void Audio::render(float* out, int n) {
             clickEnv_ *= 0.9990f; // ~23 ms decay
         }
 
-        // Diesel engines: a muffled idle drone per engine - two to a set, so four on
-        // a pair of coupled sets. Firing thrum (harmonics of the ~35 Hz firing rate) +
-        // a soft per-firing knock + a noise hum, heavily low-passed for the
-        // insulated/modern character; each is detuned from the last so they beat.
-        // Continuous while running; scaled by per-engine distance.
+        // Diesel engines, one voice each. Firing thrum (harmonics of the firing rate) +
+        // a soft per-firing knock + a noise hum, low-passed for the engine room it sits
+        // in; each is detuned from the last so they beat. Continuous while running;
+        // scaled by per-engine distance.
+        //
+        // How fast it beats, how loud it is, how much weight it carries below the firing
+        // rate and how much of the bark gets out are the engine's own, not this file's.
+        // A 6-cylinder four-stroke Cummins behind a modern railcar's sound-deadening
+        // beats 3 to the rev, quietly and darkly; a 16-cylinder two-stroke EMD of 170
+        // litres in an uninsulated 1981 engine room beats 16, twice as loud, and is full
+        // of half- and quarter-order content underneath - which is what is heard as size.
         float engine = 0.0f;
         for (int k = 0; k < kMaxEngines; ++k) {
             engRpmEnv_[k] += (engRpmT[k] - engRpmEnv_[k]) * 0.002f;
@@ -226,13 +232,34 @@ void Audio::render(float* out, int n) {
             engHunt_[k] += -engHunt_[k] * 0.00005f + wn * 0.0016f;
             // Each engine is detuned a little from the last, so several of them beat
             // against one another rather than doubling into one louder engine.
-            const float firingHz = rpm / 20.0f * (1.0f + 0.007f * static_cast<float>(k)) *
-                                   (1.0f + engHunt_[k] * 0.05f); // 3/rev, detuned + hunt
+            const float fire = engFire_[k].load(std::memory_order_relaxed);
+            const float vol = engVol_[k].load(std::memory_order_relaxed);
+            const float rum = engRum_[k].load(std::memory_order_relaxed);
+            const float bri = engBri_[k].load(std::memory_order_relaxed);
+            const float firingHz = rpm / 60.0f * fire *
+                                   (1.0f + 0.007f * static_cast<float>(k)) *
+                                   (1.0f + engHunt_[k] * 0.05f); // detuned + hunt
             engPhase_[k] += firingHz / fs;
             if (engPhase_[k] >= 1.0f) { engPhase_[k] -= 1.0f; engKnock_[k] = 1.0f; }
             const float ph = engPhase_[k];
-            const float thrum = std::sin(2.0f * kPi * ph) + 0.5f * std::sin(4.0f * kPi * ph) +
-                                0.3f * std::sin(6.0f * kPi * ph);
+            float thrum = std::sin(2.0f * kPi * ph) + 0.5f * std::sin(4.0f * kPi * ph) +
+                          0.3f * std::sin(6.0f * kPi * ph);
+            // The weight underneath, and on a V engine it is not a fudge: a V16 is two
+            // banks of eight with a manifold each, so each bank fires eight times a
+            // revolution and radiates at half the whole engine's rate. The quarter order
+            // below that is the pairing across the vee. It is those, an octave and two
+            // under the firing rate, that make an engine sound large - not the firing
+            // rate, which goes the other way from intuition. A 16-cylinder two-stroke at
+            // 315 rpm fires at 84 Hz where a 6-cylinder four-stroke at 700 fires at 35:
+            // the big slow engine has the HIGHER firing rate of the two. Weight has to
+            // come from going below it, not from slowing it down.
+            if (rum > 0.0f) {
+                engSubPhase_[k] += firingHz * 0.25f / fs;
+                if (engSubPhase_[k] >= 1.0f) engSubPhase_[k] -= 1.0f;
+                const float sp = engSubPhase_[k];
+                thrum += rum * (0.85f * std::sin(2.0f * kPi * sp) +   // quarter order
+                                0.55f * std::sin(4.0f * kPi * sp));   // half order
+            }
             rng_ = rng_ * 1664525u + 1013904223u;
             engKnLp_[k] += ((static_cast<float>(rng_ >> 8) / 8388608.0f - 1.0f) - engKnLp_[k]) * 0.5f;
             const float knock = engKnLp_[k] * engKnock_[k];
@@ -242,8 +269,9 @@ void Audio::render(float* out, int n) {
             float voice = (thrum * 0.55f + knock * 0.28f + hum * 0.10f) *
                           std::clamp((rpm - 100.0f) / 200.0f, 0.0f, 1.0f) * // crank-in
                           (1.0f + engHunt_[k] * 0.18f);                     // load fluctuation
-            engLp_[k] += (voice - engLp_[k]) * 0.11f; // insulation LP (~800 Hz)
-            engine += engLp_[k] * engGainEnv_[k];
+            engLp_[k] += (voice - engLp_[k]) * bri; // insulation LP
+            voice = engLp_[k] * vol;
+            engine += voice * engGainEnv_[k];
         }
         // Exhaust muffler: a short low-passed feedback comb that smears the firing
         // pulses into a resonant hum and adds body.
@@ -553,6 +581,12 @@ void Audio::update(const Consist& sounded, float /*dt*/, float brakeGain,
         engRpm_[k].store(k < n ? engines[k].rpm : 0.0f, std::memory_order_relaxed);
         engGain_[k].store(k < n ? std::clamp(engines[k].gain, 0.0f, 1.0f) : 0.0f,
                           std::memory_order_relaxed);
+        const Audio::EngineVoice d;
+        const Audio::EngineVoice& e = k < n ? engines[k] : d;
+        engFire_[k].store(std::max(0.5f, e.firingsPerRev), std::memory_order_relaxed);
+        engVol_[k].store(std::max(0.0f, e.volume), std::memory_order_relaxed);
+        engRum_[k].store(std::clamp(e.rumble, 0.0f, 2.0f), std::memory_order_relaxed);
+        engBri_[k].store(std::clamp(e.bright, 0.01f, 1.0f), std::memory_order_relaxed);
     }
     compActive_.store(v.compressorRunning(), std::memory_order_relaxed);
 
@@ -811,17 +845,42 @@ void Audio::dumpEngineTest(const std::string& wavPath) {
     const float fs = 44100.0f;
     Audio a;
     a.sampleRate_ = fs;
+    // Which engine to render. EBANER_AUDIO_ENGINE names a fragment of a vehicle's name;
+    // without it, the railcar, so the existing reference dump is unchanged. The point of
+    // being able to pick is that "louder and heavier" is a claim about two sounds and
+    // cannot be checked by listening to one of them.
+    const VehicleSpec* sp = &kVehicleSpecs[0];
+    for (const VehicleSpec& v : kVehicleSpecs)
+        if (std::string(v.name).find("Class 93 (T") != std::string::npos) sp = &v;
+    if (const char* want = std::getenv("EBANER_AUDIO_ENGINE"))
+        for (const VehicleSpec& v : kVehicleSpecs)
+            if (std::string(v.name).find(want) != std::string::npos) sp = &v;
+    const float fire = static_cast<float>(sp->cylinders) * (sp->twoStroke ? 1.0f : 0.5f);
+    std::fprintf(stderr, "audio: %s - idle %.0f rpm, %.0f firings/rev = %.0f Hz\n",
+                 sp->name, sp->idleRpm, fire, sp->idleRpm / 60.0f * fire);
     struct Seg { float dur, rpm; bool comp; };
-    // off -> crank -> idle -> idle+compressor -> idle -> stop -> off
-    const Seg segs[] = {{0.6f, 0.0f, false},   {4.0f, 700.0f, false}, {2.0f, 700.0f, false},
-                        {3.0f, 700.0f, true},  {2.0f, 700.0f, false}, {3.0f, 0.0f, false},
-                        {0.6f, 0.0f, false}};
+    // off -> crank -> idle -> idle+compressor -> idle -> full song -> idle -> stop -> off.
+    // Full speed is in here because loudness has to be checked at both ends: an engine
+    // tuned to sit right at idle can be into the clamp at governed speed, and the mix has
+    // to leave room for the wheels and the brakes on top of whichever is worse.
+    const float idle = sp->idleRpm, full = sp->governedRpm;
+    const Seg segs[] = {{0.6f, 0.0f, false}, {4.0f, idle, false}, {2.0f, idle, false},
+                        {3.0f, idle, true},  {2.0f, idle, false}, {4.0f, full, false},
+                        {2.0f, idle, false}, {3.0f, 0.0f, false}, {0.6f, 0.0f, false}};
     std::vector<std::int16_t> pcm;
+    // As many engines as the machine has, not always two: a locomotive with one prime
+    // mover sounded through two slots is twice as loud as it should be, and the whole
+    // point of this dump is to compare loudness between machines.
+    const int nEng = std::max(1, sp->engines);
     for (const Seg& s : segs) {
-        a.engRpm_[0].store(s.rpm);
-        a.engRpm_[1].store(s.rpm);
-        a.engGain_[0].store(1.0f);
-        a.engGain_[1].store(1.0f);
+        for (int k = 0; k < nEng; ++k) {
+            a.engRpm_[k].store(s.rpm);
+            a.engGain_[k].store(1.0f);
+            a.engFire_[k].store(fire);
+            a.engVol_[k].store(sp->engineVolume);
+            a.engRum_[k].store(sp->engineRumble);
+            a.engBri_[k].store(sp->engineBright);
+        }
         a.compActive_.store(s.comp);
         const int total = static_cast<int>(s.dur * fs);
         float buf[256];

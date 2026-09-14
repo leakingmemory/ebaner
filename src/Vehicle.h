@@ -92,6 +92,22 @@ struct VehicleSpec {
     // is not a high-speed railcar diesel under a converter, and one number for both makes
     // whichever it was not written for feel wrong. Defaulted to the railcar's.
     float spoolTime = 0.9f;      // s
+    // What the engine sounds like, which is as much the machine's own as its rev range.
+    // The firing rate falls straight out of the first two: a four-stroke fires each
+    // cylinder once every two revolutions and a two-stroke once every one, so a 6-cyl
+    // four-stroke beats 3 to the rev and a 16-cyl two-stroke beats 16. The rest is bulk.
+    // A 170-litre V16 EMD 645 is not a Cummins behind a modern railcar's sound-deadening.
+    // It is far louder, and what it radiates is weighted much further down: a V16 is two
+    // banks of eight with a manifold each, so there is a great deal of energy at half the
+    // firing rate and below, and that is what is heard as size. Note that the firing rate
+    // itself goes the other way - sixteen cylinders firing every revolution at 315 rpm is
+    // 84 Hz where six firing every other one at 700 rpm is 35, so the big slow engine has
+    // the faster beat. Weight comes from what is under the firing rate, not from it.
+    int   cylinders = 6;         // firing strokes per cycle
+    bool  twoStroke = false;     // fires every revolution rather than every other
+    float engineVolume = 1.0f;   // how loud, against the railcar's
+    float engineRumble = 0.0f;   // half- and quarter-order weight: the size of the block
+    float engineBright = 0.11f;  // radiated-spectrum low-pass; lower is darker and bigger
     int   controls = ControlCombined; // ControlLayout
 };
 
@@ -125,7 +141,7 @@ inline constexpr VehicleSpec kVehicleSpecs[] = {
     // Bogie centres follow from 15.60 m between the outer axles.
     {"NSB Di 4 (Henschel)", 120000.0f, 20.80f, 3.176f, 4.35f, 3.85f, 11.75f, 2, BodyDi4, 1,
      3, 1, DriveElectric, 2450000.0f, 0.55f, 1.00f, 360000.0f, 315.0f, 900.0f, 7.0f,
-     ControlSeparate},
+     16, true, 0.92f, 2.7f, 0.075f, ControlSeparate},
 };
 // Counted off the table rather than written down beside it. A hand-kept number that falls
 // behind the array makes the last entry unreachable everywhere at once - the start screen,
@@ -353,6 +369,15 @@ public:
     void movePower(int cab, int dir);
     void moveBrake(int cab, int dir);
     int controls() const { return controls_; }
+    // What this engine sounds like. Firings per revolution falls out of the cylinder
+    // count and the cycle: every cylinder every revolution on a two-stroke, every other
+    // one on a four-stroke.
+    float firingsPerRev() const {
+        return static_cast<float>(cylinders_) * (twoStroke_ ? 1.0f : 0.5f);
+    }
+    float engineVolume() const { return engineVolume_; }
+    float engineRumble() const { return engineRumble_; }
+    float engineBright() const { return engineBright_; }
     // Combined-lever position for the mesh/HUD: +brake (1..5), 0 neutral, -power
     // (-1..-kMaxPowerNotch); handleName gives "P3" / "N" / "B2" / "EMERG".
     int handlePosition(int cab) const;
@@ -524,6 +549,9 @@ private:
     int bogieCount_;
     // What the machine is, taken from its spec rather than from a shared constant.
     float idleRpm_ = 700.0f, governedRpm_ = kMaxRpm, spoolTime_ = 0.9f;
+    int cylinders_ = 6;
+    bool twoStroke_ = false;
+    float engineVolume_ = 1.0f, engineRumble_ = 0.0f, engineBright_ = 0.11f;
     int controls_ = ControlCombined;
     float load_ = 0.0f;      // load regulator: excitation as a fraction of full
     float railPower_ = 0.0f; // W at the rail this step, for the engine-load reading
