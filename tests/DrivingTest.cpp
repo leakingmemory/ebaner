@@ -98,6 +98,60 @@ int main() {
         check(di4->controls == ControlSeparate, "the locomotive has two handles");
     }
 
+    std::puts("\nAn engine that is off reads nothing, and can be shut down again");
+    {
+        // Both machines, because this went wrong on exactly one of them and the other is
+        // the control. A diesel-electric sets its own revs off the notch - there is no
+        // geared speed dragging them - and doing that on every step rather than only
+        // while powering put a stopped engine at idle speed, reported it Running, and
+        // made it impossible to stop: the revs went back up the same step they came down.
+        for (const VehicleSpec* sp : {c93, di4}) {
+            const std::string who(sp->name);
+            World w2;
+            Consist c(&w2.paths, &w2.paths[0], *sp, 10000.0f);
+            c.attachNetwork(&w2.paths, nullptr);
+            auto run = [&](float secs) {
+                for (int i = 0; i < static_cast<int>(secs * 60.0f); ++i)
+                    c.update(1.0f / 60.0f, 0.0f);
+            };
+            run(5.0f);
+            check(c.lead().engineRpm(0) == 0.0f, who + ": stopped, it turns at nothing",
+                  c.lead().engineRpm(0), 0.0);
+            check(c.lead().engineState(0) == EngineState::Off, "  and reports itself Off");
+            check(!c.lead().enginesRunning(), "  and is not running");
+
+            c.toggleEngines();
+            run(6.0f);
+            check(std::abs(c.lead().engineRpm(0) - sp->idleRpm) < 1.0f,
+                  "  started, it settles at its own idle", c.lead().engineRpm(0),
+                  sp->idleRpm);
+            check(c.lead().enginesRunning(), "  and is running");
+
+            c.toggleEngines();
+            run(10.0f);
+            check(c.lead().engineRpm(0) == 0.0f, "  shut down, it comes back to nothing",
+                  c.lead().engineRpm(0), 0.0);
+            check(c.lead().engineState(0) == EngineState::Off, "  and reports Off again");
+        }
+    }
+
+    std::puts("\nAnd a stopped engine pulls nothing, whatever the controls say");
+    {
+        World w2;
+        Consist c(&w2.paths, &w2.paths[0], *di4, 10000.0f);
+        c.attachNetwork(&w2.paths, nullptr);
+        c.setReverser(0, 1);
+        for (int i = 0; i < 8; ++i) c.moveBrake(0, -1);
+        for (int i = 0; i < 5; ++i) c.movePower(0, +1);
+        for (int i = 0; i < 900; ++i) c.update(1.0f / 60.0f, 0.0f);
+        check(c.powerNotch(0) == 5, "the controller is at full power", c.powerNotch(0), 5.0);
+        check(c.lead().engineRpm(0) == 0.0f, "  the engine still turns at nothing",
+              c.lead().engineRpm(0), 0.0);
+        check(std::abs(c.lead().tractiveEffort()) < 1.0f, "  and nothing is pulling",
+              c.lead().tractiveEffort(), 0.0);
+        check(std::abs(c.velocity()) < 0.01f, "  so it has not moved", c.velocity(), 0.0);
+    }
+
     std::puts("\nThe combined lever still walks one axis (the railcar, unchanged)");
     {
         Loco l(w, *c93);

@@ -168,7 +168,13 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   cross, at 2460 kW × 0.85 ÷ 314 kN ≈ 24 km/h, and moves wherever the rating and the starting
   effort put it. So it pulls away hard and then runs out of pull, which is what a heavy diesel
   loco does and what the railcar does not. It hauls nothing yet — a train of *unlike* vehicles
-  is its own job — so it runs light engine.
+  is its own job — so it runs light engine. Its **governor answers the notch and nothing
+  else** — there is no geared speed dragging the revs, which is why a diesel-electric winds
+  up standing still — but only while it is *pulling*: off power the revs belong to the same
+  cranking code every machine uses, so `I` starts it to its own 315 rpm idle and stops it
+  dead. Setting them from the traction code unconditionally, as this first did, left a
+  stopped locomotive sitting at idle speed calling itself *running*, and made it impossible
+  to shut down at all — the revs went back up the same step they came down.
   It is **driven differently**, too. A railcar of the 1990s gives its driver one lever that
   walks power and brake along a single axis; a locomotive of 1981 does not. The interior
   photographs show a short ball-topped **power controller** on a gated base under the left

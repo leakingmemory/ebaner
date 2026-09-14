@@ -808,15 +808,26 @@ std::vector<VehicleFrame> Vehicle::axleFrames() const {
 void Vehicle::updateElectricDrive(float demandSigned, float demand, bool powering,
                                   bool reverse, float dt) {
     tractiveEffort_ = 0.0f;
+    // Not under power, the revs are not this function's business: the cranking block in
+    // update() owns them, and it is the one that knows the engine can be off and that a
+    // running compressor loads it down.
+    //
+    // This used to set the revs here on every step whether powering or not, and then
+    // clamp them to at least idle. Two things followed, and both looked like the engine
+    // rather than the code. A stopped locomotive sat at idle speed and reported itself
+    // Running, so the Di 4 read 315 rpm with its engine off; and it could not be shut
+    // down at all, because the clamp put the revs back the same step the cranking block
+    // wound them toward zero. The hydraulic path never had either fault - it returns
+    // here and lets the shared block do it, which is what this now does too.
+    if (!powering) return;
+
     // The governor answers the notch and nothing else - there is no geared speed for the
     // engine to be dragged to, which is why a diesel-electric revs up standing still.
-    const float rpmWant =
-        powering ? idleRpm_ + demand * (governedRpm_ - idleRpm_) : idleRpm_;
+    const float rpmWant = idleRpm_ + demand * (governedRpm_ - idleRpm_);
     float rpm = engineRpm_[0];
     rpm += std::clamp(rpmWant - rpm, -kRpmSlew * dt, kRpmSlew * dt);
     rpm = std::clamp(rpm, idleRpm_, governedRpm_);
     for (int i = 0; i < engineCount_; ++i) engineRpm_[i] = rpm;
-    if (!powering) return;
 
     const float sp = std::abs(physV_);
     const float pRail = demand * powerW_ * kElectricEta;
