@@ -1297,7 +1297,8 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
             const float spd = vehicle.speed();
             const float load = std::abs(vehicle.tractiveEffort()) / di4::kLoadFullN;
             const float rpm = vehicle.engineRpm(0) / di4::kRevFull;
-            const int handle = vehicle.handlePosition(cab);
+            const int power = vehicle.powerNotch(cab);
+            const int brake = vehicle.brakeNotch(cab);
             const int rev = vehicle.reverser(cab);
 
             // Across the face as the photographs have it: a plain dial, the rectangular
@@ -1335,9 +1336,14 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                 rectFace(cC, u, v, n, 0.24f + 0.065f * i, 0.175f, 0.021f, 0.013f, 0.012f,
                          di4::kButton);
 
-            // The combined lever on the desk at the driver's hand, with the yellow collar
-            // the photographs show, and the reverser to its right. Same swing as the Class
-            // 93's: brake toward the driver, power away from him.
+            // The driving controls, and this machine has two of them rather than the
+            // railcar's one lever. The photographs are unambiguous: a short ball-topped
+            // controller on a gated base under the left hand, and under the right - set
+            // directly below the three air gauges, where a driver's eye goes when he is
+            // braking - a long lever swinging fore and aft in a curved quadrant. That
+            // quadrant plate is the signature of a driver's brake valve of the period,
+            // and German practice of these years puts the Fahrschalter left and the
+            // Führerbremsventil right, which is what a Henschel cab of 1981 would be.
             //
             // Where they stand is squeezed between two limits. A lever sits at a third of
             // the console's distance, so the same sideways offset throws it three times as
@@ -1345,39 +1351,53 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
             // the edge of the windscreen. Pulling it back toward the driver instead runs
             // into the camera's 0.5 m near plane, which clips it away silently - it is in
             // the mesh, it is in front of the eye, and it is simply not drawn.
-            {
-                const float lx = xD + dx(-0.38f), ly = yCB - so * 0.25f;
-                emitBox(X, Y, Z, P(lx, ly, zD + 0.02f), 0.075f, 0.075f, 0.02f, di4::kButton);
-                const float tilt = handle >= 0
-                                       ? 0.5f * static_cast<float>(handle) /
-                                             static_cast<float>(Vehicle::kEmergencyNotch)
-                                       : -0.4f * static_cast<float>(-handle) /
-                                             static_cast<float>(Vehicle::kMaxPowerNotch);
-                const glm::vec3 pv = P(lx, ly, zD + 0.04f);
-                const glm::vec3 dir = Z * std::cos(tilt) - Y * (so * std::sin(tilt));
-                const glm::vec3 Yb = glm::normalize(glm::cross(dir, X));
-                const float L = 0.20f;
-                emitBox(X, Yb, dir, pv + dir * (0.5f * L), 0.022f, 0.022f, 0.5f * L,
-                        di4::kDash);
-                // The yellow collar, wide enough to stand clear of the stick it rings -
-                // eight millimetres proud is a hairline at arm's length.
-                emitBox(X, Yb, dir, pv + dir * (0.72f * L), 0.042f, 0.042f, 0.026f,
-                        di4::kPlough);
-                emitBox(X, Yb, dir, pv + dir * (L + 0.04f), 0.040f, 0.055f, 0.035f,
-                        di4::kDash);
-            }
-            {
-                const float lx = xD + dx(0.38f), ly = yCB - so * 0.25f;
-                emitBox(X, Y, Z, P(lx, ly, zD + 0.02f), 0.06f, 0.06f, 0.02f, di4::kButton);
-                const float tilt = static_cast<float>(rev) * 0.35f;
+            //
+            // One lever, given its pivot, length and lean off the sim.
+            auto lever = [&](float lx, float ly, float tilt, float L, float shaft,
+                             float knob, const glm::vec3& col, bool collar) {
                 const glm::vec3 pv = P(lx, ly, zD + 0.04f);
                 const glm::vec3 dir = Z * std::cos(tilt) + Y * (so * std::sin(tilt));
                 const glm::vec3 Yb = glm::normalize(glm::cross(dir, X));
-                const float L = 0.14f;
-                emitBox(X, Yb, dir, pv + dir * (0.5f * L), 0.018f, 0.018f, 0.5f * L,
+                emitBox(X, Yb, dir, pv + dir * (0.5f * L), shaft, shaft, 0.5f * L,
                         di4::kDash);
-                emitBox(X, Yb, dir, pv + dir * (L + 0.02f), 0.032f, 0.045f, 0.026f,
-                        di4::kButton);
+                if (collar) // the yellow collar, standing clear of the stick it rings
+                    emitBox(X, Yb, dir, pv + dir * (0.72f * L), 0.042f, 0.042f, 0.026f,
+                            di4::kPlough);
+                emitBox(X, Yb, dir, pv + dir * (L + knob * 0.8f), knob, knob, knob, col);
+            };
+
+            // Power controller, left hand. Off is upright; notching up leans it forward,
+            // away from the driver, as the railcar's does on its power side.
+            {
+                const float lx = xD + dx(-0.38f), ly = yCB - so * 0.25f;
+                emitBox(X, Y, Z, P(lx, ly, zD + 0.02f), 0.075f, 0.075f, 0.02f, di4::kButton);
+                const float t = -0.42f * static_cast<float>(power) /
+                                static_cast<float>(Vehicle::kMaxPowerNotch);
+                lever(lx, ly, t, 0.20f, 0.022f, 0.040f, di4::kDash, true);
+            }
+            // Reverser, a short selector beside the controller: F away, R back, N upright.
+            {
+                const float lx = xD + dx(-0.20f), ly = yCB - so * 0.20f;
+                emitBox(X, Y, Z, P(lx, ly, zD + 0.02f), 0.05f, 0.05f, 0.02f, di4::kButton);
+                lever(lx, ly, -0.35f * static_cast<float>(rev), 0.11f, 0.015f, 0.028f,
+                      di4::kButton, false);
+            }
+            // Driver's brake valve, right hand, in its quadrant. Release stands forward
+            // and the handle comes back through the service range to emergency, so the
+            // lever leans toward the driver as the brake goes on.
+            {
+                const float lx = xD + dx(0.38f), ly = yCB - so * 0.25f;
+                const float t = -0.40f + 0.80f * static_cast<float>(brake) /
+                                             static_cast<float>(Vehicle::kEmergencyNotch);
+                const glm::vec3 pv = P(lx, ly, zD + 0.04f);
+                const float R = 0.24f;
+                for (int i = 0; i <= 7; ++i) { // the quadrant the handle swings in
+                    const float a = -0.46f + 0.92f * static_cast<float>(i) / 7.0f;
+                    emitBox(X, Y, Z,
+                            pv + Y * (so * R * std::sin(a)) + Z * (R * std::cos(a) - R),
+                            0.050f, 0.022f, 0.010f, di4::kFrame);
+                }
+                lever(lx, ly, t, 0.26f, 0.020f, 0.038f, di4::kDash, false);
             }
             // The writing pad on the desk to the driver's right, and the handset on its
             // cradle at the left of the console.

@@ -150,6 +150,7 @@ Vehicle::Vehicle(const TrackPath* path, const VehicleSpec& spec, float s,
       startTE_(spec.startTE),
       idleRpm_(spec.idleRpm),
       governedRpm_(spec.governedRpm),
+      controls_(spec.controls),
       bodyStyle_(spec.body),
       name_(spec.name),
       physV_(initialSpeed),
@@ -340,6 +341,16 @@ void Vehicle::moveHandle(int cab, int dir) {
         if (powerNotch_[cab] > 0) --powerNotch_[cab];
         else brakeNotch_[cab] = std::min(kEmergencyNotch, brakeNotch_[cab] + 1);
     }
+}
+
+void Vehicle::movePower(int cab, int dir) {
+    if (cab != 0 && cab != 1) return;
+    powerNotch_[cab] = std::clamp(powerNotch_[cab] + dir, 0, kMaxPowerNotch);
+}
+
+void Vehicle::moveBrake(int cab, int dir) {
+    if (cab != 0 && cab != 1) return;
+    brakeNotch_[cab] = std::clamp(brakeNotch_[cab] + dir, 0, kEmergencyNotch);
 }
 
 int Vehicle::handlePosition(int cab) const {

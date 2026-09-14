@@ -269,11 +269,15 @@ void testCannotBeCheated() {
     { // and it really is the hold doing it, not the interlock or a safety device
         Parted p;
         if (!p.rear) return;
-        // Two cabs in gear makes activeCab() -1 and the interlock true; back to one
-        // leaves the interlock false with nothing else holding the brakes but the hold.
-        p.rear->setReverser(0, 1);
-        p.rear->update(kDt);
-        p.rear->setReverser(0, 0);
+        // Put a cab in gear and leave it there, so the reverser interlock has nothing to
+        // complain about and any brake still on is the hold's doing and nothing else.
+        //
+        // This used to reach the same place by putting a SECOND cab in gear and taking it
+        // out again, which made activeCab() -1 and the interlock true on the way through.
+        // That route is gone: a cab taking the reverser now centres every other cab, on
+        // the grounds that a locomotive has one reverser handle and the driver carries it
+        // to the end he is working from. Two cabs in gear is no longer a state that exists.
+        p.rear->setReverser(p.cab, 1);
         p.rear->update(kDt);
         check(p.rear->activeCab() == p.cab, "exactly one cab in gear", p.rear->activeCab(),
               p.cab);
@@ -283,7 +287,7 @@ void testCannotBeCheated() {
         check(p.rear->emergencyLine(), "  and it is STILL in emergency - the hold");
     }
 
-    { // the far-end cheat: cycle the other cab's reverser, not your own
+    { // handing the reverser to the other cab is not a cycle through Neutral
         Parted p;
         if (!p.rear) return;
         bool everReleased = false;
@@ -292,11 +296,21 @@ void testCannotBeCheated() {
             if (p.rear->uncoupleHold() == Consist::UncoupleHold::None)
                 everReleased = true;
         };
-        p.rear->setReverser(0, 1); watch();  // far end into gear
-        p.rear->setReverser(0, 0); watch();  // ...and out again
-        p.rear->setReverser(0, 1); watch();
-        p.rear->setReverser(0, 0); watch();
-        check(!everReleased, "cycling the FAR cab's reverser never releases it");
+        // This block used to be about a cheat: cycle the OTHER cab's reverser rather than
+        // your own and see whether the hold came off. There is no such cheat any more,
+        // because there are no longer two reversers to play off against each other - a cab
+        // taking the reverser centres every other cab, so cycling it anywhere is cycling
+        // the one handle there is. What is worth guarding instead is the handover itself:
+        // walking to the far end and taking charge there is not a trip through Neutral,
+        // and it must not be mistaken for one.
+        const int far = p.cab == 0 ? p.rear->cabCount() - 1 : 0;
+        for (int i = 0; i < 4; ++i) { // hand it back and forth, always leaving one in gear
+            p.rear->setReverser(far, 1); watch();
+            p.rear->setReverser(p.cab, 1); watch();
+        }
+        check(!everReleased, "handing the reverser between cabs never releases it");
+        check(p.rear->activeCab() == p.cab, "  and one cab still has it",
+              p.rear->activeCab(), p.cab);
         check(p.rear->emergencyLine(), "  still in emergency");
     }
 

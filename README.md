@@ -169,6 +169,19 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   effort put it. So it pulls away hard and then runs out of pull, which is what a heavy diesel
   loco does and what the railcar does not. It hauls nothing yet — a train of *unlike* vehicles
   is its own job — so it runs light engine.
+  It is **driven differently**, too. A railcar of the 1990s gives its driver one lever that
+  walks power and brake along a single axis; a locomotive of 1981 does not. The interior
+  photographs show a short ball-topped **power controller** on a gated base under the left
+  hand, and under the right — set directly below the three air gauges, where a driver's eye
+  goes when he is braking — a long lever swinging fore and aft in a **curved quadrant**,
+  which is the signature of a driver's brake valve of the period. That matches German
+  practice of these years, *Fahrschalter* left and *Führerbremsventil* right, which is what
+  a Henschel cab of 1981 would be: the Di 4 descends directly from the three Henschel-BBC
+  **DE 2500** three-phase prototypes (DB class 202, 1971). So the vehicle table carries a
+  `ControlLayout`, the Di 4's cab draws both handles and a reverser stub between them, and
+  `,` / `.` work the power controller while **`K` releases and `L` applies** the train
+  brake. The difference is not decoration: with two handles you can hold a train on the
+  brake and wind power on against it, which one lever cannot express at all.
   It now has a **cab at each end to sit in**, drawn from three interior photographs of a
   class of five: two windscreens of equal size either side of a narrow centre pillar with
   roller blinds above them, the **driver on the right** with a second seat and a plain flat
@@ -255,6 +268,15 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   heard from where the trains met rather than through the near train's envelope, so a
   collision thirty kilometres away is thirty kilometres away.
   `EBANER_AUDIO_DUMP_IMPACT=out.wav` renders the range offline, as the other voices have.
+- **One reverser, one driving cab** — the train takes its commands from the cab holding
+  the reverser, so putting a cab into gear **centres every other cab**: a locomotive has one
+  reverser handle and the driver carries it to the end he is working from. This is also a
+  trap closed. Leave the reverser at one end, walk to the other, and every control there
+  moves and reads back while the locomotive does nothing — no error and no clue, because the
+  commands are being taken from a cab you are not sitting in. It only bites a machine with
+  two cabs you can sit in, which is why it surfaced the day the Di 4 got its second one. The
+  HUD now says so outright when the cab you are in is not the one driving, and F or R takes
+  the reverser where you sit.
 - **More than one train** — every train in the world is simulated, whether or not anyone
   is driving it. There is no dead-man device, so a portion left in gear under power goes
   on running by itself indefinitely, holds its own track circuits, forces its own switches

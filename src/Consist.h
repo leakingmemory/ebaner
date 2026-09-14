@@ -96,6 +96,10 @@ public:
     void setPowerNotch(int cab, int notch);
     int powerNotch(int cab) const;
     void moveHandle(int cab, int dir);
+    void movePower(int cab, int dir);
+    void moveBrake(int cab, int dir);
+    int controls() const { return lead().controls(); }
+    const char* brakeNotchName(int cab) const;
     int handlePosition(int cab) const;
     const char* handleName(int cab) const;
     void setReverser(int cab, int dir);

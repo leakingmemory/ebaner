@@ -301,6 +301,13 @@ add_test(NAME train-yard COMMAND TrainYardTest)
 
 # The air brake: a pipe that has to be kept full, and bogies that stop the train when it
 # is not. No dataset - a kilometre of straight TrackPath is the whole world, as UncoupleTest.
+# Driving: which machine has which controls, and the cab that holds the reverser.
+add_executable(DrivingTest tests/DrivingTest.cpp src/Vehicle.cpp src/Consist.cpp)
+add_dependencies(DrivingTest shaders)
+target_link_libraries(DrivingTest PRIVATE ebaner_engine)
+target_include_directories(DrivingTest PRIVATE src)
+add_test(NAME driving COMMAND DrivingTest)
+
 add_executable(AirBrakeTest tests/AirBrakeTest.cpp src/Vehicle.cpp src/Consist.cpp)
 add_dependencies(AirBrakeTest shaders)
 target_link_libraries(AirBrakeTest PRIVATE ebaner_engine)

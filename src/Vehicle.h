@@ -38,6 +38,16 @@ enum VehicleBodyStyle {
 // through a torque converter and a gearbox, so its pull steps as it changes gear; the other
 // turns a generator and its motors pull flat to a corner speed and then fall away as 1/v,
 // holding the rated power. Neither is a special case of the other.
+// How the driving position is laid out. A railcar of the 1990s gives the driver one
+// combined lever - push for power, pull for brake - and a locomotive of 1981 does not: it
+// has a power controller under the left hand and a driver's brake valve on a curved
+// quadrant under the right, worked independently and often at the same time. Which it is
+// changes what the keyboard does and what the cab draws, so it belongs to the vehicle.
+enum ControlLayout {
+    ControlCombined = 0, // one lever, power and brake on one axis (Class 93)
+    ControlSeparate = 1, // power controller and train brake, a hand each (Di 4)
+};
+
 enum DriveKind {
     DriveNone = 0,      // unpowered: a wagon, a carriage, a bare wheelset
     DriveHydraulic = 1, // torque converter + 5-speed box (Class 93)
@@ -77,6 +87,7 @@ struct VehicleSpec {
     // they should be. Defaulted to the Class 93's, so its rows do not move.
     float idleRpm = 700.0f;
     float governedRpm = 1500.0f; // Vehicle::kMaxRpm, which is declared below this
+    int   controls = ControlCombined; // ControlLayout
 };
 
 // The vehicles offered on the start screen.
@@ -108,7 +119,8 @@ inline constexpr VehicleSpec kVehicleSpecs[] = {
     // the middle axle 75 mm from where it belongs and is not a thing anyone can see.
     // Bogie centres follow from 15.60 m between the outer axles.
     {"NSB Di 4 (Henschel)", 120000.0f, 20.80f, 3.176f, 4.35f, 3.85f, 11.75f, 2, BodyDi4, 1,
-     3, 1, DriveElectric, 2450000.0f, 0.55f, 1.00f, 360000.0f, 315.0f, 900.0f},
+     3, 1, DriveElectric, 2450000.0f, 0.55f, 1.00f, 360000.0f, 315.0f, 900.0f,
+     ControlSeparate},
 };
 // Counted off the table rather than written down beside it. A hand-kept number that falls
 // behind the array makes the last entry unreachable everywhere at once - the start screen,
@@ -328,7 +340,14 @@ public:
     // Move the combined lever one step: dir < 0 toward power (brake bleeds to 0
     // first, then power rises), dir > 0 toward brake (power bleeds to 0 first, then
     // brake rises to emergency).
+    // The combined lever, and - where the machine has two handles instead - the power
+    // controller and the driver's brake valve, worked independently. Both notches exist
+    // either way; what differs is whether one lever walks them in sequence or two levers
+    // move them apart, so a machine with separate controls can power against the brake.
     void moveHandle(int cab, int dir);
+    void movePower(int cab, int dir);
+    void moveBrake(int cab, int dir);
+    int controls() const { return controls_; }
     // Combined-lever position for the mesh/HUD: +brake (1..5), 0 neutral, -power
     // (-1..-kMaxPowerNotch); handleName gives "P3" / "N" / "B2" / "EMERG".
     int handlePosition(int cab) const;
@@ -493,6 +512,7 @@ private:
     int bogieCount_;
     // What the machine is, taken from its spec rather than from a shared constant.
     float idleRpm_ = 700.0f, governedRpm_ = kMaxRpm;
+    int controls_ = ControlCombined;
     int axlesPerBogie_ = 2, drive_ = DriveNone;
     float powerW_ = 0.0f, wheelRadius_ = 0.42f, drivenFrac_ = 1.0f, startTE_ = 0.0f;
     int bodyStyle_;

@@ -657,22 +657,32 @@ int main(int argc, char** argv) {
                       6.0);
             }
 
-            // --- a cab in gear at each end is still the interlock --------------------
+            // --- one reverser, and the far end takes it rather than sharing it -------
+            //
+            // This used to put a cab in gear at each end and check that the interlock saw
+            // two and held the train. That state is gone: taking the reverser in a cab
+            // centres every other cab, because a locomotive has one reverser handle and
+            // the driver carries it to the end he is working from. What is checked now is
+            // the handover - and that the interlock still bites when NO cab has it, which
+            // is the half of the rule that survives and the half that stops a runaway.
             {
                 Consist c(&paths1, run, multi, startS);
                 c.attachNetwork(&paths1, &net);
                 c.setReverser(0, 1);
-                c.setReverser(rear, 1);              // both ends of the train in gear
-                check(c.activeCab() < 0, "a cab in gear at each end is no cab in gear",
+                check(c.activeCab() == 0, "the cab that takes the reverser drives",
+                      double(c.activeCab()), 0.0);
+                c.setReverser(rear, 1);              // the far end takes charge
+                check(c.reverser(0) == 0, "taking it at the far end centres the near cab",
+                      double(c.reverser(0)), 0.0);
+                check(c.activeCab() == rear, "and the train is driven from there",
+                      double(c.activeCab()), double(rear));
+                check(!c.interlockEmergency(), "with the interlock satisfied throughout",
+                      double(c.interlockEmergency()), 0.0);
+                c.setReverser(rear, 0);              // and nobody has it
+                check(c.activeCab() < 0, "letting it go leaves no cab in gear",
                       double(c.activeCab()), -1.0);
                 check(c.interlockEmergency(), "which holds the train in emergency",
                       double(c.interlockEmergency()), 1.0);
-                c.setReverser(0, 0);
-                check(c.activeCab() == rear,
-                      "and letting one go hands the train to the other",
-                      double(c.activeCab()), double(rear));
-                check(!c.interlockEmergency(), "with the interlock released",
-                      double(c.interlockEmergency()), 0.0);
             }
         }
     }

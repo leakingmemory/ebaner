@@ -543,7 +543,9 @@ int main(int argc, char** argv) {
     std::printf(
         "\nControls: WASD move, Q/E down/up, mouse look, Shift boost, "
         "C chase vehicle, V driver view (switch cab), I engines start/stop, "
-        "Up/Down push vehicle, , / . power/brake lever, Space emergency, "
+        "Up/Down push vehicle, , / . power/brake lever (the power controller on a "
+        "machine with two handles, whose train brake is K release / L apply), "
+        "Space emergency, "
         "F/N/R reverser, T throw aimed switch, U uncouple, M mute, "
         "Tab release cursor, Esc menu (drive another train, place one)\n\n");
 
@@ -1951,6 +1953,7 @@ int main(int argc, char** argv) {
     bool prevUp = false, prevDown = false, prevEnter = false;
     bool prevNum[9] = {}; // one per vehicle-select number key
     bool prevBrkDown = false, prevBrkUp = false, prevBrkEmerg = false;
+    bool prevBrkRel = false, prevBrkApp = false; // the separate train brake, K / L
     bool prevSafety = false, prevEngine = false;
     bool prevRevF = false, prevRevN = false, prevRevR = false;
     bool prevUncouple = false;
@@ -3794,29 +3797,51 @@ int main(int argc, char** argv) {
                 if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) pushInput -= 1.0f;
             }
 
-            // Combined power/brake lever: ',' steps toward power (N -> P1..P5), '.'
-            // toward brake (N -> B1..B4 -> Emergency), Space slams to emergency
-            // (edge-triggered so each press is one notch). These keys are the same
-            // physical position on any layout (unlike [ ] \, which are AltGr
-            // combinations on e.g. Norwegian keyboards).
+            // The driving controls. ',' steps toward power and '.' away from it, as they
+            // always have; on a machine whose power and brake are one lever that walks
+            // the single combined axis, and on one with two handles it works the power
+            // controller alone, with K and L releasing and applying the train brake. Space
+            // slams to emergency. All edge-triggered, so a press is a notch.
+            //
+            // Letters and the two punctuation keys only: [ ] and \ are AltGr combinations
+            // on a Norwegian keyboard and cannot be pressed as plain keys at all.
             auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
             // The keyboard drives the cab you are sitting in (driver view V), or
             // the front cab (0) in any other view.
             const int cab = (g_driverPos >= 0) ? g_driverPos : 0;
+            const bool split = vehicle->controls() == ControlSeparate;
             const bool bD = down(GLFW_KEY_COMMA), bU = down(GLFW_KEY_PERIOD),
                        bE = down(GLFW_KEY_SPACE);
+            const bool kRel = split && down(GLFW_KEY_K), kApp = split && down(GLFW_KEY_L);
             const int prevPos = vehicle->handlePosition(cab);
-            if (bD && !prevBrkDown) vehicle->moveHandle(cab, -1); // toward power
-            if (bU && !prevBrkUp) vehicle->moveHandle(cab, +1);   // toward brake
+            const int prevPow = vehicle->powerNotch(cab), prevBrk = vehicle->brakeNotch(cab);
+            if (bD && !prevBrkDown) {
+                if (split) vehicle->movePower(cab, +1); else vehicle->moveHandle(cab, -1);
+            }
+            if (bU && !prevBrkUp) {
+                if (split) vehicle->movePower(cab, -1); else vehicle->moveHandle(cab, +1);
+            }
+            if (kRel && !prevBrkRel) vehicle->moveBrake(cab, -1);
+            if (kApp && !prevBrkApp) vehicle->moveBrake(cab, +1);
             if (bE && !prevBrkEmerg) {
                 vehicle->setPowerNotch(cab, 0);
                 vehicle->setBrakeNotch(cab, Vehicle::kEmergencyNotch);
             }
             prevBrkDown = bD; prevBrkUp = bU; prevBrkEmerg = bE;
-            if (vehicle->handlePosition(cab) != prevPos) {
-                std::printf("[Handle] cab %d %s  BP %.1f  BC %.1f  MR %.1f bar\n", cab,
-                            vehicle->handleName(cab), vehicle->bpPressure(),
-                            vehicle->bcPressure(), vehicle->mrPressure());
+            prevBrkRel = kRel; prevBrkApp = kApp;
+            const bool moved = split ? (vehicle->powerNotch(cab) != prevPow ||
+                                        vehicle->brakeNotch(cab) != prevBrk)
+                                     : vehicle->handlePosition(cab) != prevPos;
+            if (moved) {
+                if (split)
+                    std::printf("[Handle] cab %d power P%d  brake %s  BP %.1f  BC %.1f  "
+                                "MR %.1f bar\n", cab, vehicle->powerNotch(cab),
+                                vehicle->brakeNotchName(cab), vehicle->bpPressure(),
+                                vehicle->bcPressure(), vehicle->mrPressure());
+                else
+                    std::printf("[Handle] cab %d %s  BP %.1f  BC %.1f  MR %.1f bar\n", cab,
+                                vehicle->handleName(cab), vehicle->bpPressure(),
+                                vehicle->bcPressure(), vehicle->mrPressure());
                 std::fflush(stdout);
             }
 
@@ -4212,13 +4237,32 @@ int main(int argc, char** argv) {
                                                         : "SHUT DOWN (coupled)");
                 appendText(tv, buf, x, y, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
                 y += lh;
-                std::snprintf(buf, sizeof(buf), "HANDLE %s   , power / brake . / Space",
-                              vehicle->handleName(cab));
+                if (vehicle->controls() == ControlSeparate)
+                    std::snprintf(buf, sizeof(buf),
+                                  "POWER P%d  , / .      BRAKE %s  K rel / L app / Space",
+                                  vehicle->powerNotch(cab), vehicle->brakeNotchName(cab));
+                else
+                    std::snprintf(buf, sizeof(buf),
+                                  "HANDLE %s   , power / brake . / Space",
+                                  vehicle->handleName(cab));
                 const bool emerg = vehicle->brakeNotch(cab) >= Vehicle::kEmergencyNotch;
                 appendText(tv, buf, x, y, sc,
                            emerg ? glm::vec3(1.0f, 0.4f, 0.35f) : glm::vec3(0.7f, 0.85f, 0.7f),
                            fbw, fbh);
                 y += lh;
+                // Sitting in a cab that is not the one in charge. Every control here moves
+                // and reads back, and the train ignores all of them, because the commands
+                // are taken from the cab holding the reverser. Worth a line of its own:
+                // without it this is indistinguishable from a broken locomotive, and the
+                // way out - take the reverser here - is not guessable.
+                const int inCharge = vehicle->activeCab();
+                if (inCharge >= 0 && inCharge != cab) {
+                    std::snprintf(buf, sizeof(buf),
+                                  "!! CAB %d IS NOT DRIVING - cab %d has the reverser "
+                                  "(F or R here takes it) !!", cab, inCharge);
+                    appendText(tv, buf, x, y, sc, glm::vec3(1.0f, 0.75f, 0.3f), fbw, fbh);
+                    y += lh;
+                }
                 if (vehicle->interlockEmergency()) {
                     appendText(tv, "!! REVERSER INTERLOCK - AUTO EMERGENCY !!", x, y,
                                sc, glm::vec3(1.0f, 0.35f, 0.3f), fbw, fbh);

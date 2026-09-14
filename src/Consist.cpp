@@ -115,6 +115,15 @@ int Consist::powerNotch(int cab) const {
 void Consist::moveHandle(int cab, int dir) {
     if (cab >= 0 && cab < cabCount()) units_[cab / 2].moveHandle(cab % 2, dir);
 }
+void Consist::movePower(int cab, int dir) {
+    if (cab >= 0 && cab < cabCount()) units_[cab / 2].movePower(cab % 2, dir);
+}
+void Consist::moveBrake(int cab, int dir) {
+    if (cab >= 0 && cab < cabCount()) units_[cab / 2].moveBrake(cab % 2, dir);
+}
+const char* Consist::brakeNotchName(int cab) const {
+    return (cab >= 0 && cab < cabCount()) ? units_[cab / 2].brakeNotchName(cab % 2) : "REL";
+}
 int Consist::handlePosition(int cab) const {
     return (cab >= 0 && cab < cabCount()) ? units_[cab / 2].handlePosition(cab % 2) : 0;
 }
@@ -132,6 +141,18 @@ void Consist::setReverser(int cab, int dir) {
     // then be driven by a cab at a coupler, and putting a real end cab into gear would
     // make two and trip the interlock, which is a corner nobody can get out of.
     if (dir != 0 && !cabDrivable(cab)) return;
+    // Putting a cab into gear takes charge of the train, so every other cab comes out of
+    // gear as it does. A locomotive has one reverser handle and the driver carries it to
+    // the end he is working from; two cabs in gear at once is not a state the machine has.
+    //
+    // Without this the simulator has a trap with no tell: leave the reverser in the cab
+    // you started in, walk to the other end, and the lever there moves, the HUD reads P5 -
+    // and nothing happens, because the commands are taken from the cab holding the
+    // reverser and that one is still shut. It only bites a machine with two cabs you can
+    // sit in, which is why it surfaced the day the Di 4 got its second one.
+    if (dir != 0)
+        for (int c = 0; c < cabCount(); ++c)
+            if (c != cab) units_[c / 2].setReverser(c % 2, 0);
     units_[cab / 2].setReverser(cab % 2, dir);
 }
 int Consist::reverser(int cab) const {
