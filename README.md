@@ -348,10 +348,16 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   the plan*, which is a seat-map convention for a designated area and not the colour of the
   moquette. Nothing to see, so nothing to draw — a near-duplicate mesh would be a lie about
   how much is known.
+  The **A5-1** is the 1st class comfort coach, and the one variant whose *shell* is genuinely
+  different rather than just its furniture: there is a **window across the centre** where
+  every 2nd class variant has 2.2 m of blank side, plus a short extra one at the far end.
+  Inside, **12 rows of four — 48 seats** — spaced **1.27 m** apart against 2nd class's 0.92,
+  which is what the extra legroom looks like on a drawing, with a steward's service point
+  amidships.
   So the variants share one body and one `Layout`, differing in where the windows and doors
   go and what furniture is inside — and the standard rake is **a list and not a count**:
-  `"BC5-3,FR5-1,B5-3,B5-5,BC5-3"`, café **second**, plain seating **third and fourth**, as
-  it is marshalled. 336.4 t, 150.3 m.
+  `"BC5-3,FR5-1,B5-3,B5-5,A5-1"`, café **second**, 2nd class **third and fourth**, 1st class
+  on the **tail**, as it is marshalled. 335.4 t, 150.3 m.
   Hauling meant a train could stop being **all one vehicle**. A `Consist` took one spec and
   made copies of it, and its spacing came from `lead().length()` alone — so a 20.8 m
   locomotive pulling 25.3 m carriages would have laid every one of them 4.5 m inside the

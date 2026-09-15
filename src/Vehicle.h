@@ -35,6 +35,7 @@ enum VehicleBodyStyle {
     BodyType5 = 3,      // NSB Type 5 (Strommens Vaerksted) passenger carriage
     BodyType5Fr = 4,    // the same body as a cafe car: different windows, different doors
     BodyType5B = 5,     // and as a plain seating coach: the same shell, seating throughout
+    BodyType5A = 6,     // and as 1st class: a window across the centre, and more legroom
 };
 
 // What turns the wheels. Two machines that could hardly be less alike: one puts its engine
@@ -261,8 +262,25 @@ inline constexpr VehicleSpec kVehicleSpecs[] = {
      .wheelRadius = 0.46f,
      .cabs = 0,
      .epBrake = false},
-    // The standard rake, as it is marshalled: cafe second, plain seating third and fourth.
-    hauling(kDi4Spec, "NSB Di 4 + 5 (cafe 2nd)", "BC5-3,FR5-1,B5-3,B5-5,BC5-3"),
+    // A5-1, the 1st class comfort coach. 48 seats against the 2nd class 68, and the one
+    // variant whose shell is genuinely different: a window across the centre where every
+    // other one has 2.2 m of blank side, and an extra short one at the far end.
+    {.name = "NSB A5-1 (Type 5)",
+     .mass = 42000.0f,
+     .length = 25.30f,
+     .width = 3.10f,
+     .height = 4.115f,
+     .wheelbase = 2.50f,
+     .bogieSpacing = 18.00f,
+     .bogieCount = 2,
+     .body = BodyType5A,
+     .units = 1,
+     .wheelRadius = 0.46f,
+     .cabs = 0,
+     .epBrake = false},
+    // The standard rake, as it is marshalled: cafe second, 2nd class third and fourth,
+    // and 1st class on the tail.
+    hauling(kDi4Spec, "NSB Di 4 + 5 (cafe 2nd)", "BC5-3,FR5-1,B5-3,B5-5,A5-1"),
 };
 // Counted off the table rather than written down beside it. A hand-kept number that falls
 // behind the array makes the last entry unreachable everywhere at once - the start screen,

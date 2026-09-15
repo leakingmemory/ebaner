@@ -175,6 +175,7 @@ struct Layout {
     const float* seatRows; // where the rows are, off the seat plan
     int seatRowCount;
     float saloon0, saloon1; // partitions closing the saloon off
+    float serviceAt;        // a steward's service point, 0 for none
 };
 
 // BC5-3: nine saloon windows in two groups, four and five, with 2.2 m of blank side
@@ -205,12 +206,27 @@ constexpr float kRowsB53[] = {-7.17f, -6.20f, -5.28f, -4.37f, -3.45f, -2.53f,
                               -0.65f, 0.73f,  2.51f,  3.43f,  4.36f,  5.29f,
                               6.22f,  7.14f,  8.07f,  9.00f,  9.93f};
 
+// A5-1, the 1st class comfort coach, and the shell is not quite the others': there is a
+// window across the CENTRE where every 2nd class variant has 2.2 m of blank side, and an
+// extra short one at the far end. Inside, twelve rows of four instead of seventeen - 48
+// seats - spaced 1.27 m apart where 2nd class sits at 0.92, which is what the extra
+// legroom looks like from a drawing. A steward's service point takes the middle.
+constexpr float kWinA51[][2] = {
+    {-7.13f, -6.31f}, {-5.81f, -4.58f}, {-4.08f, -2.85f}, {-2.34f, -1.11f},
+    {-0.61f, 0.62f},  {1.12f, 2.35f},   {2.85f, 4.08f},   {4.59f, 5.82f},
+    {6.32f, 7.54f},   {8.03f, 9.26f},   {9.86f, 10.46f},
+};
+constexpr float kRowsA51[] = {-6.89f, -5.63f, -4.36f, -3.04f, -1.77f, -0.51f,
+                              3.03f,  4.36f,  5.63f,  6.89f,  8.16f,  9.48f};
+
 constexpr Layout kBC53{kWinBC53, 9, {-11.36f, 11.36f}, {0.46f, 0.62f},
-                       InsideFamily, kRowsBC53, 9, -8.30f, 5.30f};
+                       InsideFamily, kRowsBC53, 9, -8.30f, 5.30f, 0.0f};
 constexpr Layout kB53{kWinBC53, 9, {-11.36f, 11.36f}, {0.46f, 0.46f},
-                      InsideSeats, kRowsB53, 17, -8.30f, 10.60f};
+                      InsideSeats, kRowsB53, 17, -8.30f, 10.60f, 0.0f};
+constexpr Layout kA51{kWinA51, 11, {-11.36f, 11.36f}, {0.46f, 0.46f},
+                      InsideSeats, kRowsA51, 12, -8.30f, 10.60f, 1.30f};
 constexpr Layout kFR51{kWinFR51, 8, {-1.39f, 7.59f}, {0.46f, 0.46f},
-                       InsideCafe, nullptr, 0, -12.0f, 12.0f};
+                       InsideCafe, nullptr, 0, -12.0f, 12.0f, 0.0f};
 
 constexpr float kWcAt = -10.40f; // the accessible WC, behind the partition at one end
 // And the playroom, which on the family carriage takes the last four metres of saloon:
@@ -1267,6 +1283,10 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                     emitBox(X, Y, Z, P(sx * 0.95f, lay.saloon1 + 0.70f, z0 + 0.55f), 0.42f,
                             0.55f, 0.55f, t5::kLining); // service nook and luggage
             }
+            // A steward's service point amidships, where 1st class has one.
+            if (lay.serviceAt != 0.0f)
+                emitBox(X, Y, Z, P(-0.80f, lay.serviceAt, z0 + 0.60f), 0.60f, 0.90f, 0.60f,
+                        t5::kTable);
             }
         }
         // Floor pan and the two ends. The ends are plain: they are only ever seen from
@@ -1858,6 +1878,8 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                 emitType5(sections[i], halfLen, t5::kFR51);
             } else if (vehicle.bodyStyle() == BodyType5B) {
                 emitType5(sections[i], halfLen, t5::kB53);
+            } else if (vehicle.bodyStyle() == BodyType5A) {
+                emitType5(sections[i], halfLen, t5::kA51);
             } else {
                 const glm::vec3 centre =
                     sections[i].pos + sections[i].up * (frameTopZ + kUnderframeHalfHeight);

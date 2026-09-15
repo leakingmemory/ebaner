@@ -138,6 +138,17 @@ int main() {
             check(pets->body == plain->body,
                   "  and shares the B5-3's body, there being nothing visible to tell them "
                   "apart");
+        // The A5-1 is the one variant whose shell really is different: 1st class has a
+        // window across the centre where every 2nd class one has 2.2 m of blank side.
+        const VehicleSpec* first = specNamed("A5-1 (");
+        check(first != nullptr, "the A5-1 is in the table");
+        if (first != nullptr) {
+            check(std::abs(first->mass - 42000.0f) < 1.0f, "  1st class at 42 t",
+                  first->mass, 42000.0);
+            check(first->body != plain->body,
+                  "  and a body of its own - it is glazed differently, not just furnished "
+                  "differently");
+        }
     }
 
     std::puts("\nA locomotive and five carriages is one train of six unlike vehicles");
@@ -154,11 +165,12 @@ int main() {
         check(std::string(c.unit(3).name()).find("B5-3 (") != std::string::npos,
               "  the plain seating coach the third");
         check(std::string(c.unit(4).name()).find("B5-5 (") != std::string::npos,
-              "  and the one with the pet places the fourth");
-        for (const int u : {1, 5})
-            check(std::string(c.unit(u).name()).find("BC5-3") != std::string::npos,
-                  "  carriage " + std::to_string(u) + " is a BC5-3");
-        check(std::abs(c.mass() - 336400.0f) < 1.0f, "336.4 t", c.mass(), 336400.0);
+              "  the one with the pet places the fourth");
+        check(std::string(c.unit(5).name()).find("A5-1 (") != std::string::npos,
+              "  and 1st class on the tail");
+        check(std::string(c.unit(1).name()).find("BC5-3") != std::string::npos,
+              "  with the family carriage next to the locomotive");
+        check(std::abs(c.mass() - 335400.0f) < 1.0f, "335.4 t", c.mass(), 335400.0);
         const float want = 20.80f + 5.0f * 25.30f + 5.0f * Consist::kCouplerGap;
         check(std::abs(c.length() - want) < 0.05f, "and its length is the sum of them",
               c.length(), want);
