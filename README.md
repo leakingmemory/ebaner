@@ -221,9 +221,20 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   the speed the train has rather than letting it push the train backwards. And while it is
   working the locomotive's **own friction brake is held off**, since applying both
   duplicates the effort and cooks the shoes; the carriages brake on air as usual, and an
-  emergency drops the electric brake out and fills every cylinder there is. Not modelled,
-  and worth saying: the **grid blower**, which on a real one is the loudest thing about it,
-  and grid **thermal limits**, which there is no temperature anywhere in this model to carry.
+  emergency drops the electric brake out and fills every cylinder there is.
+  And you can **hear it**, which matters more than it sounds: the electric brake is the one
+  control on this locomotive with no other feedback — no gauge moves, and the diesel stays
+  at idle throughout — so a silent one is a control you drive by the HUD. The **grid
+  blower** is fed from the braking current, so the fans speed up the harder the brake works:
+  wind the controller back and the roar builds over a couple of seconds, notch off and it
+  **coasts down** rather than stopping. Rushing air through the ducts with the blade-passing
+  tone under it, and both the **level and the pitch** rise with the load — measured across
+  the notches at 214 → 384 → 538 → 618 Hz. That the blower is current-fed is an
+  **assumption**: reasonable for a BBC machine of this period and much the more interesting
+  behaviour, but not something I could source for this locomotive. `EBANER_AUDIO_DUMP_GRID`
+  renders the application to a WAV. Still not modelled: grid **thermal limits**, which there
+  is no temperature anywhere in this model to carry — a real one fades as the grids heat and
+  runs its fans on after the brake releases.
   It is **driven differently**, too. A railcar of the 1990s gives its driver one lever that
   walks power and brake along a single axis; a locomotive of 1981 does not. The interior
   photographs show a short ball-topped **power controller** on a gated base under the left

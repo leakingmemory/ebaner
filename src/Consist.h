@@ -103,6 +103,8 @@ public:
     void movePower(int cab, int dir);
     void moveBrake(int cab, int dir);
     int controls() const { return lead().controls(); }
+    // The hardest-working set of grids in the train, 0..1 - what the blower answers to.
+    float dynamicBrakeFrac() const;
     const char* brakeNotchName(int cab) const;
     int handlePosition(int cab) const;
     const char* handleName(int cab) const;

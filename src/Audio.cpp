@@ -39,6 +39,13 @@
 
 namespace {
 constexpr float kPi = 3.14159265358979f;
+// The grid blower. The blade-passing rate of a big axial fan at full song, and how fast it
+// gets there: a couple of seconds spinning up, and slower coasting down with nothing
+// driving it any more. Per audio sample, so these are small numbers.
+constexpr float kGridBladeHz = 118.0f;
+constexpr float kGridSpinUp = 0.000020f;
+constexpr float kGridCoast = 0.000009f;
+constexpr float kGridIdleSpeed = 0.45f; // what it turns at with the brake barely on
 
 // --- The crossing bell's voice ---------------------------------------------------
 // Struck once per flash of the lights (SignalMesh.h's kCrossingFastS): bell and lamps
@@ -152,6 +159,7 @@ void Audio::render(float* out, int n) {
         engGainT[k] = engGain_[k].load(std::memory_order_relaxed);
     }
     const float compTarget = compActive_.load(std::memory_order_relaxed) ? 1.0f : 0.0f;
+    const float gridTarget = gridLoad_.load(std::memory_order_relaxed);
     const float bellTarget = bellGain_.load(std::memory_order_relaxed);
     const bool railborne = railborne_.load(std::memory_order_relaxed);
     const float rollSpeedT = railborne ? rollSpeed_.load(std::memory_order_relaxed) : 0.0f;
@@ -303,6 +311,64 @@ void Audio::render(float* out, int n) {
             for (int k = 0; k < kMaxEngines; ++k) near = std::max(near, engGainEnv_[k]);
             comp = compLp_ * compEnv_ * near; // heard from whichever end is nearest
         }
+        }
+
+        // Grid blower: the fans that force air through the rheostatic brake's resistors.
+        //
+        // Fed from the braking current itself, so the fan speeds up the harder the brake is
+        // working - which is the whole character of the thing. Wind the controller back and
+        // the roar builds; notch off and it coasts down. It is not a switch, and the fan
+        // does not follow the load instantly either: it has inertia, and it runs down more
+        // slowly than it runs up because nothing is driving it any more.
+        //
+        // (That the blower is current-fed is an assumption. It is reasonable for a BBC
+        // machine of this period and it is the more interesting behaviour, but it is not
+        // something I could source for this locomotive in particular.)
+        //
+        // Three parts: rushing air through the ducts, which dominates and which rises in
+        // pitch as well as level; the blade-passing tone and its harmonics; and enough of
+        // the driving motor to keep it from sounding like plain noise. Fan noise goes up
+        // very steeply with speed - near the fifth power - so this is quiet at E1 and
+        // unmistakable at E5 rather than fading up evenly across the range.
+        {
+            // The fan does not crawl at the first notch. A blower motor fed from the
+            // braking current still has a substantial no-load speed, so the useful range
+            // is something like half to full rather than nothing to full - which is also
+            // what makes the first notch audible instead of a fiftieth of the sound.
+            const float want = gridTarget > 0.0f ? kGridIdleSpeed +
+                                                       (1.0f - kGridIdleSpeed) * gridTarget
+                                                 : 0.0f;
+            const float rate = want > gridFan_ ? kGridSpinUp : kGridCoast;
+            gridFan_ += (want - gridFan_) * rate;
+        }
+        float grid = 0.0f;
+        if (gridFan_ > 1e-3f) {
+            const float sp = gridFan_;
+            gridPhase_ += kGridBladeHz * (0.35f + 0.65f * sp) / fs;
+            if (gridPhase_ >= 1.0f) gridPhase_ -= 1.0f;
+            const float gp = gridPhase_;
+            const float blade = std::sin(2.0f * kPi * gp) + 0.45f * std::sin(4.0f * kPi * gp) +
+                                0.22f * std::sin(6.0f * kPi * gp);
+            rng_ = rng_ * 1664525u + 1013904223u;
+            const float wn = static_cast<float>(rng_ >> 8) / 8388608.0f - 1.0f;
+            // A two-pole band-pass made of one low-pass chasing another: the centre rides
+            // up with the fan, which is what makes it a fan and not a volume control.
+            const float k = std::clamp(0.05f + 0.22f * sp, 0.02f, 0.5f);
+            gridBp1_ += (wn - gridBp1_) * k;
+            gridBp2_ += (gridBp1_ - gridBp2_) * k * 0.45f;
+            const float air = gridBp1_ - gridBp2_;
+            // Steep with fan speed, as fan noise is, but not as steep as the fifth-power
+            // law on its own would make it: taken literally that puts a fifth of the brake
+            // at a fiftieth of the sound, and the first notch becomes inaudible. The ear
+            // wants to hear the brake come on.
+            const float loud = sp * std::sqrt(sp);
+            float near = 0.0f;
+            for (int k2 = 0; k2 < kMaxEngines; ++k2) near = std::max(near, engGainEnv_[k2]);
+            // Soft-limited rather than scaled down. Band-passed noise has a high crest
+            // factor - all peak and little body - so the level that sounds right is the
+            // level that clips, and taking the tops off is what lets a rushing sound be
+            // loud without eating the headroom the wheels and the brakes need.
+            grid = std::tanh((air * 2.4f + blade * 0.30f) * loud) * 0.62f * near;
         }
 
         // --- Crossing warning bell ------------------------------------------------
@@ -513,7 +579,7 @@ void Audio::render(float* out, int n) {
         const float rollMix = 0.75f;
         float s = muted ? 0.0f
                         : (hiss * 1.2f + click * 0.9f) * envEnv_ + engine * 0.30f +
-                              comp * 0.22f + bell * 0.34f + bang * 0.55f +
+                              comp * 0.22f + grid * 0.42f + bell * 0.34f + bang * 0.55f +
                               (roll * 0.45f + joints * 0.30f + squeal * 0.16f +
                                brakeRub * 0.16f) * rollMix;
         s = std::clamp(s, -1.0f, 1.0f);
@@ -589,6 +655,7 @@ void Audio::update(const Consist& sounded, float /*dt*/, float brakeGain,
         engBri_[k].store(std::clamp(e.bright, 0.01f, 1.0f), std::memory_order_relaxed);
     }
     compActive_.store(v.compressorRunning(), std::memory_order_relaxed);
+    gridLoad_.store(std::clamp(v.dynamicBrakeFrac(), 0.0f, 1.0f), std::memory_order_relaxed);
 
     // --- Wheel on rail ------------------------------------------------------------
     // Four things the contact is doing, kept apart rather than summed into one number,
@@ -882,6 +949,42 @@ void Audio::dumpEngineTest(const std::string& wavPath) {
             a.engBri_[k].store(sp->engineBright);
         }
         a.compActive_.store(s.comp);
+        const int total = static_cast<int>(s.dur * fs);
+        float buf[256];
+        for (int done = 0; done < total; done += 256) {
+            const int n = std::min(256, total - done);
+            a.render(buf, n);
+            for (int i = 0; i < n; ++i)
+                pcm.push_back(static_cast<std::int16_t>(
+                    std::clamp(buf[i], -1.0f, 1.0f) * 32767.0f));
+        }
+    }
+    writeWav(wavPath, pcm, static_cast<int>(fs));
+    std::fprintf(stderr, "audio: wrote %s (%zu samples)\n", wavPath.c_str(), pcm.size());
+}
+
+void Audio::dumpGridTest(const std::string& wavPath) {
+    const float fs = 44100.0f;
+    Audio a;
+    a.sampleRate_ = fs;
+    const VehicleSpec* sp = specNamed("Di 4 (Hen");
+    if (sp == nullptr) return;
+    const float fire = static_cast<float>(sp->cylinders) * (sp->twoStroke ? 1.0f : 0.5f);
+    // What a driver does: running at idle, then the controller back through the notches,
+    // held at full, then off - and the fans left to coast down, which is the half of it
+    // that a switch would get wrong.
+    struct Seg { float dur, load; };
+    const Seg segs[] = {{3.0f, 0.0f},  {4.0f, 0.2f}, {4.0f, 0.6f}, {8.0f, 1.0f},
+                        {10.0f, 0.0f}, {2.0f, 0.0f}};
+    std::vector<std::int16_t> pcm;
+    for (const Seg& s : segs) {
+        a.engRpm_[0].store(sp->idleRpm);
+        a.engGain_[0].store(1.0f);
+        a.engFire_[0].store(fire);
+        a.engVol_[0].store(sp->engineVolume);
+        a.engRum_[0].store(sp->engineRumble);
+        a.engBri_[0].store(sp->engineBright);
+        a.gridLoad_.store(s.load);
         const int total = static_cast<int>(s.dur * fs);
         float buf[256];
         for (int done = 0; done < total; done += 256) {

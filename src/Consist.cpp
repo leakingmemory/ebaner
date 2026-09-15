@@ -179,6 +179,12 @@ void Consist::movePower(int cab, int dir) {
 void Consist::moveBrake(int cab, int dir) {
     if (cab >= 0 && cab < cabCount()) units_[cabUnit(cab)].moveBrake(cabEnd(cab), dir);
 }
+float Consist::dynamicBrakeFrac() const {
+    float f = 0.0f;
+    for (const Vehicle& u : units_) f = std::max(f, u.dynamicBrakeFrac());
+    return f;
+}
+
 const char* Consist::brakeNotchName(int cab) const {
     return (cab >= 0 && cab < cabCount()) ? units_[cabUnit(cab)].brakeNotchName(cabEnd(cab)) : "REL";
 }

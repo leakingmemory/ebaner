@@ -558,6 +558,12 @@ public:
     int cabCount() const { return cabs_; }  // 0 on a carriage: driven from nowhere
     bool hasDynamicBrake() const { return dynBrakeN_ > 0.0f; }
     float dynamicBrakeForce() const { return dynBrake_; } // N this step, >= 0
+    // How hard the grids are working, 0..1. What the blower is fed from.
+    float dynamicBrakeFrac() const {
+        if (dynBrakeN_ <= 0.0f) return 0.0f;
+        const float f = dynBrake_ / dynBrakeN_;
+        return f < 0.0f ? 0.0f : (f > 1.0f ? 1.0f : f);
+    }
     bool epBrake() const { return epBrake_; }
     // What this engine sounds like. Firings per revolution falls out of the cylinder
     // count and the cycle: every cylinder every revolution on a two-stroke, every other

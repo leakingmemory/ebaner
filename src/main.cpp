@@ -285,6 +285,10 @@ int main(int argc, char** argv) {
         Audio::dumpCrossingTest(dump);
         return EXIT_SUCCESS;
     }
+    if (const char* dump = std::getenv("EBANER_AUDIO_DUMP_GRID")) {
+        Audio::dumpGridTest(dump);
+        return 0;
+    }
     if (const char* dump = std::getenv("EBANER_AUDIO_DUMP_ROLLING")) {
         Audio::dumpRollingTest(dump);
         return EXIT_SUCCESS;

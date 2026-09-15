@@ -134,12 +134,20 @@ public:
     // walking pace, through a rough shunt, to a train being wrecked. The one voice, heard
     // at the severities the sim will actually hand it.
     static void dumpImpactTest(const std::string& wavPath);
+    // Render a dynamic-brake application to a mono WAV: idle, then the controller back
+    // through E1, E3 and E5, held, then off and the fans left to coast down.
+    static void dumpGridTest(const std::string& wavPath);
 
 private:
     // Shared main -> audio thread (lock-free).
     std::atomic<float> amp_{0.0f};        // target hiss amplitude [0,1]
     std::atomic<float> brightness_{0.0f}; // 0 = apply (warm), 1 = release (bright vent)
     std::atomic<float> envGain_{1.0f};    // brake distance attenuation [0,1]
+    // The rheostatic brake's grid blower: how hard the grids are working, 0..1.
+    std::atomic<float> gridLoad_{};
+    float gridFan_ = 0.0f;   // fan speed, which lags the load - a big fan has inertia
+    float gridPhase_ = 0.0f; // blade-passing phase
+    float gridBp1_ = 0.0f, gridBp2_ = 0.0f; // the rushing air, band-passed
     std::atomic<float> engRpm_[kMaxEngines]{};      // per-engine speed (rev/min)
     std::atomic<float> engGain_[kMaxEngines]{};     // per-engine distance attenuation [0,1]
     std::atomic<bool> compActive_{false}; // a compressor is pumping
