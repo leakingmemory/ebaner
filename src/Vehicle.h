@@ -239,8 +239,30 @@ inline constexpr VehicleSpec kVehicleSpecs[] = {
      .wheelRadius = 0.46f,
      .cabs = 0,
      .epBrake = false},
-    // The standard rake, as it is marshalled: cafe second, plain seating third.
-    hauling(kDi4Spec, "NSB Di 4 + 5 (cafe 2nd)", "BC5-3,FR5-1,B5-3,BC5-3,BC5-3"),
+    // B5-5: the same coach with eight of its seats set aside for passengers with pets.
+    // It shares the B5-3's body deliberately, not for want of looking. Its side elevation
+    // and its seat plan were compared against the B5-3's pixel by pixel: the seat rows and
+    // the windows are the same to the centimetre, the only strong differences anywhere are
+    // at the two doors where one drawing carries the orange highlight and the other does
+    // not, and the eight pet seats are marked by being GREEN on the plan - a seat-map
+    // convention for a designated area, not the colour of the moquette. There is nothing
+    // to see, so there is nothing to draw, and a near-duplicate mesh would be a lie about
+    // how much is known.
+    {.name = "NSB B5-5 (Type 5)",
+     .mass = 43200.0f,
+     .length = 25.30f,
+     .width = 3.10f,
+     .height = 4.115f,
+     .wheelbase = 2.50f,
+     .bogieSpacing = 18.00f,
+     .bogieCount = 2,
+     .body = BodyType5B,
+     .units = 1,
+     .wheelRadius = 0.46f,
+     .cabs = 0,
+     .epBrake = false},
+    // The standard rake, as it is marshalled: cafe second, plain seating third and fourth.
+    hauling(kDi4Spec, "NSB Di 4 + 5 (cafe 2nd)", "BC5-3,FR5-1,B5-3,B5-5,BC5-3"),
 };
 // Counted off the table rather than written down beside it. A hand-kept number that falls
 // behind the array makes the last entry unreachable everywhere at once - the start screen,

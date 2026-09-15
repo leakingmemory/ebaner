@@ -129,6 +129,15 @@ int main() {
         check(std::abs(plain->length - car->length) < 0.01f,
               "  though it is the same length as the carriage rebuilt from it",
               plain->length, car->length);
+        // The B5-5 shares the B5-3's body on purpose: the two drawings differ only in a
+        // door highlight and in eight seats being green on the plan, which is a seat-map
+        // convention for a designated area and not something anyone can see.
+        const VehicleSpec* pets = specNamed("B5-5 (");
+        check(pets != nullptr, "the B5-5 is in the table");
+        if (pets != nullptr)
+            check(pets->body == plain->body,
+                  "  and shares the B5-3's body, there being nothing visible to tell them "
+                  "apart");
     }
 
     std::puts("\nA locomotive and five carriages is one train of six unlike vehicles");
@@ -144,10 +153,12 @@ int main() {
               "  the cafe car is the second carriage");
         check(std::string(c.unit(3).name()).find("B5-3 (") != std::string::npos,
               "  the plain seating coach the third");
-        for (const int u : {1, 4, 5})
+        check(std::string(c.unit(4).name()).find("B5-5 (") != std::string::npos,
+              "  and the one with the pet places the fourth");
+        for (const int u : {1, 5})
             check(std::string(c.unit(u).name()).find("BC5-3") != std::string::npos,
                   "  carriage " + std::to_string(u) + " is a BC5-3");
-        check(std::abs(c.mass() - 336200.0f) < 1.0f, "336.2 t", c.mass(), 336200.0);
+        check(std::abs(c.mass() - 336400.0f) < 1.0f, "336.4 t", c.mass(), 336400.0);
         const float want = 20.80f + 5.0f * 25.30f + 5.0f * Consist::kCouplerGap;
         check(std::abs(c.length() - want) < 0.05f, "and its length is the sum of them",
               c.length(), want);

@@ -340,10 +340,18 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   at +10.9 m, out in the vestibule, leaving two windows looking into an empty carriage. The
   drawing puts it at **+5.8 to +10.2**, with the wheelchair bays beside it, and that is only
   visible by looking at the carriage whose seating *does* run that far back.
-  So all three share one body and one `Layout`, differing in where the windows and doors go
-  and what furniture is inside — and the standard rake is **a list and not a count**:
-  `"BC5-3,FR5-1,B5-3,BC5-3,BC5-3"`, café **second** and plain seating **third**, as it is
-  marshalled. 336.2 t, 150.3 m.
+  The **B5-5** is the same coach with eight seats set aside for passengers with pets, and it
+  **shares the B5-3's body** — not for want of looking. Both side elevations and both seat
+  plans were compared pixel by pixel: seat rows and windows agree to the centimetre, the
+  only strong differences anywhere are at the two doors where one drawing carries an orange
+  highlight and the other does not, and the eight pet seats are marked by being *green on
+  the plan*, which is a seat-map convention for a designated area and not the colour of the
+  moquette. Nothing to see, so nothing to draw — a near-duplicate mesh would be a lie about
+  how much is known.
+  So the variants share one body and one `Layout`, differing in where the windows and doors
+  go and what furniture is inside — and the standard rake is **a list and not a count**:
+  `"BC5-3,FR5-1,B5-3,B5-5,BC5-3"`, café **second**, plain seating **third and fourth**, as
+  it is marshalled. 336.4 t, 150.3 m.
   Hauling meant a train could stop being **all one vehicle**. A `Consist` took one spec and
   made copies of it, and its spacing came from `lead().length()` alone — so a 20.8 m
   locomotive pulling 25.3 m carriages would have laid every one of them 4.5 m inside the
