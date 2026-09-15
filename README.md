@@ -331,8 +331,19 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   differ only in a `Layout` — where the windows and doors are, and what furniture goes in —
   because a Type 5 is a Type 5 and the seat plan is what makes one a family carriage and
   another a café.
-  The standard rake is therefore **a list and not a count**: `"BC5-3,FR5-1,BC5-3,BC5-3,
-  BC5-3"`, so the café is marshalled **second**, as it runs. 336 t, 150.3 m.
+  The **B5-3** is the plain 2nd class coach the BC5-3 was rebuilt out of, and it makes the
+  point about where these carriages differ: its windows and doors are **identical** — same
+  spacing, same central blank, same door positions — and inside it has **seventeen rows of
+  four, 68 seats**, against the family carriage's nine rows and 36. What the BC5-3 spends
+  those eight rows on is the **playroom**, which takes the last four metres of its saloon.
+  Comparing the two through the glass is what caught a real error: the playroom had been put
+  at +10.9 m, out in the vestibule, leaving two windows looking into an empty carriage. The
+  drawing puts it at **+5.8 to +10.2**, with the wheelchair bays beside it, and that is only
+  visible by looking at the carriage whose seating *does* run that far back.
+  So all three share one body and one `Layout`, differing in where the windows and doors go
+  and what furniture is inside — and the standard rake is **a list and not a count**:
+  `"BC5-3,FR5-1,B5-3,BC5-3,BC5-3"`, café **second** and plain seating **third**, as it is
+  marshalled. 336.2 t, 150.3 m.
   Hauling meant a train could stop being **all one vehicle**. A `Consist` took one spec and
   made copies of it, and its spacing came from `lead().length()` alone — so a 20.8 m
   locomotive pulling 25.3 m carriages would have laid every one of them 4.5 m inside the

@@ -99,8 +99,9 @@ int main() {
     const VehicleSpec* di4 = specNamed("Di 4 (Hen");
     const VehicleSpec* car = specNamed("BC5-3");
     const VehicleSpec* cafe = specNamed("FR5-1");
+    const VehicleSpec* plain = specNamed("B5-3 (");
     const VehicleSpec* train = specNamed("Di 4 + 5");
-    if (!c93 || !di4 || !car || !cafe || !train) {
+    if (!c93 || !di4 || !car || !cafe || !plain || !train) {
         std::puts("the vehicle table is missing a Class 93 / Di 4 / BC5-3 / FR5-1 / train");
         return 1;
     }
@@ -118,6 +119,16 @@ int main() {
         check(std::abs(cafe->mass - 44000.0f) < 1.0f, "  at 44 t", cafe->mass, 44000.0);
         check(cafe->body != car->body,
               "  but a different body: its windows and doors are nowhere near the same");
+        // The B5-3 is the shell the BC5-3 was rebuilt out of, so it is the same carriage
+        // from outside and a different one inside - seventeen rows where the family
+        // carriage has nine, because the playroom takes the last four metres of its saloon.
+        check(std::abs(plain->mass - 43200.0f) < 1.0f, "the plain B5-3 at 43.2 t",
+              plain->mass, 43200.0);
+        check(plain->body != car->body && plain->body != cafe->body,
+              "  and a body of its own, for what is inside it");
+        check(std::abs(plain->length - car->length) < 0.01f,
+              "  though it is the same length as the carriage rebuilt from it",
+              plain->length, car->length);
     }
 
     std::puts("\nA locomotive and five carriages is one train of six unlike vehicles");
@@ -130,11 +141,13 @@ int main() {
         check(std::string(c.unit(0).name()).find("Di 4") != std::string::npos,
               "the locomotive leads");
         check(std::string(c.unit(2).name()).find("FR5-1") != std::string::npos,
-              "  and the cafe car is the second carriage");
-        for (const int u : {1, 3, 4, 5})
+              "  the cafe car is the second carriage");
+        check(std::string(c.unit(3).name()).find("B5-3 (") != std::string::npos,
+              "  the plain seating coach the third");
+        for (const int u : {1, 4, 5})
             check(std::string(c.unit(u).name()).find("BC5-3") != std::string::npos,
                   "  carriage " + std::to_string(u) + " is a BC5-3");
-        check(std::abs(c.mass() - 336000.0f) < 1.0f, "336 t", c.mass(), 336000.0);
+        check(std::abs(c.mass() - 336200.0f) < 1.0f, "336.2 t", c.mass(), 336200.0);
         const float want = 20.80f + 5.0f * 25.30f + 5.0f * Consist::kCouplerGap;
         check(std::abs(c.length() - want) < 0.05f, "and its length is the sum of them",
               c.length(), want);

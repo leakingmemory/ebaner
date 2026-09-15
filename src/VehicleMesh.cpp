@@ -160,12 +160,21 @@ constexpr float kRedBand = 0.34f;    // the red skirt, above the solebar
 // furniture. Held as data rather than branches, because they differ only in where things
 // are: a Type 5 is a Type 5, and the seat plan is what makes one a family carriage and
 // another a cafe.
+enum Inside {
+    InsideSeats,  // a plain saloon end to end (B5-3)
+    InsideFamily, // the same, cut short for a playroom and wheelchair bays (BC5-3)
+    InsideCafe,   // booths, a servery and a stowage bay (FR5-1)
+};
+
 struct Layout {
     const float (*windows)[2]; // spans, metres from the middle of the carriage
     int windowCount;
     float doorAt[2];   // door centres; not at the ends on the cafe, which is the point
     float doorHalf[2]; // half widths - the BC5-3's wheelchair end is wider
-    bool cafe;
+    Inside inside;
+    const float* seatRows; // where the rows are, off the seat plan
+    int seatRowCount;
+    float saloon0, saloon1; // partitions closing the saloon off
 };
 
 // BC5-3: nine saloon windows in two groups, four and five, with 2.2 m of blank side
@@ -184,18 +193,33 @@ constexpr float kWinFR51[][2] = {
     {-11.69f, -11.03f}, {-10.56f, -9.74f}, {-9.23f, -8.00f}, {-7.13f, -5.91f},
     {-4.79f, -3.56f},   {2.18f, 3.01f},    {3.18f, 4.01f},   {4.17f, 5.00f},
 };
-constexpr Layout kBC53{kWinBC53, 9, {-11.36f, 11.36f}, {0.46f, 0.62f}, false};
-constexpr Layout kFR51{kWinFR51, 8, {-1.39f, 7.59f}, {0.46f, 0.46f}, true};
-
 // The BC5-3 inside, from its seat plan: nine rows of four - two a side across a centre
-// aisle - the middle two facing across tables; a wheelchair-accessible WC and a service
-// nook behind the partition at one end; the playroom and the wheelchair bays at the other.
-constexpr float kSeatRows[] = {-5.50f, -4.37f, -3.45f, -2.53f, -0.65f,
+// aisle - the middle two facing across tables.
+constexpr float kRowsBC53[] = {-5.50f, -4.37f, -3.45f, -2.53f, -0.65f,
                                0.65f,  2.51f,  3.45f,  4.61f};
-constexpr float kSaloonEnd0 = -8.30f; // partitions closing the saloon off
-constexpr float kSaloonEnd1 = 9.80f;
-constexpr float kWcAt = -10.40f;      // the accessible WC, behind the near partition
-constexpr float kPlayAt = 10.90f;     // and the playroom at the far end
+// And the B5-3's: the same shell with the whole of it given over to seating, so seventeen
+// rows and sixty-eight seats where the family carriage has nine rows and thirty-six. The
+// windows and doors are identical - the BC5-3 was rebuilt out of one of these - and what
+// makes them different carriages is entirely what is inside.
+constexpr float kRowsB53[] = {-7.17f, -6.20f, -5.28f, -4.37f, -3.45f, -2.53f,
+                              -0.65f, 0.73f,  2.51f,  3.43f,  4.36f,  5.29f,
+                              6.22f,  7.14f,  8.07f,  9.00f,  9.93f};
+
+constexpr Layout kBC53{kWinBC53, 9, {-11.36f, 11.36f}, {0.46f, 0.62f},
+                       InsideFamily, kRowsBC53, 9, -8.30f, 5.30f};
+constexpr Layout kB53{kWinBC53, 9, {-11.36f, 11.36f}, {0.46f, 0.46f},
+                      InsideSeats, kRowsB53, 17, -8.30f, 10.60f};
+constexpr Layout kFR51{kWinFR51, 8, {-1.39f, 7.59f}, {0.46f, 0.46f},
+                       InsideCafe, nullptr, 0, -12.0f, 12.0f};
+
+constexpr float kWcAt = -10.40f; // the accessible WC, behind the partition at one end
+// And the playroom, which on the family carriage takes the last four metres of saloon:
+// the seats stop at +4.6 and it runs +5.8 to +10.2, with the wheelchair bays beside it.
+// Set at +10.9 to begin with, which put it out in the vestibule and left the two windows
+// over it looking into an empty carriage - visible only by comparing it against the B5-3,
+// whose seating does run that far back.
+constexpr float kPlayAt = 8.00f;
+constexpr float kChairBays[] = {7.00f, 9.40f};
 // And the FR5-1's, likewise: booth seating at one end, the servery and its counters
 // through the middle with stools along them, and the bike, ski and luggage bay beyond.
 constexpr float kBoothRows[] = {-11.30f, -10.20f, -9.10f, -8.00f, -6.90f};
@@ -1156,7 +1180,7 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                           P(sx * ihw, halfLen * 0.99f, band.second),
                           P(sx * ihw, -halfLen * 0.99f, band.second), t5::kLining,
                           in + X * (sx * 6.0f));
-            if (lay.cafe) {
+            if (lay.inside == t5::InsideCafe) {
                 // Booth seating at one end, back to back across tables.
                 for (const float row : t5::kBoothRows)
                     for (const float sx : {-1.0f, 1.0f}) {
@@ -1195,11 +1219,12 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                         0.05f, 0.5f * (zCeil - z0), t5::kLining);
             } else {
             // Partitions closing the saloon off from the two ends.
-            for (const float y : {t5::kSaloonEnd0, t5::kSaloonEnd1})
+            for (const float y : {lay.saloon0, lay.saloon1})
                 emitBox(X, Y, Z, P(0.0f, y, z0 + 0.5f * (zCeil - z0)), ihw, 0.05f,
                         0.5f * (zCeil - z0), t5::kLining);
             // Nine rows of four: two seats a side, a 0.50 m aisle between them.
-            for (const float row : t5::kSeatRows)
+            for (int ri = 0; ri < lay.seatRowCount; ++ri) {
+                const float row = lay.seatRows[ri];
                 for (const float sx : {-1.0f, 1.0f})
                     for (int k = 0; k < 2; ++k) {
                         const float xc = sx * (0.30f + 0.55f * (static_cast<float>(k) + 0.5f));
@@ -1208,6 +1233,7 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                         emitBox(X, Y, Z, P(xc, row + 0.22f, z0 + 0.80f), 0.25f, 0.05f,
                                 0.35f, t5::kSeat); // back, above the sill and visible
                     }
+            }
             // The two table bays at the centre, one each side, against the blank panel.
             for (const float sx : {-1.0f, 1.0f})
                 emitBox(X, Y, Z, P(sx * 0.88f, 0.0f, z0 + 0.72f), 0.52f, 0.55f, 0.03f,
@@ -1216,14 +1242,31 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
             emitBox(X, Y, Z, P(-0.55f, t5::kWcAt, z0 + 0.5f * (zCeil - z0)), 0.90f, 0.85f,
                     0.5f * (zCeil - z0), t5::kLining);
             // The playroom at the far end - an open floor with a couple of soft blocks on
-            // it - and the wheelchair bays, which are floor kept clear beside it.
-            for (int k = 0; k < 2; ++k)
-                emitBox(X, Y, Z,
-                        P(-0.45f + 0.9f * static_cast<float>(k), t5::kPlayAt, z0 + 0.20f),
-                        0.30f, 0.30f, 0.18f, t5::kSeat);
-            for (const float sx : {-1.0f, 1.0f})
-                emitBox(X, Y, Z, P(sx * 1.05f, t5::kSaloonEnd1 + 0.55f, z0 + 0.03f), 0.38f,
-                        0.45f, 0.01f, t5::kTable); // the bays' marked floor
+            // it - and the wheelchair bays, which are floor kept clear beside it. Only on
+            // the family carriage: the B5-3 has a service nook and luggage there instead,
+            // which is what those ten metres of extra seating cost it.
+            if (lay.inside == t5::InsideFamily) {
+                // The play area is drawn as a raised platform with a padded surround and
+                // a couple of soft blocks loose on it. The surround is what can be seen
+                // from outside - the blocks sit below the window line, as they would.
+                emitBox(X, Y, Z, P(0.0f, t5::kPlayAt, z0 + 0.12f), ihw - 0.25f, 2.10f,
+                        0.12f, t5::kTable); // the platform
+                emitBox(X, Y, Z, P(0.0f, t5::kPlayAt - 2.05f, z0 + 0.55f), ihw - 0.25f,
+                        0.08f, 0.55f, t5::kSeat); // its padded surround, at the aisle end
+                for (int k = 0; k < 2; ++k)
+                    emitBox(X, Y, Z,
+                            P(-0.45f + 0.9f * static_cast<float>(k), t5::kPlayAt,
+                              z0 + 0.42f),
+                            0.30f, 0.30f, 0.30f, t5::kSeat); // the soft blocks on it
+                for (const float bay : t5::kChairBays)
+                    for (const float sx : {-1.0f, 1.0f})
+                        emitBox(X, Y, Z, P(sx * 1.05f, bay, z0 + 0.03f), 0.34f, 0.40f,
+                                0.01f, t5::kTable); // the bays' marked floor
+            } else {
+                for (const float sx : {-1.0f, 1.0f})
+                    emitBox(X, Y, Z, P(sx * 0.95f, lay.saloon1 + 0.70f, z0 + 0.55f), 0.42f,
+                            0.55f, 0.55f, t5::kLining); // service nook and luggage
+            }
             }
         }
         // Floor pan and the two ends. The ends are plain: they are only ever seen from
@@ -1813,6 +1856,8 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                 emitType5(sections[i], halfLen, t5::kBC53);
             } else if (vehicle.bodyStyle() == BodyType5Fr) {
                 emitType5(sections[i], halfLen, t5::kFR51);
+            } else if (vehicle.bodyStyle() == BodyType5B) {
+                emitType5(sections[i], halfLen, t5::kB53);
             } else {
                 const glm::vec3 centre =
                     sections[i].pos + sections[i].up * (frameTopZ + kUnderframeHalfHeight);
