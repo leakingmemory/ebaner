@@ -32,26 +32,43 @@ constexpr float kCouplerSlack = 1.5f;  // m
 // on purpose: a Class 93 set is 41 m and the whole train a few of them, so the real
 // delay end to end is a fraction of a second and the point of modelling it is that it is
 // not zero, not that it is long.
-constexpr float kPipeCoupling = 3.0f;
+// How fast air crosses a coupling. This only has to drag a neighbour's pipe under the
+// emergency threshold, not drain it - the neighbour's own accelerator does the draining -
+// so it sets how fast the application travels rather than how fast the train brakes.
+constexpr float kPipeCoupling = 5.0f;
 } // namespace
 
 Consist::Consist(const std::vector<TrackPath>* paths, const TrackPath* path,
                  const VehicleSpec& spec, float s, float initialSpeed)
-    : paths_(paths), name_(spec.name), v_(initialSpeed) {
-    const int n = std::max(1, spec.units);
+    : paths_(paths), name_(specTitle(spec)), v_(initialSpeed) {
+    // The machine itself, and then whatever the formation says it brings with it. A
+    // hauled vehicle is a unit like any other from here on - the train simply stops being
+    // all one thing, which is what everything below had to be taught.
+    const int own = std::max(1, spec.units);
+    const VehicleSpec* trailer = specNamed(spec.hauls);
+    const int hauled = trailer != nullptr ? std::max(0, spec.haulCount) : 0;
+    const int n = own + hauled;
     units_.reserve(n);
-    for (int i = 0; i < n; ++i) units_.emplace_back(path, spec, s, initialSpeed);
+    for (int i = 0; i < own; ++i) units_.emplace_back(path, spec, s, initialSpeed);
+    for (int i = 0; i < hauled; ++i) units_.emplace_back(path, *trailer, s, initialSpeed);
     // The sets are laid out along the train with the first at one end. Until the
     // network is attached the walk has nothing to follow, so this is a straight
     // placement; layOut() does it properly once attachNetwork has been called.
-    const float pitch = unitPitch();
+    // Where each unit's centre falls, walked rather than multiplied: the units may be
+    // different lengths, and a locomotive hauling carriages 4.5 m longer than itself would
+    // otherwise be laid out overlapping every one of them.
     const int idx = (paths_ && path) ? static_cast<int>(path - paths_->data()) : -1;
-    for (int i = 0; i < n && idx >= 0 && n > 1; ++i) {
-        Vehicle::TrackAnchor a;
-        a.pathIdx = idx;
-        a.s = s + (static_cast<float>(i) - 0.5f * static_cast<float>(n - 1)) * pitch;
-        a.orient = 1;
-        units_[i].placeAt(*paths_, a);
+    if (idx >= 0 && n > 1) {
+        std::vector<float> centre(n, 0.0f);
+        for (int i = 1; i < n; ++i) centre[i] = centre[i - 1] + pitchBetween(i - 1, i);
+        const float mid = 0.5f * (centre.front() + centre.back());
+        for (int i = 0; i < n; ++i) {
+            Vehicle::TrackAnchor a;
+            a.pathIdx = idx;
+            a.s = s + centre[i] - mid;
+            a.orient = 1;
+            units_[i].placeAt(*paths_, a);
+        }
     }
 }
 
@@ -80,7 +97,8 @@ void Consist::layOut() {
     if (!paths_) return;
     for (std::size_t i = 1; i < units_.size(); ++i) {
         Vehicle::TrackAnchor a;
-        if (units_[i - 1].anchorAtOffset(unitPitch(), a)) units_[i].placeAt(*paths_, a);
+        if (units_[i - 1].anchorAtOffset(pitchBetween(i - 1, i), a))
+            units_[i].placeAt(*paths_, a);
     }
 }
 
@@ -92,6 +110,32 @@ bool Consist::consumeSwitchChanged() {
 
 // --- cabs -----------------------------------------------------------------------
 
+// A cab index counts only real driving positions, so a locomotive with five carriages
+// behind it has two and not twelve. These two do the walk from that index to the unit it
+// belongs to and which end of it - which is every place the old `cab / 2` and `cab % 2`
+// used to appear, and the reason they are a function now is that carriages are skipped.
+int Consist::cabUnit(int cab) const {
+    for (std::size_t i = 0; i < units_.size(); ++i) {
+        const int c = units_[i].cabCount();
+        if (cab < c) return static_cast<int>(i);
+        cab -= c;
+    }
+    return 0;
+}
+int Consist::cabEnd(int cab) const {
+    for (const Vehicle& u : units_) {
+        const int c = u.cabCount();
+        if (cab < c) return cab;
+        cab -= c;
+    }
+    return 0;
+}
+int Consist::cabCount() const {
+    int n = 0;
+    for (const Vehicle& u : units_) n += u.cabCount();
+    return n;
+}
+
 bool Consist::cabDrivable(int cab) const {
     if (cab < 0 || cab >= cabCount()) return false;
     // Coupled, only the cabs at the two ends of the train drive; the ones at the
@@ -101,34 +145,34 @@ bool Consist::cabDrivable(int cab) const {
 }
 
 void Consist::setBrakeNotch(int cab, int notch) {
-    if (cab >= 0 && cab < cabCount()) units_[cab / 2].setBrakeNotch(cab % 2, notch);
+    if (cab >= 0 && cab < cabCount()) units_[cabUnit(cab)].setBrakeNotch(cabEnd(cab), notch);
 }
 int Consist::brakeNotch(int cab) const {
-    return (cab >= 0 && cab < cabCount()) ? units_[cab / 2].brakeNotch(cab % 2) : 0;
+    return (cab >= 0 && cab < cabCount()) ? units_[cabUnit(cab)].brakeNotch(cabEnd(cab)) : 0;
 }
 void Consist::setPowerNotch(int cab, int notch) {
-    if (cab >= 0 && cab < cabCount()) units_[cab / 2].setPowerNotch(cab % 2, notch);
+    if (cab >= 0 && cab < cabCount()) units_[cabUnit(cab)].setPowerNotch(cabEnd(cab), notch);
 }
 int Consist::powerNotch(int cab) const {
-    return (cab >= 0 && cab < cabCount()) ? units_[cab / 2].powerNotch(cab % 2) : 0;
+    return (cab >= 0 && cab < cabCount()) ? units_[cabUnit(cab)].powerNotch(cabEnd(cab)) : 0;
 }
 void Consist::moveHandle(int cab, int dir) {
-    if (cab >= 0 && cab < cabCount()) units_[cab / 2].moveHandle(cab % 2, dir);
+    if (cab >= 0 && cab < cabCount()) units_[cabUnit(cab)].moveHandle(cabEnd(cab), dir);
 }
 void Consist::movePower(int cab, int dir) {
-    if (cab >= 0 && cab < cabCount()) units_[cab / 2].movePower(cab % 2, dir);
+    if (cab >= 0 && cab < cabCount()) units_[cabUnit(cab)].movePower(cabEnd(cab), dir);
 }
 void Consist::moveBrake(int cab, int dir) {
-    if (cab >= 0 && cab < cabCount()) units_[cab / 2].moveBrake(cab % 2, dir);
+    if (cab >= 0 && cab < cabCount()) units_[cabUnit(cab)].moveBrake(cabEnd(cab), dir);
 }
 const char* Consist::brakeNotchName(int cab) const {
-    return (cab >= 0 && cab < cabCount()) ? units_[cab / 2].brakeNotchName(cab % 2) : "REL";
+    return (cab >= 0 && cab < cabCount()) ? units_[cabUnit(cab)].brakeNotchName(cabEnd(cab)) : "REL";
 }
 int Consist::handlePosition(int cab) const {
-    return (cab >= 0 && cab < cabCount()) ? units_[cab / 2].handlePosition(cab % 2) : 0;
+    return (cab >= 0 && cab < cabCount()) ? units_[cabUnit(cab)].handlePosition(cabEnd(cab)) : 0;
 }
 const char* Consist::handleName(int cab) const {
-    return (cab >= 0 && cab < cabCount()) ? units_[cab / 2].handleName(cab % 2) : "N";
+    return (cab >= 0 && cab < cabCount()) ? units_[cabUnit(cab)].handleName(cabEnd(cab)) : "N";
 }
 void Consist::setReverser(int cab, int dir) {
     if (cab < 0 || cab >= cabCount()) return;
@@ -153,10 +197,10 @@ void Consist::setReverser(int cab, int dir) {
     if (dir != 0)
         for (int c = 0; c < cabCount(); ++c)
             if (c != cab) units_[c / 2].setReverser(c % 2, 0);
-    units_[cab / 2].setReverser(cab % 2, dir);
+    units_[cabUnit(cab)].setReverser(cabEnd(cab), dir);
 }
 int Consist::reverser(int cab) const {
-    return (cab >= 0 && cab < cabCount()) ? units_[cab / 2].reverser(cab % 2) : 0;
+    return (cab >= 0 && cab < cabCount()) ? units_[cabUnit(cab)].reverser(cabEnd(cab)) : 0;
 }
 const char* Consist::reverserName(int cab) const {
     const int r = reverser(cab);
@@ -431,8 +475,15 @@ void Consist::update(float dt, float pushInput) {
     // reservoir, each bogie's distributor fills its own cylinder from its own auxiliary,
     // and each set revs its own engines.
     float totalTE = 0.0f, totalBrake = 0.0f;
-    for (Vehicle& u : units_) {
-        const UnitStep st = u.stepSubsystems(dt, cmd, v_);
+    // The driver's brake valve is on the unit whose cab is in charge, and on plain
+    // automatic air that is the only place the pipe is worked. With no cab in charge the
+    // valve is nowhere, which is right: the train is standing with its brakes on and
+    // nobody is going to release them from an empty cab.
+    const int valveUnit = a >= 0 ? cabUnit(a) : -1;
+    for (std::size_t i = 0; i < units_.size(); ++i) {
+        LinkCommand one = cmd;
+        one.valveHere = static_cast<int>(i) == valveUnit;
+        const UnitStep st = units_[i].stepSubsystems(dt, one, v_);
         totalTE += st.tractiveEffort;
         totalBrake += st.brakeForce;
     }
@@ -475,7 +526,7 @@ void Consist::update(float dt, float pushInput) {
     // then the residual is metres and the train has been split.
     for (std::size_t i = 1; i < units_.size(); ++i) {
         Vehicle::TrackAnchor want;
-        if (!units_[i - 1].anchorAtOffset(unitPitch(), want)) continue;
+        if (!units_[i - 1].anchorAtOffset(pitchBetween(i - 1, i), want)) continue;
         if (want.pathIdx != units_[i].pathIdx()) {
             std::printf("[Consist] set %zu is no longer on the set in front's road - "
                         "the points have split the train\n", i + 1);
@@ -507,9 +558,9 @@ float Consist::mass() const {
 }
 
 float Consist::length() const {
-    const int n = unitCount();
-    return static_cast<float>(n) * lead().length() +
-           static_cast<float>(n - 1) * kCouplerGap;
+    float m = 0.0f;
+    for (const Vehicle& u : units_) m += u.length();
+    return m + static_cast<float>(unitCount() - 1) * kCouplerGap;
 }
 
 float Consist::rollingResistance(float speed) const {
@@ -521,15 +572,21 @@ float Consist::rollingResistance(float speed) const {
     // with the drag taken back out, so a train of one comes to exactly the number a
     // lone set would give. Subtracting a term and adding it back does not round-trip
     // in floating point, and a consist of one has to be the old vehicle to the bit.
-    const float one = lead().rollingResistance(speed);
-    const float drag = lead().dragResistance(speed);
-    return one + static_cast<float>(unitCount() - 1) * (one - drag);
+    // Each unit's own, since they need not be the same vehicle, but the air is met once:
+    // only the leading one carries its drag term, and the rest contribute what they have
+    // left when theirs is taken out.
+    float total = lead().rollingResistance(speed);
+    for (int i = 1; i < unitCount(); ++i)
+        total += units_[i].rollingResistance(speed) - units_[i].dragResistance(speed);
+    return total;
 }
 
 GravityResolution Consist::gravity() const { return lead().gravity(); }
 
 glm::vec3 Consist::inertia() const {
-    return static_cast<float>(unitCount()) * lead().inertia();
+    glm::vec3 j(0.0f);
+    for (const Vehicle& u : units_) j += u.inertia();
+    return j;
 }
 
 TippingLimit Consist::tippingLimit(float curvature, float cant) const {
@@ -671,7 +728,9 @@ bool Consist::occupiedSpans(std::vector<PathSpan>& out) const {
     if (!offs.empty()) {
         const auto mm = std::minmax_element(offs.begin(), offs.end());
         const float rear = *mm.first;
-        const float front = static_cast<float>(unitCount() - 1) * unitPitch() + *mm.second;
+        float span = 0.0f;
+        for (int i = 1; i < unitCount(); ++i) span += pitchBetween(i - 1, i);
+        const float front = span + *mm.second;
         std::vector<PathSpan> whole;
         if (!units_.front().spansBetween(rear, front, whole)) ok = false;
         out.insert(out.end(), whole.begin(), whole.end());
@@ -695,11 +754,10 @@ bool Consist::occupiedSpans(std::vector<PathSpan>& out) const {
 std::vector<float> Consist::axleOffsets() const {
     // Each set's own offsets, shifted to where that set sits in the train.
     std::vector<float> out;
-    const float pitch = unitPitch();
-    const float first = -0.5f * static_cast<float>(unitCount() - 1) * pitch;
-    for (int i = 0; i < unitCount(); ++i) {
-        const float centre = first + static_cast<float>(i) * pitch;
-        for (float o : units_[i].axleOffsets()) out.push_back(centre + o);
-    }
+    std::vector<float> centre(unitCount(), 0.0f);
+    for (int i = 1; i < unitCount(); ++i) centre[i] = centre[i - 1] + pitchBetween(i - 1, i);
+    const float mid = 0.5f * (centre.front() + centre.back());
+    for (int i = 0; i < unitCount(); ++i)
+        for (float o : units_[i].axleOffsets()) out.push_back(centre[i] - mid + o);
     return out;
 }

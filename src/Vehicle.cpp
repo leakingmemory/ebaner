@@ -61,6 +61,13 @@ constexpr float kAuxCapacity = 5.0f;     // auxiliary reservoir, charged from th
 constexpr float kBPVentRate = 2.5f;      // EP valve venting the pipe (bar/s)
 constexpr float kBPEmergVentRate = 8.0f; // emergency: the pipe dumped wide open (bar/s)
 constexpr float kBPChargeRate = 1.6f;    // EP valve recharging from the main reservoir
+// The length of pipe the vent and charge rates above are quoted for. A vehicle's pipe
+// volume goes with its length, and the rate at which a fixed orifice can empty or fill it
+// goes the other way, so everything scales by this over the vehicle's own length. Set to
+// the Class 93's, which is what those rates were measured on, so nothing about the railcar
+// moves. It is also why the brake on a hauled train is slow twice over: more vehicles to
+// travel through, and each one of them bigger than the locomotive at the front.
+constexpr float kPipeRefLength = 41.5f;  // m, a Class 93 set
 constexpr float kMRPerBP = 0.05f;        // MR bar spent per bar of pipe charged
 // The auxiliary refills slowly - far more slowly than the cylinder empties. That
 // asymmetry is the whole of brake fade: a driver who makes and releases applications
@@ -74,6 +81,12 @@ constexpr float kBCApplyRate = 2.5f;     // cylinder filling from the auxiliary 
 // pulling the handle to the stop feels like or does.
 constexpr float kBCEmergApplyRate = 6.0f;
 constexpr float kBCReleaseRate = 1.6f;   // cylinder exhausting to atmosphere (bar/s)
+// What a distributor without EP behind it manages, as a fraction of the rates above.
+constexpr float kPlainAirFill = 0.22f;
+// Where a distributor decides this is an emergency and opens its own vent: falling, and
+// already below a full service reduction - so a service application, which stops at 3.5,
+// never trips it however deep the driver goes.
+constexpr float kBPEmergSense = 2.9f;
 // Auxiliary bar spent per bar of cylinder, which is the ratio of the two volumes. A real
 // auxiliary is sized so that emptying it into the cylinder *equalises* at the full-
 // application pressure - that is what sets kBCMax in the first place, and it is why a
@@ -174,6 +187,8 @@ Vehicle::Vehicle(const TrackPath* path, const VehicleSpec& spec, float s,
       engineRumble_(spec.engineRumble),
       engineBright_(spec.engineBright),
       controls_(spec.controls),
+      cabs_(spec.cabs),
+      epBrake_(spec.epBrake),
       bodyStyle_(spec.body),
       name_(spec.name),
       physV_(initialSpeed),
@@ -364,6 +379,20 @@ void Vehicle::moveHandle(int cab, int dir) {
         if (powerNotch_[cab] > 0) --powerNotch_[cab];
         else brakeNotch_[cab] = std::min(kEmergencyNotch, brakeNotch_[cab] + 1);
     }
+}
+
+const VehicleSpec* specNamed(const char* fragment) {
+    if (fragment == nullptr) return nullptr;
+    // Matches the formation's title as well as the machine's name, because a formation
+    // keeps its locomotive's name - the Di 4 with carriages behind it is still a Di 4 -
+    // and asking for it by the only string that tells the two apart has to work.
+    for (const VehicleSpec& v : kVehicleSpecs) {
+        const char* t = specTitle(v);
+        if (t != nullptr && std::string(t).find(fragment) != std::string::npos) return &v;
+        if (v.name != nullptr && std::string(v.name).find(fragment) != std::string::npos)
+            return &v;
+    }
+    return nullptr;
 }
 
 void Vehicle::movePower(int cab, int dir) {
@@ -972,6 +1001,7 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
     physV_ = physicalSpeed;
     cmdNotch_ = std::clamp(cmd.brakeNotch, 0, kEmergencyNotch);
     trainEmerg_ = cmd.emergency;
+    valveHere_ = cmd.valveHere;
 
     // The link's demand arrives in the physical frame (+ = the way the train faces);
     // this set turns it into its own path's frame, which is what orient_ is for. Two
@@ -1028,18 +1058,51 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
     // leak - so the pipe simply empties and the distributors do the rest. This is what
     // separates a burst hose from a momentary bleed, and it is the fault the whole
     // arrangement is built around.
+    // Who is allowed to move this vehicle's pipe at all.
+    //
+    // A vehicle drives its own pipe if the driver's valve is on it, or it has EP - which
+    // echoes the valve electrically at every vehicle, so they all vent in step - or its own
+    // device is calling for emergency, which is a cock opening here and needs nobody's
+    // permission. Anything else only follows its neighbours by the diffusion across the
+    // couplings, and its distributors answer the pressure it actually has.
+    //
+    // That single rule is the difference between a railcar and a hauled train. With EP the
+    // application is everywhere at once and the length of the train does not enter into it.
+    // On plain automatic air it has to travel, and five carriages of pipe take their time.
+    //
+    // The accelerator is the part that makes a long train work at all. A distributor that
+    // sees the pipe fall past the emergency threshold does not wait for the driver's valve
+    // to draw its air away down a hundred metres of hose - it opens its own vent and dumps
+    // locally. Each vehicle doing that pulls its neighbour under the threshold in turn, so
+    // the application travels as a wave at a few hundred metres a second rather than
+    // seeping along by diffusion. Without it the far end of this train bit at 3.8 s, which
+    // works out at 75 m/s against the 250 m/s a UIC brake is required to manage.
+    // What trips it is the pipe FALLING past the threshold, not merely being below it -
+    // bpRate_ still holds last step's signed rate. A vehicle standing with an empty pipe
+    // is not in emergency, it simply has no air in it yet, and reading the level alone
+    // latched every vehicle at start-up and left the whole fleet unable to release.
+    if (bp_ < kBPEmergSense && -bpRate_ > 0.2f) emergVent_ = true;
+    if (bpRate_ >= 0.0f) emergVent_ = false; // the pipe is coming back up: close the vent
+    const bool localDump = pipeCut_ || safetyBrake_ || emergVent_;
+    const bool drives = epBrake_ || valveHere_ || localDump;
+    // How fast this vehicle's own length of pipe can be emptied or filled. Air has to be
+    // moved out of a volume, and the volume goes with the length, so a 25 m carriage is
+    // slower than a 21 m locomotive and a train of them slower again.
+    const float vol = kPipeRefLength / std::max(4.0f, length_);
     const float bpWant = pipeCut_ ? 0.0f : targetBP(effNotch);
-    if (pipeCut_) {
-        bp_ = std::max(0.0f, bp_ - kBPEmergVentRate * dt);
+    if (pipeCut_ || emergVent_) {
+        bp_ = std::max(0.0f, bp_ - kBPEmergVentRate * vol * dt);
+    } else if (!drives) {
+        // Nothing of its own: the couplings are the only thing that moves this pipe.
     } else if (bpWant < bp_) {
         const float rate = (effNotch >= kEmergencyNotch) ? kBPEmergVentRate : kBPVentRate;
-        bp_ = std::max(bpWant, bp_ - rate * dt);
+        bp_ = std::max(bpWant, bp_ - rate * vol * dt);
     } else if (bpWant > bp_) {
         // Charged from the main reservoir and limited by it: a set whose reservoir has
         // run down cannot fill its pipe, so it cannot release.
         const float reach = std::min(bpWant, mrPres_);
         const float before = bp_;
-        bp_ = std::min(reach, bp_ + kBPChargeRate * dt);
+        bp_ = std::min(reach, bp_ + kBPChargeRate * vol * dt);
         mrPres_ -= kMRPerBP * std::max(0.0f, bp_ - before);
     }
     bp_ = std::max(0.0f, bp_);
@@ -1056,8 +1119,13 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
         if (want > b.bc) {
             // Filling from the auxiliary, and limited by it. An auxiliary drawn down by
             // repeated applications cannot fill its cylinder, and the brake fades.
-            const float rate = (bp_ < kBPFullService - 0.1f) ? kBCEmergApplyRate
-                                                             : kBCApplyRate;
+            // The cylinders fill at the rate the distributor can pass air, and EP stock
+            // fills fast on purpose - that is most of what EP buys. Plain automatic air
+            // has no such help: the distributor is working on its own, off a pipe that is
+            // itself still falling, and a passenger brake of the period takes a couple of
+            // seconds to come up rather than a fraction of one.
+            float rate = (bp_ < kBPFullService - 0.1f) ? kBCEmergApplyRate : kBCApplyRate;
+            if (!epBrake_) rate *= kPlainAirFill;
             const float reach = std::min(want, b.aux);
             const float before = b.bc;
             b.bc = std::min(reach, b.bc + rate * dt);

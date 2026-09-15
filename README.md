@@ -302,6 +302,46 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   heard from where the trains met rather than through the near train's envelope, so a
   collision thirty kilometres away is thirty kilometres away.
   `EBANER_AUDIO_DUMP_IMPACT=out.wav` renders the range offline, as the other voices have.
+- **NSB Type 5 carriages, and a locomotive that hauls them** — the
+  [BC5-3](https://www.norsketog.no/tog/personvogner/type-5): 25.3 m on two two-axle bogies,
+  43 t, 160 km/t, built at **Strømmens Værksted** 1977–81 and rebuilt 2010–12 as
+  *"rullestolplass og lekerom"* — wheelchair spaces and a playroom. Those are interior
+  features and a carriage is a thing you cannot get into, so what is drawn is the outside:
+  red-and-grey livery as three bands — red skirt, silver flanks, dark window band — with a
+  red plug door at each end, **the left one wider** for the wheelchair rebuild, and the roof
+  tumbling in above the cantrail. The floor plans on that page are interactive seat maps
+  that a text fetch sees nothing of, so the window and door arrangement is general Type 5
+  practice rather than measured, and is the part most likely to be wrong.
+  Hauling meant a train could stop being **all one vehicle**. A `Consist` took one spec and
+  made copies of it, and its spacing came from `lead().length()` alone — so a 20.8 m
+  locomotive pulling 25.3 m carriages would have laid every one of them 4.5 m inside the
+  next. Pitch, length, inertia and resistance are per-vehicle now, and a cab index counts
+  only **real driving positions**, so this train has two cabs and not twelve.
+- **A brake that feels how long the train is** — and it did not, at all. Slamming a Class 93
+  to emergency reached full brake at the far end in **0.42 s whether the train was one unit
+  or three**, 41 m or 124 m, because the application was not travelling: emergency was a
+  train-wide line and every vehicle dumped its own pipe in the same tick. That is not a bug,
+  it is **EP** — electro-pneumatic, the driver's valve echoed electrically at every vehicle —
+  and a railcar of the 1990s has it. A locomotive of 1981 and carriages of 1977 do not. One
+  rule now decides: *a vehicle works its own pipe if the driver's valve is on it, or it has
+  EP, or its own device is calling for emergency; everything else only follows its
+  neighbours.* The Class 93 keeps EP and keeps its 0.42 s.
+  The first version of this then got the *mechanism* wrong, and it is worth writing down
+  which way. It made the application seep along by diffusion and scaled it by pipe volume,
+  which gave 75 m/s down the train where [UIC requires
+  250](https://railwaynews.net/uic-544-1-brakes-braking-performance.html). The missing part
+  is the **accelerator**: a distributor that sees the pipe falling past the emergency
+  threshold opens its own vent rather than waiting for its air to be drawn away down a
+  hundred metres of hose, and each one doing that drags its neighbour under the threshold
+  in turn. The application therefore travels as a **wave**, and what actually takes the
+  time is the **brake cylinders filling** — three to five seconds to 95% in P — which is
+  local to each vehicle and the same however long the train is. So a hauled train brakes
+  **slowly but nearly together**, not front-first: a Di 4 with five carriages starts to
+  pull up at **1.7 s**, much where the light locomotive does, with the last carriage
+  **0.65 s** behind it — 231 m/s down 150 m of train.
+  Volume does dominate, but on the **release**, where there is no accelerator to help
+  because nothing local can make air: every pipe has to be filled from the one main
+  reservoir at the front, and the train takes **12 s** against the light engine's 3.4 s.
 - **One reverser, one driving cab** — the train takes its commands from the cab holding
   the reverser, so putting a cab into gear **centres every other cab**: a locomotive has one
   reverser handle and the driver carries it to the end he is working from. This is also a

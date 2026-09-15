@@ -130,6 +130,29 @@ constexpr float kBufferR = 0.19f;
 } // namespace di4
 
 // NSB Class 93 (Bombardier Talent) exterior, classic NSB livery.
+// NSB Type 5 (Strommens Vaerksted, 1977-81) passenger carriage, in the red-and-grey the
+// class wore for most of its working life behind these locomotives. 25.3 m on two two-axle
+// bogies. A slab-sided coach: flat flanks with the roof curving in above the cantrail, a
+// continuous window band between two end vestibules, and a plug door at each end - the one
+// on the left wider, which is what the wheelchair rebuild of a BC5-3 needed.
+namespace t5 {
+const glm::vec3 kBody(0.70f, 0.71f, 0.73f);  // silver-grey flanks
+const glm::vec3 kBand(0.10f, 0.11f, 0.13f);  // dark window band
+const glm::vec3 kRed(0.72f, 0.11f, 0.13f);   // NSB red: doors and the lower band
+const glm::vec3 kRoof(0.52f, 0.53f, 0.55f);  // grey roof
+const glm::vec3 kUnder(0.16f, 0.17f, 0.18f); // solebar and underfloor gear
+const glm::vec3 kEnd(0.20f, 0.21f, 0.22f);   // the ends, in shadow between vehicles
+constexpr float kFloorAbove = 0.15f; // underframe top to floor
+constexpr float kWinLow = 1.00f;     // window band, above the floor
+constexpr float kWinHigh = 1.90f;
+constexpr float kCant = 2.15f;       // where the roof starts curving in
+constexpr float kRoofHalf = 0.62f;   // roof half width, of the body's
+constexpr float kRedBand = 0.34f;    // the red skirt, above the solebar
+constexpr float kDoorAt = 9.10f;     // door centres, from the middle of the carriage
+constexpr float kDoorHalf = 0.45f;   // and half a door's width
+constexpr float kWideDoorHalf = 0.65f; // the wheelchair end's, which is wider
+} // namespace t5
+
 namespace c93 {
 const glm::vec3 kBody(0.72f, 0.73f, 0.75f);  // silver-grey car body
 const glm::vec3 kBand(0.11f, 0.12f, 0.14f);  // dark window band / glazing
@@ -984,6 +1007,69 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
     //
     // One rigid body on two bogies, so this is drawn once for the whole locomotive: `f` is
     // the body centre and `halfLen` reaches to the nose knee at each end.
+    // One Type 5 carriage body.
+    auto emitType5 = [&](const VehicleFrame& f, float halfLen) {
+        const glm::vec3 X = f.right, Y = f.tangent, Z = f.up;
+        const float hw = 0.5f * vehicle.width();
+        const float hwRoof = hw * t5::kRoofHalf;
+        const float z0 = frameTopZ + t5::kFloorAbove;
+        const float roofZ = wheelset::kRailTopZ + vehicle.height();
+        const float zCant = z0 + t5::kCant;
+        const float zLo = z0 + t5::kWinLow, zHi = z0 + t5::kWinHigh;
+        auto P = [&](float lx, float ly, float lz) { return f.pos + X * lx + Y * ly + Z * lz; };
+        const glm::vec3 core = P(0.0f, 0.0f, z0 + 0.5f * (zCant - z0));
+
+        // Solebar, then the flanks in three bands: red skirt, silver, dark window band,
+        // silver again to the cantrail. Drawn as strips rather than one box so the livery
+        // is the geometry and not a texture.
+        emitBox(X, Y, Z, P(0.0f, 0.0f, frameTopZ - 0.10f), hw * 0.94f, halfLen * 0.98f,
+                0.16f, t5::kUnder);
+        for (const float sx : {-1.0f, 1.0f}) {
+            auto strip = [&](float a, float b, const glm::vec3& col) {
+                quadN(P(sx * hw, -halfLen, a), P(sx * hw, halfLen, a),
+                      P(sx * hw, halfLen, b), P(sx * hw, -halfLen, b), col, core);
+            };
+            strip(z0, z0 + t5::kRedBand, t5::kRed);
+            strip(z0 + t5::kRedBand, zLo, t5::kBody);
+            strip(zLo, zHi, t5::kBand);
+            strip(zHi, zCant, t5::kBody);
+            // The roof tumbling in above the cantrail.
+            quadN(P(sx * hw, -halfLen, zCant), P(sx * hw, halfLen, zCant),
+                  P(sx * hwRoof, halfLen, roofZ), P(sx * hwRoof, -halfLen, roofZ),
+                  t5::kBody, core);
+            // A plug door at each end, standing a little proud, floor to window head. The
+            // wheelchair rebuild needed a wider one, and it is on the left.
+            for (const float sy : {-1.0f, 1.0f}) {
+                const float w = (sx < 0.0f && sy > 0.0f) ? t5::kWideDoorHalf : t5::kDoorHalf;
+                emitBox(X, Y, Z, P(sx * (hw + 0.012f), sy * t5::kDoorAt,
+                                   z0 + 0.5f * (zHi - z0)),
+                        0.012f, w, 0.5f * (zHi - z0), t5::kRed);
+                // its window, in the upper half
+                emitBox(X, Y, Z, P(sx * (hw + 0.026f), sy * t5::kDoorAt,
+                                   zLo + 0.55f * (zHi - zLo)),
+                        0.010f, w * 0.62f, 0.30f * (zHi - zLo), t5::kBand);
+            }
+        }
+        emitBox(X, Y, Z, P(0.0f, 0.0f, roofZ - 0.05f), hwRoof, halfLen, 0.05f, t5::kRoof);
+        // Floor pan and the two ends. The ends are plain: they are only ever seen from
+        // between two vehicles, or at the end of the train.
+        quadN(P(-hw, -halfLen, z0), P(hw, -halfLen, z0), P(hw, halfLen, z0),
+              P(-hw, halfLen, z0), t5::kUnder, core + Z * 6.0f);
+        for (const float sy : {-1.0f, 1.0f}) {
+            quadN(P(-hw, sy * halfLen, z0), P(hw, sy * halfLen, z0),
+                  P(hw, sy * halfLen, zCant), P(-hw, sy * halfLen, zCant), t5::kEnd, core);
+            quadN(P(-hw, sy * halfLen, zCant), P(hw, sy * halfLen, zCant),
+                  P(hwRoof, sy * halfLen, roofZ), P(-hwRoof, sy * halfLen, roofZ),
+                  t5::kEnd, core);
+            // Buffers and a gangway, so two of them look coupled rather than merely near.
+            for (const float sx : {-1.0f, 1.0f})
+                emitBox(X, Y, Z, P(sx * 0.875f, sy * (halfLen + 0.16f), frameTopZ + 0.02f),
+                        0.19f, 0.16f, 0.19f, di4::kFrame);
+            emitBox(X, Y, Z, P(0.0f, sy * (halfLen + 0.10f), z0 + 0.9f), 0.55f, 0.10f, 0.9f,
+                    t5::kEnd);
+        }
+    };
+
     auto emitDi4 = [&](const VehicleFrame& f, float halfLen) {
         const glm::vec3 X = f.right, Y = f.tangent, Z = f.up;
         const float hw = 0.5f * vehicle.width();
@@ -1548,6 +1634,8 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                 emitClass93(sections[i], halfLen, i == 0, i == 1); // WC in the 2nd car
             } else if (vehicle.bodyStyle() == BodyDi4) {
                 emitDi4(sections[i], halfLen);
+            } else if (vehicle.bodyStyle() == BodyType5) {
+                emitType5(sections[i], halfLen);
             } else {
                 const glm::vec3 centre =
                     sections[i].pos + sections[i].up * (frameTopZ + kUnderframeHalfHeight);
@@ -1661,17 +1749,23 @@ void VehicleMesh::sortGlass() {
 
 namespace drivercam {
 
+// Whether a given unit offers cabs to sit in, and how many. Two cabs either way on the
+// machines that have them, but for different reasons: the railcar's are the outer ends of
+// its two body sections, the locomotive's are the two ends of one rigid body. A Di 4
+// reported none until it got a drawn cab, purely because it has a single section.
+namespace {
+int cabsOn(const Vehicle& v) {
+    if (v.cabCount() == 0) return 0; // a carriage: no driving position at all
+    if (v.bodyStyle() == BodyDi4) return 2;
+    if (v.bodyStyle() == BodyClass93 && v.bodySectionFrames().size() >= 2) return 2;
+    return 0;
+}
+} // namespace
+
 int count(const Consist& c) {
-    const Vehicle& v = c.lead();
-    // Two cabs either way, but for different reasons: the railcar's are the outer ends of
-    // its two body sections, the locomotive's are the two ends of one rigid body. A Di 4
-    // reported none until now purely because it has a single section, which is why it
-    // could only ever be driven from the chase camera.
-    const int perSet = v.bodyStyle() == BodyDi4 ? 2
-                       : (v.bodyStyle() == BodyClass93 && v.bodySectionFrames().size() >= 2)
-                           ? 2
-                           : 0;
-    return perSet * c.unitCount();
+    int n = 0;
+    for (int i = 0; i < c.unitCount(); ++i) n += cabsOn(c.unit(i));
+    return n;
 }
 
 // Mirrors the cab geometry in emitClass93: the seat sits at base + so*0.7 on the
@@ -1680,8 +1774,17 @@ bool eyePose(const Consist& c, int position, glm::vec3& eye, glm::vec3& forward)
     // Cab `position` counts along the whole train, two to a set; within its set it is
     // the cab at that section's outer end, which is the same geometry as before.
     if (position < 0 || position >= count(c)) return false;
-    const Vehicle& v = c.unit(position / 2);
-    position %= 2;
+    // Walk to the unit this cab belongs to, skipping the ones that have none. A train may
+    // be a locomotive and five carriages, and then cab 1 is the locomotive's other end and
+    // not the first carriage's imaginary front.
+    int unit = 0;
+    for (; unit < c.unitCount(); ++unit) {
+        const int k = cabsOn(c.unit(unit));
+        if (position < k) break;
+        position -= k;
+    }
+    if (unit >= c.unitCount()) return false;
+    const Vehicle& v = c.unit(unit);
     const std::vector<VehicleFrame> sections = v.bodySectionFrames();
     if (sections.empty()) return false;
 

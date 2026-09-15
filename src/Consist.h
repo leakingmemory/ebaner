@@ -86,7 +86,11 @@ public:
     // --- cabs, addressed across the whole train ---------------------------------
     // Cab c lives on set c/2 at that set's local cab c%2, so cab 0 is at one end of the
     // train and cab cabCount()-1 at the other.
-    int cabCount() const { return 2 * unitCount(); }
+    // Only real driving positions: a locomotive hauling five carriages has two cabs, not
+    // twelve. cabUnit/cabEnd do the walk from a cab index to the unit and the end of it.
+    int cabCount() const;
+    int cabUnit(int cab) const;
+    int cabEnd(int cab) const;
     // Whether a cab may take the reverser. When sets are coupled the cabs at the
     // coupler are shut down, as they are in practice, and only the two at the ends of
     // the train can drive. A shut-down cab can still be sat in and looked out of.
@@ -242,8 +246,12 @@ private:
     // The rear portion of an uncoupling: sets that already exist, moved across whole.
     Consist(std::vector<Vehicle>&& units, const std::vector<TrackPath>* paths,
             const char* name, float v);
-    // Distance between the centres of two adjacent sets.
-    float unitPitch() const { return lead().length() + kCouplerGap; }
+    // Distance between the centres of two adjacent units. Half of each, plus the gap -
+    // which is the same as the old one-figure pitch when every unit is the same length,
+    // and is the whole of what a locomotive needs to haul something a different size.
+    float pitchBetween(int a, int b) const {
+        return 0.5f * (units_[a].length() + units_[b].length()) + kCouplerGap;
+    }
     // Put the trailing sets where the coupler says they should be, following the track.
     void layOut();
 

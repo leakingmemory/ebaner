@@ -581,7 +581,7 @@ int main(int argc, char** argv) {
             // where one needs 35, so a path that was long enough before may not be.
             std::printf("[Vehicle] %s wants %.0f m of clear road and this one is %.0f m "
                         "- it will not fit and will derail at once\n",
-                        sp.name, 2.0f * margin, L);
+                        specTitle(sp), 2.0f * margin, L);
         }
         trains.clear();
         trains.emplace_back(&paths, vpath, sp, startS);
@@ -2162,7 +2162,8 @@ int main(int argc, char** argv) {
         else vehicle = &trains[static_cast<std::size_t>(driverTrain)];
         const std::string where = trainWhere(trains.back());
         std::printf("[Train] placed %s on path %u at %.0f m (%s); %zu train(s) now\n",
-                    sp.name, p.path->trackId(), p.s, where.c_str(), trains.size());
+                    specTitle(sp), p.path->trackId(), p.s, where.c_str(),
+                    trains.size());
         std::fflush(stdout);
         return "placed at " + where;
     };
@@ -3774,7 +3775,7 @@ int main(int argc, char** argv) {
                 for (int i = 0; i < kNumVehicleSpecs; ++i) {
                     const bool hi = (i == menuIndex);
                     std::string line = (hi ? "> " : "  ");
-                    line += std::to_string(i + 1) + ". " + kVehicleSpecs[i].name;
+                    line += std::to_string(i + 1) + ". " + specTitle(kVehicleSpecs[i]);
                     appendText(tv, line, x, 40.0f + (i + 2) * lh, sc,
                                hi ? glm::vec3(1.0f) : glm::vec3(0.6f, 0.6f, 0.65f),
                                fbw, fbh);

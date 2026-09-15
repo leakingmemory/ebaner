@@ -32,6 +32,7 @@ enum VehicleBodyStyle {
     BodyUnderframe = 0, // bare floor plate per section (a base to build on)
     BodyClass93 = 1,    // NSB Class 93 (Bombardier Talent) exterior
     BodyDi4 = 2,        // NSB Di 4 (Henschel) diesel-electric locomotive
+    BodyType5 = 3,      // NSB Type 5 (Strommens Vaerksted) passenger carriage
 };
 
 // What turns the wheels. Two machines that could hardly be less alike: one puts its engine
@@ -109,7 +110,52 @@ struct VehicleSpec {
     float engineRumble = 0.0f;   // half- and quarter-order weight: the size of the block
     float engineBright = 0.11f;  // radiated-spectrum low-pass; lower is darker and bigger
     int   controls = ControlCombined; // ControlLayout
+    // Driving positions. Defaulted to two, so every row written before carriages existed
+    // keeps exactly what it had; a carriage says nothing and is driven from nowhere.
+    int   cabs = 2;
+    // Electro-pneumatic brake control: the driver's valve is echoed electrically at every
+    // vehicle, so they all vent their pipe in step and the application does not have to
+    // travel. A railcar of the 1990s has it. A locomotive of 1981 and carriages of 1977
+    // do not - they have the plain automatic air brake, where the valve vents at one point
+    // and the application walks the length of the train. That difference is why a hauled
+    // train's brake is slow and a railcar's is not.
+    bool  epBrake = true;
+    // What this vehicle brings with it when it is put on the road: `haulCount` of the
+    // vehicle whose name contains `hauls`. A formation, not a property of the machine -
+    // which is why it is the only field here that says anything about other vehicles.
+    const char* hauls = nullptr;
+    int   haulCount = 0;
+    // What the whole train is called, where that differs from what the machine is called.
+    // The locomotive stays a Di 4 when it has carriages behind it; only the formation gets
+    // the longer name, and only the menu and the train list show it.
+    const char* formation = nullptr;
 };
+
+// A formation: the same machine, with something coupled behind it. Written as a copy so
+// the locomotive's twenty-odd numbers live in one row and cannot drift between the light
+// engine and the train.
+constexpr VehicleSpec hauling(VehicleSpec base, const char* name, const char* what,
+                              int howMany) {
+    base.formation = name; // the train's name; base.name stays the machine's
+    base.hauls = what;
+    base.haulCount = howMany;
+    return base;
+}
+
+// What to call a spec in a list: the formation if it is one, the machine otherwise.
+constexpr const char* specTitle(const VehicleSpec& v) {
+    return v.formation != nullptr ? v.formation : v.name;
+}
+
+// Find a vehicle by a fragment of its name. Used to resolve what a formation hauls, and
+// by the tests, which were each carrying their own copy of this.
+const VehicleSpec* specNamed(const char* fragment);
+
+// The Di 4, named so the light engine and the train it hauls are one set of numbers.
+inline constexpr VehicleSpec kDi4Spec = {
+    "NSB Di 4 (Henschel)", 120000.0f, 20.80f, 3.176f, 4.35f, 3.85f, 11.75f, 2, BodyDi4, 1,
+    3, 1, DriveElectric, 2450000.0f, 0.55f, 1.00f, 360000.0f, 315.0f, 900.0f, 7.0f,
+    16, true, 0.92f, 2.7f, 0.075f, ControlSeparate, 2, false};
 
 // The vehicles offered on the start screen.
 inline constexpr VehicleSpec kVehicleSpecs[] = {
@@ -139,9 +185,30 @@ inline constexpr VehicleSpec kVehicleSpecs[] = {
     // asymmetric: 1.85 m then 2.00 m. Spread evenly over the 3.85 m instead, which puts
     // the middle axle 75 mm from where it belongs and is not a thing anyone can see.
     // Bogie centres follow from 15.60 m between the outer axles.
-    {"NSB Di 4 (Henschel)", 120000.0f, 20.80f, 3.176f, 4.35f, 3.85f, 11.75f, 2, BodyDi4, 1,
-     3, 1, DriveElectric, 2450000.0f, 0.55f, 1.00f, 360000.0f, 315.0f, 900.0f, 7.0f,
-     16, true, 0.92f, 2.7f, 0.075f, ControlSeparate},
+    kDi4Spec,
+    // NSB Type 5, Strommens Vaerksted 1977-81, 92 built. BC5-3 is a 2010-12 rebuild of a
+    // B5-2 - "rullestolplass og lekerom", wheelchair spaces and a playroom - so it has an
+    // interior this simulator has no way to show, a carriage being a thing you cannot get
+    // into. What it does have from outside is 25.3 m on two two-axle bogies, and no engine,
+    // no cab and no EP: it brakes on the train pipe and nothing else.
+    //
+    // Written by field rather than by position like the rows above it, because a carriage's
+    // honest answer to most of them is "nothing". Fourteen zeroes for an engine it does not
+    // have would say less than leaving them out.
+    {.name = "NSB BC5-3 (Type 5)",
+     .mass = 43000.0f,
+     .length = 25.30f,
+     .width = 3.10f,
+     .height = 4.115f,
+     .wheelbase = 2.50f,
+     .bogieSpacing = 18.00f,
+     .bogieCount = 2,
+     .body = BodyType5,
+     .units = 1,
+     .wheelRadius = 0.46f, // 920 mm wheels
+     .cabs = 0,
+     .epBrake = false},
+    hauling(kDi4Spec, "NSB Di 4 + 5 x BC5-3", "BC5-3", 5),
 };
 // Counted off the table rather than written down beside it. A hand-kept number that falls
 // behind the array makes the last entry unreachable everywhere at once - the start screen,
@@ -216,6 +283,11 @@ struct LinkCommand {
     bool reverse = false;     // the reverser is in R (holds it to a shunting speed)
     bool powering = false;    // the cab is asking for power at all
     bool emergency = true;    // the train-wide emergency line is up
+    // Whether the driver's brake valve is on THIS vehicle. On stock with EP the valve is
+    // echoed electrically everywhere and this does not matter; on plain automatic air it
+    // is the one place the pipe is vented and charged, and every other vehicle's pipe only
+    // follows its neighbours'. That is what makes a long train slow to brake.
+    bool valveHere = true;
 };
 
 // One set's contribution to the whole train's motion this step, in the physical frame
@@ -369,6 +441,8 @@ public:
     void movePower(int cab, int dir);
     void moveBrake(int cab, int dir);
     int controls() const { return controls_; }
+    int cabCount() const { return cabs_; }  // 0 on a carriage: driven from nowhere
+    bool epBrake() const { return epBrake_; }
     // What this engine sounds like. Firings per revolution falls out of the cylinder
     // count and the cycle: every cylinder every revolution on a two-stroke, every other
     // one on a four-stroke.
@@ -553,6 +627,10 @@ private:
     bool twoStroke_ = false;
     float engineVolume_ = 1.0f, engineRumble_ = 0.0f, engineBright_ = 0.11f;
     int controls_ = ControlCombined;
+    int cabs_ = 2;
+    bool epBrake_ = true;
+    bool valveHere_ = true;  // the driver's brake valve is on this vehicle
+    bool emergVent_ = false; // the accelerator: this distributor is dumping its own pipe
     float load_ = 0.0f;      // load regulator: excitation as a fraction of full
     float railPower_ = 0.0f; // W at the rail this step, for the engine-load reading
     int axlesPerBogie_ = 2, drive_ = DriveNone;
