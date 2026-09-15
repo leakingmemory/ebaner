@@ -98,9 +98,10 @@ int main() {
     const VehicleSpec* c93 = specNamed("Class 93 (T");
     const VehicleSpec* di4 = specNamed("Di 4 (Hen");
     const VehicleSpec* car = specNamed("BC5-3");
+    const VehicleSpec* cafe = specNamed("FR5-1");
     const VehicleSpec* train = specNamed("Di 4 + 5");
-    if (!c93 || !di4 || !car || !train) {
-        std::puts("the vehicle table is missing one of Class 93 / Di 4 / BC5-3 / the train");
+    if (!c93 || !di4 || !car || !cafe || !train) {
+        std::puts("the vehicle table is missing a Class 93 / Di 4 / BC5-3 / FR5-1 / train");
         return 1;
     }
 
@@ -112,6 +113,11 @@ int main() {
         check(std::abs(car->length - 25.30f) < 0.01f, "25.30 m over the body", car->length,
               25.30);
         check(std::abs(car->mass - 43000.0f) < 1.0f, "43 t", car->mass, 43000.0);
+        check(cafe->cabs == 0 && cafe->engines == 0 && !cafe->epBrake,
+              "and the cafe car is a carriage in every same respect");
+        check(std::abs(cafe->mass - 44000.0f) < 1.0f, "  at 44 t", cafe->mass, 44000.0);
+        check(cafe->body != car->body,
+              "  but a different body: its windows and doors are nowhere near the same");
     }
 
     std::puts("\nA locomotive and five carriages is one train of six unlike vehicles");
@@ -119,7 +125,16 @@ int main() {
         Consist c(&w.paths, &w.paths[0], *train, 20000.0f);
         c.attachNetwork(&w.paths, nullptr);
         check(c.unitCount() == 6, "six units", c.unitCount(), 6.0);
-        check(std::abs(c.mass() - 335000.0f) < 1.0f, "335 t", c.mass(), 335000.0);
+        // Marshalled as the real rake is: the cafe is the second carriage, not just five
+        // of the same thing. A formation is a list, and this is the test of that.
+        check(std::string(c.unit(0).name()).find("Di 4") != std::string::npos,
+              "the locomotive leads");
+        check(std::string(c.unit(2).name()).find("FR5-1") != std::string::npos,
+              "  and the cafe car is the second carriage");
+        for (const int u : {1, 3, 4, 5})
+            check(std::string(c.unit(u).name()).find("BC5-3") != std::string::npos,
+                  "  carriage " + std::to_string(u) + " is a BC5-3");
+        check(std::abs(c.mass() - 336000.0f) < 1.0f, "336 t", c.mass(), 336000.0);
         const float want = 20.80f + 5.0f * 25.30f + 5.0f * Consist::kCouplerGap;
         check(std::abs(c.length() - want) < 0.05f, "and its length is the sum of them",
               c.length(), want);

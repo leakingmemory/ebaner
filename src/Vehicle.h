@@ -33,6 +33,7 @@ enum VehicleBodyStyle {
     BodyClass93 = 1,    // NSB Class 93 (Bombardier Talent) exterior
     BodyDi4 = 2,        // NSB Di 4 (Henschel) diesel-electric locomotive
     BodyType5 = 3,      // NSB Type 5 (Strommens Vaerksted) passenger carriage
+    BodyType5Fr = 4,    // the same body as a cafe car: different windows, different doors
 };
 
 // What turns the wheels. Two machines that could hardly be less alike: one puts its engine
@@ -120,11 +121,12 @@ struct VehicleSpec {
     // and the application walks the length of the train. That difference is why a hauled
     // train's brake is slow and a railcar's is not.
     bool  epBrake = true;
-    // What this vehicle brings with it when it is put on the road: `haulCount` of the
-    // vehicle whose name contains `hauls`. A formation, not a property of the machine -
-    // which is why it is the only field here that says anything about other vehicles.
+    // What this vehicle brings with it when it is put on the road: a comma-separated list
+    // of name fragments, in order from the machine backwards. A list and not a count-of-one
+    // -kind, because a real formation is not all one carriage - the standard rake here has
+    // the cafe second. A formation, not a property of the machine, which is why it is the
+    // only field that says anything about other vehicles.
     const char* hauls = nullptr;
-    int   haulCount = 0;
     // What the whole train is called, where that differs from what the machine is called.
     // The locomotive stays a Di 4 when it has carriages behind it; only the formation gets
     // the longer name, and only the menu and the train list show it.
@@ -134,11 +136,9 @@ struct VehicleSpec {
 // A formation: the same machine, with something coupled behind it. Written as a copy so
 // the locomotive's twenty-odd numbers live in one row and cannot drift between the light
 // engine and the train.
-constexpr VehicleSpec hauling(VehicleSpec base, const char* name, const char* what,
-                              int howMany) {
+constexpr VehicleSpec hauling(VehicleSpec base, const char* name, const char* what) {
     base.formation = name; // the train's name; base.name stays the machine's
     base.hauls = what;
-    base.haulCount = howMany;
     return base;
 }
 
@@ -208,7 +208,23 @@ inline constexpr VehicleSpec kVehicleSpecs[] = {
      .wheelRadius = 0.46f, // 920 mm wheels
      .cabs = 0,
      .epBrake = false},
-    hauling(kDi4Spec, "NSB Di 4 + 5 x BC5-3", "BC5-3", 5),
+    // The cafe car, from the same drawings. 44 t, and the same body as the BC5-3 with a
+    // quite different arrangement in and on it.
+    {.name = "NSB FR5-1 (Type 5)",
+     .mass = 44000.0f,
+     .length = 25.30f,
+     .width = 3.10f,
+     .height = 4.115f,
+     .wheelbase = 2.50f,
+     .bogieSpacing = 18.00f,
+     .bogieCount = 2,
+     .body = BodyType5Fr,
+     .units = 1,
+     .wheelRadius = 0.46f,
+     .cabs = 0,
+     .epBrake = false},
+    // The standard rake: five carriages with the cafe second, as it is marshalled.
+    hauling(kDi4Spec, "NSB Di 4 + 5 (cafe 2nd)", "BC5-3,FR5-1,BC5-3,BC5-3,BC5-3"),
 };
 // Counted off the table rather than written down beside it. A hand-kept number that falls
 // behind the array makes the last entry unreachable everywhere at once - the start screen,

@@ -322,6 +322,17 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   entered, but all of it is behind glass and shows through the windows, which is the point
   of drawing it: the first attempt ran the interior lining the full height, six centimetres
   behind the glass, so the carriage read as glazed and completely empty.
+  The **FR5-1** café car comes off the same drawings and is a quite different vehicle from
+  outside: five windows over the booth seating at one end, a long **blank flank** where the
+  servery is, three narrow ones over the far counter, another blank over the bike and ski
+  bay — and its two doors are **not at the ends** but at −1.4 m and +7.6 m, either side of
+  the servery, which is where the plan puts its exits. Inside: booths with tables, a counter
+  with stools down one side, and racks in the stowage bay. Both carriages share one body and
+  differ only in a `Layout` — where the windows and doors are, and what furniture goes in —
+  because a Type 5 is a Type 5 and the seat plan is what makes one a family carriage and
+  another a café.
+  The standard rake is therefore **a list and not a count**: `"BC5-3,FR5-1,BC5-3,BC5-3,
+  BC5-3"`, so the café is marshalled **second**, as it runs. 336 t, 150.3 m.
   Hauling meant a train could stop being **all one vehicle**. A `Consist` took one spec and
   made copies of it, and its spacing came from `lead().length()` alone — so a 20.8 m
   locomotive pulling 25.3 m carriages would have laid every one of them 4.5 m inside the

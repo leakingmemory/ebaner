@@ -45,12 +45,26 @@ Consist::Consist(const std::vector<TrackPath>* paths, const TrackPath* path,
     // hauled vehicle is a unit like any other from here on - the train simply stops being
     // all one thing, which is what everything below had to be taught.
     const int own = std::max(1, spec.units);
-    const VehicleSpec* trailer = specNamed(spec.hauls);
-    const int hauled = trailer != nullptr ? std::max(0, spec.haulCount) : 0;
-    const int n = own + hauled;
-    units_.reserve(n);
+    units_.reserve(own + 8);
     for (int i = 0; i < own; ++i) units_.emplace_back(path, spec, s, initialSpeed);
-    for (int i = 0; i < hauled; ++i) units_.emplace_back(path, *trailer, s, initialSpeed);
+    // Then the formation's list, in order from the machine backwards. Split on commas;
+    // anything that does not name a vehicle is skipped rather than silently substituted,
+    // because a rake with a carriage quietly missing is worse than one that is short.
+    if (spec.hauls != nullptr) {
+        std::string list(spec.hauls);
+        std::size_t at = 0;
+        while (at <= list.size()) {
+            const std::size_t comma = list.find(',', at);
+            const std::string one =
+                list.substr(at, comma == std::string::npos ? std::string::npos : comma - at);
+            if (!one.empty())
+                if (const VehicleSpec* t = specNamed(one.c_str()))
+                    units_.emplace_back(path, *t, s, initialSpeed);
+            if (comma == std::string::npos) break;
+            at = comma + 1;
+        }
+    }
+    const int n = static_cast<int>(units_.size());
     // The sets are laid out along the train with the first at one end. Until the
     // network is attached the walk has nothing to follow, so this is a straight
     // placement; layOut() does it properly once attachNetwork has been called.

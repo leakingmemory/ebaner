@@ -156,16 +156,39 @@ constexpr float kRedBand = 0.34f;    // the red skirt, above the solebar
 //
 // Nine saloon windows in two groups, four and five, with 2.2 m of blank side between them
 // at the centre. The blank is in the drawing and it is where the two table bays sit.
-constexpr float kWindows[][2] = {
+// Two variants of the same body, each with its own window and door spacing and its own
+// furniture. Held as data rather than branches, because they differ only in where things
+// are: a Type 5 is a Type 5, and the seat plan is what makes one a family carriage and
+// another a cafe.
+struct Layout {
+    const float (*windows)[2]; // spans, metres from the middle of the carriage
+    int windowCount;
+    float doorAt[2];   // door centres; not at the ends on the cafe, which is the point
+    float doorHalf[2]; // half widths - the BC5-3's wheelchair end is wider
+    bool cafe;
+};
+
+// BC5-3: nine saloon windows in two groups, four and five, with 2.2 m of blank side
+// between them at the centre where the two table bays sit.
+constexpr float kWinBC53[][2] = {
     {-7.13f, -6.30f}, {-5.80f, -4.57f}, {-4.07f, -2.84f}, {-2.33f, -1.11f},
     {1.12f, 2.34f},   {2.85f, 4.08f},   {4.58f, 5.81f},   {6.32f, 7.54f},
     {8.03f, 9.26f},
 };
-constexpr float kDoorAt = 11.36f;    // door centres: the door windows are +/-11.03..11.69
-constexpr float kDoorHalf = 0.46f;
-constexpr float kWideDoorHalf = 0.62f; // the wheelchair end's, which is wider
-// The inside, from the seat plan. Nine rows of four - two a side across a centre aisle -
-// with the middle two rows facing across tables; a wheelchair-accessible WC and a service
+// FR5-1: quite a different carriage from outside. Five windows over the cafe seating at
+// one end, then a long blank flank where the servery and the counters are, three narrow
+// ones over the far counter, and another blank over the bike and ski bay. Its two doors
+// are nowhere near the ends - they are at -1.4 m and +7.6 m, which is where the plan puts
+// its exits, either side of the servery.
+constexpr float kWinFR51[][2] = {
+    {-11.69f, -11.03f}, {-10.56f, -9.74f}, {-9.23f, -8.00f}, {-7.13f, -5.91f},
+    {-4.79f, -3.56f},   {2.18f, 3.01f},    {3.18f, 4.01f},   {4.17f, 5.00f},
+};
+constexpr Layout kBC53{kWinBC53, 9, {-11.36f, 11.36f}, {0.46f, 0.62f}, false};
+constexpr Layout kFR51{kWinFR51, 8, {-1.39f, 7.59f}, {0.46f, 0.46f}, true};
+
+// The BC5-3 inside, from its seat plan: nine rows of four - two a side across a centre
+// aisle - the middle two facing across tables; a wheelchair-accessible WC and a service
 // nook behind the partition at one end; the playroom and the wheelchair bays at the other.
 constexpr float kSeatRows[] = {-5.50f, -4.37f, -3.45f, -2.53f, -0.65f,
                                0.65f,  2.51f,  3.45f,  4.61f};
@@ -173,6 +196,11 @@ constexpr float kSaloonEnd0 = -8.30f; // partitions closing the saloon off
 constexpr float kSaloonEnd1 = 9.80f;
 constexpr float kWcAt = -10.40f;      // the accessible WC, behind the near partition
 constexpr float kPlayAt = 10.90f;     // and the playroom at the far end
+// And the FR5-1's, likewise: booth seating at one end, the servery and its counters
+// through the middle with stools along them, and the bike, ski and luggage bay beyond.
+constexpr float kBoothRows[] = {-11.30f, -10.20f, -9.10f, -8.00f, -6.90f};
+constexpr float kServery0 = -6.50f, kServery1 = 4.00f;
+constexpr float kStowFrom = 5.00f, kStowTo = 10.10f;
 const glm::vec3 kSeat(0.55f, 0.16f, 0.18f);   // NSB seat moquette
 const glm::vec3 kTable(0.78f, 0.76f, 0.71f);  // table tops
 const glm::vec3 kLining(0.80f, 0.80f, 0.78f); // interior walls and partitions
@@ -1034,7 +1062,7 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
     // One rigid body on two bogies, so this is drawn once for the whole locomotive: `f` is
     // the body centre and `halfLen` reaches to the nose knee at each end.
     // One Type 5 carriage body.
-    auto emitType5 = [&](const VehicleFrame& f, float halfLen) {
+    auto emitType5 = [&](const VehicleFrame& f, float halfLen, const t5::Layout& lay) {
         const glm::vec3 X = f.right, Y = f.tangent, Z = f.up;
         const float hw = 0.5f * vehicle.width();
         const float hwRoof = hw * t5::kRoofHalf;
@@ -1068,7 +1096,8 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                     quadN(P(sx * hw, a, zLo), P(sx * hw, b, zLo), P(sx * hw, b, zHi),
                           P(sx * hw, a, zHi), t5::kBody, core);
                 };
-                for (const auto& win : t5::kWindows) {
+                for (int wi = 0; wi < lay.windowCount; ++wi) {
+                    const float* win = lay.windows[wi];
                     pier(at, win[0]);
                     quadN(P(sx * (hw - 0.004f), win[0], zLo),
                           P(sx * (hw - 0.004f), win[1], zLo),
@@ -1084,13 +1113,13 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                   t5::kBody, core);
             // A plug door at each end, standing a little proud, floor to window head. The
             // wheelchair rebuild needed a wider one, and it is on the left.
-            for (const float sy : {-1.0f, 1.0f}) {
-                const float w = (sx < 0.0f && sy > 0.0f) ? t5::kWideDoorHalf : t5::kDoorHalf;
-                emitBox(X, Y, Z, P(sx * (hw + 0.012f), sy * t5::kDoorAt,
+            for (int di = 0; di < 2; ++di) {
+                const float w = (sx < 0.0f) ? lay.doorHalf[di] : lay.doorHalf[0];
+                emitBox(X, Y, Z, P(sx * (hw + 0.012f), lay.doorAt[di],
                                    z0 + 0.5f * (zHi - z0)),
                         0.012f, w, 0.5f * (zHi - z0), t5::kRed);
                 // its window, in the upper half
-                emitBox(X, Y, Z, P(sx * (hw + 0.026f), sy * t5::kDoorAt,
+                emitBox(X, Y, Z, P(sx * (hw + 0.026f), lay.doorAt[di],
                                    zLo + 0.55f * (zHi - zLo)),
                         0.010f, w * 0.62f, 0.30f * (zHi - zLo), di4::kGlass);
             }
@@ -1127,6 +1156,44 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                           P(sx * ihw, halfLen * 0.99f, band.second),
                           P(sx * ihw, -halfLen * 0.99f, band.second), t5::kLining,
                           in + X * (sx * 6.0f));
+            if (lay.cafe) {
+                // Booth seating at one end, back to back across tables.
+                for (const float row : t5::kBoothRows)
+                    for (const float sx : {-1.0f, 1.0f}) {
+                        emitBox(X, Y, Z, P(sx * 0.95f, row, z0 + 0.45f), 0.50f, 0.22f,
+                                0.06f, t5::kSeat);
+                        emitBox(X, Y, Z, P(sx * 0.95f, row + 0.20f, z0 + 0.80f), 0.50f,
+                                0.05f, 0.35f, t5::kSeat);
+                    }
+                for (int k = 0; k < 4; ++k)
+                    for (const float sx : {-1.0f, 1.0f})
+                        emitBox(X, Y, Z,
+                                P(sx * 0.95f, -10.75f + 1.10f * static_cast<float>(k),
+                                  z0 + 0.72f),
+                                0.45f, 0.30f, 0.03f, t5::kTable);
+                // The servery through the middle: a counter down one side with the
+                // kitchen block behind it, and stools along it.
+                emitBox(X, Y, Z,
+                        P(-1.00f, 0.5f * (t5::kServery0 + t5::kServery1), z0 + 0.55f),
+                        0.42f, 0.5f * (t5::kServery1 - t5::kServery0), 0.55f, t5::kTable);
+                emitBox(X, Y, Z, P(-1.20f, t5::kServery0 + 1.2f, z0 + 0.9f), 0.25f, 1.10f,
+                        0.9f, t5::kLining);
+                for (int k = 0; k < 9; ++k)
+                    emitBox(X, Y, Z,
+                            P(-0.35f, t5::kServery0 + 0.8f + 1.05f * static_cast<float>(k),
+                              z0 + 0.35f),
+                            0.16f, 0.16f, 0.35f, t5::kSeat);
+                // And the bike, ski and luggage bay beyond it - racks down both sides.
+                for (const float sx : {-1.0f, 1.0f})
+                    for (int k = 0; k < 3; ++k)
+                        emitBox(X, Y, Z,
+                                P(sx * 1.10f,
+                                  t5::kStowFrom + 0.9f + 1.70f * static_cast<float>(k),
+                                  z0 + 0.60f),
+                                0.28f, 0.60f, 0.60f, t5::kLining);
+                emitBox(X, Y, Z, P(0.0f, t5::kStowTo + 0.3f, z0 + 0.5f * (zCeil - z0)), ihw,
+                        0.05f, 0.5f * (zCeil - z0), t5::kLining);
+            } else {
             // Partitions closing the saloon off from the two ends.
             for (const float y : {t5::kSaloonEnd0, t5::kSaloonEnd1})
                 emitBox(X, Y, Z, P(0.0f, y, z0 + 0.5f * (zCeil - z0)), ihw, 0.05f,
@@ -1157,6 +1224,7 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
             for (const float sx : {-1.0f, 1.0f})
                 emitBox(X, Y, Z, P(sx * 1.05f, t5::kSaloonEnd1 + 0.55f, z0 + 0.03f), 0.38f,
                         0.45f, 0.01f, t5::kTable); // the bays' marked floor
+            }
         }
         // Floor pan and the two ends. The ends are plain: they are only ever seen from
         // between two vehicles, or at the end of the train.
@@ -1742,7 +1810,9 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
             } else if (vehicle.bodyStyle() == BodyDi4) {
                 emitDi4(sections[i], halfLen);
             } else if (vehicle.bodyStyle() == BodyType5) {
-                emitType5(sections[i], halfLen);
+                emitType5(sections[i], halfLen, t5::kBC53);
+            } else if (vehicle.bodyStyle() == BodyType5Fr) {
+                emitType5(sections[i], halfLen, t5::kFR51);
             } else {
                 const glm::vec3 centre =
                     sections[i].pos + sections[i].up * (frameTopZ + kUnderframeHalfHeight);
