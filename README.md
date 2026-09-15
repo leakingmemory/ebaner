@@ -203,6 +203,27 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   dead. Setting them from the traction code unconditionally, as this first did, left a
   stopped locomotive sitting at idle speed calling itself *running*, and made it impossible
   to shut down at all — the revs went back up the same step they came down.
+  It also has a **motstandsbremse** — a rheostatic brake, the traction motors driven as
+  generators and the energy burned in roof grids rather than put back anywhere. That it has
+  one is not in doubt: the trials of Di 4 651 record *"Effekt av elektrisk motstandsbrems
+  ble testet"*. It is commanded on the **power controller**, which runs `E5..E1 · N ·
+  P1..P5` either side of neutral — standard BBC practice of the period, and the cab
+  photographs show two levers and a reverser with no third handle. Its curve has the shape
+  of the traction curve because it shares the hardware and the same two limits bound it:
+  **flat at 180 kN** to a corner at 28 km/h where the motor current is the limit, then
+  **P/v** above it where the **1400 kW** grids are. Both those figures are **estimates** —
+  no source I could reach publishes either for this locomotive — chosen as typical of a
+  2450 kW machine and sanity-checked against what the brake is for: 180 kN holds the 435 t
+  night train on a 1% grade at any speed it runs at.
+  Two things about it matter more than the numbers. It **fades out below about 5 km/h and is
+  gone before the train stops**, because a machine turning slowly generates nothing — and
+  without that it would have been a *parking brake*, since the consist clamps retardation to
+  the speed the train has rather than letting it push the train backwards. And while it is
+  working the locomotive's **own friction brake is held off**, since applying both
+  duplicates the effort and cooks the shoes; the carriages brake on air as usual, and an
+  emergency drops the electric brake out and fills every cylinder there is. Not modelled,
+  and worth saying: the **grid blower**, which on a real one is the loudest thing about it,
+  and grid **thermal limits**, which there is no temperature anywhere in this model to carry.
   It is **driven differently**, too. A railcar of the 1990s gives its driver one lever that
   walks power and brake along a single axis; a locomotive of 1981 does not. The interior
   photographs show a short ball-topped **power controller** on a gated base under the left

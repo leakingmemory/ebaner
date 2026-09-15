@@ -134,6 +134,20 @@ struct VehicleSpec {
     // The locomotive stays a Di 4 when it has carriages behind it; only the formation gets
     // the longer name, and only the menu and the train list show it.
     const char* formation = nullptr;
+    // The rheostatic brake - motstandsbremse - where the machine has one: the traction
+    // motors driven as generators and the energy burned in roof grids. Two limits, the
+    // same two the traction curve has and for the same reasons: a current limit that makes
+    // the effort flat at low speed, and what the grids will take, which makes it P/v above
+    // the corner. Zero means no dynamic brake at all, which is every other row here.
+    //
+    // Both figures for the Di 4 are ESTIMATES. No source I could reach gives either for
+    // this locomotive; they are typical of a 2450 kW machine and chosen so the brake can do
+    // its job - 180 kN holds the 435 t night train on a 1% grade at any speed it runs at.
+    //
+    // At the END of the struct on purpose. The rows below are positional, so a field
+    // inserted higher up slides every value after it into the wrong slot without a word.
+    float dynBrakeN = 0.0f; // N, the flat maximum
+    float dynBrakeW = 0.0f; // W, what the resistor grids will dissipate
 };
 
 // A formation: the same machine, with something coupled behind it. Written as a copy so
@@ -158,7 +172,8 @@ const VehicleSpec* specNamed(const char* fragment);
 inline constexpr VehicleSpec kDi4Spec = {
     "NSB Di 4 (Henschel)", 120000.0f, 20.80f, 3.176f, 4.35f, 3.85f, 11.75f, 2, BodyDi4, 1,
     3, 1, DriveElectric, 2450000.0f, 0.55f, 1.00f, 360000.0f, 315.0f, 900.0f, 7.0f,
-    16, true, 0.92f, 2.7f, 0.075f, ControlSeparate, 2, false};
+    16, true, 0.92f, 2.7f, 0.075f, ControlSeparate, 2, false, nullptr, nullptr,
+    180000.0f, 1400000.0f};
 
 // The vehicles offered on the start screen.
 inline constexpr VehicleSpec kVehicleSpecs[] = {
@@ -380,6 +395,10 @@ struct LinkCommand {
     // is the one place the pipe is vented and charged, and every other vehicle's pipe only
     // follows its neighbours'. That is what makes a long train slow to brake.
     bool valveHere = true;
+    // The electric brake, 0..1, from the controller's range below neutral. Separate from
+    // `demand` because it is not negative traction: it is a retarding force that comes off
+    // the same machines, and it answers to different limits.
+    float dynamic = 0.0f;
 };
 
 // One set's contribution to the whole train's motion this step, in the physical frame
@@ -513,6 +532,9 @@ public:
     static constexpr float kGravity = 9.81f; // m/s^2
     static constexpr int kEmergencyNotch = 5;
     static constexpr int kMaxPowerNotch = 5; // combined lever: N .. P1..P5 power side
+    // And, on a machine whose controller doubles as its electric brake, the range below
+    // neutral: E1..E5. Only reachable where dynBrakeN says there is a brake to command.
+    static constexpr int kMaxBrakeNotch = 5;
     // Per-cab brake handle (0 release .. kEmergencyNotch emergency), power notch
     // (0 N .. kMaxPowerNotch) and reverser (-1 R, 0 N, +1 F); cab 0 and cab 1 are
     // the two ends. Brake and power are the two sides of one combined lever and are
@@ -534,6 +556,8 @@ public:
     void moveBrake(int cab, int dir);
     int controls() const { return controls_; }
     int cabCount() const { return cabs_; }  // 0 on a carriage: driven from nowhere
+    bool hasDynamicBrake() const { return dynBrakeN_ > 0.0f; }
+    float dynamicBrakeForce() const { return dynBrake_; } // N this step, >= 0
     bool epBrake() const { return epBrake_; }
     // What this engine sounds like. Firings per revolution falls out of the cylinder
     // count and the cycle: every cylinder every revolution on a two-stroke, every other
@@ -668,6 +692,7 @@ private:
     // hydraulic one above rather than folded into it: they share almost nothing.
     void updateElectricDrive(float demandSigned, float demand, bool powering,
                              bool reverse, float dt);
+    void updateDynamicBrake(float demand, bool inGear, float dt);
     // Arc-length offsets of each bogie centre from the body centre (s_).
     std::vector<float> bogieCentres() const;
     // Half the span between the body's two support points (the two end bogies for
@@ -721,6 +746,8 @@ private:
     int controls_ = ControlCombined;
     int cabs_ = 2;
     bool epBrake_ = true;
+    float dynBrakeN_ = 0.0f, dynBrakeW_ = 0.0f;
+    float dynBrake_ = 0.0f; // what the electric brake is making this step, N
     bool valveHere_ = true;  // the driver's brake valve is on this vehicle
     bool emergVent_ = false; // the accelerator: this distributor is dumping its own pipe
     float load_ = 0.0f;      // load regulator: excitation as a fraction of full

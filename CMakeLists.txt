@@ -301,6 +301,13 @@ add_test(NAME train-yard COMMAND TrainYardTest)
 
 # The air brake: a pipe that has to be kept full, and bogies that stop the train when it
 # is not. No dataset - a kilometre of straight TrackPath is the whole world, as UncoupleTest.
+# The Di 4's rheostatic brake: its curve, and that it lets go before the train stops.
+add_executable(DynamicBrakeTest tests/DynamicBrakeTest.cpp src/Vehicle.cpp src/Consist.cpp)
+add_dependencies(DynamicBrakeTest shaders)
+target_link_libraries(DynamicBrakeTest PRIVATE ebaner_engine)
+target_include_directories(DynamicBrakeTest PRIVATE src)
+add_test(NAME dynamic-brake COMMAND DynamicBrakeTest)
+
 # Hauling: a train of unlike vehicles, and a brake that feels its length.
 add_executable(HaulTest tests/HaulTest.cpp src/Vehicle.cpp src/Consist.cpp)
 add_dependencies(HaulTest shaders)

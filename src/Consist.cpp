@@ -441,14 +441,21 @@ void Consist::update(float dt, float pushInput) {
         const float cabSign = (a % 2 == 0) ? -1.0f : 1.0f;
         const int rev = reverser(a);
         cmd.brakeNotch = brakeNotch(a);
-        cmd.demand = cabSign * static_cast<float>(rev * powerNotch(a)) /
+        // One controller, two ranges. Above neutral it is traction and is signed by the
+        // cab and the reverser; below neutral it is the electric brake, which is not
+        // negative traction - it opposes whichever way the train is going and does not
+        // care which way the reverser points.
+        const int notch = powerNotch(a);
+        cmd.demand = cabSign * static_cast<float>(rev * std::max(0, notch)) /
                      static_cast<float>(Vehicle::kMaxPowerNotch);
         cmd.reverse = rev < 0;
-        cmd.powering = !cmd.emergency && powerNotch(a) > 0;
+        cmd.powering = !cmd.emergency && notch > 0;
+        cmd.dynamic = static_cast<float>(std::max(0, -notch)) /
+                      static_cast<float>(Vehicle::kMaxBrakeNotch);
     } else {
         cmd.brakeNotch = Vehicle::kEmergencyNotch;
     }
-    if (cmd.emergency) { cmd.demand = 0.0f; cmd.powering = false; }
+    if (cmd.emergency) { cmd.demand = 0.0f; cmd.powering = false; cmd.dynamic = 0.0f; }
 
     // Gravity where each set actually stands, and the hand push. A train of two sets
     // is 84 m long and its halves are genuinely on different parts of the profile; the

@@ -3834,11 +3834,16 @@ int main(int argc, char** argv) {
                                         vehicle->brakeNotch(cab) != prevBrk)
                                      : vehicle->handlePosition(cab) != prevPos;
             if (moved) {
-                if (split)
-                    std::printf("[Handle] cab %d power P%d  brake %s  BP %.1f  BC %.1f  "
-                                "MR %.1f bar\n", cab, vehicle->powerNotch(cab),
-                                vehicle->brakeNotchName(cab), vehicle->bpPressure(),
-                                vehicle->bcPressure(), vehicle->mrPressure());
+                if (split) {
+                    const int np = vehicle->powerNotch(cab);
+                    char ctl[16];
+                    if (np < 0) std::snprintf(ctl, sizeof(ctl), "E-brake E%d", -np);
+                    else std::snprintf(ctl, sizeof(ctl), "power P%d", np);
+                    std::printf("[Handle] cab %d %s  brake %s  BP %.1f  BC %.1f  "
+                                "MR %.1f bar\n", cab, ctl, vehicle->brakeNotchName(cab),
+                                vehicle->bpPressure(), vehicle->bcPressure(),
+                                vehicle->mrPressure());
+                }
                 else
                     std::printf("[Handle] cab %d %s  BP %.1f  BC %.1f  MR %.1f bar\n", cab,
                                 vehicle->handleName(cab), vehicle->bpPressure(),
@@ -4246,10 +4251,21 @@ int main(int argc, char** argv) {
                                                         : "SHUT DOWN (coupled)");
                 appendText(tv, buf, x, y, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
                 y += lh;
-                if (vehicle->controls() == ControlSeparate)
+                if (vehicle->controls() == ControlSeparate) {
+                    // One controller with a range either side of neutral, so the label
+                    // has to say which side it is on - otherwise E2 and P2 read alike and
+                    // the driver cannot tell pulling from pushing.
+                    const int np = vehicle->powerNotch(cab);
+                    char ctl[40];
+                    if (np < 0)
+                        std::snprintf(ctl, sizeof(ctl), "E-BRAKE E%d  %3.0f kN", -np,
+                                      vehicle->lead().dynamicBrakeForce() / 1000.0f);
+                    else
+                        std::snprintf(ctl, sizeof(ctl), "POWER P%d", np);
                     std::snprintf(buf, sizeof(buf),
-                                  "POWER P%d  , / .      BRAKE %s  K rel / L app / Space",
-                                  vehicle->powerNotch(cab), vehicle->brakeNotchName(cab));
+                                  "%-22s , / .      BRAKE %s  K rel / L app / Space", ctl,
+                                  vehicle->brakeNotchName(cab));
+                }
                 else
                     std::snprintf(buf, sizeof(buf),
                                   "HANDLE %s   , power / brake . / Space",

@@ -132,6 +132,11 @@ constexpr float kEta = 0.9f;             // driveline efficiency
 // Lower than a mechanical driveline's, which is the price of having no gearbox.
 constexpr float kElectricEta = 0.85f;
 constexpr float kRevSpeedCap = 11.0f;    // m/s (~40 km/h) reverse power cut
+// Where the electric brake fades away. Below the lower figure there is nothing at all, and
+// it comes fully in by the upper one - about 5 km/h, by which speed the machines are
+// turning fast enough to generate. A brake that did not fade would hold the train at rest.
+constexpr float kDynFadeOut = 0.4f;      // m/s
+constexpr float kDynFadeIn = 1.4f;       // m/s
 // The governor's spool time is VehicleSpec::spoolTime, held as a time rather than an
 // rpm/s so it means the same lag on any engine instead of a different one per rev range.
 // It used to be one shared 900 rpm/s, which over the Di 4's 315-to-900 span put a 16-645
@@ -189,6 +194,8 @@ Vehicle::Vehicle(const TrackPath* path, const VehicleSpec& spec, float s,
       controls_(spec.controls),
       cabs_(spec.cabs),
       epBrake_(spec.epBrake),
+      dynBrakeN_(spec.dynBrakeN),
+      dynBrakeW_(spec.dynBrakeW),
       bodyStyle_(spec.body),
       name_(spec.name),
       physV_(initialSpeed),
@@ -363,7 +370,9 @@ int Vehicle::brakeNotch(int cab) const {
 }
 
 void Vehicle::setPowerNotch(int cab, int notch) {
-    if (cab == 0 || cab == 1) powerNotch_[cab] = std::clamp(notch, 0, kMaxPowerNotch);
+    if (cab == 0 || cab == 1)
+        powerNotch_[cab] = std::clamp(notch, hasDynamicBrake() ? -kMaxBrakeNotch : 0,
+                                      kMaxPowerNotch);
 }
 
 int Vehicle::powerNotch(int cab) const {
@@ -397,7 +406,10 @@ const VehicleSpec* specNamed(const char* fragment) {
 
 void Vehicle::movePower(int cab, int dir) {
     if (cab != 0 && cab != 1) return;
-    powerNotch_[cab] = std::clamp(powerNotch_[cab] + dir, 0, kMaxPowerNotch);
+    // Below neutral only where there is an electric brake to command. Nothing without
+    // one can be wound into a range it does not have.
+    powerNotch_[cab] = std::clamp(powerNotch_[cab] + dir,
+                                  hasDynamicBrake() ? -kMaxBrakeNotch : 0, kMaxPowerNotch);
 }
 
 void Vehicle::moveBrake(int cab, int dir) {
@@ -923,12 +935,48 @@ void Vehicle::updateElectricDrive(float demandSigned, float demand, bool powerin
     railPower_ = TE * sp;
 }
 
+// The rheostatic brake: the same machines turned round. They are driven as generators and
+// what they make is burned in the roof grids, so this is a retarding force that never
+// becomes tractive effort and never goes back into anything.
+//
+// Its curve has the shape of the traction curve because it shares the hardware and the same
+// two limits bound it - current below the corner, and above it what the grids will take.
+// The difference that matters is the bottom end: a machine turning slowly generates nothing,
+// so the brake fades out and is gone before the train stops. That is not a nicety. Without
+// it the "brake" would hold the train at a stand, because the consist clamps retardation to
+// the speed it has rather than letting it push the train backwards - so a force that never
+// faded would look exactly like a parking brake, and a locomotive would sit on a grade held
+// by its generators.
+void Vehicle::updateDynamicBrake(float demand, bool inGear, float dt) {
+    (void)dt;
+    dynBrake_ = 0.0f;
+    if (dynBrakeN_ <= 0.0f || demand <= 0.0f) return;
+    // Part of the traction system: no engine, no auxiliaries, nothing to excite the
+    // machines with - and nothing at all from a cab that is not in gear.
+    if (!engineOn_ || !enginesRunning() || !inGear) return;
+    if (state_ != VehicleState::OnRail) return;
+
+    const float sp = std::abs(physV_);
+    const float fade = std::clamp((sp - kDynFadeOut) / (kDynFadeIn - kDynFadeOut), 0.0f, 1.0f);
+    if (fade <= 0.0f) return;
+
+    const float beFlat = demand * dynBrakeN_;
+    const float bePower = dynBrakeW_ > 0.0f ? demand * dynBrakeW_ / std::max(sp, 0.05f)
+                                            : std::numeric_limits<float>::max();
+    // Through the driven wheels, so the same adhesion cap the pull answers to.
+    const float beAdh = kTractionMu * drivenFrac_ * mass_ * kG;
+    dynBrake_ = fade * std::min(std::min(beFlat, bePower), beAdh);
+}
+
 // Motor current as a fraction of what the drive will pass. Effort is what current buys,
 // so below the corner speed these are the same number - which is what makes an ammeter
-// the gauge a diesel-electric is driven on.
+// the gauge a diesel-electric is driven on. It reads the same either way: braking current
+// is current, and the needle a driver watches going up a bank is the one he watches coming
+// down it.
 float Vehicle::tractionAmpsFrac() const {
     if (startTE_ <= 0.0f) return 0.0f;
-    return std::clamp(std::abs(tractiveEffort_) / startTE_, 0.0f, 1.0f);
+    const float amps = std::max(std::abs(tractiveEffort_), dynBrake_);
+    return std::clamp(amps / startTE_, 0.0f, 1.0f);
 }
 
 // And how hard the diesel is actually being worked, which at low speed is not much.
@@ -1029,6 +1077,13 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
                 engineRpm_[i] = std::max(rpmTarget, engineRpm_[i] - down * dt);
         }
     }
+    // The electric brake, which answers the controller's range below neutral. Worked out
+    // whether or not the vehicle is powering - the two are opposite ends of one handle and
+    // cannot both be commanded - but dropped entirely by an emergency, which wants the
+    // friction brake and all of it.
+    updateDynamicBrake(cmd.emergency ? 0.0f : cmd.dynamic, cmd.demand != 0.0f || cmd.dynamic > 0.0f,
+                       dt);
+
     if (state_ != VehicleState::OnRail) return {};
 
     // Traction: a torque converter feeding a 5-speed automatic gearbox. The effort is
@@ -1172,7 +1227,16 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
     float bf = 0.0f;
     for (const BrakeUnit& b : brakes_)
         bf += (b.bc / kBCMax) * share * kFullServiceDecel;
-    brakeForce_ = std::min(bf, kAdhesionMu * mass_ * kG);
+    // Blending. While the electric brake is working, this vehicle's own friction brake is
+    // held off: applying both duplicates the effort and cooks the shoes, and a locomotive
+    // with dynamic braking is arranged so that it does not happen. The PIPE is untouched -
+    // the carriages behind must still get their application, and these cylinders still
+    // fill - what is suppressed is counting their force. An emergency, a safety trip or a
+    // burst pipe all override it, because then what is wanted is every shoe there is.
+    const bool blended = dynBrake_ > 0.0f && !trainEmerg_ && !safetyBrake_ && !pipeCut_;
+    brakeForce_ = blended ? 0.0f : std::min(bf, kAdhesionMu * mass_ * kG);
+    // The electric brake adds on top of whatever is left, and is capped with it.
+    brakeForce_ = std::min(brakeForce_ + dynBrake_, kAdhesionMu * mass_ * kG);
 
     UnitStep out;
     // Back into the physical frame for the train to add up.
