@@ -309,9 +309,19 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   features and a carriage is a thing you cannot get into, so what is drawn is the outside:
   red-and-grey livery as three bands — red skirt, silver flanks, dark window band — with a
   red plug door at each end, **the left one wider** for the wheelchair rebuild, and the roof
-  tumbling in above the cantrail. The floor plans on that page are interactive seat maps
-  that a text fetch sees nothing of, so the window and door arrangement is general Type 5
-  practice rather than measured, and is the part most likely to be wrong.
+  tumbling in above the cantrail.
+  The window and door spacing and the **interior** are measured, not supposed. The
+  interactive seat maps on that page are backed by **SVG drawings** — `/uploads/trains/
+  seatmaps|filled/coach/Type5/Type5-BC5-3.svg` — and an SVG is geometry, so rendering the
+  two and reading the pixel runs gives the real arrangement: two 0.66 m door windows at
+  ±11.36 m, nine saloon windows of 1.22 m (0.83 m for the first), and **2.23 m of blank
+  side across the centre** where the two table bays are. Inside, nine rows of four across a
+  centre aisle at the measured spacings, the middle two facing over tables, a
+  wheelchair-accessible **WC** behind the partition at one end — which is why there is no
+  window there — and the **playroom** and wheelchair bays at the other. None of it can be
+  entered, but all of it is behind glass and shows through the windows, which is the point
+  of drawing it: the first attempt ran the interior lining the full height, six centimetres
+  behind the glass, so the carriage read as glazed and completely empty.
   Hauling meant a train could stop being **all one vehicle**. A `Consist` took one spec and
   made copies of it, and its spacing came from `lead().length()` alone — so a 20.8 m
   locomotive pulling 25.3 m carriages would have laid every one of them 4.5 m inside the

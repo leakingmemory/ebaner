@@ -148,9 +148,35 @@ constexpr float kWinHigh = 1.90f;
 constexpr float kCant = 2.15f;       // where the roof starts curving in
 constexpr float kRoofHalf = 0.62f;   // roof half width, of the body's
 constexpr float kRedBand = 0.34f;    // the red skirt, above the solebar
-constexpr float kDoorAt = 9.10f;     // door centres, from the middle of the carriage
-constexpr float kDoorHalf = 0.45f;   // and half a door's width
-constexpr float kWideDoorHalf = 0.65f; // the wheelchair end's, which is wider
+// Where the windows and the doors actually are, measured off the side elevation and the
+// seat plan that Norske tog publish for this carriage - the SVGs behind the interactive
+// diagrams, which are drawings and not pictures, so these are the real spacings rather
+// than a guess at "a continuous band". Metres from the middle of the carriage; the body
+// is 25.30 m, so the ends are at +/-12.65.
+//
+// Nine saloon windows in two groups, four and five, with 2.2 m of blank side between them
+// at the centre. The blank is in the drawing and it is where the two table bays sit.
+constexpr float kWindows[][2] = {
+    {-7.13f, -6.30f}, {-5.80f, -4.57f}, {-4.07f, -2.84f}, {-2.33f, -1.11f},
+    {1.12f, 2.34f},   {2.85f, 4.08f},   {4.58f, 5.81f},   {6.32f, 7.54f},
+    {8.03f, 9.26f},
+};
+constexpr float kDoorAt = 11.36f;    // door centres: the door windows are +/-11.03..11.69
+constexpr float kDoorHalf = 0.46f;
+constexpr float kWideDoorHalf = 0.62f; // the wheelchair end's, which is wider
+// The inside, from the seat plan. Nine rows of four - two a side across a centre aisle -
+// with the middle two rows facing across tables; a wheelchair-accessible WC and a service
+// nook behind the partition at one end; the playroom and the wheelchair bays at the other.
+constexpr float kSeatRows[] = {-5.50f, -4.37f, -3.45f, -2.53f, -0.65f,
+                               0.65f,  2.51f,  3.45f,  4.61f};
+constexpr float kSaloonEnd0 = -8.30f; // partitions closing the saloon off
+constexpr float kSaloonEnd1 = 9.80f;
+constexpr float kWcAt = -10.40f;      // the accessible WC, behind the near partition
+constexpr float kPlayAt = 10.90f;     // and the playroom at the far end
+const glm::vec3 kSeat(0.55f, 0.16f, 0.18f);   // NSB seat moquette
+const glm::vec3 kTable(0.78f, 0.76f, 0.71f);  // table tops
+const glm::vec3 kLining(0.80f, 0.80f, 0.78f); // interior walls and partitions
+const glm::vec3 kFloorIn(0.28f, 0.28f, 0.30f);
 } // namespace t5
 
 namespace c93 {
@@ -1031,8 +1057,27 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
             };
             strip(z0, z0 + t5::kRedBand, t5::kRed);
             strip(z0 + t5::kRedBand, zLo, t5::kBody);
-            strip(zLo, zHi, t5::kBand);
             strip(zHi, zCant, t5::kBody);
+            // The window band, window by window rather than as one dark stripe: body
+            // between them, glass in them. Glazed in the translucent colour, so what is
+            // behind the glass is what you see through it.
+            {
+                float at = -halfLen;
+                auto pier = [&](float a, float b) {
+                    if (b - a < 0.005f) return;
+                    quadN(P(sx * hw, a, zLo), P(sx * hw, b, zLo), P(sx * hw, b, zHi),
+                          P(sx * hw, a, zHi), t5::kBody, core);
+                };
+                for (const auto& win : t5::kWindows) {
+                    pier(at, win[0]);
+                    quadN(P(sx * (hw - 0.004f), win[0], zLo),
+                          P(sx * (hw - 0.004f), win[1], zLo),
+                          P(sx * (hw - 0.004f), win[1], zHi),
+                          P(sx * (hw - 0.004f), win[0], zHi), di4::kGlass, core);
+                    at = win[1];
+                }
+                pier(at, halfLen);
+            }
             // The roof tumbling in above the cantrail.
             quadN(P(sx * hw, -halfLen, zCant), P(sx * hw, halfLen, zCant),
                   P(sx * hwRoof, halfLen, roofZ), P(sx * hwRoof, -halfLen, roofZ),
@@ -1047,10 +1092,72 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                 // its window, in the upper half
                 emitBox(X, Y, Z, P(sx * (hw + 0.026f), sy * t5::kDoorAt,
                                    zLo + 0.55f * (zHi - zLo)),
-                        0.010f, w * 0.62f, 0.30f * (zHi - zLo), t5::kBand);
+                        0.010f, w * 0.62f, 0.30f * (zHi - zLo), di4::kGlass);
             }
         }
         emitBox(X, Y, Z, P(0.0f, 0.0f, roofZ - 0.05f), hwRoof, halfLen, 0.05f, t5::kRoof);
+
+        // --- Inside -------------------------------------------------------------------
+        //
+        // Taken off the seat plan Norske tog publish for this carriage, which is a drawing
+        // and not a photograph, so the arrangement is measured rather than supposed: nine
+        // rows of four across a centre aisle, the middle two rows facing over tables, a
+        // wheelchair-accessible WC and a service nook behind the partition at one end, and
+        // the playroom and the wheelchair bays at the other. None of it can be walked into
+        // - a carriage has no cab - but all of it is behind glass and can be seen through
+        // the windows, which is the whole reason for drawing it.
+        {
+            const float ihw = hw - 0.06f;
+            const float zCeil = z0 + 2.30f;
+            const glm::vec3 in = P(0.0f, 0.0f, z0 + 1.0f);
+            // Floor, ceiling and the lining behind the windows.
+            emitBox(X, Y, Z, P(0.0f, 0.0f, z0 + 0.02f), ihw, halfLen * 0.99f, 0.02f,
+                    t5::kFloorIn);
+            emitBox(X, Y, Z, P(0.0f, 0.0f, zCeil), ihw, halfLen * 0.99f, 0.04f,
+                    t5::kLining);
+            // Side lining below the sill and above the window head, and nothing across
+            // the window band itself. A wall run the full height sits six centimetres
+            // behind the glass and is all you would ever see through it - the seats are
+            // inboard of it, so the carriage would read as glazed and empty.
+            for (const float sx : {-1.0f, 1.0f})
+                for (const auto& band : {std::pair<float, float>{z0, zLo},
+                                         std::pair<float, float>{zHi, zCeil}})
+                    quadN(P(sx * ihw, -halfLen * 0.99f, band.first),
+                          P(sx * ihw, halfLen * 0.99f, band.first),
+                          P(sx * ihw, halfLen * 0.99f, band.second),
+                          P(sx * ihw, -halfLen * 0.99f, band.second), t5::kLining,
+                          in + X * (sx * 6.0f));
+            // Partitions closing the saloon off from the two ends.
+            for (const float y : {t5::kSaloonEnd0, t5::kSaloonEnd1})
+                emitBox(X, Y, Z, P(0.0f, y, z0 + 0.5f * (zCeil - z0)), ihw, 0.05f,
+                        0.5f * (zCeil - z0), t5::kLining);
+            // Nine rows of four: two seats a side, a 0.50 m aisle between them.
+            for (const float row : t5::kSeatRows)
+                for (const float sx : {-1.0f, 1.0f})
+                    for (int k = 0; k < 2; ++k) {
+                        const float xc = sx * (0.30f + 0.55f * (static_cast<float>(k) + 0.5f));
+                        emitBox(X, Y, Z, P(xc, row, z0 + 0.45f), 0.25f, 0.24f, 0.06f,
+                                t5::kSeat); // cushion
+                        emitBox(X, Y, Z, P(xc, row + 0.22f, z0 + 0.80f), 0.25f, 0.05f,
+                                0.35f, t5::kSeat); // back, above the sill and visible
+                    }
+            // The two table bays at the centre, one each side, against the blank panel.
+            for (const float sx : {-1.0f, 1.0f})
+                emitBox(X, Y, Z, P(sx * 0.88f, 0.0f, z0 + 0.72f), 0.52f, 0.55f, 0.03f,
+                        t5::kTable);
+            // The accessible WC: a closed cubicle, which is why there is no window there.
+            emitBox(X, Y, Z, P(-0.55f, t5::kWcAt, z0 + 0.5f * (zCeil - z0)), 0.90f, 0.85f,
+                    0.5f * (zCeil - z0), t5::kLining);
+            // The playroom at the far end - an open floor with a couple of soft blocks on
+            // it - and the wheelchair bays, which are floor kept clear beside it.
+            for (int k = 0; k < 2; ++k)
+                emitBox(X, Y, Z,
+                        P(-0.45f + 0.9f * static_cast<float>(k), t5::kPlayAt, z0 + 0.20f),
+                        0.30f, 0.30f, 0.18f, t5::kSeat);
+            for (const float sx : {-1.0f, 1.0f})
+                emitBox(X, Y, Z, P(sx * 1.05f, t5::kSaloonEnd1 + 0.55f, z0 + 0.03f), 0.38f,
+                        0.45f, 0.01f, t5::kTable); // the bays' marked floor
+        }
         // Floor pan and the two ends. The ends are plain: they are only ever seen from
         // between two vehicles, or at the end of the train.
         quadN(P(-hw, -halfLen, z0), P(hw, -halfLen, z0), P(hw, halfLen, z0),
