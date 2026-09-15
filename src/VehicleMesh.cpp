@@ -161,9 +161,10 @@ constexpr float kRedBand = 0.34f;    // the red skirt, above the solebar
 // are: a Type 5 is a Type 5, and the seat plan is what makes one a family carriage and
 // another a cafe.
 enum Inside {
-    InsideSeats,  // a plain saloon end to end (B5-3)
-    InsideFamily, // the same, cut short for a playroom and wheelchair bays (BC5-3)
-    InsideCafe,   // booths, a servery and a stowage bay (FR5-1)
+    InsideSeats,   // a plain saloon end to end (B5-3)
+    InsideFamily,  // the same, cut short for a playroom and wheelchair bays (BC5-3)
+    InsideCafe,    // booths, a servery and a stowage bay (FR5-1)
+    InsideSleeper, // compartments down one side and a corridor down the other (WLAB-2)
 };
 
 struct Layout {
@@ -227,6 +228,22 @@ constexpr Layout kA51{kWinA51, 11, {-11.36f, 11.36f}, {0.46f, 0.46f},
                       InsideSeats, kRowsA51, 12, -8.30f, 10.60f, 1.30f};
 constexpr Layout kFR51{kWinFR51, 8, {-1.39f, 7.59f}, {0.46f, 0.46f},
                        InsideCafe, nullptr, 0, -12.0f, 12.0f, 0.0f};
+
+// WLAB-2, the sleeping car - Strommen again, but 1986-87 and not a Type 5 at all: 27.0 m
+// on a 3.24 m body, half a metre longer and wider than the coaches it runs with. Its side
+// says exactly what it is. Fifteen small windows of 1.05 m at an even 1.385 m pitch, one
+// for each compartment, which is the fourteen sovekupeer and the one HC sovekupe the
+// builder lists; a door at each end at +/-12.09, which is where the drawing's door outline
+// falls to the centimetre; and a short window beyond each door for the end vestibule.
+constexpr float kWinWLAB[][2] = {
+    {-13.15f, -12.76f}, {-8.93f, -7.88f},  {-7.55f, -6.50f}, {-6.14f, -5.10f},
+    {-4.75f, -3.70f},   {-3.37f, -2.32f},  {-2.00f, -0.96f}, {-0.57f, 0.48f},
+    {0.81f, 1.86f},     {2.18f, 3.22f},    {3.57f, 4.62f},   {4.94f, 5.98f},
+    {6.33f, 7.38f},     {7.71f, 8.75f},    {9.12f, 10.16f},  {10.47f, 11.52f},
+    {12.76f, 13.15f},
+};
+constexpr Layout kWLAB2{kWinWLAB, 17, {-12.09f, 12.09f}, {0.56f, 0.56f},
+                        InsideSleeper, nullptr, 0, -9.70f, 12.20f, 0.0f};
 
 constexpr float kWcAt = -10.40f; // the accessible WC, behind the partition at one end
 // And the playroom, which on the family carriage takes the last four metres of saloon:
@@ -1234,7 +1251,8 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                 emitBox(X, Y, Z, P(0.0f, t5::kStowTo + 0.3f, z0 + 0.5f * (zCeil - z0)), ihw,
                         0.05f, 0.5f * (zCeil - z0), t5::kLining);
             } else {
-            // Partitions closing the saloon off from the two ends.
+            // Partitions closing the saloon off from the two ends. A sleeper's are the
+            // vestibule bulkheads, which is the same thing by another name.
             for (const float y : {lay.saloon0, lay.saloon1})
                 emitBox(X, Y, Z, P(0.0f, y, z0 + 0.5f * (zCeil - z0)), ihw, 0.05f,
                         0.5f * (zCeil - z0), t5::kLining);
@@ -1250,13 +1268,18 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                                 0.35f, t5::kSeat); // back, above the sill and visible
                     }
             }
-            // The two table bays at the centre, one each side, against the blank panel.
-            for (const float sx : {-1.0f, 1.0f})
-                emitBox(X, Y, Z, P(sx * 0.88f, 0.0f, z0 + 0.72f), 0.52f, 0.55f, 0.03f,
-                        t5::kTable);
-            // The accessible WC: a closed cubicle, which is why there is no window there.
-            emitBox(X, Y, Z, P(-0.55f, t5::kWcAt, z0 + 0.5f * (zCeil - z0)), 0.90f, 0.85f,
-                    0.5f * (zCeil - z0), t5::kLining);
+            // The two table bays at the centre, one each side, against the blank panel -
+            // and only on a 2nd class carriage: 1st class has a window across the middle
+            // instead, and the sleeper has a compartment there like any other.
+            if (lay.inside == t5::InsideSeats || lay.inside == t5::InsideFamily) {
+                if (lay.serviceAt == 0.0f)
+                    for (const float sx : {-1.0f, 1.0f})
+                        emitBox(X, Y, Z, P(sx * 0.88f, 0.0f, z0 + 0.72f), 0.52f, 0.55f,
+                                0.03f, t5::kTable);
+                // The accessible WC: a closed cubicle, and why there is no window there.
+                emitBox(X, Y, Z, P(-0.55f, t5::kWcAt, z0 + 0.5f * (zCeil - z0)), 0.90f,
+                        0.85f, 0.5f * (zCeil - z0), t5::kLining);
+            }
             // The playroom at the far end - an open floor with a couple of soft blocks on
             // it - and the wheelchair bays, which are floor kept clear beside it. Only on
             // the family carriage: the B5-3 has a service nook and luggage there instead,
@@ -1278,10 +1301,38 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                     for (const float sx : {-1.0f, 1.0f})
                         emitBox(X, Y, Z, P(sx * 1.05f, bay, z0 + 0.03f), 0.34f, 0.40f,
                                 0.01f, t5::kTable); // the bays' marked floor
-            } else {
+            } else if (lay.inside == t5::InsideSeats) {
                 for (const float sx : {-1.0f, 1.0f})
                     emitBox(X, Y, Z, P(sx * 0.95f, lay.saloon1 + 0.70f, z0 + 0.55f), 0.42f,
                             0.55f, 0.55f, t5::kLining); // service nook and luggage
+            }
+            if (lay.inside == t5::InsideSleeper) {
+                // Compartments down one side, a corridor down the other, and a berth
+                // across each compartment at two heights. The upper one sits in the
+                // window, which is what a sleeper's side looks like from a platform at
+                // night; the lower is below the sill, as a bed is.
+                const float corr = 0.55f; // the corridor wall, offset to one side
+                emitBox(X, Y, Z,
+                        P(corr, 0.5f * (lay.saloon0 + lay.saloon1), z0 + 0.5f * (zCeil - z0)),
+                        0.05f, 0.5f * (lay.saloon1 - lay.saloon0), 0.5f * (zCeil - z0),
+                        t5::kLining);
+                // Compartments occupy the side from the far wall up to the corridor and
+                // stop there. Centre them on the span they actually fill: getting this
+                // wrong runs the berths straight through the corridor wall and out the
+                // other side, which a ray cast through a window shows at once as berth,
+                // wall, berth - a sleeper with beds in its corridor.
+                const float cx = 0.5f * (corr - ihw);        // centre of the compartment
+                const float chw = 0.5f * (corr + ihw);       // and half its width
+                for (int wi = 1; wi + 1 < lay.windowCount; ++wi) {
+                    const float* win = lay.windows[wi];
+                    const float mid = 0.5f * (win[0] + win[1]);
+                    // the partition on the far side of this compartment
+                    emitBox(X, Y, Z, P(cx, win[1] + 0.17f, z0 + 0.5f * (zCeil - z0)), chw,
+                            0.04f, 0.5f * (zCeil - z0), t5::kLining);
+                    for (const float bz : {0.40f, 1.45f}) // lower berth and upper
+                        emitBox(X, Y, Z, P(cx, mid, z0 + bz), chw - 0.06f, 0.44f, 0.06f,
+                                t5::kSeat);
+                }
             }
             // A steward's service point amidships, where 1st class has one.
             if (lay.serviceAt != 0.0f)
@@ -1880,6 +1931,8 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                 emitType5(sections[i], halfLen, t5::kB53);
             } else if (vehicle.bodyStyle() == BodyType5A) {
                 emitType5(sections[i], halfLen, t5::kA51);
+            } else if (vehicle.bodyStyle() == BodyWlab2) {
+                emitType5(sections[i], halfLen, t5::kWLAB2);
             } else {
                 const glm::vec3 centre =
                     sections[i].pos + sections[i].up * (frameTopZ + kUnderframeHalfHeight);

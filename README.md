@@ -358,6 +358,22 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   go and what furniture is inside — and the standard rake is **a list and not a count**:
   `"BC5-3,FR5-1,B5-3,B5-5,A5-1"`, café **second**, 2nd class **third and fourth**, 1st class
   on the **tail**, as it is marshalled. 335.4 t, 150.3 m.
+- **The night train** — the same five with two
+  [WLAB-2](https://www.norsketog.no/tog/personvogner/wlab2) **sleepers** on the back.
+  Strømmen again, but 1986–87 and not a Type 5 at all: **27.0 m on a 3.24 m body**, longer
+  and wider and taller than the coaches it runs with, 50 t tare. Its side says exactly what
+  it is — **fifteen small windows of 1.05 m at an even 1.385 m pitch**, one for each
+  compartment, which is the *14 sovekupeer* and the *1 HC sovekupé* the builder lists, with
+  a door at each end falling at ±12.09 m where the drawing's door outline is to the
+  centimetre. Inside, compartments down one side with a **berth at two heights** in each and
+  a **corridor** down the other, so from a platform one side shows berths behind the glass
+  and the other the corridor wall. Getting that wrong is invisible in a screenshot and
+  obvious to a ray cast through a window: the first attempt centred the berths on the
+  carriage rather than on the compartment, giving berth → wall → berth, a sleeper with beds
+  in its corridor.
+  It is also the real test of hauling: **three different vehicle lengths in one train** —
+  20.8, 25.3 and 27.0 m — which a pitch taken from the front of the train cannot space.
+  **435.4 t, 205.5 m**, and still two cabs.
   Hauling meant a train could stop being **all one vehicle**. A `Consist` took one spec and
   made copies of it, and its spacing came from `lead().length()` alone — so a 20.8 m
   locomotive pulling 25.3 m carriages would have laid every one of them 4.5 m inside the

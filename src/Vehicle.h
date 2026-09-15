@@ -36,6 +36,7 @@ enum VehicleBodyStyle {
     BodyType5Fr = 4,    // the same body as a cafe car: different windows, different doors
     BodyType5B = 5,     // and as a plain seating coach: the same shell, seating throughout
     BodyType5A = 6,     // and as 1st class: a window across the centre, and more legroom
+    BodyWlab2 = 7,      // NSB WLAB-2 sleeping car: compartments, one small window each
 };
 
 // What turns the wheels. Two machines that could hardly be less alike: one puts its engine
@@ -278,9 +279,28 @@ inline constexpr VehicleSpec kVehicleSpecs[] = {
      .wheelRadius = 0.46f,
      .cabs = 0,
      .epBrake = false},
+    // WLAB-2, the sleeping car. Strommen again but 1986-87 and not a Type 5: 27.0 m on a
+    // 3.24 m body, longer and wider and taller than the coaches it runs with, 50 t tare,
+    // and 15 compartments - 14 sovekupeer and one HC - for 30 berths.
+    {.name = "NSB WLAB-2 (sovevogn)",
+     .mass = 50000.0f,
+     .length = 27.00f,
+     .width = 3.24f,
+     .height = 4.22f,
+     .wheelbase = 2.50f,
+     .bogieSpacing = 19.00f,
+     .bogieCount = 2,
+     .body = BodyWlab2,
+     .units = 1,
+     .wheelRadius = 0.46f,
+     .cabs = 0,
+     .epBrake = false},
     // The standard rake, as it is marshalled: cafe second, 2nd class third and fourth,
     // and 1st class on the tail.
     hauling(kDi4Spec, "NSB Di 4 + 5 (cafe 2nd)", "BC5-3,FR5-1,B5-3,B5-5,A5-1"),
+    // And the night train: the same five with two sleepers on the back.
+    hauling(kDi4Spec, "NSB Di 4 + 5 + 2 sleepers",
+            "BC5-3,FR5-1,B5-3,B5-5,A5-1,WLAB-2,WLAB-2"),
 };
 // Counted off the table rather than written down beside it. A hand-kept number that falls
 // behind the array makes the last entry unreachable everywhere at once - the start screen,

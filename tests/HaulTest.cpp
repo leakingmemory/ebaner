@@ -198,6 +198,43 @@ int main() {
                   c.unit(u).cabCount(), 0.0);
     }
 
+    std::puts("\nAnd the night train, with two sleepers on the back");
+    {
+        const VehicleSpec* night = specNamed("+ 2 sleepers");
+        const VehicleSpec* slp = specNamed("WLAB-2");
+        check(night != nullptr && slp != nullptr, "the night train and the sleeper exist");
+        if (night != nullptr && slp != nullptr) {
+            // A sleeper is not a Type 5 - it is longer, wider and heavier - so this train
+            // has three different vehicle lengths in it and is the real test of a pitch
+            // that is worked out per pair rather than taken from the front of the train.
+            check(std::abs(slp->length - 27.00f) < 0.01f, "27.0 m, longer than a Type 5",
+                  slp->length, 27.0);
+            check(std::abs(slp->mass - 50000.0f) < 1.0f, "  and 50 t", slp->mass, 50000.0);
+            check(slp->cabs == 0 && !slp->epBrake, "  a carriage like the rest");
+
+            Consist c(&w.paths, &w.paths[0], *night, 20000.0f);
+            c.attachNetwork(&w.paths, nullptr);
+            check(c.unitCount() == 8, "eight units", c.unitCount(), 8.0);
+            for (const int u : {6, 7})
+                check(std::string(c.unit(u).name()).find("WLAB-2") != std::string::npos,
+                      "  sleeper " + std::to_string(u - 5) + " on the back");
+            check(std::abs(c.mass() - 435400.0f) < 1.0f, "435.4 t", c.mass(), 435400.0);
+            const float want = 20.80f + 5.0f * 25.30f + 2.0f * 27.00f +
+                               7.0f * Consist::kCouplerGap;
+            check(std::abs(c.length() - want) < 0.05f, "205.5 m over the couplers",
+                  c.length(), want);
+            float worst = 1e9f;
+            for (int i = 1; i < c.unitCount(); ++i)
+                worst = std::min(worst, std::abs(c.unit(i).s() - c.unit(i - 1).s()) -
+                                            0.5f * (c.unit(i).length() +
+                                                    c.unit(i - 1).length()));
+            check(worst > 0.0f,
+                  "  and nothing overlaps, with three lengths in one train", worst,
+                  Consist::kCouplerGap);
+            check(c.cabCount() == 2, "  still two cabs", c.cabCount(), 2.0);
+        }
+    }
+
     std::puts("\nThe brake takes as long as the train is long");
     {
         float farC93 = 0.0f, farLight = 0.0f, farTrain = 0.0f;
