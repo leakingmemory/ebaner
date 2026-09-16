@@ -63,6 +63,25 @@ enum DriveKind {
 // (0 = single bare axle, 1 = one bogie, 2 = end bogies, 3 = end + middle),
 // bogieSpacing (end-bogie-to-end-bogie distance) and wheelbase (axle spacing
 // within a bogie). Two or more bogies carry a body of `length` drawn per `body`.
+// What part of the list a vehicle belongs in. The table is ordered by this and the
+// pickers put a heading in wherever it changes, so the complete trains a driver actually
+// wants are at the top and the bare test shapes are out of the way at the bottom.
+enum VehicleCategory {
+    CatTrain = 0,    // complete formations, ready to drive
+    CatLoco = 1,     // a locomotive on its own
+    CatCarriage = 2, // a single carriage, for building something up
+    CatDebug = 3,    // bare wheelsets and underframes: shapes to test the physics on
+};
+
+inline constexpr int kVehicleCats = 4; // how many headings the pickers will draw
+
+constexpr const char* categoryName(int c) {
+    return c == CatTrain      ? "TRAINS"
+           : c == CatLoco     ? "LOCOMOTIVES"
+           : c == CatCarriage ? "CARRIAGES"
+                              : "DEBUGGING";
+}
+
 struct VehicleSpec {
     const char* name;
     float mass;         // kg
@@ -152,6 +171,9 @@ struct VehicleSpec {
     // second valve on to its own cylinders. Every mainline locomotive has one; a railcar
     // has nothing to be independent OF, so this is a locomotive's field.
     bool independentBrake = false;
+    // Which part of the list this belongs in. kVehicleSpecs MUST stay sorted by it - the
+    // pickers put a heading in wherever it changes and would otherwise repeat one.
+    int category = CatDebug;
 };
 
 // A formation: the same machine, with something coupled behind it. Written as a copy so
@@ -160,7 +182,16 @@ struct VehicleSpec {
 constexpr VehicleSpec hauling(VehicleSpec base, const char* name, const char* what) {
     base.formation = name; // the train's name; base.name stays the machine's
     base.hauls = what;
+    base.category = CatTrain; // a formation is a train, wherever its locomotive belongs
     return base;
+}
+
+// Put a row in a part of the list. Needed because `category` is at the end of a struct
+// with a dozen defaulted fields, so a row written positionally cannot reach it without
+// spelling out everything in between.
+constexpr VehicleSpec inCat(VehicleSpec v, int c) {
+    v.category = c;
+    return v;
 }
 
 // What to call a spec in a list: the formation if it is one, the machine otherwise.
@@ -181,21 +212,29 @@ inline constexpr VehicleSpec kDi4Spec = {
 
 // The vehicles offered on the start screen.
 inline constexpr VehicleSpec kVehicleSpecs[] = {
-    {"Single-axle wheelset", 1300.0f, 0.20f, 2.20f, 0.92f, 0.00f, 0.00f, 0, BodyUnderframe, 1},
-    {"Dual-axle bogie", 4000.0f, 2.60f, 2.50f, 1.05f, 1.80f, 0.00f, 1, BodyUnderframe, 1},
-    {"Carriage (two bogies)", 34000.0f, 25.0f, 3.00f, 1.30f, 2.50f, 18.00f, 2, BodyUnderframe, 1},
-    {"Articulated (3 bogies)", 45000.0f, 30.0f, 2.70f, 1.30f, 2.50f, 22.00f, 3, BodyUnderframe, 1},
+    // Ordered by category, and it MUST stay that way: the pickers put a heading in
+    // wherever the category changes and would repeat one if a row were out of place.
+
+    // --- Complete trains, which is what anyone starting the simulator wants ---
     // 2 x 306 kW through a torque converter and five gears, 0.84 m wheels, four of its
     // six axles driven. These were the file-scope constants every vehicle shared.
-    {"NSB Class 93 (Talent)", 70000.0f, 41.5f, 2.75f, 3.80f, 2.50f, 30.00f, 3, BodyClass93, 1,
-     2, 2, DriveHydraulic, 612000.0f, 0.42f, 0.67f, 0.0f},
+    inCat({"NSB Class 93 (Talent)", 70000.0f, 41.5f, 2.75f, 3.80f, 2.50f, 30.00f, 3, BodyClass93, 1,
+     2, 2, DriveHydraulic, 612000.0f, 0.42f, 0.67f, 0.0f}, CatTrain),
     // Two sets coupled: the figures stay per set and `units` says how many. A Class 93
     // runs in multiple in service, and the two sets keep their own air, engines and
     // safety systems - see Consist.
-    {"NSB Class 93 x2 (Talent)", 70000.0f, 41.5f, 2.75f, 3.80f, 2.50f, 30.00f, 3, BodyClass93, 2,
-     2, 2, DriveHydraulic, 612000.0f, 0.42f, 0.67f, 0.0f},
-    {"NSB Class 93 x3 (Talent)", 70000.0f, 41.5f, 2.75f, 3.80f, 2.50f, 30.00f, 3, BodyClass93, 3,
-     2, 2, DriveHydraulic, 612000.0f, 0.42f, 0.67f, 0.0f},
+    inCat({"NSB Class 93 x2 (Talent)", 70000.0f, 41.5f, 2.75f, 3.80f, 2.50f, 30.00f, 3, BodyClass93, 2,
+     2, 2, DriveHydraulic, 612000.0f, 0.42f, 0.67f, 0.0f}, CatTrain),
+    inCat({"NSB Class 93 x3 (Talent)", 70000.0f, 41.5f, 2.75f, 3.80f, 2.50f, 30.00f, 3, BodyClass93, 3,
+     2, 2, DriveHydraulic, 612000.0f, 0.42f, 0.67f, 0.0f}, CatTrain),
+    // The standard rake, as it is marshalled: cafe second, 2nd class third and fourth,
+    // and 1st class on the tail.
+    hauling(kDi4Spec, "NSB Di 4 + 5 (cafe 2nd)", "BC5-3,FR5-1,B5-3,B5-5,A5-1"),
+    // And the night train: the same five with two sleepers on the back.
+    hauling(kDi4Spec, "NSB Di 4 + 5 + 2 sleepers",
+            "BC5-3,FR5-1,B5-3,B5-5,A5-1,WLAB-2,WLAB-2"),
+
+    // --- A locomotive on its own ---
     // NSB Di 4: Henschel, 1981, five built for Nordlandsbanen - this line. A Co'Co', so
     // six axles in two three-axle bogies and every one of them driven, which is what lets
     // a 120 t locomotive put down 360 kN without slipping. One EMD 16-645E3B of 2450 kW at
@@ -207,7 +246,9 @@ inline constexpr VehicleSpec kVehicleSpecs[] = {
     // asymmetric: 1.85 m then 2.00 m. Spread evenly over the 3.85 m instead, which puts
     // the middle axle 75 mm from where it belongs and is not a thing anyone can see.
     // Bogie centres follow from 15.60 m between the outer axles.
-    kDi4Spec,
+    inCat(kDi4Spec, CatLoco),
+
+    // --- Single carriages, for building a formation up by hand ---
     // NSB Type 5, Strommens Vaerksted 1977-81, 92 built. BC5-3 is a 2010-12 rebuild of a
     // B5-2 - "rullestolplass og lekerom", wheelchair spaces and a playroom - so it has an
     // interior this simulator has no way to show, a carriage being a thing you cannot get
@@ -229,7 +270,8 @@ inline constexpr VehicleSpec kVehicleSpecs[] = {
      .units = 1,
      .wheelRadius = 0.46f, // 920 mm wheels
      .cabs = 0,
-     .epBrake = false},
+     .epBrake = false,
+     .category = CatCarriage},
     // The cafe car, from the same drawings. 44 t, and the same body as the BC5-3 with a
     // quite different arrangement in and on it.
     {.name = "NSB FR5-1 (Type 5)",
@@ -244,7 +286,8 @@ inline constexpr VehicleSpec kVehicleSpecs[] = {
      .units = 1,
      .wheelRadius = 0.46f,
      .cabs = 0,
-     .epBrake = false},
+     .epBrake = false,
+     .category = CatCarriage},
     // The plain 2nd class seating coach the BC5-3 was rebuilt out of. Same shell and the
     // same windows; seventeen rows of four instead of nine, so 68 seats against 36.
     {.name = "NSB B5-3 (Type 5)",
@@ -259,7 +302,8 @@ inline constexpr VehicleSpec kVehicleSpecs[] = {
      .units = 1,
      .wheelRadius = 0.46f,
      .cabs = 0,
-     .epBrake = false},
+     .epBrake = false,
+     .category = CatCarriage},
     // B5-5: the same coach with eight of its seats set aside for passengers with pets.
     // It shares the B5-3's body deliberately, not for want of looking. Its side elevation
     // and its seat plan were compared against the B5-3's pixel by pixel: the seat rows and
@@ -281,7 +325,8 @@ inline constexpr VehicleSpec kVehicleSpecs[] = {
      .units = 1,
      .wheelRadius = 0.46f,
      .cabs = 0,
-     .epBrake = false},
+     .epBrake = false,
+     .category = CatCarriage},
     // A5-1, the 1st class comfort coach. 48 seats against the 2nd class 68, and the one
     // variant whose shell is genuinely different: a window across the centre where every
     // other one has 2.2 m of blank side, and an extra short one at the far end.
@@ -297,7 +342,8 @@ inline constexpr VehicleSpec kVehicleSpecs[] = {
      .units = 1,
      .wheelRadius = 0.46f,
      .cabs = 0,
-     .epBrake = false},
+     .epBrake = false,
+     .category = CatCarriage},
     // WLAB-2, the sleeping car. Strommen again but 1986-87 and not a Type 5: 27.0 m on a
     // 3.24 m body, longer and wider and taller than the coaches it runs with, 50 t tare,
     // and 15 compartments - 14 sovekupeer and one HC - for 30 berths.
@@ -313,13 +359,14 @@ inline constexpr VehicleSpec kVehicleSpecs[] = {
      .units = 1,
      .wheelRadius = 0.46f,
      .cabs = 0,
-     .epBrake = false},
-    // The standard rake, as it is marshalled: cafe second, 2nd class third and fourth,
-    // and 1st class on the tail.
-    hauling(kDi4Spec, "NSB Di 4 + 5 (cafe 2nd)", "BC5-3,FR5-1,B5-3,B5-5,A5-1"),
-    // And the night train: the same five with two sleepers on the back.
-    hauling(kDi4Spec, "NSB Di 4 + 5 + 2 sleepers",
-            "BC5-3,FR5-1,B5-3,B5-5,A5-1,WLAB-2,WLAB-2"),
+     .epBrake = false,
+     .category = CatCarriage},
+
+    // --- Bare shapes to test the physics on. Last: they are not trains ---
+    {"Single-axle wheelset", 1300.0f, 0.20f, 2.20f, 0.92f, 0.00f, 0.00f, 0, BodyUnderframe, 1},
+    {"Dual-axle bogie", 4000.0f, 2.60f, 2.50f, 1.05f, 1.80f, 0.00f, 1, BodyUnderframe, 1},
+    {"Carriage (two bogies)", 34000.0f, 25.0f, 3.00f, 1.30f, 2.50f, 18.00f, 2, BodyUnderframe, 1},
+    {"Articulated (3 bogies)", 45000.0f, 30.0f, 2.70f, 1.30f, 2.50f, 22.00f, 3, BodyUnderframe, 1},
 };
 // Counted off the table rather than written down beside it. A hand-kept number that falls
 // behind the array makes the last entry unreachable everywhere at once - the start screen,

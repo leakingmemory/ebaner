@@ -51,12 +51,6 @@ void check(bool ok, const std::string& what, double got, double want) {
     if (!ok) ++failures;
 }
 
-const VehicleSpec* specNamed(const std::string& fragment) {
-    for (const VehicleSpec& v : kVehicleSpecs)
-        if (std::string(v.name).find(fragment) != std::string::npos) return &v;
-    return nullptr;
-}
-
 struct World {
     std::vector<TrackPath> paths;
     World() {
@@ -86,7 +80,7 @@ struct Loco {
 int main() {
     World w;
     const VehicleSpec* c93 = specNamed("Class 93 (Talent)");
-    const VehicleSpec* di4 = specNamed("Di 4");
+    const VehicleSpec* di4 = specNamed("Di 4 (Hen");
     if (c93 == nullptr || di4 == nullptr) {
         std::puts("the vehicle table is missing a Class 93 or a Di 4 - cannot test");
         return 1;

@@ -314,8 +314,12 @@ int main(int argc, char** argv) {
             std::puts("  no turnout with room to run past - nothing to check");
         } else {
             const Turnout& to = net.turnouts()[found];
-            // The Class 93: three bogies, six axles.
-            const VehicleSpec& spec = kVehicleSpecs[4];
+            // The Class 93: three bogies, six axles. By name, because the table is
+            // ordered for the pickers and an index into it moves whenever a vehicle is
+            // added.
+            const VehicleSpec* c93 = specNamed("Class 93 (T");
+            if (c93 == nullptr) { std::puts("  no Class 93 in the table"); return 1; }
+            const VehicleSpec& spec = *c93;
             Consist v(&paths1, &paths1[to.mainPath], spec, to.sMain - 120.0f, 20.0f);
             v.attachNetwork(&paths1, &net);
             v.setReverser(0, 1);      // one cab in gear, so the handle rules...

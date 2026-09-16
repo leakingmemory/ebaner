@@ -81,7 +81,15 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   onto the common track but the switch is left **broken** in the neutral position
   (throw it again to repair it). Trailing through an already-broken switch just
   continues onto the common track.
-- **Rail vehicle** — chosen on an in-window **start screen** (a text menu): a
+- **Rail vehicle** — chosen on an in-window **start screen** (a text menu),
+  and by the same list again from the Escape menu when placing another train.
+  Both are grouped under headings — complete **trains** first, since that is
+  what someone starting the simulator is nearly always after, then single
+  **locomotives**, then single **carriages** to build a formation up by hand,
+  and the bare test shapes last under **debugging** where they are out of the
+  way but still reachable. `kVehicleSpecs` is stored in that order and must stay
+  in it: the pickers write a heading wherever the category changes, so a row out
+  of place would print its heading twice. The choices are a
   single-axle wheelset, a dual-axle bogie (two wheelsets + frame), a full-length
   **carriage underframe** on two dual-axle bogies (one at each end), or a longer
   **articulated module** on three bogies whose two underframe sections hinge over
@@ -1377,7 +1385,7 @@ the corresponding sources (national rail register + NVDB roads + OSM enrichment)
 | `EBANER_NOCARVE`    | Skip carving railway cuttings into the terrain.               |
 | `EBANER_NOOVERLAY`  | Ignore the `overlay/` track edits (link fixes).               |
 | `EBANER_EDMODE`     | `ebaner-trackedit` only: start in this mode, by its menu name. |
-| `EBANER_VEHICLE`    | Skip the start screen and preselect a vehicle (`0`–`6`; `5` = two Class 93 sets coupled, `6` = three). |
+| `EBANER_VEHICLE`    | Skip the start screen and preselect a vehicle, by its index in `kVehicleSpecs` (`0` = a single Class 93, `1`/`2` = two and three coupled, `3` = Di 4 + 5, `4` = the night train, `5` = a light Di 4). The table is ordered for the pickers, so these move when a vehicle is added - the start screen numbers the list. |
 | `EBANER_AUDIO_DUMP` | Render a scripted brake sequence to the given WAV and exit.   |
 | `EBANER_AUDIO_DUMP_ENGINE` | Render an engine start/idle/stop to the given WAV, exit. |
 | `EBANER_AUDIO_DUMP_CROSSING` | Render a crossing bell activating/falling silent, exit. |

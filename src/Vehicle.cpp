@@ -398,15 +398,19 @@ void Vehicle::moveHandle(int cab, int dir) {
 
 const VehicleSpec* specNamed(const char* fragment) {
     if (fragment == nullptr) return nullptr;
-    // Matches the formation's title as well as the machine's name, because a formation
-    // keeps its locomotive's name - the Di 4 with carriages behind it is still a Di 4 -
-    // and asking for it by the only string that tells the two apart has to work.
-    for (const VehicleSpec& v : kVehicleSpecs) {
-        const char* t = specTitle(v);
-        if (t != nullptr && std::string(t).find(fragment) != std::string::npos) return &v;
-        if (v.name != nullptr && std::string(v.name).find(fragment) != std::string::npos)
+    // A formation is addressed by its TRAIN name and a machine by its machine name, and
+    // the two passes keep them apart. A formation keeps its locomotive's name - the Di 4
+    // with carriages behind it is still a Di 4 - so a single pass in table order would
+    // hand back whichever came first, and asking for "Di 4 (Hen" would give you a train
+    // of eight the moment the list was reordered to put formations at the top.
+    for (const VehicleSpec& v : kVehicleSpecs)
+        if (v.formation != nullptr &&
+            std::string(v.formation).find(fragment) != std::string::npos)
             return &v;
-    }
+    for (const VehicleSpec& v : kVehicleSpecs)
+        if (v.formation == nullptr && v.name != nullptr &&
+            std::string(v.name).find(fragment) != std::string::npos)
+            return &v;
     return nullptr;
 }
 

@@ -2122,9 +2122,26 @@ int main(int argc, char** argv) {
             out.push_back(st.name + (st.isStop() ? "  (stop)" : "") + "  " + st.line);
         return out;
     }();
-    const std::vector<std::string> vehicleLabels = [] {
+    // The runtime picker's rows, with a heading wherever the category changes and a map
+    // back to the spec each row stands for. A heading maps to -1 and the selection steps
+    // over it, so the list reads the same as the start screen's without the caller having
+    // to know that some rows are not choices.
+    //
+    // Labelled by specTitle and not by `name`: a formation keeps its locomotive's name, so
+    // this list used to offer two rows both reading "NSB Di 4 (Henschel)".
+    std::vector<int> vehicleRow;
+    const std::vector<std::string> vehicleLabels = [&vehicleRow] {
         std::vector<std::string> out;
-        for (const VehicleSpec& v : kVehicleSpecs) out.push_back(v.name);
+        int lastCat = -1;
+        for (int i = 0; i < kNumVehicleSpecs; ++i) {
+            if (kVehicleSpecs[i].category != lastCat) {
+                lastCat = kVehicleSpecs[i].category;
+                out.push_back(std::string("-- ") + categoryName(lastCat) + " --");
+                vehicleRow.push_back(-1);
+            }
+            out.push_back(specTitle(kVehicleSpecs[i]));
+            vehicleRow.push_back(i);
+        }
         return out;
     }();
 
@@ -3658,6 +3675,13 @@ int main(int argc, char** argv) {
             if (mPU && !prevMenuPgUp) sel = (sel + n - kPageStep % n) % n;
             if (mPD && !prevMenuPgDn) sel = (sel + kPageStep) % n;
             sel = std::clamp(sel, 0, n - 1);
+            // Step off a heading on to the next real choice, in whichever direction the
+            // selection was last moving, so the headings are invisible to use.
+            if (g_menuStep == MenuStep::PickVehicle && !vehicleRow.empty()) {
+                const int dir = (mU && !prevMenuUp) || (mPU && !prevMenuPgUp) ? -1 : 1;
+                for (int guard = 0; guard < n && vehicleRow[sel] < 0; ++guard)
+                    sel = (sel + dir + n) % n;
+            }
 
             if (mE && !prevMenuEnter && !list.empty()) {
                 if (root) {
@@ -3713,13 +3737,20 @@ int main(int argc, char** argv) {
                     g_menuStep = MenuStep::PickVehicle;
                     g_menuSubSel = 0;
                 } else if (g_menuStep == MenuStep::PickVehicle) {
-                    menuNote = placeTrain(g_menuSubSel, placeTarget);
-                    // Placed from the start screen, the vehicle picker is still behind the
-                    // menu - and choosing from it clears every train there is. Having put
-                    // one on the line is answering that question, so leave the start screen.
-                    if (vehicle != nullptr) mode = Mode::Sim;
-                    g_menuStep = MenuStep::Root;
-                    g_menuSubSel = 0;
+                    const int pick = (g_menuSubSel >= 0 &&
+                                      g_menuSubSel < static_cast<int>(vehicleRow.size()))
+                                         ? vehicleRow[g_menuSubSel]
+                                         : -1;
+                    if (pick >= 0) { // a heading is not a choice, so Enter does nothing
+                        menuNote = placeTrain(pick, placeTarget);
+                        // Placed from the start screen, the vehicle picker is still behind
+                        // the menu - and choosing from it clears every train there is.
+                        // Having put one on the line answers that question, so leave the
+                        // start screen.
+                        if (vehicle != nullptr) mode = Mode::Sim;
+                        g_menuStep = MenuStep::Root;
+                        g_menuSubSel = 0;
+                    }
                 }
             }
             prevMenuUp = mU; prevMenuDown = mD; prevMenuEnter = mE;
@@ -3760,7 +3791,15 @@ int main(int argc, char** argv) {
                 mode = Mode::Sim;
             } else {
                 std::vector<TextVertex> tv;
-                const float sc = std::max(2.0f, static_cast<float>(fbh) / 240.0f);
+                // Sized to the window, and then sized down again if the list would not
+                // fit in it: with the category headings the list is 24 rows, and at the
+                // old fixed scale the last vehicles and the prompt were drawn below the
+                // bottom of a 700-pixel window, where nobody could see them.
+                const float rows = static_cast<float>(kNumVehicleSpecs + kVehicleCats + 4);
+                const float fit = (static_cast<float>(fbh) - 60.0f) / (12.0f * rows);
+                const float sc =
+                    std::max(1.5f, std::min(std::max(2.0f, static_cast<float>(fbh) / 240.0f),
+                                            fit));
                 const float x = 40.0f, lh = 12.0f * sc;
                 // Dark backing panel for contrast over the terrain.
                 {
@@ -3769,7 +3808,7 @@ int main(int argc, char** argv) {
                     };
                     const float x1 =
                         std::min(static_cast<float>(fbw) - 20.0f, 40.0f + 30.0f * 8.0f * sc);
-                    const float y1 = 40.0f + (kNumVehicleSpecs + 4) * lh;
+                    const float y1 = 40.0f + (kNumVehicleSpecs + kVehicleCats + 4) * lh;
                     const glm::vec3 pc(0.04f, 0.05f, 0.09f);
                     const glm::vec2 a = ndc(20.0f, 20.0f), b = ndc(x1, 20.0f),
                                     c = ndc(x1, y1), d = ndc(20.0f, y1);
@@ -3778,20 +3817,33 @@ int main(int argc, char** argv) {
                 }
                 appendText(tv, "SELECT VEHICLE", x, 40.0f, sc,
                            glm::vec3(1.0f, 0.95f, 0.5f), fbw, fbh);
+                // A heading wherever the category changes, so the complete trains are
+                // at the top and the bare test shapes are plainly marked at the bottom.
+                // Headings take a row of their own, which is why the row is counted
+                // separately from the vehicle index.
+                int row = 0, lastCat = -1;
                 for (int i = 0; i < kNumVehicleSpecs; ++i) {
+                    if (kVehicleSpecs[i].category != lastCat) {
+                        lastCat = kVehicleSpecs[i].category;
+                        appendText(tv, std::string("  ") + categoryName(lastCat), x,
+                                   40.0f + (row + 2) * lh, sc * 0.8f,
+                                   glm::vec3(1.0f, 0.85f, 0.45f), fbw, fbh);
+                        ++row;
+                    }
                     const bool hi = (i == menuIndex);
                     std::string line = (hi ? "> " : "  ");
                     line += std::to_string(i + 1) + ". " + specTitle(kVehicleSpecs[i]);
-                    appendText(tv, line, x, 40.0f + (i + 2) * lh, sc,
+                    appendText(tv, line, x, 40.0f + (row + 2) * lh, sc,
                                hi ? glm::vec3(1.0f) : glm::vec3(0.6f, 0.6f, 0.65f),
                                fbw, fbh);
+                    ++row;
                 }
                 char pick[64];
                 std::snprintf(pick, sizeof(pick),
                               "UP/DOWN OR 1-%d TO CHOOSE, ENTER TO START",
                               std::min(kNumVehicleSpecs, 9));
                 appendText(tv, pick, x,
-                           40.0f + (kNumVehicleSpecs + 3) * lh, sc * 0.75f,
+                           40.0f + (kNumVehicleSpecs + kVehicleCats + 3) * lh, sc * 0.75f,
                            glm::vec3(0.7f, 0.8f, 0.9f), fbw, fbh);
                 renderer.setOverlayText(tv);
             }
