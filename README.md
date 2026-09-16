@@ -452,6 +452,18 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   Volume does dominate, but on the **release**, where there is no accelerator to help
   because nothing local can make air: every pipe has to be filled from the one main
   reservoir at the front, and the train takes **12 s** against the light engine's 3.4 s.
+- **A carriage has no main reservoir**, and no low-reservoir safety device. That device is a
+  locomotive's, there to catch a **failed compressor** — and a vehicle that never had one
+  cannot have one fail. Getting this wrong stopped a hauled train dead after **half an hour
+  of running**, wherever it happened to be, with the brake handle sitting in release: every
+  vehicle leaked its reservoir and only a vehicle with a compressor could make it up, so an
+  unpowered one fell 8.0 → 6.0 bar in about **34 minutes** and tripped. That latched an
+  emergency across the whole train, and nothing on a carriage could ever recharge it above
+  the reset pressure, so it never cleared — a locomotive cycling its compressor happily at
+  the front and seven carriages quietly running out of air behind it. A carriage carries
+  **auxiliary** reservoirs fed from the train pipe and nothing else. The real fault is still
+  modelled: a machine that *has* a compressor and is not running it does lose its air, and
+  does trip, at 34 minutes.
 - **One reverser, one driving cab** — the train takes its commands from the cab holding
   the reverser, so putting a cab into gear **centres every other cab**: a locomotive has one
   reverser handle and the driver carries it to the end he is working from. This is also a

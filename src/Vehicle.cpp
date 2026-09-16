@@ -1110,8 +1110,18 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
     // set calls for emergency regardless of the handle, latched until the reservoir
     // recovers above the reset pressure. It is this set's own reservoir and this set's
     // own device: nothing about the other sets can set it or clear it.
-    if (mrPres_ < kMRSafetyTrip) safetyBrake_ = true;
-    else if (mrPres_ >= kMRSafetyReset) safetyBrake_ = false;
+    //
+    // Only on a vehicle that HAS a compressor. The device is a locomotive's and it is
+    // there to catch a compressor that has failed; a vehicle that never had one cannot
+    // have one fail, and arming it on a carriage made a guaranteed time bomb. The leak
+    // below took an unpowered vehicle's reservoir under the trip pressure in about 34
+    // minutes, the emergency latched, and nothing on that vehicle could ever recharge it
+    // above the reset pressure - so any hauled train stopped irrecoverably after half an
+    // hour, wherever it happened to be, with the brake handle sitting in release.
+    if (engineCount_ > 0) {
+        if (mrPres_ < kMRSafetyTrip) safetyBrake_ = true;
+        else if (mrPres_ >= kMRSafetyReset) safetyBrake_ = false;
+    }
     const int effNotch = effectiveNotch();
 
     // The EP valve on this set: it vents its own length of pipe to atmosphere, or
@@ -1231,9 +1241,14 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
         }
         b.bcRate = (dt > 1e-6f) ? (b.bc - bcBefore) / dt : 0.0f;
     }
-    mrPres_ -= kMRLeak * dt;
+    // The leak, and only where there is a reservoir to leak from. A carriage carries
+    // auxiliary reservoirs fed from the train pipe and no main reservoir of its own, so
+    // there is nothing here to run down - and nothing that could fill it if there were.
+    // Leaking it anyway is what armed the trap described above.
+    if (engineCount_ > 0) mrPres_ -= kMRLeak * dt;
     // Engine-driven compressors recharge only while the engines idle, scaled by how
-    // many are running. With the engines off the reservoir just draws down. "Running"
+    // many are running. With the engines off the reservoir just draws down - which is
+    // a real fault on a machine that has a compressor, and stays modelled. "Running"
     // uses a threshold below the compressor load droop so the droop can't make it cut
     // out and hunt.
     int running = 0;

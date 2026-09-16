@@ -235,6 +235,63 @@ int main() {
         }
     }
 
+    std::puts("\nA carriage has no reservoir to run down, and no device to trip on it");
+    {
+        // The bug this guards against stopped a train dead after half an hour of running,
+        // wherever it happened to be, with the brake handle sitting in release.
+        //
+        // Every vehicle leaked its main reservoir and only a vehicle with a compressor
+        // could make it up, so an unpowered one fell 8.0 to 6.0 bar in about 34 minutes
+        // and tripped its low-reservoir safety. That latched an emergency across the whole
+        // train - and nothing on a carriage could ever recharge it above the reset
+        // pressure, so it never cleared. A locomotive cycling its compressor happily at
+        // the front, seven carriages quietly running out of air behind it.
+        //
+        // A carriage carries auxiliary reservoirs fed from the train pipe and no main
+        // reservoir of its own; and the low-reservoir device is a locomotive's, there to
+        // catch a compressor that has failed, which a vehicle that never had one cannot do.
+        const VehicleSpec* nt = specNamed("+ 2 sleepers");
+        if (nt == nullptr) { std::puts("  (no night train - skipped)"); return 1; }
+        Consist c(&w.paths, &w.paths[0], *nt, 60000.0f, 0.0f);
+        c.attachNetwork(&w.paths, nullptr);
+        c.toggleEngines();
+        c.setReverser(0, 1);
+        for (int i = 0; i < 12; ++i) c.moveBrake(0, -1);
+        int trippedAt = -1;
+        for (int m = 0; m < 60 && trippedAt < 0; ++m) {
+            for (int i = 0; i < 60 * 60; ++i) c.update(1.0f / 60.0f, 0.0f);
+            if (c.trippedUnit() >= 0) trippedAt = m + 1;
+        }
+        std::printf("    an hour standing with the brake released: %s\n",
+                    trippedAt < 0 ? "nothing tripped"
+                                  : ("set " + std::to_string(c.trippedUnit() + 1) +
+                                     " tripped at " + std::to_string(trippedAt) + " min")
+                                        .c_str());
+        check(trippedAt < 0, "an hour passes and no set calls for emergency", trippedAt,
+              -1.0);
+        check(!c.emergencyLine(), "  the train is not in emergency");
+        float worst = 9.0f;
+        for (int u = 1; u < c.unitCount(); ++u)
+            worst = std::min(worst, c.unit(u).mrPressure());
+        check(worst > 7.9f, "  and no carriage's reservoir has run down at all", worst, 8.0);
+        check(c.lead().mrPressure() > 6.0f,
+              "  while the locomotive's cycles on its compressor as it should",
+              c.lead().mrPressure(), 7.0);
+
+        // The real fault still has to be modelled: a machine that HAS a compressor and is
+        // not running it does lose its air, and does trip.
+        Consist r(&w.paths, &w.paths[0], *c93, 60000.0f, 0.0f);
+        r.attachNetwork(&w.paths, nullptr); // engines left off on purpose
+        int rTrip = -1;
+        for (int m = 0; m < 90 && rTrip < 0; ++m) {
+            for (int i = 0; i < 60 * 60; ++i) r.update(1.0f / 60.0f, 0.0f);
+            if (r.trippedUnit() >= 0) rTrip = m + 1;
+        }
+        std::printf("    a railcar left shut down trips after %d min\n", rTrip);
+        check(rTrip > 0, "a shut-down railcar still runs its reservoir down and trips",
+              rTrip, 34.0);
+    }
+
     std::puts("\nThe brake takes as long as the train is long");
     {
         float farC93 = 0.0f, farLight = 0.0f, farTrain = 0.0f;
