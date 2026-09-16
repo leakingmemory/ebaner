@@ -147,6 +147,7 @@ private:
     std::atomic<float> gridLoad_{};
     float gridFan_ = 0.0f;   // fan speed, which lags the load - a big fan has inertia
     float gridPhase_ = 0.0f; // blade-passing phase
+    float gridShaft_ = 0.0f; // once-per-revolution phase, for the throb over the rush
     float gridBp1_ = 0.0f, gridBp2_ = 0.0f; // the rushing air, band-passed
     std::atomic<float> engRpm_[kMaxEngines]{};      // per-engine speed (rev/min)
     std::atomic<float> engGain_[kMaxEngines]{};     // per-engine distance attenuation [0,1]
@@ -219,6 +220,12 @@ private:
     float engKnock_[kMaxEngines] = {};       // per-firing knock envelope
     float engKnLp_[kMaxEngines] = {};        // knock noise low-pass
     float engHunt_[kMaxEngines] = {};        // slow random load/rpm hunting
+    // The heavy-engine extras, which only a voice carrying half- and quarter-order weight
+    // (`rumble`) uses at all - a well-insulated railcar engine keeps the smooth voice.
+    float engFireAmp_[kMaxEngines] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f}; // this firing's weight
+    float engClPhase_[kMaxEngines] = {};     // mechanical clatter, at half engine speed
+    float engClEnv_[kMaxEngines] = {};       // one clatter event decaying
+    float engClA_[kMaxEngines] = {}, engClB_[kMaxEngines] = {}; // and its band-pass
     float exhaustBuf_[1024] = {};            // exhaust comb (smears knocks into a hum)
     int exhaustIdx_ = 0;
     float exhaustLp_ = 0.0f;

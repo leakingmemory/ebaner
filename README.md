@@ -253,7 +253,12 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   wind the controller back and the roar builds over a couple of seconds, notch off and it
   **coasts down** rather than stopping. Rushing air through the ducts with the blade-passing
   tone under it, and both the **level and the pitch** rise with the load — measured across
-  the notches at 214 → 384 → 538 → 618 Hz. That the blower is current-fed is an
+  the notches at 214 → 384 → 538 → 618 Hz. It is mixed as a **hum** rather than as a rush:
+  four harmonics of the blade-passing tone, and the shaft throbbing under the air once a
+  revolution because a fan that size is never balanced to nothing. Against the first cut at
+  it, that is **+1.7 dB at 60–120 Hz and +4 to +6 dB from 120 to 500 Hz** at full brake,
+  with the hiss above 500 Hz **down** 2 dB — a blower heard from the cab is loud enough to
+  talk over, and what makes it loud is the bottom half. That the blower is current-fed is an
   **assumption**: reasonable for a BBC machine of this period and much the more interesting
   behaviour, but not something I could source for this locomotive. `EBANER_AUDIO_DUMP_GRID`
   renders the application to a WAV. Still not modelled: grid **thermal limits**, which there
@@ -513,7 +518,16 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   sound big is underneath: a V16 is two banks of eight with a manifold each, so it radiates
   hard at half the firing rate and below, and the Di 4 carries **2.4× the low-end energy**
   and runs **2–2.8× louder** than the railcar, weighted low (low/mid 1.9 against 1.1 at
-  idle). Measured, not guessed: `EBANER_AUDIO_DUMP_ENGINE` renders the script — off, crank,
+  idle). Weight is not the whole of it, though, and a sine stack is a smooth thing where a
+  big diesel is not: the **exhaust blast** is a pulse over about a third of the firing
+  period rather than a wave, **no two firings are alike** (a third of the amplitude either
+  way — sixteen cylinders are never quite in step), and the **gear train and injectors**
+  are heard as a rattle at half the firing rate, deliberately left *outside* the insulation
+  low-pass because a pipe radiates dark and a crankcase cover does not. That is a change of
+  spectrum and not of level: the extra harmonics are paid for by trimming the voice back,
+  so the Di 4's engine measures the same RMS it did and carries **+2 to +10 dB** from
+  500 Hz up. All of it keys off the rumble weight the voice already carries, so the railcar
+  — which has none — is untouched, and its dump is **bit-identical** to the reference. Measured, not guessed: `EBANER_AUDIO_DUMP_ENGINE` renders the script — off, crank,
   idle, compressor, full song, shut down — and `EBANER_AUDIO_ENGINE` picks which machine,
   because "louder and heavier" is a claim about two sounds and cannot be checked by
   listening to one. The first attempt was 4× and **clipping**; the dump caught both that

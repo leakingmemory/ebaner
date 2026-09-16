@@ -247,11 +247,47 @@ void Audio::render(float* out, int n) {
             const float firingHz = rpm / 60.0f * fire *
                                    (1.0f + 0.007f * static_cast<float>(k)) *
                                    (1.0f + engHunt_[k] * 0.05f); // detuned + hunt
+            // How much of the heavy-engine character this voice gets. Taken from the
+            // rumble weight rather than from a knob of its own: an engine big enough to
+            // radiate below its firing rate is the same engine whose exhaust beats are
+            // separate events and whose gear train can be heard. A railcar's is 0 and
+            // keeps the smooth voice it had.
+            const float heavy = std::min(1.0f, rum * 0.5f);
             engPhase_[k] += firingHz / fs;
-            if (engPhase_[k] >= 1.0f) { engPhase_[k] -= 1.0f; engKnock_[k] = 1.0f; }
+            if (engPhase_[k] >= 1.0f) {
+                engPhase_[k] -= 1.0f;
+                engKnock_[k] = 1.0f;
+                // No two firings alike. Sixteen cylinders are never quite in step - fuel,
+                // wear and temperature all differ - and it is that unevenness, not the
+                // pitch, that separates an engine from an oscillator. A tenth of a dB
+                // would not be heard; a third of the amplitude is.
+                //
+                // Drawn only for an engine that uses it, so that a voice with no rumble
+                // weight takes exactly the samples out of the generator it always did
+                // and the railcar's engine is unchanged to the last bit.
+                if (heavy > 0.0f) {
+                    rng_ = rng_ * 1664525u + 1013904223u;
+                    const float r = static_cast<float>(rng_ >> 8) / 8388608.0f; // [-1,1]
+                    engFireAmp_[k] = 1.0f + heavy * r * 0.35f;
+                }
+            }
             const float ph = engPhase_[k];
             float thrum = std::sin(2.0f * kPi * ph) + 0.5f * std::sin(4.0f * kPi * ph) +
                           0.3f * std::sin(6.0f * kPi * ph);
+            // The exhaust blast. A sine stack is a smooth thing and a cylinder emptying
+            // is not: the port opens, the charge goes out in a fraction of the cycle, and
+            // the rest of the cycle is comparatively quiet. So a raised-cosine pulse over
+            // the first third of the firing period, with its mean taken out so it adds
+            // harmonics rather than a DC step. The harmonics are the point - they are
+            // what is heard as volume in the cylinder and length in the pipe, and they
+            // are what the smooth voice was missing.
+            if (heavy > 0.0f) {
+                constexpr float kDuty = 0.34f; // how much of the period the blast occupies
+                const float blast =
+                    ph < kDuty ? (0.5f - 0.5f * std::cos(2.0f * kPi * ph / kDuty)) - 0.5f
+                               : -0.5f;
+                thrum += heavy * blast * 0.80f * engFireAmp_[k];
+            }
             // The weight underneath, and on a V engine it is not a fudge: a V16 is two
             // banks of eight with a manifold each, so each bank fires eight times a
             // revolution and radiates at half the whole engine's rate. The quarter order
@@ -270,7 +306,7 @@ void Audio::render(float* out, int n) {
             }
             rng_ = rng_ * 1664525u + 1013904223u;
             engKnLp_[k] += ((static_cast<float>(rng_ >> 8) / 8388608.0f - 1.0f) - engKnLp_[k]) * 0.5f;
-            const float knock = engKnLp_[k] * engKnock_[k];
+            const float knock = engKnLp_[k] * engKnock_[k] * engFireAmp_[k];
             engKnock_[k] *= 0.9985f; // ~15 ms decay (about half a firing period)
             rng_ = rng_ * 1664525u + 1013904223u;
             const float hum = static_cast<float>(rng_ >> 8) / 8388608.0f - 1.0f;
@@ -278,7 +314,37 @@ void Audio::render(float* out, int n) {
                           std::clamp((rpm - 100.0f) / 200.0f, 0.0f, 1.0f) * // crank-in
                           (1.0f + engHunt_[k] * 0.18f);                     // load fluctuation
             engLp_[k] += (voice - engLp_[k]) * bri; // insulation LP
-            voice = engLp_[k] * vol;
+            // A pulse carries more level than the sine stack it replaced, and this was
+            // meant to change what the engine sounds like and not how loud it is - it is
+            // already the loudest thing on the locomotive, and the headroom belongs to
+            // the wheels and the brakes as much as to it. So the heavy voice is trimmed
+            // back to about the level it had, and the difference is all spectrum.
+            voice = engLp_[k] * vol / (1.0f + 0.22f * heavy);
+            // Moving parts, and they are deliberately outside the insulation low-pass.
+            // Exhaust noise comes out of a pipe and arrives dark; gear train, injectors
+            // and valve gear are radiated by the block and the covers and keep their
+            // treble, which is why a big diesel at idle is heard as a clatter over a hum
+            // and not as a hum alone. Clocked at half the firing rate so it is its own
+            // slower rattle rather than more weight on the firing beat.
+            if (heavy > 0.0f) {
+                engClPhase_[k] += firingHz * 0.5f / fs;
+                if (engClPhase_[k] >= 1.0f) {
+                    engClPhase_[k] -= 1.0f;
+                    rng_ = rng_ * 1664525u + 1013904223u;
+                    const float r = static_cast<float>(rng_ >> 8) / 8388608.0f;
+                    engClEnv_[k] = 0.65f + 0.35f * r; // uneven, like the firings
+                }
+                rng_ = rng_ * 1664525u + 1013904223u;
+                const float n = static_cast<float>(rng_ >> 8) / 8388608.0f - 1.0f;
+                // Two low-passes differenced into a band-pass, around a kilohertz: the
+                // rattle wants presence, not hiss and not more bottom end.
+                engClA_[k] += (n - engClA_[k]) * 0.30f;
+                engClB_[k] += (engClA_[k] - engClB_[k]) * 0.09f;
+                const float rattle = (engClA_[k] - engClB_[k]) * engClEnv_[k];
+                engClEnv_[k] *= 0.9970f; // ~7 ms, a tick and not a tone
+                voice += rattle * vol * heavy * 0.34f *
+                         std::clamp((rpm - 100.0f) / 200.0f, 0.0f, 1.0f);
+            }
             engine += voice * engGainEnv_[k];
         }
         // Exhaust muffler: a short low-passed feedback comb that smears the firing
@@ -347,8 +413,19 @@ void Audio::render(float* out, int n) {
             gridPhase_ += kGridBladeHz * (0.35f + 0.65f * sp) / fs;
             if (gridPhase_ >= 1.0f) gridPhase_ -= 1.0f;
             const float gp = gridPhase_;
-            const float blade = std::sin(2.0f * kPi * gp) + 0.45f * std::sin(4.0f * kPi * gp) +
-                                0.22f * std::sin(6.0f * kPi * gp);
+            // More of the tone, and more harmonics in it. A grid blower heard from the
+            // cab is not a rushing sound with a note somewhere in it: it is a hum, and
+            // loud enough to talk over. The harmonics are what make it a hum and not a
+            // sine - they are the blades passing a structure, not air moving.
+            const float blade = std::sin(2.0f * kPi * gp) + 0.55f * std::sin(4.0f * kPi * gp) +
+                                0.32f * std::sin(6.0f * kPi * gp) +
+                                0.17f * std::sin(8.0f * kPi * gp);
+            // And the shaft turning under all of it. A fan this size is never balanced to
+            // nothing, so the rush is louder once per revolution - a slow throb, about
+            // ten a second at full song, which is heard as size rather than as a pitch.
+            gridShaft_ += kGridBladeHz / 12.0f * (0.35f + 0.65f * sp) / fs;
+            if (gridShaft_ >= 1.0f) gridShaft_ -= 1.0f;
+            const float throb = 1.0f + 0.15f * std::sin(2.0f * kPi * gridShaft_);
             rng_ = rng_ * 1664525u + 1013904223u;
             const float wn = static_cast<float>(rng_ >> 8) / 8388608.0f - 1.0f;
             // A two-pole band-pass made of one low-pass chasing another: the centre rides
@@ -368,7 +445,12 @@ void Audio::render(float* out, int n) {
             // factor - all peak and little body - so the level that sounds right is the
             // level that clips, and taking the tops off is what lets a rushing sound be
             // loud without eating the headroom the wheels and the brakes need.
-            grid = std::tanh((air * 2.4f + blade * 0.30f) * loud) * 0.62f * near;
+            // Driven harder into the same soft limit, and the ceiling brought down a
+            // little to pay for it: what comes out is louder on average and far more of
+            // it is hum, without the peaks growing to match. A hard clamp on the master
+            // sum is the only thing below this, and the wheels and the brakes are sounding
+            // over the top of the blower whenever the blower is working at all.
+            grid = std::tanh((air * 2.15f * throb + blade * 0.78f) * loud) * 0.58f * near;
         }
 
         // --- Crossing warning bell ------------------------------------------------
@@ -579,7 +661,7 @@ void Audio::render(float* out, int n) {
         const float rollMix = 0.75f;
         float s = muted ? 0.0f
                         : (hiss * 1.2f + click * 0.9f) * envEnv_ + engine * 0.30f +
-                              comp * 0.22f + grid * 0.42f + bell * 0.34f + bang * 0.55f +
+                              comp * 0.22f + grid * 0.45f + bell * 0.34f + bang * 0.55f +
                               (roll * 0.45f + joints * 0.30f + squeal * 0.16f +
                                brakeRub * 0.16f) * rollMix;
         s = std::clamp(s, -1.0f, 1.0f);
