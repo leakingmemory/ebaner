@@ -69,6 +69,11 @@ constexpr float kBPChargeRate = 1.6f;    // EP valve recharging from the main re
 // travel through, and each one of them bigger than the locomotive at the front.
 constexpr float kPipeRefLength = 41.5f;  // m, a Class 93 set
 constexpr float kMRPerBP = 0.05f;        // MR bar spent per bar of pipe charged
+// And per bar the independent brake puts into a cylinder. Small: it is one vehicle's
+// cylinders off the whole reservoir, which is exactly why a locomotive can stand on its
+// own brake for as long as it likes where the automatic would have run its auxiliaries
+// down long before.
+constexpr float kMRPerBC = 0.012f;
 // The auxiliary refills slowly - far more slowly than the cylinder empties. That
 // asymmetry is the whole of brake fade: a driver who makes and releases applications
 // faster than this gets less air each time, which is what running away down a long
@@ -194,6 +199,7 @@ Vehicle::Vehicle(const TrackPath* path, const VehicleSpec& spec, float s,
       controls_(spec.controls),
       cabs_(spec.cabs),
       epBrake_(spec.epBrake),
+      independent_(spec.independentBrake),
       dynBrakeN_(spec.dynBrakeN),
       dynBrakeW_(spec.dynBrakeW),
       bodyStyle_(spec.body),
@@ -410,6 +416,15 @@ void Vehicle::movePower(int cab, int dir) {
     // one can be wound into a range it does not have.
     powerNotch_[cab] = std::clamp(powerNotch_[cab] + dir,
                                   hasDynamicBrake() ? -kMaxBrakeNotch : 0, kMaxPowerNotch);
+}
+
+void Vehicle::moveIndependent(int cab, int dir) {
+    if (cab != 0 && cab != 1 || !independent_) return;
+    indNotch_[cab] = std::clamp(indNotch_[cab] + dir, 0, kMaxIndNotch);
+}
+
+int Vehicle::independentNotch(int cab) const {
+    return (cab == 0 || cab == 1) ? indNotch_[cab] : 0;
 }
 
 void Vehicle::moveBrake(int cab, int dir) {
@@ -1050,6 +1065,7 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
     cmdNotch_ = std::clamp(cmd.brakeNotch, 0, kEmergencyNotch);
     trainEmerg_ = cmd.emergency;
     valveHere_ = cmd.valveHere;
+    indDemand_ = independent_ ? std::clamp(cmd.independent, 0.0f, 1.0f) : 0.0f;
 
     // The link's demand arrives in the physical frame (+ = the way the train faces);
     // this set turns it into its own path's frame, which is what orient_ is for. Two
@@ -1170,7 +1186,20 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
         // is what makes the brake answer the *reduction*; following up is what recharges
         // the memory so the next reduction is measured from a full pipe again.
         b.ctrl = std::max(b.ctrl, std::min(bp_, kBPRelease));
-        const float want = std::clamp((b.ctrl - bp_) * kBCPerBPDrop, 0.0f, kBCMax);
+        float autoWant = std::clamp((b.ctrl - bp_) * kBCPerBPDrop, 0.0f, kBCMax);
+        // The dynamic brake interlock. While the grids are working, this vehicle's
+        // AUTOMATIC application is held off - applying shoes and grids together
+        // duplicates the effort and cooks the shoes, and a locomotive with dynamic
+        // braking is arranged so it does not happen. The cylinders are genuinely
+        // released, not merely discounted afterwards, so the gauge tells the truth.
+        // An emergency, a safety trip or a burst pipe all override it.
+        if (dynBrake_ > 0.0f && !trainEmerg_ && !safetyBrake_ && !pipeCut_) autoWant = 0.0f;
+        // And the independent brake on top, by a double check valve: the two feed the
+        // same cylinders and whichever asks for more gets it. This one is the driver's
+        // own hand and is NOT held off by the interlock - if he wants shoes as well as
+        // grids he can have them.
+        const float indWant = indDemand_ * kBCMax;
+        const float want = std::max(autoWant, indWant);
         if (want > b.bc) {
             // Filling from the auxiliary, and limited by it. An auxiliary drawn down by
             // repeated applications cannot fill its cylinder, and the brake fades.
@@ -1181,10 +1210,15 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
             // seconds to come up rather than a fraction of one.
             float rate = (bp_ < kBPFullService - 0.1f) ? kBCEmergApplyRate : kBCApplyRate;
             if (!epBrake_) rate *= kPlainAirFill;
-            const float reach = std::min(want, b.aux);
+            // The automatic brake fills from the auxiliary and is limited by it; the
+            // independent fills from the main reservoir, which is why a locomotive can be
+            // held on its own brake long after its auxiliaries would have given out.
+            const float reach = std::min(want, std::max(b.aux, indWant));
             const float before = b.bc;
             b.bc = std::min(reach, b.bc + rate * dt);
-            b.aux = std::max(0.0f, b.aux - kAuxPerBC * std::max(0.0f, b.bc - before));
+            const float drawn = std::max(0.0f, b.bc - before);
+            if (indWant >= autoWant) mrPres_ = std::max(0.0f, mrPres_ - kMRPerBC * drawn);
+            else b.aux = std::max(0.0f, b.aux - kAuxPerBC * drawn);
         } else if (want < b.bc) {
             b.bc = std::max(want, b.bc - kBCReleaseRate * dt); // exhausts to atmosphere
         }
@@ -1233,10 +1267,9 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
     // the carriages behind must still get their application, and these cylinders still
     // fill - what is suppressed is counting their force. An emergency, a safety trip or a
     // burst pipe all override it, because then what is wanted is every shoe there is.
-    const bool blended = dynBrake_ > 0.0f && !trainEmerg_ && !safetyBrake_ && !pipeCut_;
-    brakeForce_ = blended ? 0.0f : std::min(bf, kAdhesionMu * mass_ * kG);
-    // The electric brake adds on top of whatever is left, and is capped with it.
-    brakeForce_ = std::min(brakeForce_ + dynBrake_, kAdhesionMu * mass_ * kG);
+    // The interlock is applied at the cylinders now rather than here, so whatever
+    // pressure they have is real and makes the force it looks like it should.
+    brakeForce_ = std::min(bf + dynBrake_, kAdhesionMu * mass_ * kG);
 
     UnitStep out;
     // Back into the physical frame for the train to add up.

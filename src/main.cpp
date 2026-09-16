@@ -548,8 +548,9 @@ int main(int argc, char** argv) {
         "\nControls: WASD move, Q/E down/up, mouse look, Shift boost, "
         "C chase vehicle, V driver view (switch cab), I engines start/stop, "
         "Up/Down push vehicle, , / . power/brake lever (the power controller on a "
-        "machine with two handles, whose train brake is K release / L apply), "
-        "Space emergency, "
+        "machine with two handles - back past neutral is its electric brake - whose "
+        "train brake is K release / L apply and whose independent loco brake is "
+        "H release / J apply), Space emergency, "
         "F/N/R reverser, T throw aimed switch, U uncouple, M mute, "
         "Tab release cursor, Esc menu (drive another train, place one)\n\n");
 
@@ -1958,6 +1959,7 @@ int main(int argc, char** argv) {
     bool prevNum[9] = {}; // one per vehicle-select number key
     bool prevBrkDown = false, prevBrkUp = false, prevBrkEmerg = false;
     bool prevBrkRel = false, prevBrkApp = false; // the separate train brake, K / L
+    bool prevIndRel = false, prevIndApp = false; // the independent loco brake, H / J
     bool prevSafety = false, prevEngine = false;
     bool prevRevF = false, prevRevN = false, prevRevR = false;
     bool prevUncouple = false;
@@ -3818,8 +3820,14 @@ int main(int argc, char** argv) {
             const bool bD = down(GLFW_KEY_COMMA), bU = down(GLFW_KEY_PERIOD),
                        bE = down(GLFW_KEY_SPACE);
             const bool kRel = split && down(GLFW_KEY_K), kApp = split && down(GLFW_KEY_L);
+            // The independent brake on H / J, immediately left of the train brake's K / L,
+            // so the two read left to right along the row: loco brake, then train brake,
+            // each with release on the left and apply on the right.
+            const bool iRel = vehicle->hasIndependentBrake() && down(GLFW_KEY_H);
+            const bool iApp = vehicle->hasIndependentBrake() && down(GLFW_KEY_J);
             const int prevPos = vehicle->handlePosition(cab);
             const int prevPow = vehicle->powerNotch(cab), prevBrk = vehicle->brakeNotch(cab);
+            const int prevInd = vehicle->independentNotch(cab);
             if (bD && !prevBrkDown) {
                 if (split) vehicle->movePower(cab, +1); else vehicle->moveHandle(cab, -1);
             }
@@ -3828,14 +3836,18 @@ int main(int argc, char** argv) {
             }
             if (kRel && !prevBrkRel) vehicle->moveBrake(cab, -1);
             if (kApp && !prevBrkApp) vehicle->moveBrake(cab, +1);
+            if (iRel && !prevIndRel) vehicle->moveIndependent(cab, -1);
+            if (iApp && !prevIndApp) vehicle->moveIndependent(cab, +1);
             if (bE && !prevBrkEmerg) {
                 vehicle->setPowerNotch(cab, 0);
                 vehicle->setBrakeNotch(cab, Vehicle::kEmergencyNotch);
             }
             prevBrkDown = bD; prevBrkUp = bU; prevBrkEmerg = bE;
             prevBrkRel = kRel; prevBrkApp = kApp;
+            prevIndRel = iRel; prevIndApp = iApp;
             const bool moved = split ? (vehicle->powerNotch(cab) != prevPow ||
-                                        vehicle->brakeNotch(cab) != prevBrk)
+                                        vehicle->brakeNotch(cab) != prevBrk ||
+                                        vehicle->independentNotch(cab) != prevInd)
                                      : vehicle->handlePosition(cab) != prevPos;
             if (moved) {
                 if (split) {
@@ -3843,10 +3855,11 @@ int main(int argc, char** argv) {
                     char ctl[16];
                     if (np < 0) std::snprintf(ctl, sizeof(ctl), "E-brake E%d", -np);
                     else std::snprintf(ctl, sizeof(ctl), "power P%d", np);
-                    std::printf("[Handle] cab %d %s  brake %s  BP %.1f  BC %.1f  "
-                                "MR %.1f bar\n", cab, ctl, vehicle->brakeNotchName(cab),
-                                vehicle->bpPressure(), vehicle->bcPressure(),
-                                vehicle->mrPressure());
+                    std::printf("[Handle] cab %d %s  brake %s  loco L%d  BP %.1f  "
+                                "BC %.1f  MR %.1f bar\n", cab, ctl,
+                                vehicle->brakeNotchName(cab),
+                                vehicle->independentNotch(cab), vehicle->bpPressure(),
+                                vehicle->bcPressure(), vehicle->mrPressure());
                 }
                 else
                     std::printf("[Handle] cab %d %s  BP %.1f  BC %.1f  MR %.1f bar\n", cab,
@@ -4266,9 +4279,15 @@ int main(int argc, char** argv) {
                                       vehicle->lead().dynamicBrakeForce() / 1000.0f);
                     else
                         std::snprintf(ctl, sizeof(ctl), "POWER P%d", np);
-                    std::snprintf(buf, sizeof(buf),
-                                  "%-22s , / .      BRAKE %s  K rel / L app / Space", ctl,
-                                  vehicle->brakeNotchName(cab));
+                    if (vehicle->hasIndependentBrake())
+                        std::snprintf(buf, sizeof(buf),
+                                      "%-22s , / .   LOCO L%d  H/J   TRAIN %s  K/L / Space",
+                                      ctl, vehicle->independentNotch(cab),
+                                      vehicle->brakeNotchName(cab));
+                    else
+                        std::snprintf(buf, sizeof(buf),
+                                      "%-22s , / .      BRAKE %s  K rel / L app / Space",
+                                      ctl, vehicle->brakeNotchName(cab));
                 }
                 else
                     std::snprintf(buf, sizeof(buf),

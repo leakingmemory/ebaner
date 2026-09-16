@@ -179,6 +179,15 @@ void Consist::movePower(int cab, int dir) {
 void Consist::moveBrake(int cab, int dir) {
     if (cab >= 0 && cab < cabCount()) units_[cabUnit(cab)].moveBrake(cabEnd(cab), dir);
 }
+void Consist::moveIndependent(int cab, int dir) {
+    if (cab >= 0 && cab < cabCount())
+        units_[cabUnit(cab)].moveIndependent(cabEnd(cab), dir);
+}
+int Consist::independentNotch(int cab) const {
+    return (cab >= 0 && cab < cabCount())
+               ? units_[cabUnit(cab)].independentNotch(cabEnd(cab))
+               : 0;
+}
 float Consist::dynamicBrakeFrac() const {
     float f = 0.0f;
     for (const Vehicle& u : units_) f = std::max(f, u.dynamicBrakeFrac());
@@ -510,6 +519,13 @@ void Consist::update(float dt, float pushInput) {
     for (std::size_t i = 0; i < units_.size(); ++i) {
         LinkCommand one = cmd;
         one.valveHere = static_cast<int>(i) == valveUnit;
+        // The independent brake is the driving cab's own vehicle and nothing else's:
+        // that is the whole point of it. A carriage six back has no cylinders of its
+        // own to put air into from here.
+        one.independent = (a >= 0 && static_cast<int>(i) == valveUnit)
+                              ? static_cast<float>(independentNotch(a)) /
+                                    static_cast<float>(Vehicle::kMaxIndNotch)
+                              : 0.0f;
         const UnitStep st = units_[i].stepSubsystems(dt, one, v_);
         totalTE += st.tractiveEffort;
         totalBrake += st.brakeForce;

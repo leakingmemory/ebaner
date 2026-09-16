@@ -216,6 +216,74 @@ int main() {
               maxBc(*b.train), first);
     }
 
+    std::puts("\nThe independent brake holds the locomotive and nothing else");
+    {
+        // The Zusatzbremse: a second valve straight on to the locomotive's own cylinders,
+        // from its own main reservoir, touching neither the train pipe nor anything behind
+        // the drawbar. It is what a locomotive is held on at a stand and shunted on, and
+        // without it there is no way to stop the engine alone.
+        const VehicleSpec* night = specNamed("+ 2 sleepers");
+        const VehicleSpec* c93s = specNamed("Class 93 (T");
+        if (night == nullptr || c93s == nullptr) {
+            std::puts("  (no night train in the table - skipped)");
+        } else {
+            std::vector<TrackPath> paths;
+            std::vector<glm::vec3> pts;
+            for (int i = 0; i <= 4000; ++i)
+                pts.push_back({static_cast<float>(i) * 25.0f, 0.0f, 0.0f});
+            paths.emplace_back(1u, 0u, pts, std::vector<std::uint16_t>(pts.size(), 200));
+            Consist c(&paths, &paths[0], *night, 50000.0f, 0.0f);
+            c.attachNetwork(&paths, nullptr);
+            c.toggleEngines();
+            c.setReverser(0, 1);
+            auto run = [&](float secs) {
+                for (int i = 0; i < static_cast<int>(secs * 60.0f); ++i)
+                    c.update(1.0f / 60.0f, 0.0f);
+            };
+            auto worstCarriage = [&] {
+                float m = 0.0f;
+                for (int u = 1; u < c.unitCount(); ++u)
+                    m = std::max(m, c.unit(u).bcPressure());
+                return m;
+            };
+            for (int i = 0; i < 12; ++i) c.moveBrake(0, -1);
+            run(120.0f);
+            check(c.lead().bcPressure() < 0.05f, "the train is released to start with",
+                  c.lead().bcPressure(), 0.0);
+
+            for (int i = 0; i < Vehicle::kMaxIndNotch; ++i) c.moveIndependent(0, +1);
+            run(20.0f);
+            check(c.lead().bcPressure() > 3.0f, "the independent fills the loco's cylinders",
+                  c.lead().bcPressure(), 3.8);
+            check(worstCarriage() < 0.05f, "  and not one carriage's", worstCarriage(), 0.0);
+            check(std::abs(c.lead().bpPressure() - 5.0f) < 0.05f,
+                  "  with the train pipe untouched at 5 bar", c.lead().bpPressure(), 5.0);
+
+            // It runs off the main reservoir, not the auxiliaries, which is why a
+            // locomotive can stand on its own brake for as long as it likes.
+            const float mr0 = c.lead().mrPressure();
+            run(300.0f);
+            check(c.lead().bcPressure() > 3.0f, "five minutes later it is still holding",
+                  c.lead().bcPressure(), 3.8);
+            check(c.lead().mrPressure() > mr0 - 1.5f,
+                  "  having spent little of the reservoir doing it",
+                  mr0 - c.lead().mrPressure(), 1.0);
+
+            for (int i = 0; i < Vehicle::kMaxIndNotch; ++i) c.moveIndependent(0, -1);
+            run(30.0f);
+            check(c.lead().bcPressure() < 0.05f, "and it lets go again",
+                  c.lead().bcPressure(), 0.0);
+
+            // A railcar has nothing to be independent of, and its handle does not move.
+            Consist r(&paths, &paths[0], *c93s, 20000.0f);
+            r.attachNetwork(&paths, nullptr);
+            check(!r.hasIndependentBrake(), "a railcar has no independent brake");
+            for (int i = 0; i < 3; ++i) r.moveIndependent(0, +1);
+            check(r.independentNotch(0) == 0, "  and its handle will not move",
+                  r.independentNotch(0), 0.0);
+        }
+    }
+
     std::puts("\nA coupled train: EP together, a burst pipe from one end");
     {
         Bench b(3);

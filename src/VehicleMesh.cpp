@@ -1674,6 +1674,7 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
             const float rpm = vehicle.engineRpm(0) / di4::kRevFull;
             const int power = vehicle.powerNotch(cab);
             const int brake = vehicle.brakeNotch(cab);
+            const int ind = vehicle.independentNotch(cab);
             const int rev = vehicle.reverser(cab);
 
             // Across the face as the photographs have it: a plain dial, the rectangular
@@ -1773,6 +1774,17 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                             0.050f, 0.022f, 0.010f, di4::kFrame);
                 }
                 lever(lx, ly, t, 0.26f, 0.020f, 0.038f, di4::kDash, false);
+            }
+            // The independent brake - the Zusatzbremse - beside it and further out, a
+            // shorter handle with a shorter throw, which is where German practice puts one
+            // and where the photographs show a second handle next to the train brake.
+            if (vehicle.hasIndependentBrake()) {
+                const float lx = xD + dx(0.66f), ly = yCB - so * 0.20f;
+                emitBox(X, Y, Z, P(lx, ly, zD + 0.02f), 0.055f, 0.055f, 0.02f,
+                        di4::kButton);
+                const float t = -0.34f + 0.68f * static_cast<float>(ind) /
+                                             static_cast<float>(Vehicle::kMaxIndNotch);
+                lever(lx, ly, t, 0.15f, 0.016f, 0.030f, di4::kDash, false);
             }
             // The writing pad on the desk to the driver's right, and the handset on its
             // cradle at the left of the console.

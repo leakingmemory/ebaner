@@ -102,6 +102,9 @@ public:
     void moveHandle(int cab, int dir);
     void movePower(int cab, int dir);
     void moveBrake(int cab, int dir);
+    void moveIndependent(int cab, int dir);
+    int independentNotch(int cab) const;
+    bool hasIndependentBrake() const { return lead().hasIndependentBrake(); }
     int controls() const { return lead().controls(); }
     // The hardest-working set of grids in the train, 0..1 - what the blower answers to.
     float dynamicBrakeFrac() const;

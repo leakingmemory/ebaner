@@ -222,6 +222,22 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   working the locomotive's **own friction brake is held off**, since applying both
   duplicates the effort and cooks the shoes; the carriages brake on air as usual, and an
   emergency drops the electric brake out and fills every cylinder there is.
+- **The independent brake** — the *Zusatzbremse*, a second valve straight on to the
+  locomotive's own cylinders from its own main reservoir, touching neither the train pipe
+  nor anything behind the drawbar. Every mainline locomotive has one, because without it
+  there is no way to hold the engine at a stand, shunt, or run light without dragging a
+  train brake application around; and the cab photographs show a second handle beside the
+  train brake on its quadrant, which is where German practice puts one. `H` releases and
+  `J` applies, immediately left of the train brake's `K`/`L`, so the two read along the row.
+  It runs off the **main reservoir** rather than the auxiliaries, which is why a locomotive
+  can stand on its own brake as long as it likes: five minutes holding costs 0.3 bar.
+  It also puts the **dynamic brake interlock** on a proper footing. That interlock used to
+  suppress the locomotive's brake *force* after the fact, leaving pressure in cylinders that
+  made none — a gauge that lied. It now holds the **cylinders** off instead, so what the
+  gauge reads is what the shoes do; and it holds off only the **automatic** application,
+  because the driver's own valve is his to use. Under the grids a train application leaves
+  the loco's cylinders empty while the carriages brake on air, and the independent still
+  fills them if he asks.
   And you can **hear it**, which matters more than it sounds: the electric brake is the one
   control on this locomotive with no other feedback — no gauge moves, and the diesel stays
   at idle throughout — so a silent one is a control you drive by the HUD. The **grid

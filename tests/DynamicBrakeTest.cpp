@@ -178,6 +178,42 @@ int main() {
               c.lead().bcPressure(), 3.8);
     }
 
+    std::puts("\nThe interlock, held at a speed where the grids are actually working");
+    {
+        // Tested on a unit at a held speed rather than on a train that is slowing, and the
+        // first version of this got that wrong: it applied the train brake after twenty
+        // seconds of electric braking, by which time the train was down to 1.8 km/h, the
+        // brake had faded out and the interlock was correctly not doing anything. The rule
+        // needs the grids working to be a rule at all.
+        auto bcAfter = [&](float dyn, int notch, float ind) {
+            Vehicle u(&w.paths[0], *di4, 4000.0f, 20.0f);
+            u.attachNetwork(&w.paths, nullptr);
+            u.toggleEngines();
+            LinkCommand cmd;
+            cmd.emergency = false;
+            cmd.demand = 0.0f;
+            cmd.powering = false;
+            cmd.brakeNotch = 0;
+            cmd.dynamic = 0.0f;
+            for (int i = 0; i < 300 * 60; ++i) u.stepSubsystems(1.0f / 60.0f, cmd, 20.0f);
+            cmd.brakeNotch = notch;
+            cmd.dynamic = dyn;
+            cmd.independent = ind;
+            for (int i = 0; i < 60 * 60; ++i) u.stepSubsystems(1.0f / 60.0f, cmd, 20.0f);
+            return u.bcPressure();
+        };
+        check(bcAfter(0.0f, 3, 0.0f) > 1.5f,
+              "with no grids working, a train application fills the loco's cylinders",
+              bcAfter(0.0f, 3, 0.0f), 2.9);
+        check(bcAfter(1.0f, 3, 0.0f) < 0.1f,
+              "under the grids the interlock holds them empty", bcAfter(1.0f, 3, 0.0f), 0.0);
+        // Held empty at the CYLINDER, not discounted from the force afterwards, so the
+        // gauge tells the truth about what is in them.
+        check(bcAfter(1.0f, 3, 1.0f) > 3.0f,
+              "  but the driver's own valve still fills them if he asks for it",
+              bcAfter(1.0f, 3, 1.0f), 3.8);
+    }
+
     std::puts("\nAnd it comes off before the train does stop");
     {
         Consist c(&w.paths, &w.paths[0], *di4, 50000.0f, 6.0f);
