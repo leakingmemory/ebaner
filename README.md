@@ -187,13 +187,27 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   precisely all the weight can put down, which is what a freight locomotive is built to be.
   It out-pulls the Di 4 by about **30 %** at 20 m/s, which is the operator's claim arrived
   at from the figures rather than taken on trust.
-  It looks nothing like the Di 4 and the difference is one line: **this nose has no chin**.
-  The front is close to vertical with a single slight rake all the way up. Grey flanks with
-  a big **louvred radiator panel** whose slats run *across*, a **golden-yellow band at
-  solebar level** running the whole length and carrying on round the nose, black underframe,
-  fuel tank and lower front, red markers high at the nose corners over headlights low on the
-  black, and a **yellow snowplough** reaching down to 15 cm over the railhead. Taken off a
-  photograph of **0312 002-7**; the colours are sampled from it rather than guessed.
+  It shares the Di 4's **roof** — narrower than the body, shoulders chamfered down to the
+  flanks, hatch and fan panels darker and **recessed between the cantrails** — and almost
+  nothing else. Where the Di 4's nose has a **chin**, reaching furthest forward at a knee
+  half way up and tucking back *in* below it, this one is in two parts: **vertical** for the
+  lower two fifths, and then the whole rake above it — the windscreen and the roof — going
+  back **1.10 m** in a straight line. Traced off the side elevation at 50 px/m rather than
+  judged: 0.00 m of setback at the solebar and still nothing at 0.43 of the body height,
+  then +0.30, +0.70 and +1.10 at 0.63, 0.80 and the roof. Grey flanks with two short **louvred radiator panels**, one behind each
+  cab, whose slats run **vertically**; an **orange band at solebar level** the whole length
+  and round the nose; orange grab rails at the cab doors; a dark **window band** the glazing
+  sits in, wrapping from the windscreen round both cab sides; red markers high on the nose
+  with headlights low on the **grey** — there is no black panel across the front; and an
+  orange **snowplough** reaching down to 15 cm over the railhead. Built from a three-quarter
+  view first, which got four of those wrong at once — a black lower front that was only the
+  nose in shadow, a near-vertical face, horizontal louvres, and a flat wide roof — and
+  corrected against a **side elevation** of 0312 002 at Grorud, which settles all four. The
+  first pass at the rake then guessed 2.10 m from a knee a third of the way up, which is
+  nearly twice the setback and starts it too low; measuring it off that same photograph
+  gave the two-part profile above, and the difference between guessing and measuring here
+  is the difference between a wedge and a locomotive.
+  The colours are sampled from the photographs rather than guessed.
   **Width, height, bogie wheelbase and bogie centres are estimates** — no source gives any
   of the four, and a three-quarter photograph cannot be scaled — as are the two dynamic
   brake figures, which are flagged in the spec the way the Di 4's are. The length, mass,
