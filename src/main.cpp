@@ -2241,6 +2241,16 @@ int main(int argc, char** argv) {
         std::fflush(stdout);
     }
 
+    // EBANER_CHASE=1 rides the vehicle from the start, for the same reason EBANER_CAB and
+    // EBANER_MAP exist: the chase camera is only reachable by pressing C, so the one view
+    // that actually shows the machine you just spawned could not be screenshotted or
+    // checked headlessly at all. A value of 0 turns it off again, so a scripted run can be
+    // explicit either way.
+    if (const char* ch = std::getenv("EBANER_CHASE")) {
+        g_chase = std::atoi(ch) != 0;
+        if (g_chase) g_driverPos = -1;
+    }
+
     // EBANER_MENU opens the Escape menu at a step, for the same reason EBANER_MAP opens the
     // traffic manager: a list that is only reachable by keypress cannot be screenshotted or
     // checked headlessly, and this one is where every train in the world is named.
@@ -4502,7 +4512,14 @@ int main(int argc, char** argv) {
                     if (g_driverPos >= 0) g_driverPos = -1; // no cab here; fall back
                     const VehicleFrame vp = vehicle->frame();
                     const glm::vec3 axle = vp.pos + vp.up * wheelset::kAxleCentreAboveBed;
-                    const glm::vec3 camPos = axle - vp.tangent * 8.0f + vp.up * 3.0f;
+                    // Clear of the vehicle's own back end, not 8 m behind its middle. A
+                    // fixed 8 m was written when everything here was a 25 m railcar whose
+                    // frame is the middle of a three-section body, and it puts the eye
+                    // INSIDE anything longer than 16 m - the Di 4 and the CD 312 both -
+                    // where the view is the inside of the shell and reads as a broken
+                    // mesh rather than as a camera in the wrong place.
+                    const float back = 0.5f * vehicle->lead().length() + 8.0f;
+                    const glm::vec3 camPos = axle - vp.tangent * back + vp.up * 3.0f;
                     const glm::vec3 dir = glm::normalize(axle - camPos);
                     g_camera.setPose(camPos, std::atan2(dir.y, dir.x),
                                      std::asin(glm::clamp(dir.z, -1.0f, 1.0f)));

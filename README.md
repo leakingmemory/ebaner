@@ -1444,6 +1444,7 @@ the corresponding sources (national rail register + NVDB roads + OSM enrichment)
 | `EBANER_NOOVERLAY`  | Ignore the `overlay/` track edits (link fixes).               |
 | `EBANER_EDMODE`     | `ebaner-trackedit` only: start in this mode, by its menu name. |
 | `EBANER_VEHICLE`    | Skip the start screen and preselect a vehicle, by its index in `kVehicleSpecs` (`0` = a single Class 93, `1`/`2` = two and three coupled, `3` = Di 4 + 5, `4` = the night train, `5` = a light Di 4, `6` = a CD 312). The table is ordered for the pickers, so these move when a vehicle is added - the start screen numbers the list. |
+| `EBANER_CHASE`      | `1` rides the vehicle from the start (the chase camera is otherwise only reachable by pressing C, so the one view that shows the machine could not be screenshotted). |
 | `EBANER_AUDIO_DUMP` | Render a scripted brake sequence to the given WAV and exit.   |
 | `EBANER_AUDIO_DUMP_ENGINE` | Render an engine start/idle/stop to the given WAV, exit. |
 | `EBANER_AUDIO_DUMP_CROSSING` | Render a crossing bell activating/falling silent, exit. |
