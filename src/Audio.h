@@ -77,6 +77,11 @@ public:
         float volume = 1.0f;
         float rumble = 0.0f;        // half- and quarter-order weight under the firing
         float bright = 0.11f;       // insulation low-pass coefficient
+        // What this engine idles at, which the voice needs in order to know when it has
+        // caught. The fade-in used to be an absolute rev window written around engines
+        // that idle at 315 and 700; an EMD 710 idles at 200 and came out at half voice
+        // for ever, having never left the ramp.
+        float idleRpm = 700.0f;
     };
     // Main thread, per sim frame. `sounded` is the train the single rolling, brake and
     // compressor voices are taken from - there is one of each and one set of filters
@@ -214,6 +219,7 @@ private:
     std::atomic<float> engVol_[kMaxEngines]{};
     std::atomic<float> engRum_[kMaxEngines]{};
     std::atomic<float> engBri_[kMaxEngines]{};
+    std::atomic<float> engIdle_[kMaxEngines]{};
     float engRpmEnv_[kMaxEngines] = {};      // smoothed rpm
     float engGainEnv_[kMaxEngines] = {};     // smoothed distance gain
     float engLp_[kMaxEngines] = {};          // insulation low-pass

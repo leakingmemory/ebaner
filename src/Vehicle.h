@@ -670,6 +670,10 @@ public:
     float engineVolume() const { return engineVolume_; }
     float engineRumble() const { return engineRumble_; }
     float engineBright() const { return engineBright_; }
+    // The engine's own idle. The sound needs it to know when the engine has caught, which
+    // is a thing only this machine can say: 200 on an EMD 710, 315 on a 645, 700 on the
+    // railcar's Cummins.
+    float idleRpm() const { return idleRpm_; }
     // Combined-lever position for the mesh/HUD: +brake (1..5), 0 neutral, -power
     // (-1..-kMaxPowerNotch); handleName gives "P3" / "N" / "B2" / "EMERG".
     int handlePosition(int cab) const;

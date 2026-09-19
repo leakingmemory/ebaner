@@ -244,6 +244,7 @@ void Audio::render(float* out, int n) {
             const float vol = engVol_[k].load(std::memory_order_relaxed);
             const float rum = engRum_[k].load(std::memory_order_relaxed);
             const float bri = engBri_[k].load(std::memory_order_relaxed);
+            const float idle = std::max(60.0f, engIdle_[k].load(std::memory_order_relaxed));
             const float firingHz = rpm / 60.0f * fire *
                                    (1.0f + 0.007f * static_cast<float>(k)) *
                                    (1.0f + engHunt_[k] * 0.05f); // detuned + hunt
@@ -310,9 +311,14 @@ void Audio::render(float* out, int n) {
             engKnock_[k] *= 0.9985f; // ~15 ms decay (about half a firing period)
             rng_ = rng_ * 1664525u + 1013904223u;
             const float hum = static_cast<float>(rng_ >> 8) / 8388608.0f - 1.0f;
-            float voice = (thrum * 0.55f + knock * 0.28f + hum * 0.10f) *
-                          std::clamp((rpm - 100.0f) / 200.0f, 0.0f, 1.0f) * // crank-in
-                          (1.0f + engHunt_[k] * 0.18f);                     // load fluctuation
+            // Cranking: the voice fades in as the engine comes up to speed and is at full
+            // voice once it has caught, which means once it is at ITS idle - a third of
+            // idle to idle, and not a fixed window of revs. Written absolutely, as it was,
+            // an engine that idles slowly never finishes arriving: the EMD 710's 200 rpm
+            // landed halfway up a ramp built for 315 and it sounded half a locomotive.
+            const float crank = std::clamp((rpm - idle * 0.35f) / (idle * 0.65f), 0.0f, 1.0f);
+            float voice = (thrum * 0.55f + knock * 0.28f + hum * 0.10f) * crank *
+                          (1.0f + engHunt_[k] * 0.18f); // load fluctuation
             engLp_[k] += (voice - engLp_[k]) * bri; // insulation LP
             // A pulse carries more level than the sine stack it replaced, and this was
             // meant to change what the engine sounds like and not how loud it is - it is
@@ -735,6 +741,7 @@ void Audio::update(const Consist& sounded, float /*dt*/, float brakeGain,
         engVol_[k].store(std::max(0.0f, e.volume), std::memory_order_relaxed);
         engRum_[k].store(std::clamp(e.rumble, 0.0f, 2.0f), std::memory_order_relaxed);
         engBri_[k].store(std::clamp(e.bright, 0.01f, 1.0f), std::memory_order_relaxed);
+        engIdle_[k].store(std::max(60.0f, e.idleRpm), std::memory_order_relaxed);
     }
     compActive_.store(v.compressorRunning(), std::memory_order_relaxed);
     gridLoad_.store(std::clamp(v.dynamicBrakeFrac(), 0.0f, 1.0f), std::memory_order_relaxed);
@@ -1029,6 +1036,7 @@ void Audio::dumpEngineTest(const std::string& wavPath) {
             a.engVol_[k].store(sp->engineVolume);
             a.engRum_[k].store(sp->engineRumble);
             a.engBri_[k].store(sp->engineBright);
+            a.engIdle_[k].store(sp->idleRpm);
         }
         a.compActive_.store(s.comp);
         const int total = static_cast<int>(s.dur * fs);
@@ -1066,6 +1074,7 @@ void Audio::dumpGridTest(const std::string& wavPath) {
         a.engVol_[0].store(sp->engineVolume);
         a.engRum_[0].store(sp->engineRumble);
         a.engBri_[0].store(sp->engineBright);
+        a.engIdle_[0].store(sp->idleRpm);
         a.gridLoad_.store(s.load);
         const int total = static_cast<int>(s.dur * fs);
         float buf[256];

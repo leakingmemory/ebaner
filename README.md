@@ -550,7 +550,20 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   spectrum and not of level: the extra harmonics are paid for by trimming the voice back,
   so the Di 4's engine measures the same RMS it did and carries **+2 to +10 dB** from
   500 Hz up. All of it keys off the rumble weight the voice already carries, so the railcar
-  — which has none — is untouched, and its dump is **bit-identical** to the reference. Measured, not guessed: `EBANER_AUDIO_DUMP_ENGINE` renders the script — off, crank,
+  — which has none — is untouched, and its dump is **bit-identical** to the reference.
+  A third engine found two faults in all this that two could not. The CD 312's EMD 710
+  idles at **200 rpm** where the 645 idles at 315 and the railcar's Cummins at 700, and
+  the voice used to fade in over a fixed window of revs — 100 to 300 — so an engine that
+  idles below 300 never finished arriving and sounded **half a locomotive** for ever. The
+  fade is now a fraction of the engine's *own* idle, which leaves both older machines at
+  full voice exactly where they were and changes only the **0.2 s** of cranking, where it
+  is the better answer anyway: no combustion voice at all while the starter is still
+  turning it. The other is the rumble weight. It is generated at a quarter and a half of
+  the firing rate, and at 53 Hz firing those land at **13 and 27 Hz** where the Di 4's
+  land at 21 and 42 — so with the Di 4's figure **63 % of this engine's output was below
+  20 Hz**, heard by nobody and eating the headroom the rest of the train needs. It carries
+  half as much, and a slightly brighter low-pass to put the difference where it can be
+  heard. Measured, not guessed: `EBANER_AUDIO_DUMP_ENGINE` renders the script — off, crank,
   idle, compressor, full song, shut down — and `EBANER_AUDIO_ENGINE` picks which machine,
   because "louder and heavier" is a claim about two sounds and cannot be checked by
   listening to one. The first attempt was 4× and **clipping**; the dump caught both that

@@ -4207,7 +4207,7 @@ int main(int argc, char** argv) {
                         glm::clamp((50.0f - glm::distance(camPos, secs[k].pos)) / 38.0f,
                                    0.0f, 1.0f),
                         u.firingsPerRev(), u.engineVolume(), u.engineRumble(),
-                        u.engineBright()};
+                        u.engineBright(), u.idleRpm()};
                 }
             }
             // The crossing bell: whichever ringing crossing is loudest from here. A bell
