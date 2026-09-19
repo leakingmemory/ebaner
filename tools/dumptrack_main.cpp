@@ -46,7 +46,7 @@ void usage() {
     std::puts(
         "usage: ebaner-dumptrack <datasetRoot> [--near <x> <y> <radius>]\n"
         "                       [--switches <x> <y> <radius>] [--route <a> <b>]\n"
-        "                       [<trackIdHex> ...]\n"
+        "                       [--gaps <x> <y> <radius>] [<trackIdHex> ...]\n"
         "\n"
         "  --near x y radius     list the tracks whose geometry comes within radius\n"
         "                        metres of a point, nearest first\n"
@@ -55,6 +55,12 @@ void usage() {
         "  --switches x y radius list the turnouts the sim builds around a point, with\n"
         "                        the branch track each is keyed on and whether an\n"
         "                        authored `switch ... motor` override reaches it\n"
+        "  --gaps x y radius     list the loose ends around a point: segment endpoints\n"
+        "                        with no other endpoint within the 1 m the path builder\n"
+        "                        joins at, nearest first, each with the nearest other\n"
+        "                        loose end - which is what a `link` edit would join. A\n"
+        "                        buffer stop is a loose end too, so read the distance:\n"
+        "                        a real break is two ends facing each other.\n"
         "  --route <a> <b>       ask the editor's own search for a route between two\n"
         "                        borders, each written <trackIdHex>:<frac>. Prints the\n"
         "                        count it found - 0 means the editor will refuse to\n"
@@ -100,6 +106,8 @@ int main(int argc, char** argv) {
     double sx = 0.0, sy = 0.0, sr = 0.0;
     bool haveNear = false;
     double nx = 0.0, ny = 0.0, nr = 0.0;
+    bool haveGaps = false;
+    double gx = 0.0, gy = 0.0, gr = 0.0;
     std::vector<std::uint32_t> ids;
     for (int i = 2; i < argc; ++i) {
         if (std::strcmp(argv[i], "--near") == 0 && i + 3 < argc) {
@@ -109,6 +117,11 @@ int main(int argc, char** argv) {
             nx = std::atof(argv[++i]);
             ny = std::atof(argv[++i]);
             nr = std::atof(argv[++i]);
+        } else if (std::strcmp(argv[i], "--gaps") == 0 && i + 3 < argc) {
+            haveGaps = true;
+            gx = std::atof(argv[++i]);
+            gy = std::atof(argv[++i]);
+            gr = std::atof(argv[++i]);
         } else if (std::strcmp(argv[i], "--switches") == 0 && i + 3 < argc) {
             haveSw = true;
             sx = std::atof(argv[++i]);
@@ -133,7 +146,10 @@ int main(int argc, char** argv) {
             ids.push_back(static_cast<std::uint32_t>(std::strtoul(argv[i], nullptr, 16)));
         }
     }
-    if (!haveNear && ids.empty() && routeQs.empty() && !haveSw) { usage(); return 2; }
+    if (!haveNear && ids.empty() && routeQs.empty() && !haveSw && !haveGaps) {
+        usage();
+        return 2;
+    }
 
     // The terrain window is small on purpose: the rail network is read whole
     // whatever ground is loaded, and this asks only about rail.
@@ -162,6 +178,62 @@ int main(int argc, char** argv) {
             std::printf("%8.2f %10x %5u %8zu %9s  %.2f .. %.2f\n",
                         d, s->trackId, s->trackType, s->pts.size(),
                         mediumName(s->medium), z0, z1);
+        }
+    }
+
+    if (haveGaps) {
+        // Where the road is broken. The path builder chains two segments into one route
+        // when their ends sit within kJoinTol of each other, so an end with nothing
+        // inside that distance is where a route stops - and the reason a route search
+        // between two stations comes back with 0. Finding these by eye means dumping
+        // every track in the corridor and comparing endpoints by hand, which is how the
+        // last one was found and is not worth doing twice.
+        constexpr double kJoinTol = 1.0; // must match TrackPath.cpp
+        struct End {
+            glm::dvec3 p;
+            std::uint32_t track;
+            bool tail; // which end of the segment it is, for reading the geometry back
+        };
+        std::vector<End> ends;
+        for (const TrackSegment& s : tracks) {
+            if (s.pts.size() < 2) continue;
+            ends.push_back({s.pts.front(), s.trackId, false});
+            ends.push_back({s.pts.back(), s.trackId, true});
+        }
+        auto near2 = [](const glm::dvec3& a, const glm::dvec3& b) {
+            return std::hypot(a.x - b.x, a.y - b.y);
+        };
+        std::vector<std::pair<double, std::size_t>> loose;
+        for (std::size_t i = 0; i < ends.size(); ++i) {
+            const double d = std::hypot(ends[i].p.x - gx, ends[i].p.y - gy);
+            if (d > gr) continue;
+            // Any other end inside the tolerance counts, including another segment of
+            // the same track: the path builder joins on position and does not care
+            // whose id it is, and a track that arrives in two touching pieces is joined
+            // whatever the export called them.
+            bool joined = false;
+            for (std::size_t j = 0; j < ends.size() && !joined; ++j)
+                joined = j != i && near2(ends[i].p, ends[j].p) <= kJoinTol;
+            if (!joined) loose.push_back({d, i});
+        }
+        std::sort(loose.begin(), loose.end());
+        std::printf("%8s %10s %6s %11s %11s %8s   %s\n", "dist", "id", "end", "x", "y",
+                    "z", "nearest other loose end");
+        for (const auto& [d, i] : loose) {
+            double bd = 1e30;
+            std::size_t bj = 0;
+            for (const auto& [d2, j] : loose)
+                if (j != i && near2(ends[i].p, ends[j].p) < bd) {
+                    bd = near2(ends[i].p, ends[j].p);
+                    bj = j;
+                }
+            char buf[96] = "none in range";
+            if (bd < 1e29)
+                std::snprintf(buf, sizeof(buf), "%.2f m to %x %s", bd, ends[bj].track,
+                              ends[bj].tail ? "tail" : "head");
+            std::printf("%8.2f %10x %6s %11.3f %11.3f %8.3f   %s\n", d, ends[i].track,
+                        ends[i].tail ? "tail" : "head", ends[i].p.x, ends[i].p.y,
+                        ends[i].p.z, buf);
         }
     }
 

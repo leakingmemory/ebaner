@@ -601,9 +601,17 @@ cmake -S . -B build
 cmake --build build -j
 ```
 
-This builds two executables that share the same rendering/loading engine
-(`libebaner_engine`): the **`ebaner`** viewer above, and **`ebaner-trackedit`**
-below.
+This builds three executables that share the same rendering/loading engine
+(`libebaner_engine`): the **`ebaner`** viewer above, **`ebaner-trackedit`**
+below, and **`ebaner-dumptrack`**, which answers questions about the network the
+way the sim sees it - after `track-edits.txt` is applied, which is the only form
+worth deriving anything from. `--near` lists what is around a point, a track id
+prints its vertices, `--switches` shows the turnouts and which overrides reached
+them, `--route` asks the editor's own search whether a road exists, and `--gaps`
+lists the loose ends: endpoints with nothing inside the 1 m the path builder
+joins at, each with the nearest other loose end, which is what a `link` edit
+would join. A buffer stop is a loose end too, so the distance is the tell - a
+real break is two ends facing each other a few tens of metres apart.
 
 ## Test
 
