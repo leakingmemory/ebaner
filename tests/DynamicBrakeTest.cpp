@@ -252,6 +252,41 @@ int main() {
               di4->dynBrakeN / di4->mass);
     }
 
+    // The other locomotive's brake, whose figures are estimates too but a different pair,
+    // so the shape has to come out of the numbers rather than out of one hard-coded curve.
+    const VehicleSpec* cd = specNamed("CD 312");
+    if (cd == nullptr) {
+        std::puts("\nno CD 312 in the vehicle table - that part is skipped");
+    } else {
+        std::puts("\nThe CD 312's brake, from its own two figures");
+        check(cd->dynBrakeN > 0.0f, "it has an electric brake", cd->dynBrakeN, 220000.0);
+        check(cd->dynBrakeN > di4->dynBrakeN,
+              "  a stronger one than the Di 4's, as the bigger machine should have",
+              cd->dynBrakeN, di4->dynBrakeN);
+        const float corner = cd->dynBrakeW / cd->dynBrakeN;
+        std::printf("    %.0f kN flat, %.1f MW grids, corner at %.1f m/s (%.0f km/h)\n",
+                    cd->dynBrakeN / 1000.0f, cd->dynBrakeW / 1e6f, corner, corner * 3.6f);
+        check(corner > 5.0f && corner < 20.0f,
+              "  and the corner lands somewhere a freight train actually runs", corner,
+              8.2);
+        // Below the corner, flat at the current limit. Asked at 20 m/s to begin with,
+        // which is a speed this machine is well PAST the corner at - the answer came back
+        // at four tenths of the maximum and looked like a fault, when it was the brake
+        // being grid-limited exactly as it should be.
+        const float slow = brakeAt(w, *cd, 0.6f * corner);
+        check(slow > 0.9f * cd->dynBrakeN, "below the corner it is at its current limit",
+              slow / 1000.0f, cd->dynBrakeN / 1000.0f);
+        float worst = 0.0f;
+        for (const float kmh : {50.0f, 90.0f, 120.0f}) {
+            const float v = kmh / 3.6f;
+            const float p = brakeAt(w, *cd, v) * v;
+            worst = std::max(worst, std::abs(p - cd->dynBrakeW) / cd->dynBrakeW);
+            std::printf("    %5.0f km/h: %5.0f kN, %5.0f kW into the grids\n", kmh,
+                        brakeAt(w, *cd, v) / 1000.0f, p / 1000.0f);
+        }
+        check(worst < 0.05f, "above it the grids hold their rating (worst err)", worst, 0.0);
+    }
+
     std::printf("\n%s\n", failures == 0 ? "all ok" : "FAILURES");
     return failures == 0 ? 0 : 1;
 }

@@ -99,7 +99,9 @@ int main() {
         // geared speed dragging them - and doing that on every step rather than only
         // while powering put a stopped engine at idle speed, reported it Running, and
         // made it impossible to stop: the revs went back up the same step they came down.
-        for (const VehicleSpec* sp : {c93, di4}) {
+        const VehicleSpec* cd = specNamed("CD 312"); // may be absent; skipped if so
+        for (const VehicleSpec* sp : {c93, di4, cd}) {
+            if (sp == nullptr) continue;
             const std::string who(sp->name);
             World w2;
             Consist c(&w2.paths, &w2.paths[0], *sp, 10000.0f);
@@ -116,6 +118,9 @@ int main() {
 
             c.toggleEngines();
             run(6.0f);
+            // Against the machine's OWN idle: 700 on the railcar, 315 on the Di 4's
+            // EMD 645, 200 on the CD 312's 710. A shared constant here would pass for
+            // whichever engine it was written for and quietly lie about the others.
             check(std::abs(c.lead().engineRpm(0) - sp->idleRpm) < 1.0f,
                   "  started, it settles at its own idle", c.lead().engineRpm(0),
                   sp->idleRpm);

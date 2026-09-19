@@ -176,6 +176,29 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   cross, at 2460 kW × 0.85 ÷ 314 kN ≈ 24 km/h, and moves wherever the rating and the starting
   effort put it. So it pulls away hard and then runs out of pull, which is what a heavy diesel
   loco does and what the railcar does not.
+- **CargoNet CD 312 (Vossloh/Stadler EURO 4000)** — the machine that works these freights
+  now, and the Di 4's opposite number: the Di 4 is left on the passenger trains, and this
+  one hauls the goods. Six were built by Vossloh España in 2009, leased from Beacon Rail
+  and lettered CargoNet — "CargoNet Diesel" — and bought to take **25 % more train** than
+  the Di 4 did over this line. **123 t, 23.02 m, 3178 kW, 400 kN starting, 120 km/h** on
+  **1.067 m** wheels, Co'Co' again, and an EMD again: the **16-710G3C-U2** is the direct
+  descendant of the Di 4's 16-645. Where the Di 4 is adhesion-rich, this is right at the
+  limit — 123 t on six driven axles holds **398 kN** at 0.33, so its 400 kN rating is
+  precisely all the weight can put down, which is what a freight locomotive is built to be.
+  It out-pulls the Di 4 by about **30 %** at 20 m/s, which is the operator's claim arrived
+  at from the figures rather than taken on trust.
+  It looks nothing like the Di 4 and the difference is one line: **this nose has no chin**.
+  The front is close to vertical with a single slight rake all the way up. Grey flanks with
+  a big **louvred radiator panel** whose slats run *across*, a **golden-yellow band at
+  solebar level** running the whole length and carrying on round the nose, black underframe,
+  fuel tank and lower front, red markers high at the nose corners over headlights low on the
+  black, and a **yellow snowplough** reaching down to 15 cm over the railhead. Taken off a
+  photograph of **0312 002-7**; the colours are sampled from it rather than guessed.
+  **Width, height, bogie wheelbase and bogie centres are estimates** — no source gives any
+  of the four, and a three-quarter photograph cannot be scaled — as are the two dynamic
+  brake figures, which are flagged in the spec the way the Di 4's are. The length, mass,
+  power, pull and wheel diameter are sourced. It goes on the line **light**: its train is a
+  freight train and there is not a freight wagon in the model yet.
   Nor does the power arrive when the handle moves. **Two lags in series**, and they are
   different machinery: the **governor** walks a 45-litre two-stroke from its 315 rpm idle to
   900 over about seven seconds, and behind it the **load regulator** winds excitation on
@@ -1407,7 +1430,7 @@ the corresponding sources (national rail register + NVDB roads + OSM enrichment)
 | `EBANER_NOCARVE`    | Skip carving railway cuttings into the terrain.               |
 | `EBANER_NOOVERLAY`  | Ignore the `overlay/` track edits (link fixes).               |
 | `EBANER_EDMODE`     | `ebaner-trackedit` only: start in this mode, by its menu name. |
-| `EBANER_VEHICLE`    | Skip the start screen and preselect a vehicle, by its index in `kVehicleSpecs` (`0` = a single Class 93, `1`/`2` = two and three coupled, `3` = Di 4 + 5, `4` = the night train, `5` = a light Di 4). The table is ordered for the pickers, so these move when a vehicle is added - the start screen numbers the list. |
+| `EBANER_VEHICLE`    | Skip the start screen and preselect a vehicle, by its index in `kVehicleSpecs` (`0` = a single Class 93, `1`/`2` = two and three coupled, `3` = Di 4 + 5, `4` = the night train, `5` = a light Di 4, `6` = a CD 312). The table is ordered for the pickers, so these move when a vehicle is added - the start screen numbers the list. |
 | `EBANER_AUDIO_DUMP` | Render a scripted brake sequence to the given WAV and exit.   |
 | `EBANER_AUDIO_DUMP_ENGINE` | Render an engine start/idle/stop to the given WAV, exit. |
 | `EBANER_AUDIO_DUMP_CROSSING` | Render a crossing bell activating/falling silent, exit. |

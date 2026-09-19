@@ -129,6 +129,50 @@ constexpr float kBufferHalfSpacing = 0.875f;
 constexpr float kBufferR = 0.19f;
 } // namespace di4
 
+// CargoNet CD 312 - a Vossloh EURO 4000, and the machine that works the Nordlandsbanen
+// freights today. Shaped and coloured off a three-quarter photograph of 0312 002-7.
+//
+// It is a very different animal from the Di 4 in the one respect that shows: the Di 4's
+// nose has a chin, the furthest-forward point being a knee a little over half way up with
+// the front tucking back in below it. This has none. The front is close to vertical, the
+// slight rake runs the same way all the way up, and copying the Di 4's profile here would
+// be the single most visible way to get it wrong.
+//
+// What the photograph shows, from the top: a level roof end to end; grey flanks; a big
+// louvred radiator panel over most of the hood side; a golden-yellow band at solebar level
+// running the whole length and carrying on across the nose; black underframe, fuel tank
+// and bogies; a black panel over the lower half of the front carrying the headlights, with
+// red markers high at the nose corners; and a yellow snowplough under the buffer beam.
+namespace cd312 {
+const glm::vec3 kBody(0.68f, 0.68f, 0.68f);   // the grey, sampled off the cab side
+const glm::vec3 kRoof(0.80f, 0.79f, 0.79f);   // the roof, a shade lighter than the flanks
+const glm::vec3 kBand(0.90f, 0.65f, 0.06f);   // the solebar band and the handrails
+const glm::vec3 kDark(0.07f, 0.07f, 0.08f);   // underframe, fuel tank, lower front
+const glm::vec3 kGrille(0.42f, 0.39f, 0.36f); // the radiator louvres
+const glm::vec3 kMarker(0.72f, 0.11f, 0.10f); // the red marker lights
+// Proportions of the body's own height above the floor, read off the photograph: the band
+// sits right at the bottom on the solebar, the black front panel covers the lower half,
+// and the flanks tumble in only slightly at the roof - far less than the Di 4's.
+// Measured across the front face, which is the one part of a three-quarter photograph
+// that can be scaled - it is all at one depth. Roof to solebar is 193 px, of which the
+// band is 14, the black panel below the screens 109, and the grey above it 70.
+constexpr float kBandLo = 0.00f, kBandHi = 0.07f;
+constexpr float kBlackTop = 0.63f;    // top of the black lower front
+constexpr float kScreenLo = 0.68f;    // windscreen sill
+constexpr float kScreenHi = 0.93f;    // and its head, below the cowl
+constexpr float kSideWinLo = 0.70f;   // cab side window, which lines up with the screen
+constexpr float kSideWinHi = 0.92f;
+constexpr float kShoulderFrac = 0.12f; // of the body height, where the flanks chamfer in
+constexpr float kRoofWFrac = 0.90f;   // roof width, of the body's
+constexpr float kNoseWFrac = 0.97f;   // the front, likewise
+constexpr float kNoseRake = 0.30f;    // m the front leans back from floor to roof
+constexpr float kCabLen = 2.30f;      // cab, from the hood end to the front
+constexpr float kBodyRise = 0.30f;    // body floor above the bogie frame top
+constexpr float kRoofThick = 0.10f;
+constexpr int   kLouvres = 7;         // slats. Fewer and bolder than the real panel, which
+                                      // at any distance is a moire of grey lines
+} // namespace cd312
+
 // NSB Class 93 (Bombardier Talent) exterior, classic NSB livery.
 // NSB Type 5 (Strommens Vaerksted, 1977-81) passenger carriage, in the red-and-grey the
 // class wore for most of its working life behind these locomotives. 25.3 m on two two-axle
@@ -1926,6 +1970,173 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                 0.32f, di4::kSkirt);
     };
 
+    auto emitCD312 = [&](const VehicleFrame& f, float halfLen) {
+        const glm::vec3 X = f.right, Y = f.tangent, Z = f.up;
+        const float hw = 0.5f * vehicle.width();
+        const float hwN = hw * cd312::kNoseWFrac;
+        const float z0 = frameTopZ + cd312::kBodyRise;      // underframe top / body floor
+        const float roofZ = wheelset::kRailTopZ + vehicle.height();
+        const float bodyH = roofZ - z0;
+        const float zSh = roofZ - bodyH * cd312::kShoulderFrac;
+        const float hwRoof = hw * cd312::kRoofWFrac;
+        auto P = [&](float lx, float ly, float lz) { return f.pos + X * lx + Y * ly + Z * lz; };
+        const glm::vec3 core = P(0.0f, 0.0f, z0 + 0.5f * bodyH); // for outward normals
+        auto at = [&](float frac) { return z0 + bodyH * frac; }; // a height, of the body's
+        // How far forward the body reaches at a height. One straight rake the whole way up
+        // and no knee: this is the shape, and the Di 4's chin is what it must not have.
+        auto yF = [&](float z) {
+            return halfLen - cd312::kNoseRake * (z - z0) / bodyH;
+        };
+        // The half width at a height - square sided until the shoulder, then chamfered in.
+        auto hwAt = [&](float z, float scale) {
+            const float w = z <= zSh ? hw : hw + (hwRoof - hw) * (z - zSh) / (roofZ - zSh);
+            return w * scale;
+        };
+        // One band of the shell: both flanks, and the front at each end, between two
+        // heights. Built as trapezoids rather than as a box because the front leans back,
+        // so every band is shorter than the one below it.
+        auto shellBand = [&](float zA, float zB, const glm::vec3& side,
+                             const glm::vec3& front) {
+            const float yA = yF(zA), yB = yF(zB);
+            const float wA = hwAt(zA, 1.0f), wB = hwAt(zB, 1.0f);
+            for (const float sx : {-1.0f, 1.0f})
+                quadN(P(sx * wA, -yA, zA), P(sx * wA, yA, zA), P(sx * wB, yB, zB),
+                      P(sx * wB, -yB, zB), side, core);
+            for (const float sy : {-1.0f, 1.0f})
+                quadN(P(-hwAt(zA, cd312::kNoseWFrac), sy * yA, zA),
+                      P(hwAt(zA, cd312::kNoseWFrac), sy * yA, zA),
+                      P(hwAt(zB, cd312::kNoseWFrac), sy * yB, zB),
+                      P(-hwAt(zB, cd312::kNoseWFrac), sy * yB, zB), front, core);
+        };
+
+        // Underframe below the floor, and the fuel tank slung between the bogies. 7000
+        // litres on this one, which is a tank you can see from a long way off.
+        emitBox(X, Y, Z, P(0.0f, 0.0f, frameTopZ + 0.5f * cd312::kBodyRise), hw * 0.97f,
+                halfLen - 0.20f, 0.5f * cd312::kBodyRise, cd312::kDark);
+        emitBox(X, Y, Z, P(0.0f, 0.0f, frameTopZ - 0.36f), hw * 0.64f, halfLen * 0.30f,
+                0.34f, cd312::kDark);
+
+        // The shell, bottom to top. The band at the solebar and the black lower front are
+        // paint and not structure, so they are bands of the same shell in another colour -
+        // which is also what makes the band carry round the nose, as it does on the real
+        // one.
+        shellBand(at(cd312::kBandLo), at(cd312::kBandHi), cd312::kBand, cd312::kBand);
+        shellBand(at(cd312::kBandHi), at(cd312::kBlackTop), cd312::kBody, cd312::kDark);
+        shellBand(at(cd312::kBlackTop), at(cd312::kScreenLo), cd312::kBody, cd312::kBody);
+        shellBand(at(cd312::kScreenLo), at(cd312::kScreenHi), cd312::kBody, di4::kGlass);
+        shellBand(at(cd312::kScreenHi), zSh, cd312::kBody, cd312::kBody);
+        shellBand(zSh, roofZ, cd312::kBody, cd312::kBody);
+
+        // Floor pan and roof. The roof is level for the whole length - there is no step
+        // down behind a cab, both cabs being the full height of the body.
+        quadN(P(-hw, -yF(z0), z0), P(hw, -yF(z0), z0), P(hw, yF(z0), z0), P(-hw, yF(z0), z0),
+              cd312::kDark, core);
+        const float yRoof = yF(roofZ);
+        emitBox(X, Y, Z, P(0.0f, 0.0f, roofZ - 0.5f * cd312::kRoofThick), hwRoof, yRoof,
+                0.5f * cd312::kRoofThick, cd312::kRoof);
+
+        // The hood between the cabs: the radiator louvres down each side, and the fan and
+        // hatch panels let into the roof above them.
+        const float hood = halfLen - cd312::kCabLen;
+        const float panY = hood * 0.78f;                       // the panel's half length
+        const float panLo = at(0.34f), panHi = at(0.72f);      // and its two heights
+        for (const float sx : {-1.0f, 1.0f}) {
+            emitBox(X, Y, Z, P(sx * (hw + 0.004f), 0.0f, 0.5f * (panLo + panHi)), 0.008f,
+                    panY, 0.5f * (panHi - panLo), cd312::kGrille);
+            // Slats ACROSS the panel, not up it. They are a radiator grille and they run
+            // horizontally, which is the first thing wrong when they do not: vertical bars
+            // over most of a grey flank stop reading as a locomotive altogether and start
+            // reading as a cattle wagon.
+            for (int i = 0; i < cd312::kLouvres; ++i) {
+                const float t = (static_cast<float>(i) + 0.5f) /
+                                static_cast<float>(cd312::kLouvres);
+                emitBox(X, Y, Z,
+                        P(sx * (hw + 0.010f), 0.0f, panLo + t * (panHi - panLo)), 0.006f,
+                        panY * 0.99f,
+                        (panHi - panLo) / static_cast<float>(cd312::kLouvres) * 0.30f,
+                        cd312::kDark);
+            }
+        }
+        emitBox(X, Y, Z, P(0.0f, 0.0f, roofZ - cd312::kRoofThick - 0.03f), hwRoof * 0.86f,
+                hood * 0.95f, 0.04f, cd312::kDark);
+        for (int i = -1; i <= 1; ++i)
+            emitBox(X, Y, Z,
+                    P(0.0f, static_cast<float>(i) * hood * 0.55f,
+                      roofZ - cd312::kRoofThick - 0.015f),
+                    hwRoof * 0.70f, hood * 0.16f, 0.03f, cd312::kGrille);
+
+        // The band along the flanks, proud of the side so it reads at a distance, and the
+        // yellow handrails up the cab corners that go with it.
+        for (const float sx : {-1.0f, 1.0f}) {
+            emitBox(X, Y, Z, P(sx * (hw + 0.006f), 0.0f, at(0.5f * (cd312::kBandLo +
+                                                                    cd312::kBandHi))),
+                    0.010f, halfLen - 0.30f, bodyH * 0.5f * (cd312::kBandHi -
+                                                             cd312::kBandLo),
+                    cd312::kBand);
+            for (const float sy : {-1.0f, 1.0f})
+                emitBox(X, Y, Z, P(sx * (hw + 0.02f), sy * (hood + 0.30f), at(0.50f)),
+                        0.025f, 0.025f, bodyH * 0.40f, cd312::kBand);
+        }
+
+        // Cab side windows. Painted on the flank rather than cut into it, which is the
+        // opposite of what the Di 4 needed: there the glass had to be a hole because there
+        // is a drawn cab behind it, and a dark patch on a solid side gives no daylight.
+        // There is nothing behind this one yet, so a hole would look into an empty shell.
+        // When the cab is built these become cut openings.
+        for (const float sx : {-1.0f, 1.0f})
+            for (const float sy : {-1.0f, 1.0f}) {
+                emitBox(X, Y, Z,
+                        P(sx * (hw + 0.006f), sy * (halfLen - cd312::kCabLen * 0.52f),
+                          at(0.5f * (cd312::kSideWinLo + cd312::kSideWinHi))),
+                        0.010f, cd312::kCabLen * 0.34f,
+                        bodyH * 0.5f * (cd312::kSideWinHi - cd312::kSideWinLo), di4::kGlass);
+                // The cab door under it, which is where the yellow grab rails are for.
+                emitBox(X, Y, Z,
+                        P(sx * (hw + 0.004f), sy * (halfLen - cd312::kCabLen * 0.52f),
+                          at(0.36f)), 0.006f, 0.42f, bodyH * 0.30f, cd312::kGrille);
+            }
+
+        // Each end: the lights on the black panel, the buffer beam and the plough.
+        for (const float so : {-1.0f, 1.0f}) {
+            const float yBlack = yF(at(0.5f * (cd312::kBlackTop + cd312::kBandHi)));
+            // Two headlights low, in their black housings, and a red marker high at each
+            // corner - which is the arrangement in the photograph and reads even in
+            // silhouette.
+            for (const float sx : {-1.0f, 1.0f}) {
+                emitBox(X, Y, Z, P(sx * hwN * 0.62f, so * (yBlack + 0.03f), at(0.30f)),
+                        0.17f, 0.04f, 0.13f, cd312::kDark);
+                emitBox(X, Y, Z, P(sx * hwN * 0.62f, so * (yBlack + 0.06f), at(0.30f)),
+                        0.12f, 0.02f, 0.09f, di4::kLight);
+                emitBox(X, Y, Z,
+                        P(sx * hwN * 0.80f, so * (yF(at(0.96f)) + 0.02f), at(0.96f)), 0.07f,
+                        0.02f, 0.06f, cd312::kMarker);
+            }
+            const float yC = so * (halfLen + 0.04f);
+            emitBox(X, Y, Z, P(0.0f, yC, frameTopZ + 0.04f), hw, 0.07f, 0.20f,
+                    cd312::kDark);
+            // Centre buffer coupler: this one couples by being driven into, unlike the
+            // Di 4's screw couplings between side buffers.
+            emitBox(X, Y, Z, P(0.0f, yC + so * 0.16f, frameTopZ + 0.02f), 0.22f, 0.16f,
+                    0.16f, cd312::kDark);
+            // The plough. On this line it is not an ornament, and on this machine it is
+            // the most conspicuous thing about the front: a wide yellow blade reaching
+            // down nearly to the railhead.
+            // Quoted from the RAILHEAD and not from the frame, which is the only way to
+            // say what a plough is for. Measured down from the frame it came out 0.66 m
+            // clear of the rail - a plough that would pass over the drift rather than
+            // through it - and the frame is where it is because of the wheel diameter,
+            // so a machine on smaller wheels would hang its plough higher still.
+            const float zBlade = wheelset::kRailTopZ + 0.15f;
+            quadN(P(-hw * 0.94f, so * (halfLen + 0.10f), zBlade),
+                  P(hw * 0.94f, so * (halfLen + 0.10f), zBlade),
+                  P(hw * 0.82f, yC, frameTopZ + 0.10f), P(-hw * 0.82f, yC, frameTopZ + 0.10f),
+                  di4::kPlough, P(0.0f, so * halfLen, zBlade - 1.0f));
+            emitBox(X, Y, Z,
+                    P(0.0f, so * (halfLen - 0.02f), 0.5f * (zBlade + frameTopZ + 0.10f)),
+                    hw * 0.88f, 0.14f, 0.5f * (frameTopZ + 0.10f - zBlade), di4::kPlough);
+        }
+    };
+
     const std::vector<VehicleFrame> sections = vehicle.bodySectionFrames();
     if (!sections.empty()) {
         const float halfLen =
@@ -1945,6 +2156,8 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                 emitType5(sections[i], halfLen, t5::kA51);
             } else if (vehicle.bodyStyle() == BodyWlab2) {
                 emitType5(sections[i], halfLen, t5::kWLAB2);
+            } else if (vehicle.bodyStyle() == BodyCD312) {
+                emitCD312(sections[i], halfLen);
             } else {
                 const glm::vec3 centre =
                     sections[i].pos + sections[i].up * (frameTopZ + kUnderframeHalfHeight);

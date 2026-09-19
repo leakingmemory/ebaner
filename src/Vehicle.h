@@ -37,6 +37,7 @@ enum VehicleBodyStyle {
     BodyType5B = 5,     // and as a plain seating coach: the same shell, seating throughout
     BodyType5A = 6,     // and as 1st class: a window across the centre, and more legroom
     BodyWlab2 = 7,      // NSB WLAB-2 sleeping car: compartments, one small window each
+    BodyCD312 = 8,      // CargoNet CD 312 (Vossloh/Stadler EURO 4000) freight locomotive
 };
 
 // What turns the wheels. Two machines that could hardly be less alike: one puts its engine
@@ -247,6 +248,39 @@ inline constexpr VehicleSpec kVehicleSpecs[] = {
     // the middle axle 75 mm from where it belongs and is not a thing anyone can see.
     // Bogie centres follow from 15.60 m between the outer axles.
     inCat(kDi4Spec, CatLoco),
+
+    // CargoNet CD 312: Vossloh Espana, 2009, six leased from Beacon Rail - the machine that
+    // actually works the Nordlandsbanen freights now, bought because it takes 25% more
+    // train than the Di 4 it replaced on them. A Co'Co' again, and an EMD again: the
+    // 16-710G3C-U2 is the direct descendant of the Di 4's 16-645, 28 years and 65 cubic
+    // inches a cylinder later, and it turns the same 900 rev/min for 3178 kW against 2450.
+    // 400 kN starting, 123 t, 120 km/h on 1.067 m wheels. It idles at 200, which is the
+    // 710's own figure and a good deal slower than the Di 4's - so this V16 beats 53 times
+    // a second where that one beats 84, and sounds the bigger machine for it.
+    //
+    // Less half- and quarter-order weight than the Di 4 carries, and that is not because
+    // it is a smaller engine - it is the same size. The weight is generated at a quarter
+    // and a half of the firing rate, and at 53 Hz firing those land at 13 and 27 where the
+    // Di 4's land at 21 and 42. Thirteen hertz is below anything that will reproduce it:
+    // measured with the Di 4's figure, 63% of this engine's output was under 20 Hz, heard
+    // by nobody and eating the headroom the rest of the train needs. What is audible here
+    // is the firing rate and its harmonics, so it gets a slightly brighter low-pass too.
+    //
+    // WIDTH, HEIGHT, WHEELBASE AND BOGIE CENTRES ARE ESTIMATES. No source I could reach
+    // gives any of the four for this class, and the only photograph is a three-quarter
+    // view that cannot be scaled. They are what a 23.02 m Co'Co' inside European loading
+    // gauge has to be, near enough, and the length, mass, power and pull that matter are
+    // all sourced.
+    //
+    // No `hauls`. That is a statement and not an omission: this is the freight locomotive,
+    // its train is a freight train, and there is not one freight wagon in the model yet.
+    // The passenger carriages belong to the Di 4 and are not to be hung on this instead.
+    inCat({"CargoNet CD 312 (Euro 4000)", 123000.0f, 23.02f, 2.98f, 4.26f, 3.90f, 12.30f, 2,
+           BodyCD312, 1,
+           3, 1, DriveElectric, 3178000.0f, 0.5335f, 1.00f, 400000.0f, 200.0f, 900.0f, 6.5f,
+           16, true, 0.95f, 1.3f, 0.100f, ControlSeparate, 2, false, nullptr, nullptr,
+           220000.0f, 1800000.0f, true},
+          CatLoco),
 
     // --- Single carriages, for building a formation up by hand ---
     // NSB Type 5, Strommens Vaerksted 1977-81, 92 built. BC5-3 is a 2010-12 rebuild of a

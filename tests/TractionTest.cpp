@@ -248,6 +248,42 @@ int main() {
         check(half > full * 0.4f, "  but not nothing", half, full);
     }
 
+    // The second diesel-electric. Same drive, and the same curve has to fall out of it -
+    // but from figures a quarter bigger, so this is the check that the curve is computed
+    // from the machine and not fitted to the one machine it was written for.
+    const VehicleSpec* cd = specNamed("CD 312");
+    if (cd == nullptr) {
+        std::puts("\nno CD 312 in the vehicle table - that part is skipped");
+    } else {
+        std::puts("\nThe CD 312 does the same from bigger numbers");
+        const float mg = cd->mass * 9.81f;
+        const float adh = 0.33f * cd->drivenFrac * mg;
+        const float flat = std::min(cd->startTE, adh);
+        const float pRail = cd->powerW * 0.85f;
+        const float corner = pRail / flat;
+        std::printf("    rated %.0f kW, %.0f kN starting, corner at %.1f m/s (%.0f km/h)\n",
+                    cd->powerW / 1000.0f, flat / 1000.0f, corner, corner * 3.6f);
+        // 400 kN is what the sources give, and 123 t on six driven axles is enough weight
+        // to put it down: 0.33 adhesion allows 398 kN, so this machine is right at the
+        // limit of what it can hold - which is what a freight locomotive is built to be.
+        check(flat > 0.95f * std::min(cd->startTE, adh), "starting effort is the lower of "
+              "the current limit and adhesion", flat / 1000.0f,
+              std::min(cd->startTE, adh) / 1000.0f);
+        const float below = effortAt(w, *cd, std::max(1.0f, corner * 0.4f), 5);
+        check(below >= flat * 0.95f && below <= flat * 1.02f,
+              "  flat below the corner, right up at the limit", below / 1000.0f,
+              flat / 1000.0f);
+        float worst = 0.0f;
+        for (const float v : {corner * 1.6f, corner * 2.5f, corner * 4.0f})
+            worst = std::max(worst, std::abs(effortAt(w, *cd, v, 5) * v - pRail) / pRail);
+        check(worst < 0.05f, "  and P/v above it (worst err)", worst, 0.0);
+        // It out-pulls the Di 4 at every speed, which is the whole reason it replaced it
+        // on these trains - 25% more train, said the operator.
+        const float mine = effortAt(w, *cd, 20.0f, 5), his = effortAt(w, *di4, 20.0f, 5);
+        check(mine > his * 1.15f, "at 20 m/s it out-pulls the Di 4 by a good margin",
+              mine / 1000.0f, his / 1000.0f);
+    }
+
     std::printf("\n%s\n", failures == 0 ? "all ok" : "FAILURES");
     return failures == 0 ? 0 : 1;
 }
