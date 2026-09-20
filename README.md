@@ -434,6 +434,16 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   on a **gooseneck** over the end bogie with the kingpin at 980 mm, the container deck
   either side at 1155 mm. Drawn **loaded** — 35 t of wagon and two laden trailers at 30 t
   is 95 t, well inside the 135 t it is rated for; an empty one would be its own row.
+  The sides are **deep solid plate girders**, which is the whole character of the wagon
+  from beside the track: a continuous web from the deck down past the trailer's wheels,
+  with a flange along the top, stiffeners up it and amber lashing stanchions along the
+  edge. Built first as two thin bars at deck level with daylight between them, which is
+  not a wagon — you could see straight through into the well and out the far side.
+  Checked by **casting rays across it** rather than by hunting for a camera angle: from
+  0.5 m over the railhead up to the deck at 1.155 m, **every** ray is stopped. Below
+  0.42 m they go through, which is right — that is under the solebar, where a real wagon
+  has daylight and you see the track through it — and above the deck they pass only in the
+  gaps between the two trailers.
   The articulation needed **no new code**: `bodySectionFrames()` already gives a
   three-bogie vehicle two sections, each oriented by its own pair of bogies, so the wagon
   bends at the shared bogie and each half follows the rail it is actually on — which is

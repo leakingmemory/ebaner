@@ -263,6 +263,10 @@ const glm::vec3 kBox[2] = {{0.84f, 0.84f, 0.82f},  // one trailer pale
                                                     // printed over and over
 const glm::vec3 kSkirt(0.22f, 0.22f, 0.24f);   // the trailer's chassis and running gear
 const glm::vec3 kTyre(0.08f, 0.08f, 0.09f);
+const glm::vec3 kFlange(0.38f, 0.38f, 0.40f);  // the lip along the top of the girder
+const glm::vec3 kLash(0.80f, 0.50f, 0.10f);    // securing stanchions, amber
+constexpr float kGirderBot = 0.42f; // the side plate's bottom edge over the railhead
+constexpr int   kRibs = 9;          // stiffeners a side, per half
 constexpr float kDeckZ = 1.155f;    // container deck over the railhead
 constexpr float kSaddleZ = 0.98f;   // kingpin saddle, ditto
 constexpr float kPocketZ = 0.33f;   // and the floor of the well
@@ -2464,12 +2468,33 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
         const float yGoose = yOut - so * pocket::kGoose;   // where the gooseneck stops
         const float yWell = yGoose - so * pocket::kPocketLen; // and the well with it
 
-        // Solebars: two girders the length of the half, at deck height. The wagon is a
-        // frame with a hole in it, so these are what carries it and what is seen from the
-        // side under the trailer.
-        for (const float sx : {-1.0f, 1.0f})
-            emitBox(X, Y, Z, P(sx * (hw - 0.09f), 0.0f, zr(pocket::kDeckZ - 0.14f)), 0.09f,
-                    halfLen, 0.15f, pocket::kFrame);
+        // The sides are DEEP SOLID PLATE GIRDERS, and that is the whole character of the
+        // wagon from beside the track: a continuous web from the deck down past the
+        // trailer's wheels, with a flange along the top and stiffeners up it. Built first
+        // as two thin bars at deck level with daylight between them, which is not a wagon
+        // - you could see straight through it into the well and out the far side, and the
+        // real one is a wall of steel.
+        const float gMid = 0.5f * (pocket::kDeckZ + pocket::kGirderBot);
+        const float gHalf = 0.5f * (pocket::kDeckZ - pocket::kGirderBot);
+        for (const float sx : {-1.0f, 1.0f}) {
+            emitBox(X, Y, Z, P(sx * (hw - 0.05f), 0.0f, zr(gMid)), 0.05f, halfLen, gHalf,
+                    pocket::kFrame);
+            // The top flange, standing a little proud of the web.
+            emitBox(X, Y, Z, P(sx * (hw - 0.03f), 0.0f, zr(pocket::kDeckZ + 0.02f)), 0.07f,
+                    halfLen, 0.035f, pocket::kFlange);
+            // Stiffeners up the web, and the lashing stanchions along the deck edge, which
+            // are the one bright thing on an otherwise black wagon.
+            for (int i = 0; i < pocket::kRibs; ++i) {
+                const float t = (static_cast<float>(i) + 0.5f) /
+                                static_cast<float>(pocket::kRibs);
+                const float ry = (-1.0f + 2.0f * t) * halfLen;
+                emitBox(X, Y, Z, P(sx * (hw - 0.01f), ry, zr(gMid)), 0.02f, 0.055f,
+                        gHalf * 0.94f, pocket::kFlange);
+                if (i % 3 == 1)
+                    emitBox(X, Y, Z, P(sx * (hw - 0.04f), ry, zr(pocket::kDeckZ + 0.14f)),
+                            0.05f, 0.05f, 0.14f, pocket::kLash);
+            }
+        }
         // Deck either side of the well, and the two crossbeams that close it.
         for (const float sx : {-1.0f, 1.0f})
             emitBox(X, Y, Z,
@@ -2487,6 +2512,13 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
         // The well floor itself, low between the solebars.
         emitBox(X, Y, Z, P(0.0f, 0.5f * (yGoose + yWell), zr(pocket::kPocketZ)),
                 pocket::kPocketHalfW, 0.5f * pocket::kPocketLen, 0.03f, pocket::kDeck);
+        // And close both ends of that box: the outer one behind the headstock, the inner
+        // one at the articulation, where two halves meet over the shared bogie and you
+        // would otherwise see in through the joint.
+        for (const float sy : {-1.0f, 1.0f})
+            emitBox(X, Y, Z, P(0.0f, sy * (halfLen - 0.04f), zr(gMid)), hw - 0.05f, 0.04f,
+                    gHalf, pocket::kFrame);
+
         // Headstock and buffers at the outer end only - the inner end is a Jacobs bogie
         // and has neither, which is the point of articulating it.
         emitBox(X, Y, Z, P(0.0f, yOut, zr(pocket::kDeckZ - 0.20f)), hw, 0.08f, 0.22f,
