@@ -277,6 +277,12 @@ constexpr float kTrailerLen = 13.60f;
 constexpr float kTrailerHalfW = 1.275f;
 constexpr float kTrailerFloor = 1.42f; // its chassis underside over the railhead
 constexpr float kTrailerH = 2.75f;
+// And the plain container flat, which shares this wagon's steel and its Y25 bogies.
+// A 20 ft ISO box is 6.058 x 2.438 x 2.591 m; the deck it stands on is an estimate.
+const glm::vec3 kBoxA(0.22f, 0.42f, 0.28f);  // one container green
+const glm::vec3 kBoxB(0.52f, 0.26f, 0.18f);  // and one oxide red, as a real rake mixes
+constexpr float kFlatDeck = 1.175f;  // deck over the railhead
+constexpr float kCtLen = 6.058f, kCtHalfW = 1.219f, kCtH = 2.591f;
 } // namespace pocket
 
 // NSB Class 93 (Bombardier Talent) exterior, classic NSB livery.
@@ -2559,6 +2565,59 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                     0.07f, 0.07f, 0.24f, pocket::kSkirt);
     };
 
+    // The plain four-axle container flat: a deck on two deep solebars, and two 20 ft boxes
+    // standing on it over the bogies. Same steel as the pocket wagon, because it is the
+    // same steel - these run coupled together in the same trains.
+    auto emitFlat = [&](const VehicleFrame& f, float halfLen) {
+        const glm::vec3 X = f.right, Y = f.tangent, Z = f.up;
+        const float hw = 0.5f * vehicle.width();
+        auto P = [&](float lx, float ly, float lz) { return f.pos + X * lx + Y * ly + Z * lz; };
+        auto zr = [&](float overRail) { return wheelset::kRailTopZ + overRail; };
+        const float gMid = 0.5f * (pocket::kFlatDeck + pocket::kGirderBot);
+        const float gHalf = 0.5f * (pocket::kFlatDeck - pocket::kGirderBot);
+        // Deck, and a solid solebar each side under it with stiffeners up the web.
+        emitBox(X, Y, Z, P(0.0f, 0.0f, zr(pocket::kFlatDeck - 0.04f)), hw, halfLen, 0.04f,
+                pocket::kDeck);
+        for (const float sx : {-1.0f, 1.0f}) {
+            emitBox(X, Y, Z, P(sx * (hw - 0.05f), 0.0f, zr(gMid)), 0.05f, halfLen, gHalf,
+                    pocket::kFrame);
+            emitBox(X, Y, Z, P(sx * (hw - 0.03f), 0.0f, zr(pocket::kFlatDeck + 0.02f)),
+                    0.07f, halfLen, 0.03f, pocket::kFlange);
+            for (int i = 0; i < pocket::kRibs; ++i) {
+                const float t = (static_cast<float>(i) + 0.5f) /
+                                static_cast<float>(pocket::kRibs);
+                emitBox(X, Y, Z, P(sx * (hw - 0.01f), (-1.0f + 2.0f * t) * halfLen, zr(gMid)),
+                        0.02f, 0.055f, gHalf * 0.94f, pocket::kFlange);
+            }
+        }
+        // Headstocks and buffers, both ends: this one is a wagon on its own and couples at
+        // each end, unlike the articulated pocket wagon's inner end.
+        for (const float sy : {-1.0f, 1.0f}) {
+            emitBox(X, Y, Z, P(0.0f, sy * halfLen, zr(gMid)), hw, 0.07f, gHalf,
+                    pocket::kFrame);
+            for (const float sx : {-1.0f, 1.0f})
+                emitBox(X, Y, Z, P(sx * 0.875f, sy * (halfLen + 0.13f), zr(1.05f)), 0.17f,
+                        0.13f, 0.17f, pocket::kFrame);
+        }
+        // Two 20 ft boxes, at the ends over the bogies rather than together amidships,
+        // which is where the wagon wants the weight and how a pair of TEU actually rides.
+        for (int i = 0; i < 2; ++i) {
+            const float cy = (i == 0 ? -1.0f : 1.0f) * (halfLen - 0.25f - 0.5f * pocket::kCtLen);
+            emitBox(X, Y, Z,
+                    P(0.0f, cy, zr(pocket::kFlatDeck + 0.5f * pocket::kCtH)),
+                    pocket::kCtHalfW, 0.5f * pocket::kCtLen, 0.5f * pocket::kCtH,
+                    i == 0 ? pocket::kBoxA : pocket::kBoxB);
+            // Corner castings, which are what a container actually stands on.
+            for (const float sx : {-1.0f, 1.0f})
+                for (const float sy : {-1.0f, 1.0f})
+                    emitBox(X, Y, Z,
+                            P(sx * (pocket::kCtHalfW - 0.08f),
+                              cy + sy * (0.5f * pocket::kCtLen - 0.08f),
+                              zr(pocket::kFlatDeck + 0.07f)),
+                            0.10f, 0.10f, 0.07f, pocket::kSkirt);
+        }
+    };
+
     const std::vector<VehicleFrame> sections = vehicle.bodySectionFrames();
     if (!sections.empty()) {
         const float halfLen =
@@ -2580,6 +2639,8 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                 emitType5(sections[i], halfLen, t5::kWLAB2);
             } else if (vehicle.bodyStyle() == BodyCD312) {
                 emitCD312(sections[i], halfLen);
+            } else if (vehicle.bodyStyle() == BodyFlat) {
+                emitFlat(sections[i], halfLen);
             } else if (vehicle.bodyStyle() == BodyPocket) {
                 // Section 0's outer end is at -y and section 1's at +y: they are the same
                 // half mirrored about the shared bogie.

@@ -39,6 +39,7 @@ enum VehicleBodyStyle {
     BodyWlab2 = 7,      // NSB WLAB-2 sleeping car: compartments, one small window each
     BodyCD312 = 8,      // CargoNet CD 312 (Vossloh/Stadler EURO 4000) freight locomotive
     BodyPocket = 9,     // Sdggmrss T3000e articulated double pocket wagon, loaded
+    BodyFlat = 10,      // Sgnss 60' container flat, loaded with two 20 ft boxes
 };
 
 // What turns the wheels. Two machines that could hardly be less alike: one puts its engine
@@ -426,6 +427,35 @@ inline constexpr VehicleSpec kVehicleSpecs[] = {
      .bogieSpacing = 28.40f, // 2 x 14.20 m between pivots, the middle one shared
      .bogieCount = 3,
      .body = BodyPocket,
+     .units = 1,
+     .wheelRadius = 0.46f, // 920 mm wheels
+     .cabs = 0,
+     .epBrake = false,
+     .category = CatWagon},
+
+    // Sgnss 60', the plain four-axle container flat that does most of the work in
+    // intermodal traffic. 19.60 m over buffers, bogie pivots at 14.06 m, Y25 bogies on a
+    // 1.80 m wheelbase, 19 t tare and 71 t of load, 120 km/h empty and 100 loaded at
+    // 22.5 t an axle, and round a 75 m curve like the pocket wagon.
+    //
+    // Loaded with two 20 ft boxes, which is the "two standard containers" this was asked
+    // for and also how these run: a pair of TEU goes at the ENDS, over the bogies, not
+    // together in the middle, because that is where the wagon wants the weight. A 60 ft
+    // deck with 2 x 6.06 m on it leaves a gap amidships, and that gap is correct.
+    //
+    // 19 t of wagon and two boxes at 22 t is 63 t, well inside the 90 t gross. The deck
+    // height of 1.175 m over the railhead is an ESTIMATE - the makers' sheets give the
+    // length, the pivots, the bogie and the weights, but not that - and it is what a
+    // container flat of this class has to be for a 2.59 m box to clear the gauge.
+    {.name = "Sgnss 60' (container flat)",
+     .mass = 63000.0f,
+     .length = 19.60f,
+     .width = 2.60f,
+     .height = 3.80f,
+     .wheelbase = 1.80f,     // Y25 bogie, as the pocket wagon has
+     .bogieSpacing = 14.06f,
+     .bogieCount = 2,
+     .body = BodyFlat,
      .units = 1,
      .wheelRadius = 0.46f, // 920 mm wheels
      .cabs = 0,
