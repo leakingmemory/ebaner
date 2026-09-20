@@ -88,14 +88,18 @@ struct TxpSection {
 
 class TxpNetwork {
 public:
-    // Whether the line between two stations holds no train. Supplied by the caller: the
-    // network knows the topology and deliberately nothing about trains.
-    using ClearFn = std::function<bool(const std::string&, const std::string&)>;
-
     // --- Manning ------------------------------------------------------------------
     // Man a station, asking its neighbours first. Accepted with nothing sent when there
     // is nobody to ask - the first station on a line has no one to agree with.
-    TxpExchange open(const TxpGraph& g, const std::string& station, const ClearFn& clear);
+    //
+    // Refused only by the BOOKS: a train order already made on the section it would take
+    // over. A train standing on the line is not a refusal - manning is a manual act by
+    // somebody who can see the line, and the one thing they cannot see is what the far
+    // end has agreed to. This used to ask the caller whether the section was physically
+    // clear, which failed for exactly the trains most worth manning a station for: the
+    // check began 300 m inside each station, and a 600 m train standing at one reaches
+    // past that and reads as a train on the line.
+    TxpExchange open(const TxpGraph& g, const std::string& station);
 
     // Unman it. The section it held falls back to its neighbours, so the two either side
     // are joined again - which needs nobody's agreement: a longer section under fewer

@@ -1197,10 +1197,6 @@ int main(int argc, char** argv) {
         g.build(ps, att, {}, polys, paths, glm::dvec3(0.0));
 
         // The line is clear unless this says otherwise.
-        std::string occupied;
-        auto clear = [&](const std::string& a, const std::string& b) {
-            return occupied.empty() || !(occupied == a + "-" + b || occupied == b + "-" + a);
-        };
         auto kinds = [](const TxpExchange& r) {
             std::string s;
             for (const TxpMessage& m : r.exchange)
@@ -1212,20 +1208,20 @@ int main(int argc, char** argv) {
         TxpNetwork net;
 
         // Bodø first: nobody to ask.
-        TxpExchange r = net.open(g, "Bodø", clear);
+        TxpExchange r = net.open(g, "Bodø");
         check(r.accepted, "the first station opens");
         check(r.exchange.empty(), "with nothing sent - there is nobody to ask");
         check(net.links().empty(), "and no section is worked yet");
 
         // Fauske next, two along: one neighbour to ask.
-        r = net.open(g, "Fauske", clear);
+        r = net.open(g, "Fauske");
         check(r.accepted && kinds(r) == "CA", "the second sends one connect and is accepted");
         check(r.exchange.size() > 0 && r.exchange[0].to == "Bodø", "it asks Bodø");
         check(net.linked("Bodø", "Fauske"), "and the two now work the line between them");
         check(net.links().size() == 1, "which is the only section");
 
         // Oteråga sits *between* them: it must ask both, and takes over their section.
-        r = net.open(g, "Oteråga", clear);
+        r = net.open(g, "Oteråga");
         check(r.accepted && kinds(r) == "CCAA", "opening between two asks both of them");
         check(net.linked("Bodø", "Oteråga") && net.linked("Oteråga", "Fauske"),
               "and it works a section with each");
@@ -1239,24 +1235,20 @@ int main(int argc, char** argv) {
               "closing it joins the two either side again");
         check(!net.isOpen("Oteråga"), "and it is out of the network");
 
-        // The same opening, refused: a train stands between Bodø and Fauske.
-        occupied = "Bodø-Fauske";
-        r = net.open(g, "Oteråga", clear);
-        check(!r.accepted && kinds(r) == "CCRR", "an occupied section refuses both connects");
-        check(!r.exchange.empty() && !r.exchange.back().reason.empty(),
-              "and says why");
-        check(!net.isOpen("Oteråga"), "the station does not open");
-        check(net.linked("Bodø", "Fauske") && net.links().size() == 1,
-              "and nothing about the section it asked for moves");
-
-        // Once the train has gone it opens as before.
-        occupied.clear();
-        r = net.open(g, "Oteråga", clear);
-        check(r.accepted && net.links().size() == 2, "with the line clear it opens");
+        // The same opening with a train standing between Bodø and Fauske: ACCEPTED. Manning
+        // a station is a manual act by somebody who can see the line, and a train on it is
+        // not their reason to refuse - the books are. This used to be a refusal, and it
+        // failed worst for the trains most worth manning a station for: the check began
+        // 300 m inside each station, so a 600 m train standing AT one reached past that
+        // and read as a train on the line.
+        r = net.open(g, "Oteråga");
+        check(r.accepted && kinds(r) == "CCAA",
+              "a train standing on the line does not refuse the opening");
+        check(net.links().size() == 2, "and the section still becomes two");
 
         // Rognan at the far end: only one neighbour, and it is Fauske - not Oteråga,
         // which is manned but has Fauske between it and Rognan.
-        r = net.open(g, "Rognan", clear);
+        r = net.open(g, "Rognan");
         check(r.accepted && kinds(r) == "CA", "the end of the line asks its one neighbour");
         check(r.exchange.size() > 0 && r.exchange[0].to == "Fauske",
               "which is the nearest manned station, not the first one opened");
@@ -1264,7 +1256,7 @@ int main(int argc, char** argv) {
         check(net.linksOf("Rognan").size() == 1, "and Rognan only the one");
 
         // A station nobody put a TXP at is not part of this, and says nothing.
-        r = net.open(g, "Røkland", clear);
+        r = net.open(g, "Røkland");
         check(r.accepted && r.exchange.empty(),
               "a station with no TXP position opens without asking anyone");
         check(!net.isOpen("Røkland"), "and works no sections");
@@ -1310,9 +1302,9 @@ int main(int argc, char** argv) {
             return s;
         };
         TxpNetwork net;
-        net.open(g, "Bodø", {});
-        net.open(g, "Oteråga", {});
-        net.open(g, "Fauske", {});
+        net.open(g, "Bodø");
+        net.open(g, "Oteråga");
+        net.open(g, "Fauske");
         check(net.links().size() == 2, "three manned stations work two sections");
 
         // The whole sequence, one section at a time.
@@ -1384,7 +1376,7 @@ int main(int argc, char** argv) {
               "a station holding a train order cannot close");
         check(!net.close(g, "Oteråga").accepted, "nor can the far end of that order");
         check(net.close(g, "Fauske").accepted, "one clear of it still can");
-        net.open(g, "Fauske", {});
+        net.open(g, "Fauske");
 
         // Rognan opening would split Fauske - and beyond, which is clear; but opening a
         // station into the held Bodø - Oteråga section is refused by the books.
@@ -1400,7 +1392,7 @@ int main(int argc, char** argv) {
         // Now the interaction the user asked for: a held line refuses a station opening
         // into it.
         net.requestDispatch("Bodø", "Fauske", TxpTrainType::Cargo);
-        r = net.open(g, "Oteråga", {});
+        r = net.open(g, "Oteråga");
         check(!r.accepted && kinds(r) == "CCRR",
               "opening between two stations is refused while their line is booked");
         check(!net.isOpen("Oteråga"), "so it does not open");
@@ -1409,7 +1401,7 @@ int main(int argc, char** argv) {
         check(net.state("Bodø", "Fauske") == TxpLineState::Prepared, "still prepared");
 
         net.cancelDispatch("Bodø", "Fauske");
-        check(net.open(g, "Oteråga", {}).accepted,
+        check(net.open(g, "Oteråga").accepted,
               "withdrawn, the station opens as it would have");
     }
 

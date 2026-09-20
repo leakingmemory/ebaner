@@ -2284,31 +2284,6 @@ int main(int argc, char** argv) {
     // the section is the line *between* them, and a train standing at a platform is not
     // on it. Without that inset a station could never be opened while anything stood at
     // either of its neighbours.
-    auto txpSectionClear = [&](const std::string& a, const std::string& b) {
-        if (!vehicle) return true; // nothing running, so nothing in the way
-        const TxpStationNode* na = nullptr;
-        const TxpStationNode* nb = nullptr;
-        for (const TxpStationNode& n : txpGraph.nodes()) {
-            if (n.name == a) na = &n;
-            if (n.name == b) nb = &n;
-        }
-        if (!na || !nb || na->path < 0 || na->path != nb->path) return true;
-        constexpr float kStationLimitM = 300.0f; // roughly out to the entry signals
-        const TrackPath& p = paths[na->path];
-        float lo = std::min(na->s, nb->s) + kStationLimitM;
-        float hi = std::max(na->s, nb->s) - kStationLimitM;
-        if (hi <= lo) return true; // stations closer together than their own limits
-        // Any train on the stretch between them, not only the one being driven.
-        for (const Consist& t : trains) {
-            const std::vector<VehicleFrame> bogies = t.bogieFrames();
-            for (float s = lo; s <= hi; s += 25.0f) {
-                const glm::vec3 q = p.poseAt(s).pos;
-                for (const VehicleFrame& bg : bogies)
-                    if (glm::distance(q, bg.pos) < 30.0f) return false;
-            }
-        }
-        return true;
-    };
     // Man or unman a station, going through the train-order network. Manning is the one
     // that can be refused: the neighbours have to agree to hand over part of what they
     // hold, and they will not while there is a train in it.
@@ -2348,7 +2323,7 @@ int main(int argc, char** argv) {
             setMapMsg(station + ": unmanned, signals off", true);
             return false;
         }
-        const TxpExchange r = txpNet.open(txpGraph, station, txpSectionClear);
+        const TxpExchange r = txpNet.open(txpGraph, station);
         logExchange(r);
         if (!r.accepted) {
             setMapMsg(station + ": opening refused - " + refusal(r));

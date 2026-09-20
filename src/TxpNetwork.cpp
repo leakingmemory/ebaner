@@ -100,8 +100,7 @@ std::vector<std::string> TxpNetwork::linksOf(const std::string& station) const {
     return out;
 }
 
-TxpExchange TxpNetwork::open(const TxpGraph& g, const std::string& station,
-                             const ClearFn& clear) {
+TxpExchange TxpNetwork::open(const TxpGraph& g, const std::string& station) {
     TxpExchange r;
     if (station.empty() || isOpen(station)) {
         r.accepted = true;
@@ -128,10 +127,9 @@ TxpExchange TxpNetwork::open(const TxpGraph& g, const std::string& station,
         return r;
     }
 
-    // What has to be clear is the section this station is about to take over. Between two
-    // manned stations that is the one they hold between them, which is about to become
-    // two; at the end of the chain it is the stretch out to the one neighbour. Either way
-    // a train inside it is one the new station would not know it had.
+    // Which section this station is about to take over. Between two manned stations that
+    // is the one they hold between them, which is about to become two; at the end of the
+    // chain it is the stretch out to the one neighbour.
     const bool splitting = !down.empty() && !up.empty();
     std::string secA, secB;
     if (splitting) { secA = down; secB = up; }        // the one about to become two
@@ -143,17 +141,21 @@ TxpExchange TxpNetwork::open(const TxpGraph& g, const std::string& station,
         r.exchange.push_back({TxpMsgKind::Connect, station, peer, {}});
     }
 
-    // Two reasons to refuse, and they are different things. A train order on the section
-    // is a refusal by the books: the station cannot take over a line that is spoken for,
-    // because the order was made with the far end and it would now be in the middle of it.
-    // A train standing in it is a refusal by the ground, which is what `clear` is for.
+    // One reason to refuse, and it is the books: a train order on the section means the
+    // line is spoken for, the order was made with the far end, and this station would now
+    // be standing in the middle of it.
+    //
+    // A train merely STANDING on the line is not a reason, and used to be. Manning a
+    // station is a manual operation by somebody who can see out of the window, and what
+    // the section's books say is the only thing they cannot see. Refusing on occupancy
+    // also failed in a way that got worse the longer the train: it measured from 300 m
+    // inside each station, so a 600 m train standing AT a station necessarily spills past
+    // that and reads as a train on the line - which is how manning Dunderland worked and
+    // then manning Ørtfjell or Skonseng next door did not.
     std::string why;
     if (const TxpSection* held = splitting ? section(down, up) : nullptr;
-        held && held->held()) {
+        held && held->held())
         why = "the line " + secA + " - " + secB + " is " + heldAs(*held);
-    } else if (clear && !clear(secA, secB)) {
-        why = "the line " + secA + " - " + secB + " is occupied";
-    }
     for (const std::string& peer : {down, up}) {
         if (peer.empty()) continue;
         if (why.empty()) r.exchange.push_back({TxpMsgKind::Accept, peer, station, {}});

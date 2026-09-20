@@ -1440,17 +1440,21 @@ one sends a connect to the nearest manned station either side, and they have to 
 - The second sends one connect, and the two then work the line between them.
 - One opening **between** two manned stations asks **both**, and takes over the section
   they held: the link that spanned it goes, and two shorter ones replace it.
-- They may only agree if that section is **clear**. A station cannot appear in the middle
-  of a section with a train in it, because it would then be holding a road it was never
-  told about — so the opening is refused, and nothing moves. It says which line was
-  occupied.
+- They may only refuse by the **books**: a train order already made on the section it
+  would take over, because that order was agreed with the far end and this station would
+  now be standing in the middle of it. It says which line was booked, and nothing moves.
+- A train **standing on the line** is not a refusal. Manning a station is a manual act by
+  somebody who can see the line out of the window, and the one thing they cannot see is
+  what the far end has agreed to — which is exactly what the books are. This was a
+  refusal once, and it failed worst for the trains most worth manning a station for: it
+  measured from 300 m inside each station, so a **600 m train standing at a station**
+  reaches past that and reads as a train on the line. Manning Dunderland with one worked;
+  manning Ørtfjell or Skonseng next door then did not.
 - Unmanning hands the whole of what it held back to the two either side, joining them
   again. That needs nobody's agreement: a longer section under fewer stations takes
   nothing away from anyone.
 
-Occupancy is measured from a little way inside each station rather than from the station
-itself — the section is the line *between* them, and a train standing at a platform is not
-on it. The exchange is printed as it happens (`[TXP] CONNECT`, `ACCEPT`, `REJECT`).
+The exchange is printed as it happens (`[TXP] CONNECT`, `ACCEPT`, `REJECT`).
 
 **Dispatching a train** is the exchange that uses those sections. From the station panel:
 **Request dispatch** → where to → what kind of train. The far end answers automatically.
