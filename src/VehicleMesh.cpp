@@ -234,10 +234,13 @@ const glm::vec3 kPaleBtn(0.80f, 0.80f, 0.78f);
 // whole desk and everything on it is simply not there. Raising the desk keeps the driver's
 // relationship to his controls and his windscreen right, which is what the cab is for.
 constexpr float kDeskH = 1.02f;       // desk top above the cab floor
-constexpr float kEyeAboveFloor = 1.48f; // seated, and it MUST clear the windscreen sill:
-                                        // at 1.42 against a sill at 1.36 the margin was
+constexpr float kEyeAboveFloor = 1.57f; // seated, and it MUST clear the windscreen sill:
+                                        // at 1.42 against a sill at 1.28 the margin was
                                         // 6 cm, which is one tweak away from a driver
-                                        // looking at the inside of the bodywork
+                                        // looking at the inside of the bodywork. At 1.57
+                                        // he sits 29 cm over it and still 82 cm under the
+                                        // window head, so the road ahead is the middle of
+                                        // the view rather than a letterbox along the top
 constexpr float kSeatBack = 0.80f;    // the seat, back from the near edge of the desk.
                                       // 1.05 put it through the rear bulkhead and 0.40 put
                                       // the driver's chest against the desk, looking over
