@@ -128,6 +128,33 @@ void expectPhaseOn(Rig& r, std::size_t track, CrossingPhase want, const std::str
 } // namespace
 
 int main(int argc, char** argv) {
+    // argv[1] is a SCRATCH directory, and this test writes into it: level crossings, TXP
+    // positions, flag posts, signals, switch types and track edits, all through the real
+    // write functions and all with std::ios::trunc, and it deletes several of them again
+    // on the way out. CMake passes build/crossing-test, which is why ctest is safe.
+    //
+    // Handed a real dataset instead it will overwrite that dataset's overlay with
+    // fixtures and then delete it. That is not hypothetical: it happened here, to a
+    // 16 037-line track-edits.txt among others, from running this binary by hand with
+    // ../norway-rails to read its output. A real export has tiles/ and a manifest.json
+    // and a scratch root has neither, so it can be told, and it is worth telling loudly -
+    // the damage is silent, and the tests that notice it are three other tests failing
+    // for reasons that look nothing like this.
+    if (argc > 1) {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        const std::string root = argv[1];
+        if (fs::exists(root + "/tiles", ec) || fs::exists(root + "/manifest.json", ec)) {
+            std::fprintf(stderr,
+                         "\n%s looks like a real dataset: it has tiles/ or a "
+                         "manifest.json.\n"
+                         "This test WRITES overlay files there and deletes them again, so "
+                         "it refuses.\nGive it a scratch directory - ctest passes "
+                         "build/crossing-test - or no argument at all.\n\n",
+                         root.c_str());
+            return 2;
+        }
+    }
     std::puts("\nA train approaching, passing and clearing:");
     {
         Rig r;
