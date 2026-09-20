@@ -190,6 +190,27 @@ std::vector<CrossingSite> resolveCrossings(const std::vector<LevelCrossing>& xs,
     return out;
 }
 
+int crossingTrackUnder(const CrossingSite& site, int axlePath, float axleS, float& s,
+                       bool& decided) {
+    decided = false;
+    if (axlePath < 0) return -1; // derailed, or placed without a network
+    // The window the geometric form searches, and for the same reason: nothing further out
+    // than the circuits reach can be on this crossing. Inside it, an axle on this path is
+    // on this road, and the arc position it walked to IS the answer that search is looking
+    // for - the two are the same number arrived at two ways.
+    int on = -1;
+    float best = 0.0f;
+    for (std::size_t t = 0; t < site.tracks.size(); ++t) {
+        if (site.tracks[t].path != axlePath) continue;
+        decided = true; // this crossing is on the road the axle is walking
+        const float rel = std::abs(axleS - site.tracks[t].s);
+        if (rel > site.outerM + 200.0f) continue;
+        if (on < 0 || rel < best) { on = static_cast<int>(t); best = rel; }
+    }
+    if (on >= 0) s = axleS;
+    return on;
+}
+
 int crossingTrackUnder(const CrossingSite& site, const std::vector<TrackPath>& paths,
                        const glm::vec2& at, float& s) {
     constexpr double kOnIt = 4.0; // m; beyond this the point is on none of these roads
@@ -255,6 +276,44 @@ std::vector<float> crossingReach(const CrossingSite& site,
     // Never inside the inner circuit, which is at the crossing itself.
     for (float& r : reach) r = std::max(r, site.innerM);
     return reach;
+}
+
+std::vector<std::vector<int>> buildTurnoutsByPath(const SwitchNetwork& net,
+                                                  std::size_t pathCount) {
+    std::vector<std::vector<int>> out(pathCount);
+    const std::vector<Turnout>& tos = net.turnouts();
+    for (std::size_t i = 0; i < tos.size(); ++i)
+        if (tos[i].mainPath >= 0 && static_cast<std::size_t>(tos[i].mainPath) < pathCount)
+            out[static_cast<std::size_t>(tos[i].mainPath)].push_back(static_cast<int>(i));
+    return out;
+}
+
+int crossingRoadAtPoints(const CrossingSite& site, const SwitchNetwork& net,
+                         const std::vector<std::vector<int>>& onPath, int on, float s) {
+    if (on < 0 || on >= static_cast<int>(site.tracks.size())) return on;
+    const int path = site.tracks[on].path;
+    if (path < 0 || static_cast<std::size_t>(path) >= onPath.size())
+        return crossingRoadAtPoints(site, net, on, s); // no table: the long way round
+    const float sx = site.tracks[on].s;
+    if (std::abs(sx - s) < 1e-3f) return on;
+    const int dir = s < sx ? +1 : -1;
+    int road = on;
+    float nearest = 1e30f;
+    const std::vector<Turnout>& tos = net.turnouts();
+    // The same walk as below, over the turnouts that are on this road rather than over
+    // every turnout there is.
+    for (const int i : onPath[static_cast<std::size_t>(path)]) {
+        const float ts = tos[static_cast<std::size_t>(i)].sMain;
+        if (dir * (ts - s) <= 0.0f || dir * (sx - ts) <= 0.0f) continue;
+        if (tos[static_cast<std::size_t>(i)].facingS != dir) continue;
+        if (net.state(i) != SwitchState::Diverging) continue;
+        for (std::size_t t = 0; t < site.tracks.size(); ++t) {
+            if (static_cast<int>(t) == on) continue;
+            if (site.tracks[t].path != tos[static_cast<std::size_t>(i)].sidingPath) continue;
+            if (dir * (ts - s) < nearest) { nearest = dir * (ts - s); road = static_cast<int>(t); }
+        }
+    }
+    return road;
 }
 
 int crossingRoadAtPoints(const CrossingSite& site, const SwitchNetwork& net, int on,

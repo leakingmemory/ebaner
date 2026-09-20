@@ -1510,6 +1510,18 @@ int main(int argc, char** argv) {
     // A train that ran out of rail under part of itself is worth a word, since it means the
     // body reaches past a buffer stop and the circuits cannot see all of it.
     std::vector<PathSpan> trainSpans, oneTrain;
+    // Scratch for the crossing loop, kept across frames so a long train does not allocate
+    // its way through one: the axles of every train, and per crossing its occupancy and
+    // the phases it had before the step.
+    // Which turnouts sit on which path. Fixed for the life of the world - a switch moves,
+    // a turnout does not - and it is what keeps a crossing from walking all 3388 of them
+    // for every axle standing on its approach.
+    const std::vector<std::vector<int>> turnoutsByPath =
+        buildTurnoutsByPath(switchNet, paths.size());
+    std::vector<AxlePlace> axles;
+    std::vector<char> signalOpen;
+    std::vector<CrossingOccupancy> occ;
+    std::vector<CrossingPhase> was;
     bool warnedOffTrack = false; // said once, not sixty times a second
     auto updateOccupancy = [&](std::vector<char>& occ) {
         trainSpans.clear();
@@ -3000,6 +3012,11 @@ int main(int argc, char** argv) {
     // the frame whose cost goes up with the length of the train: everything else here is
     // per signal, per crossing or per screen.
     Stat pAspects, pDistants, pMesh, pUpload, pMap, pFrame, pVeh, pVehUp;
+    // The three per-frame blocks whose cost goes up with the number of axles in the world,
+    // which is what a long train is: the physics step, the track circuits and the level
+    // crossings. The frame was timed as a whole and the meshes inside it, and everything
+    // between those two was guesswork.
+    Stat pSim, pOcc, pCross;
     double profileUntil = glfwGetTime() + 1.0;
     auto now_ms = [] {
         return std::chrono::duration<double, std::milli>(
@@ -3060,8 +3077,10 @@ int main(int argc, char** argv) {
         // changes - a train entering or leaving a section.
         bool occupancyChanged = false;
         {
+            const double tO = profile ? now_ms() : 0.0;
             std::vector<char> occ(circuits.sections.size(), 0);
             updateOccupancy(occ);
+            if (profile) pOcc.add(now_ms() - tO);
             if (occ != secOccupied) {
                 secOccupied = occ;
                 occupancyChanged = true;
@@ -3090,23 +3109,26 @@ int main(int argc, char** argv) {
         // Level crossings: each reads its own circuits and runs its own sequence. Every
         // frame rather than only on an occupancy change, because the phases are timed -
         // the 5 s delays and the stuck timeout advance whether or not a train moved.
+        const double tX = profile ? now_ms() : 0.0;
         if (!crossings.empty()) {
             // Every train's axles together. A crossing counts wheels over its circuits
             // and does not care whose they are, so two portions standing on one approach
             // read as one long train - which is the conservative answer and the right
             // one for a crossing.
-            std::vector<VehicleFrame> axles;
-            for (const Consist& t : trains) {
-                const std::vector<VehicleFrame> a = t.axleFrames();
-                axles.insert(axles.end(), a.begin(), a.end());
-            }
+            // As PLACES - which road each wheel is on and how far along it - not as points
+            // in the world. Both come out of the same walk the vehicle has already done,
+            // and asking for the place means a crossing can answer by subtraction instead
+            // of by searching its approach for the axle. Buffers reused: this runs sixty
+            // times a second and a 600 m train brings 112 axles to it.
+            axles.clear();
+            for (const Consist& t : trains) t.axlePlaces(axles);
             bool anyPhaseMoved = false;
             bool anyBarrierMoving = false;
             // Which signals are giving an authority to move, which is what decides how far
             // each crossing's approach circuits reach. The aspects are last frame's - they
             // settle further down the loop - and one frame is nothing against a sequence
             // measured in seconds.
-            std::vector<char> signalOpen(sigPlacements.size(), 0);
+            signalOpen.assign(sigPlacements.size(), 0);
             for (std::size_t k = 0; k < sigPlacements.size(); ++k)
                 signalOpen[k] = signalGivesAuthority(sigPlacements[k]) ? 1 : 0;
             for (std::size_t ci = 0; ci < crossings.size(); ++ci) {
@@ -3127,16 +3149,23 @@ int main(int argc, char** argv) {
                 // can reach the crossing without first passing it.
                 const std::vector<float> reach =
                     crossingReach(site, crossingGuards[ci], signalOpen);
-                std::vector<CrossingOccupancy> occ(site.tracks.size());
-                for (const VehicleFrame& ax : axles) {
+                occ.assign(site.tracks.size(), CrossingOccupancy{});
+                for (const AxlePlace& ax : axles) {
                     float onS = 0.0f;
-                    const int under =
-                        crossingTrackUnder(site, paths, glm::vec2(ax.pos), onS);
+                    // By path and arc position first, which is a comparison. Only if that
+                    // finds nothing does the geometric search run - a track can belong to
+                    // more than one path, so a train walking a different one over the same
+                    // rails still has to be seen, and that is what the search is left for.
+                    bool decided = false;
+                    int under = crossingTrackUnder(site, ax.path, ax.s, onS, decided);
+                    if (under < 0 && !decided)
+                        under = crossingTrackUnder(site, paths, glm::vec2(ax.pos), onS);
                     if (under < 0) continue; // not on this crossing at all
                     const float rel = onS - site.tracks[under].s;
                     // Where it is, and then where the points are taking it - out on the
                     // approach the roads have not divided and only the second can answer.
-                    const int on = crossingRoadAtPoints(site, switchNet, under, onS);
+                    const int on =
+                        crossingRoadAtPoints(site, switchNet, turnoutsByPath, under, onS);
                     // The limit is the road it is physically on, the occupancy the road
                     // the points are taking it to: where a circuit is cut is geometry,
                     // which road's sequence it arms is the points.
@@ -3147,7 +3176,7 @@ int main(int argc, char** argv) {
                     else if (rel < 0.0f && rel >= -far) occ[on].outerA = true;
                     else if (rel > 0.0f && rel <= far) occ[on].outerB = true;
                 }
-                std::vector<CrossingPhase> was;
+                was.clear();
                 for (const CrossingTrackState& ts : crossingStates[ci].tracks)
                     was.push_back(ts.phase);
                 stepCrossing(crossings[ci], crossingStates[ci], occ, now);
@@ -3157,6 +3186,7 @@ int main(int argc, char** argv) {
                     if (crossingStates[ci].tracks[t].phase != was[t]) anyPhaseMoved = true;
                 if (crossingStates[ci].barrierMoving()) anyBarrierMoving = true;
             }
+            if (profile) pCross.add(now_ms() - tX);
             // A moving boom is the one thing here that has to be rebuilt every frame. The
             // flashing does not: it is a function of the clock in the shader, baked into
             // the vertices once. A rigid rotation cannot be done that way - it needs a
@@ -4051,7 +4081,9 @@ int main(int argc, char** argv) {
             const float simDt = std::min(dt, 0.05f);
             const VehicleState prev = vehicle->state();
             // Every train is stepped; only the one being driven feels the hand push.
+            const double tS = profile ? now_ms() : 0.0;
             for (Consist& t : trains) t.update(simDt, &t == vehicle ? pushInput : 0.0f);
+            if (profile) pSim.add(now_ms() - tS);
             // ...and every train is asked whether it forced a switch, the answers OR'd.
             // The flag clears on read, so asking only the driven train would silently
             // lose one a detached portion had run through, and the only symptom would
@@ -4565,6 +4597,9 @@ int main(int argc, char** argv) {
                 line("distant walks", pDistants);
                 line("mesh rebuild", pMesh);
                 line("mesh upload", pUpload);
+                line("sim step", pSim);
+                line("occupancy", pOcc);
+                line("crossings", pCross);
                 line("vehicle mesh", pVeh);
                 line("vehicle upload", pVehUp);
                 line("map overlay", pMap);
@@ -4572,6 +4607,7 @@ int main(int argc, char** argv) {
                 pFrame.reset(); pAspects.reset(); pDistants.reset();
                 pMesh.reset(); pUpload.reset(); pMap.reset();
                 pVeh.reset(); pVehUp.reset();
+                pSim.reset(); pOcc.reset(); pCross.reset();
             }
         }
     }

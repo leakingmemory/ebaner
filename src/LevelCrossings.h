@@ -221,6 +221,21 @@ struct CrossingState {
 // a metre apart there, so both would answer yes to that - and a train leaving on the main
 // line armed the loop's circuits as it passed the points. A train is on one road.
 //
+// The same question asked of an axle that already knows where it is. An axle walking the
+// crossing's own path is on that road iff it is within the circuits' reach along it, which
+// is a subtraction - where the geometric form below has to search the approach to find out.
+//
+// Returns -1 when no road matches, which is NOT the same as "not on this crossing": an axle
+// on another path over the same rails will miss here, and the caller falls back to the
+// geometric form for those. It never claims a road the axle is not on, which is the half
+// that has to be right.
+// `decided` comes back true when the axle is walking one of this crossing's own paths, in
+// which case the answer is final either way - on it at `s`, or definitively not on it - and
+// the caller need not ask the geometric form at all. False means the axle is on some other
+// path, which may still be the same rails, and only a search can say.
+int crossingTrackUnder(const CrossingSite& site, int axlePath, float axleS, float& s,
+                       bool& decided);
+
 int crossingTrackUnder(const CrossingSite& site, const std::vector<TrackPath>& paths,
                        const glm::vec2& at, float& s);
 
@@ -233,6 +248,17 @@ int crossingTrackUnder(const CrossingSite& site, const std::vector<TrackPath>& p
 // loop by the points. Arming the road it will not take would run the sequence on the wrong
 // side - clearing that road's heads to white and leaving the train to pass the other's at
 // red. Between the turnouts nothing is in the way and this changes nothing.
+// `onPath` is the turnouts of the network gathered by the path their main road belongs to,
+// which is a thing that never changes and so is worked out once: buildTurnoutsByPath below.
+// Without it this walks every turnout in the country for every axle on the crossing, which
+// is 3388 of them times a hundred axles times a crossing, every frame.
+int crossingRoadAtPoints(const CrossingSite& site, const SwitchNetwork& net,
+                         const std::vector<std::vector<int>>& onPath, int on, float s);
+// Turnout indices by the path their main road runs on. Built once after the switch network
+// is; paths and turnout positions do not move, only the switches' states do.
+std::vector<std::vector<int>> buildTurnoutsByPath(const SwitchNetwork& net,
+                                                  std::size_t pathCount);
+
 int crossingRoadAtPoints(const CrossingSite& site, const SwitchNetwork& net, int on,
                          float s);
 

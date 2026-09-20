@@ -734,6 +734,45 @@ joins at, each with the nearest other loose end, which is what a `link` edit
 would join. A buffer stop is a loose end too, so the distance is the tell - a
 real break is two ends facing each other a few tens of metres apart.
 
+### What a crossing asks an axle
+
+A level crossing has to know which of its roads each wheel is on, and it used to find out
+by **searching**: walk the approach in 5 m steps calling `poseAt` at each one, from
+`s - outerM - 200` to `s + outerM + 200`. With approaches of 968–1473 m that is up to
+**670 samples, per axle, per crossing track, per frame**. A cheap straight-line reject
+keeps distant crossings free, which is why it never mattered: a 6-axle railcar costs 4 000
+samples at the crossing it is standing on and nothing anywhere else.
+
+The 600 m freight has **112 axles**, and every one of them is inside the reject radius of
+the crossing it is standing at: **75 000 `poseAt` calls in one frame**, for one crossing.
+That is the whole of "it gets terrible near a level crossing with a long train".
+
+The answer was already known and thrown away. Every axle's position comes from `walkTo`,
+which produces the path index and the arc position along it — exactly what those 670
+samples reconstruct — and `railFrame` kept only the world point. Axles now also come as
+**`AxlePlace { pos, path, s }`**, and a crossing answers by subtraction: same path, and
+within reach along it. The search stays as the **fallback**, because a track can belong to
+more than one `TrackPath` and a train walking a different one over the same rails still has
+to be seen; the fast form says whether its answer is *final*, so the fallback runs only for
+that case.
+
+The same block walked **all 3388 turnouts** for every axle standing on a crossing, to find
+the points between it and the crossing. Turnouts do not move — only their states do — so
+that list is built once per path at load.
+
+Measured at Rognan, which has two crossings, with the 600 m freight:
+
+| | before | after |
+|---|---|---|
+| whole frame | 43.4 ms (23 fps) | **20.6 ms (49 fps)** |
+| of which crossings | dominant | **1.8 ms** |
+| one railcar, for comparison | 8.4 ms | 7.7 ms |
+
+Checked rather than assumed, because a crossing that stops seeing a train does not fail
+loudly — it just fails to close. Running both forms side by side over the real network at
+four stations agreed **1 635 000 times out of 1 635 000**, with no answer more than 5 m
+apart.
+
 ### What a long train costs, and what it need not
 
 A 600 m freight is 23 units and **83 388 vertices** — the longest train before it was the
@@ -1568,7 +1607,7 @@ the corresponding sources (national rail register + NVDB roads + OSM enrichment)
 | `EBANER_NOOVERLAY`  | Ignore the `overlay/` track edits (link fixes).               |
 | `EBANER_EDMODE`     | `ebaner-trackedit` only: start in this mode, by its menu name. |
 | `EBANER_VEHICLE`    | Skip the start screen and preselect a vehicle, by its index in `kVehicleSpecs` (`0` = a single Class 93, `1`/`2` = two and three coupled, `3` = Di 4 + 5, `4` = the night train, `5` = the 600 m freight, `6` = a light Di 4, `7` = a CD 312, `14` = a pocket wagon, `15` = a container flat). The table is ordered for the pickers, so these move when a vehicle is added - the start screen numbers the list. |
-| `EBANER_PROFILE`    | Print per-frame timings once a second: whole frame, signal aspects, distant walks, the signal mesh, and the vehicle mesh and its upload. |
+| `EBANER_PROFILE`    | Print per-frame timings once a second: whole frame, the sim step, occupancy, crossings, signal aspects, distant walks, the signal mesh, and the vehicle mesh and its upload. With `EBANER_SCREENSHOT=/dev/null EBANER_SHOTFRAME=900` the viewer exits by itself with the reports flushed, which is how a profile gets taken without a file or a keypress. |
 | `EBANER_RADIUS`     | Half-window of world to load, in metres (default 20000). Two kilometres loads in seconds where the full 40 km square takes minutes, which is what makes a profile or a frame-time measurement affordable at all. Inspection only: drive out of it and the world ends. |
 | `EBANER_CHASE`      | `1` rides the vehicle from the start (the chase camera is otherwise only reachable by pressing C, so the one view that shows the machine could not be screenshotted). |
 | `EBANER_AUDIO_DUMP` | Render a scripted brake sequence to the given WAV and exit.   |

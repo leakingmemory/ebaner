@@ -524,6 +524,19 @@ struct VehicleFrame {
     glm::vec3 up;
 };
 
+// An axle, and WHERE ON THE NETWORK it is - the path it is walking and how far along it.
+// A VehicleFrame answers where a wheel is in the world, which is what a mesh wants; this
+// answers which rail it is standing on, which is what anything asking about track wants.
+//
+// Both come out of the same walk. The world point used to be all that was kept, and then
+// a level crossing spent 670 samples of its approach working the rest of it out again for
+// every axle, every frame - 75 000 of them for a 600 m train standing at one.
+struct AxlePlace {
+    glm::vec3 pos;   // scene-relative, as VehicleFrame::pos
+    int path = -1;   // index into the path list the vehicle is attached to, -1 if none
+    float s = 0.0f;  // arc position along that path
+};
+
 enum class VehicleState { OnRail, Derailed, Stopped };
 
 // Per-engine state, derived from its rpm (cranking up / at idle / spinning down).
@@ -632,6 +645,9 @@ public:
     VehicleFrame bodyFrame() const;
     // On-rail pose of each axle (1 single axle, 2 bogie, 4 carriage), for the mesh.
     std::vector<VehicleFrame> axleFrames() const;
+    // The same axles, said the other way: which road each is on and where along it. Comes
+    // from the same walkTo that axleFrames() uses and throws away.
+    std::vector<AxlePlace> axlePlaces() const;
     // Pivot frame of each bogie (0 for a bare axle, up to 3), each chording its
     // own axles.
     std::vector<VehicleFrame> bogieFrames() const;

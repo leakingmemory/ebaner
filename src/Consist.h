@@ -178,6 +178,10 @@ public:
     VehicleFrame frame() const { return lead().frame(); }
     std::vector<VehicleFrame> axleFrames() const;
     std::vector<VehicleFrame> bogieFrames() const;
+    // Every axle of every set, as places on the network rather than points in the world.
+    // Appended to `out` rather than returned, so a caller polling it every frame keeps
+    // its buffer.
+    void axlePlaces(std::vector<AxlePlace>& out) const;
     std::vector<VehicleFrame> bodySectionFrames() const;
     // Arc-length offsets of every axle from the *train's* centre.
     std::vector<float> axleOffsets() const;

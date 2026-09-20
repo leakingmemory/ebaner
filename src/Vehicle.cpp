@@ -866,6 +866,30 @@ std::vector<VehicleFrame> Vehicle::bodySectionFrames() const {
     return out;
 }
 
+std::vector<AxlePlace> Vehicle::axlePlaces() const {
+    std::vector<AxlePlace> out;
+    const std::vector<float> offs = axleOffsets();
+    out.reserve(offs.size());
+    for (const float off : offs) {
+        AxlePlace a;
+        if (state_ == VehicleState::OnRail) {
+            int cp = -1, nose = 1;
+            float cs = 0.0f;
+            // walkTo says which path the axle ended up on and where; when there is no
+            // network attached it answers on the one path the vehicle was placed on.
+            walkTo(off, cp, cs, nose);
+            a.path = (cp >= 0 && paths_) ? cp : -1;
+            a.s = cs;
+            a.pos = (a.path >= 0) ? (*paths_)[static_cast<std::size_t>(a.path)].poseAt(cs).pos
+                                  : path_->poseAt(cs).pos;
+        } else { // derailed: off the rails, so on no road at all
+            a.pos = pos_ + fTangent_ * off;
+        }
+        out.push_back(a);
+    }
+    return out;
+}
+
 std::vector<VehicleFrame> Vehicle::axleFrames() const {
     std::vector<VehicleFrame> out;
     for (float off : axleOffsets()) {

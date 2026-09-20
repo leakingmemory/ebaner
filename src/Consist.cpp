@@ -740,6 +740,13 @@ std::vector<VehicleFrame> Consist::axleFrames() const {
     return out;
 }
 
+void Consist::axlePlaces(std::vector<AxlePlace>& out) const {
+    for (const Vehicle& u : units_) {
+        const std::vector<AxlePlace> a = u.axlePlaces();
+        out.insert(out.end(), a.begin(), a.end());
+    }
+}
+
 std::vector<VehicleFrame> Consist::bogieFrames() const {
     std::vector<VehicleFrame> out;
     for (const Vehicle& u : units_) {
