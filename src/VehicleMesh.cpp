@@ -502,12 +502,12 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                 push(worldPt(x1, r * c0, r * s0), n0, color);
                 push(worldPt(x1, r * c1, r * s1), n1, color);
                 push(worldPt(x0, r * c1, r * s1), n1, color);
-                indices_.push_back(base + 0);
-                indices_.push_back(base + 1);
-                indices_.push_back(base + 2);
-                indices_.push_back(base + 0);
-                indices_.push_back(base + 2);
-                indices_.push_back(base + 3);
+                idx(base + 0);
+                idx(base + 1);
+                idx(base + 2);
+                idx(base + 0);
+                idx(base + 2);
+                idx(base + 3);
             }
             for (int e = 0; e < 2; ++e) {
                 const float xe = (e == 0) ? x0 : x1;
@@ -520,9 +520,9 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                     push(worldPt(xe, r * std::cos(a), r * std::sin(a)), an, color);
                 }
                 for (int k = 0; k < kSeg; ++k) {
-                    indices_.push_back(centre);
-                    indices_.push_back(centre + 1 + k);
-                    indices_.push_back(centre + 1 + (k + 1) % kSeg);
+                    idx(centre);
+                    idx(centre + 1 + k);
+                    idx(centre + 1 + (k + 1) % kSeg);
                 }
             }
         };
@@ -545,12 +545,12 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
             push(p1, n, col);
             push(p2, n, col);
             push(p3, n, col);
-            indices_.push_back(b + 0);
-            indices_.push_back(b + 1);
-            indices_.push_back(b + 2);
-            indices_.push_back(b + 0);
-            indices_.push_back(b + 2);
-            indices_.push_back(b + 3);
+            idx(b + 0);
+            idx(b + 1);
+            idx(b + 2);
+            idx(b + 0);
+            idx(b + 2);
+            idx(b + 3);
         };
         face(P(1, -1, -1), P(1, 1, -1), P(1, 1, 1), P(1, -1, 1), X);
         face(P(-1, -1, -1), P(-1, 1, -1), P(-1, 1, 1), P(-1, -1, 1), -X);
@@ -588,8 +588,8 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
         if (glm::dot(n, cen - inside) < 0.0f) n = -n;
         const std::uint32_t b = static_cast<std::uint32_t>(vertices_.size());
         push(p0, n, col); push(p1, n, col); push(p2, n, col); push(p3, n, col);
-        indices_.push_back(b + 0); indices_.push_back(b + 1); indices_.push_back(b + 2);
-        indices_.push_back(b + 0); indices_.push_back(b + 2); indices_.push_back(b + 3);
+        idx(b + 0); idx(b + 1); idx(b + 2);
+        idx(b + 0); idx(b + 2); idx(b + 3);
     };
 
     // --- Instruments ------------------------------------------------------------------
@@ -965,8 +965,8 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                     const glm::vec2 uv(0.0f);
                     const std::uint32_t vb = static_cast<std::uint32_t>(vertices_.size());
                     push(a, n, col); push(b, n, col); push(c, n, col); push(d, n, col);
-                    indices_.push_back(vb + 0); indices_.push_back(vb + 1); indices_.push_back(vb + 2);
-                    indices_.push_back(vb + 0); indices_.push_back(vb + 2); indices_.push_back(vb + 3);
+                    idx(vb + 0); idx(vb + 1); idx(vb + 2);
+                    idx(vb + 0); idx(vb + 2); idx(vb + 3);
                 }
             };
             {
@@ -2702,6 +2702,10 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
 // The whole train: every set's geometry into one buffer, then the glazing sorted to
 // the back of it. The renderer holds one vehicle buffer and draws it in two runs, so
 // the split has to be over the finished train and not per set.
+// The texLayer value the track shader reads as "translucent". Both the sort that works
+// out which vertices get it and the per-frame path that stamps them again need it.
+constexpr float kGlassLayer = -2.0f;
+
 void VehicleMesh::build(const Consist& consist) {
     vertices_.clear();
     indices_.clear();
@@ -2717,11 +2721,45 @@ void VehicleMesh::build(const Consist& consist) {
 // vertex refresh. Otherwise the old indices are read against new vertices and the
 // trains draw as a heap of triangles, silently.
 void VehicleMesh::build(const std::deque<Consist>& trains) {
+    wantIndices_ = true;
     vertices_.clear();
     indices_.clear();
     for (const Consist& t : trains)
         for (int i = 0; i < t.unitCount(); ++i) emitUnit(t.unit(i));
     sortGlass();
+}
+
+void VehicleMesh::refresh(const std::deque<Consist>& trains) {
+    // The geometry and nothing else. Same trains in the same order emit the same triangles
+    // in the same order - which is not an assumption but the standing rule of this buffer,
+    // the one that makes attachVehicle necessary when the composition changes - so the
+    // indices already on the GPU still describe these vertices exactly.
+    wantIndices_ = false;
+    const std::size_t was = vertices_.size();
+    vertices_.clear();
+    for (const Consist& t : trains)
+        for (int i = 0; i < t.unitCount(); ++i) emitUnit(t.unit(i));
+    wantIndices_ = true;
+    // The glazing sentinel lives on the vertices, which have just been thrown away and
+    // made again, so it has to go back on. Which vertices carried it was worked out when
+    // the buffer was attached and cannot have changed since.
+    for (const std::uint32_t v : glassVerts_)
+        if (v < vertices_.size()) vertices_[v].texLayer = kGlassLayer;
+    // A different count means somebody changed the train without re-attaching, and every
+    // triangle after the change is now drawn from the wrong vertices. The renderer says so
+    // too when the byte count stops matching, but it can only say it once the damage is
+    // done; this is the same fault caught where it is caused.
+    if (was != 0 && vertices_.size() != was) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            std::fprintf(stderr,
+                         "[VehicleMesh] refresh emitted %zu vertices where the attached "
+                         "buffer holds %zu - the composition changed without an "
+                         "attachVehicle, and the train will draw as a heap of triangles\n",
+                         vertices_.size(), was);
+        }
+    }
 }
 
 void VehicleMesh::sortGlass() {
@@ -2730,7 +2768,6 @@ void VehicleMesh::sortGlass() {
     // band / windscreen (kBand) and the interior glazing (kGlass); its vertices are
     // tagged with a texLayer sentinel the track shader reads as "translucent".
     {
-        constexpr float kGlassLayer = -2.0f;
         auto isGlass = [](const glm::vec3& c) {
             auto eq = [&](const glm::vec3& g) {
                 return std::abs(c.x - g.x) < 0.005f && std::abs(c.y - g.y) < 0.005f &&
@@ -2754,6 +2791,12 @@ void VehicleMesh::sortGlass() {
         glassFirstIndex_ = static_cast<std::uint32_t>(opaque.size());
         opaque.insert(opaque.end(), glass.begin(), glass.end());
         indices_ = std::move(opaque);
+        // And which vertices ended up carrying the sentinel, so the per-frame path can
+        // stamp exactly those and skip the 44 000-triangle colour sort that found them.
+        glassVerts_.clear();
+        for (std::size_t i = 0; i < vertices_.size(); ++i)
+            if (vertices_[i].texLayer == kGlassLayer)
+                glassVerts_.push_back(static_cast<std::uint32_t>(i));
     }
 }
 

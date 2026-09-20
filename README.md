@@ -734,6 +734,41 @@ joins at, each with the nearest other loose end, which is what a `link` edit
 would join. A buffer stop is a loose end too, so the distance is the tell - a
 real break is two ends facing each other a few tens of metres apart.
 
+### What a long train costs, and what it need not
+
+A 600 m freight is 23 units and **83 388 vertices** — the longest train before it was the
+8-unit night train — and the per-frame path was rebuilding all of it, indices and all, and
+then copying 3 MB twice. On an Intel HD 510 that was **8.4 ms of a 20.5 ms frame**.
+
+Three of those things cannot change between frames and are no longer redone. The **index
+buffer** is fixed from the moment it is attached (that is why changing a train's
+composition has to go through `attachVehicle`), so the 144 000 index pushes were building
+exactly the buffer the GPU already held. The **opaque/glass split** is fixed for the same
+reason, so `sortGlass`'s colour sort over 48 000 triangles was finding the same answer
+every frame; only the `texLayer` stamp has to be put back, and which vertices carry it is
+recorded once. And `updateVehicleVertices` **swaps** rather than copies, since the
+deferral past the frame fence is what it is for, not the copy.
+
+| | before | after |
+|---|---|---|
+| 600 m freight, vehicle mesh | 8.37 ms | **6.30 ms** |
+| 600 m freight, upload | 0.62 ms | **0.00 ms** |
+| 600 m freight, whole frame | 20.51 ms (49 fps) | **17.04 ms (59 fps)** |
+| one railcar, vehicle mesh | 3.01 ms | **2.03 ms** |
+
+`refresh()` is checked against `build()` offline rather than by eye: for every vehicle in
+the table it reproduces the buffer **bit for bit**, vertices, glazing tags and indices
+alike. The failure it guards against is silent — a train drawn from the wrong vertices
+looks like a heap of triangles — so it also warns if a refresh ever emits a different
+vertex count, which is what a composition change without an `attachVehicle` would do.
+
+What is left of the 6.3 ms is the geometry itself, and the way to cut that is to stop
+making geometry nobody can see: the draw has no **culling** at all, so all 23 units are
+submitted whether they are in front of the camera or half a kilometre behind it. The
+machinery is already here — `drawFrame` builds a `Frustum` and the terrain and building
+draws skip chunks with `frustum.sees(centre, radius)` — and the vehicle is the one that
+does not use it.
+
 ## Test
 
 ```sh
@@ -1529,6 +1564,8 @@ the corresponding sources (national rail register + NVDB roads + OSM enrichment)
 | `EBANER_NOOVERLAY`  | Ignore the `overlay/` track edits (link fixes).               |
 | `EBANER_EDMODE`     | `ebaner-trackedit` only: start in this mode, by its menu name. |
 | `EBANER_VEHICLE`    | Skip the start screen and preselect a vehicle, by its index in `kVehicleSpecs` (`0` = a single Class 93, `1`/`2` = two and three coupled, `3` = Di 4 + 5, `4` = the night train, `5` = the 600 m freight, `6` = a light Di 4, `7` = a CD 312, `14` = a pocket wagon, `15` = a container flat). The table is ordered for the pickers, so these move when a vehicle is added - the start screen numbers the list. |
+| `EBANER_PROFILE`    | Print per-frame timings once a second: whole frame, signal aspects, distant walks, the signal mesh, and the vehicle mesh and its upload. |
+| `EBANER_RADIUS`     | Half-window of world to load, in metres (default 20000). Two kilometres loads in seconds where the full 40 km square takes minutes, which is what makes a profile or a frame-time measurement affordable at all. Inspection only: drive out of it and the world ends. |
 | `EBANER_CHASE`      | `1` rides the vehicle from the start (the chase camera is otherwise only reachable by pressing C, so the one view that shows the machine could not be screenshotted). |
 | `EBANER_AUDIO_DUMP` | Render a scripted brake sequence to the given WAV and exit.   |
 | `EBANER_AUDIO_DUMP_ENGINE` | Render an engine start/idle/stop to the given WAV, exit. |

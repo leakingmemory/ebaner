@@ -1508,11 +1508,12 @@ void VulkanRenderer::createVehicleBuffers(
     pendingVehicleVertices_ = vertices;
 }
 
-void VulkanRenderer::updateVehicleVertices(
-    const std::vector<TrackVertex>& vertices) {
-    // Stored now; copied into the current frame's mapped buffer in drawFrame,
-    // after that frame's fence (so the GPU has finished reading it).
-    if (vehicleIndexCount_ > 0) pendingVehicleVertices_ = vertices;
+void VulkanRenderer::updateVehicleVertices(std::vector<TrackVertex>& vertices) {
+    // Taken now; copied into the current frame's mapped buffer in drawFrame, after that
+    // frame's fence (so the GPU has finished reading it). Swapped rather than copied -
+    // the deferral is what this is for, not the copy, and both vectors keep their
+    // capacity so nothing is allocated either way.
+    if (vehicleIndexCount_ > 0) pendingVehicleVertices_.swap(vertices);
 }
 
 void VulkanRenderer::attachVehicle(const std::vector<TrackVertex>& vertices,

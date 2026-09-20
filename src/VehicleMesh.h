@@ -45,8 +45,21 @@ public:
     // at attach time and never touched again, so a rebuild under the old one would draw
     // as a heap of triangles with nothing anywhere to say why.
     void build(const std::deque<Consist>& trains);
+    // The per-frame path. The trains have moved, so every vertex is regenerated - but the
+    // index buffer and the opaque/glass split it is sorted into cannot have changed, since
+    // changing either is what attachVehicle is for. So this does the geometry and nothing
+    // else: no indices, no re-sorting, just the glazing stamped back on to the vertices
+    // that carried it when the buffer was attached.
+    //
+    // On a 23-unit train that was 8.4 ms of a 20 ms frame, and most of it was work thrown
+    // away: 132 000 index pushes and a 44 000-triangle colour sort, every frame, to arrive
+    // at exactly the buffer the GPU was already holding.
+    void refresh(const std::deque<Consist>& trains);
 
     const std::vector<TrackVertex>& vertices() const { return vertices_; }
+    // For the renderer to swap with rather than copy: 3 MB a frame is worth not copying,
+    // and what it leaves behind here is overwritten whole by the next refresh.
+    std::vector<TrackVertex>& mutableVertices() { return vertices_; }
     const std::vector<std::uint32_t>& indices() const { return indices_; }
     // Index at which the transparent (glass) triangles begin; indices are ordered
     // opaque-first, then glass, so the two can be drawn in separate passes.
@@ -55,8 +68,16 @@ public:
 private:
     // One set's geometry, appended to the buffer.
     void emitUnit(const Vehicle& vehicle);
-    // Move the glazing to the back of the index buffer, over whatever has been emitted.
+    // Move the glazing to the back of the index buffer, over whatever has been emitted,
+    // and record which vertices it stamped so refresh() can stamp them again without
+    // having to work out which they are a second time.
     void sortGlass();
+    // Index pushes go through here so refresh() can skip them wholesale.
+    void idx(std::uint32_t i) {
+        if (wantIndices_) indices_.push_back(i);
+    }
+    bool wantIndices_ = true;
+    std::vector<std::uint32_t> glassVerts_; // vertices carrying the translucent sentinel
 
     std::vector<TrackVertex> vertices_;
     std::vector<std::uint32_t> indices_;

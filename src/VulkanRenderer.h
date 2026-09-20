@@ -193,7 +193,11 @@ private:
 
 public:
     // Replaces the wheelset vertices for the next frame (fixed topology).
-    void updateVehicleVertices(const std::vector<TrackVertex>& vertices);
+    // Takes the vertices by SWAP, not by copy: at 23 units the buffer is 3 MB and it was
+    // being copied here and then memcpy'd into the mapped buffer a second time, 6 MB of
+    // pure copying a frame. What the caller gets back is the previous frame's vector,
+    // which it overwrites whole before offering it again.
+    void updateVehicleVertices(std::vector<TrackVertex>& vertices);
 
 private:
     void createCommandBuffers();

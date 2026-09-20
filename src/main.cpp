@@ -374,7 +374,14 @@ int main(int argc, char** argv) {
     drawLoadingNotice(window, renderer, *start);
 
     try {
-        data.load(datasetRoot, start->world);
+        // EBANER_RADIUS shrinks the world that is loaded, in metres. The default 20 km
+        // half-window is a 40 km square and takes minutes to read on a slow machine, which
+        // makes any measurement that needs the simulator running - a profile, a frame time
+        // - cost minutes a go. Two kilometres loads in seconds and is plenty to stand a
+        // train in. For inspection only: drive out of it and the world ends.
+        double half = 20000.0;
+        if (const char* r = std::getenv("EBANER_RADIUS")) half = std::max(200.0, std::atof(r));
+        data.load(datasetRoot, start->world, half);
        
         paths = buildTrackPaths(data);
        
@@ -3014,7 +3021,10 @@ int main(int argc, char** argv) {
         void reset() { worst = total = 0.0; n = 0; }
     };
     const bool profile = std::getenv("EBANER_PROFILE") != nullptr;
-    Stat pAspects, pDistants, pMesh, pUpload, pMap, pFrame;
+    // The vehicle mesh is timed apart from the signal mesh because it is the one thing in
+    // the frame whose cost goes up with the length of the train: everything else here is
+    // per signal, per crossing or per screen.
+    Stat pAspects, pDistants, pMesh, pUpload, pMap, pFrame, pVeh, pVehUp;
     double profileUntil = glfwGetTime() + 1.0;
     auto now_ms = [] {
         return std::chrono::duration<double, std::milli>(
@@ -4239,8 +4249,16 @@ int main(int argc, char** argv) {
             }
             audio.setCrossingBell(bellGain);
             audio.update(*sounded, simDt, distGain, voices, nGain, rollGain);
-            vmesh.build(trains);
-            renderer.updateVehicleVertices(vmesh.vertices());
+            // refresh, not build: the trains have moved but their composition has not, so
+            // the index buffer on the GPU still describes this geometry and only the
+            // vertices need making again. Anything that changes what is in the train -
+            // coupling, uncoupling, placing one - goes through build + attachVehicle.
+            const double tV = profile ? now_ms() : 0.0;
+            vmesh.refresh(trains);
+            if (profile) pVeh.add(now_ms() - tV);
+            const double tVU = profile ? now_ms() : 0.0;
+            renderer.updateVehicleVertices(vmesh.mutableVertices());
+            if (profile) pVehUp.add(now_ms() - tVU);
 
             // Aim: the switch stand nearest the camera's forward ray (the crosshair),
             // in front and within a small cone. T throws it. Only in the cab view -
@@ -4572,10 +4590,13 @@ int main(int argc, char** argv) {
                 line("distant walks", pDistants);
                 line("mesh rebuild", pMesh);
                 line("mesh upload", pUpload);
+                line("vehicle mesh", pVeh);
+                line("vehicle upload", pVehUp);
                 line("map overlay", pMap);
                 std::fflush(stdout);
                 pFrame.reset(); pAspects.reset(); pDistants.reset();
                 pMesh.reset(); pUpload.reset(); pMap.reset();
+                pVeh.reset(); pVehUp.reset();
             }
         }
     }
