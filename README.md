@@ -207,6 +207,28 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   nearly twice the setback and starts it too low; measuring it off that same photograph
   gave the two-part profile above, and the difference between guessing and measuring here
   is the difference between a wedge and a locomotive.
+  Its **cab** is a different room from the Di 4's, and the difference is the thing to get
+  right: the driver sits **inside a wraparound desk** rather than behind a bench with the
+  controls off to one side. Three surfaces — a light grey desk top the handles stand on, a
+  black instrument panel raked steeply up from it to the windscreen sill, and a taupe
+  coaming capping it. Left to right as the photograph has them: the fault panel of switches
+  and coloured buttons, the power handle on its quadrant with the big black ball knob and
+  the reverser beside it, the **load meter and speedometer** with a red indicator between
+  them, the twin-needle **air gauge** and two small dials, the brake handles, and on the
+  right wing the **EMD screens**, a keypad, and the green start and red emergency buttons.
+  A blue seat inside the curve, cream lining, checker plate underfoot.
+  Four things had to be *measured* rather than reasoned about, and each produced the same
+  symptom — a cab that looked like geometry nobody had written. The panel's outward normal
+  is worked out by asking which way the driver is, not from the sign of a cross product:
+  this basis is `(right, tangent, up)` with `right = cross(up, tangent)`, so it is **left
+  handed** and the right-hand rule gives the wrong answer — signed by hand it went wrong
+  twice, in both directions, each time putting every dial a centimetre *inside* the panel.
+  The panel itself has to be **steep and close**; taken up to the nose skin it rakes at 22°
+  over 1.2 m and is seen almost edge-on. The gauge faces have to be **pale**, because a dark
+  face on a dark panel is invisible at the distance a driver sits from it. And the desk sits
+  high, 1.02 m over the cab floor, which is a compensation and not a measurement: the body
+  floor here is 1.55 m over the railhead — the height stack counts the wheel radius twice —
+  so a realistic 0.85 m desk is 60° below straight ahead and outside the view entirely.
   The colours are sampled from the photographs rather than guessed.
   **Width, height, bogie wheelbase and bogie centres are estimates** — no source gives any
   of the four, and a three-quarter photograph cannot be scaled — as are the two dynamic

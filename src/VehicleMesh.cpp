@@ -164,8 +164,12 @@ const glm::vec3 kMarker(0.72f, 0.11f, 0.10f); // the red marker lights
 // chamfered down to the flanks, and the hatch panels darker and recessed between the
 // cantrails.
 constexpr float kBandLo = 0.00f, kBandHi = 0.07f;
-constexpr float kWinLo = 0.60f;       // the dark window band, which the glazing sits in
-constexpr float kWinHi = 0.85f;
+// The window band, off the side elevation at 50 px/m: its bottom edge is 1.36 m above the
+// solebar and its top 2.38 m, against a 2.7 m bodyside. Guessed at 0.60/0.85 first, which
+// put the sill 1.51 m up - above a seated driver's eye, so from inside the cab he was
+// looking at the panel and not out of the locomotive.
+constexpr float kWinLo = 0.47f;       // the dark window band, which the glazing sits in
+constexpr float kWinHi = 0.88f;
 constexpr float kShoulderFrac = 0.18f; // of the body height, where the flanks chamfer in
 constexpr float kRoofWFrac = 0.78f;   // roof width, of the body's
 constexpr float kNoseWFrac = 0.97f;   // the front, likewise
@@ -189,6 +193,55 @@ constexpr float kBodyRise = 0.30f;    // body floor above the bogie frame top
 constexpr float kRoofThick = 0.10f;
 constexpr int   kLouvres = 20;        // slats per panel, which is fine but not as fine as
                                       // the real thing - that is a moire at any distance
+
+// --- The cab, from a photograph of a EURO 4000 desk --------------------------------
+//
+// A wraparound desk in a shallow arc with the seat inside the curve, which is a very
+// different room from the Di 4's flat bench of a console with the driver off to one side.
+// Three surfaces: a light grey desk top the handles stand on, a black instrument panel
+// raked back from it to the windscreen sill, and a taupe coaming capping the whole thing.
+// Left to right on the panel: a fault-and-switch panel of coloured buttons, the gauge cluster,
+// the EMD screen and keypad, and the start and emergency buttons on the right wing.
+const glm::vec3 kCabWall(0.78f, 0.76f, 0.72f);  // cream lining
+const glm::vec3 kCabFloor(0.24f, 0.24f, 0.25f); // checker plate
+const glm::vec3 kDesk(0.58f, 0.58f, 0.59f);     // the grey desk top
+const glm::vec3 kPanel(0.09f, 0.09f, 0.10f);    // the black instrument panels
+const glm::vec3 kCoaming(0.40f, 0.36f, 0.34f);  // the taupe cap over the panel
+const glm::vec3 kSeat(0.17f, 0.20f, 0.42f);     // the blue seat fabric
+const glm::vec3 kSeatFrame(0.10f, 0.10f, 0.11f);
+const glm::vec3 kKnob(0.06f, 0.06f, 0.07f);     // the ball knobs on the handles
+// The two big dials have pale faces and the air gauges dark ones, which is what the
+// photograph shows and also the only way either reads: a dark face on a dark panel with a
+// 9 mm rim round it is invisible at the distance a driver sits from it, and the first cut
+// of this had every gauge that way. The Di 4's cab made the same choice for the same
+// reason.
+const glm::vec3 kDial(0.80f, 0.80f, 0.77f);     // the speedometer and the load meter
+const glm::vec3 kDialDark(0.13f, 0.13f, 0.14f); // the air gauges
+const glm::vec3 kDialRim(0.50f, 0.50f, 0.52f);
+const glm::vec3 kNeedle(0.09f, 0.09f, 0.10f);   // dark, on a pale face
+const glm::vec3 kNeedleL(0.90f, 0.90f, 0.87f);  // and pale, on a dark one
+const glm::vec3 kScreenG(0.10f, 0.32f, 0.16f);  // the EMD display, green on near-black
+const glm::vec3 kRedBtn(0.80f, 0.10f, 0.08f);
+const glm::vec3 kGreenBtn(0.20f, 0.62f, 0.26f);
+const glm::vec3 kAmberBtn(0.85f, 0.68f, 0.10f);
+const glm::vec3 kPaleBtn(0.80f, 0.80f, 0.78f);
+// The desk sits high, 1.02 m over the cab floor, and that is a compensation rather than a
+// measurement. The body floor in this model is 1.55 m over the railhead - the height stack
+// counts the wheel radius twice - so the windows, placed by fractions of the bodyside, end
+// up higher above the cab floor than they are on the real machine. The driver's eye has to
+// clear the sill, and once it does, a desk at a realistic 0.85 m is 0.68 m below his eye
+// and 60 degrees down from straight ahead: outside the 60-degree view altogether, so the
+// whole desk and everything on it is simply not there. Raising the desk keeps the driver's
+// relationship to his controls and his windscreen right, which is what the cab is for.
+constexpr float kDeskH = 1.02f;       // desk top above the cab floor
+constexpr float kEyeAboveFloor = 1.48f; // seated, and it MUST clear the windscreen sill:
+                                        // at 1.42 against a sill at 1.36 the margin was
+                                        // 6 cm, which is one tweak away from a driver
+                                        // looking at the inside of the bodywork
+constexpr float kSeatBack = 0.80f;    // the seat, back from the near edge of the desk.
+                                      // 1.05 put it through the rear bulkhead and 0.40 put
+                                      // the driver's chest against the desk, looking over
+                                      // the top of every instrument he has
 } // namespace cd312
 
 // NSB Class 93 (Bombardier Talent) exterior, classic NSB livery.
@@ -2135,6 +2188,195 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                           at(0.36f)), 0.006f, 0.42f, bodyH * 0.30f, cd312::kGrille);
             }
 
+        // --- The cab -------------------------------------------------------------------
+        //
+        // From a photograph of a EURO 4000 desk. The driver sits INSIDE a wraparound desk
+        // rather than behind a bench with the controls on one side, which is the thing
+        // that makes this cab look nothing like the Di 4's even though both are a desk,
+        // some dials and two handles.
+        auto emitCabAt = [&](float so) {
+            const float ihw = hw * cd312::kNoseWFrac - 0.02f;   // inside the lining
+            const float zFl = z0;                                // cab floor = body floor
+            const float zWinLo = at(cd312::kWinLo), zWinHi = at(cd312::kWinHi);
+            const float zC = zWinHi + 0.22f;                     // ceiling, clear of the shoulder
+            const float yB = so * (halfLen - cd312::kCabLen);    // rear bulkhead
+            // Positive is the driver's RIGHT, and the sign flips with the end because
+            // f.right is cross(up, tangent). Signed the other way first, which mirrors the
+            // whole desk: the fault panel ends up on his right and the EMD screens on his
+            // left, which is a cab nobody has ever driven.
+            auto dx = [&](float w) { return so * w; };
+            const glm::vec3 mid = P(0.0f, 0.5f * (yB + so * halfLen), 0.5f * (zFl + zC));
+            // The lining stops against the nose, which leans: squared off at one y it
+            // either leaves bare skin beside the driver or stands out through the front.
+            auto yIn = [&](float z) { return yF(z) - so * 0.06f; };
+
+            // Shell: floor, ceiling, side walls, rear bulkhead. Seen from within, so every
+            // reference point is outside its own face and the normals turn inward.
+            quadN(P(-ihw, yB, zFl + 0.015f), P(ihw, yB, zFl + 0.015f),
+                  P(ihw, yIn(zFl), zFl + 0.015f), P(-ihw, yIn(zFl), zFl + 0.015f),
+                  cd312::kCabFloor, mid + Z * 6.0f);
+            quadN(P(-ihw, yB, zC), P(ihw, yB, zC), P(ihw, yIn(zC), zC), P(-ihw, yIn(zC), zC),
+                  cd312::kCabWall, mid - Z * 6.0f);
+            quadN(P(-ihw, yB, zFl), P(ihw, yB, zFl), P(ihw, yB, zC), P(-ihw, yB, zC),
+                  cd312::kCabWall, mid - Y * (so * 6.0f));
+            // Two panels a side, folding where the nose does, for the same reason the
+            // Di 4's do: one straight edge from floor to ceiling leaves the skin bare
+            // exactly where the driver's shoulder is.
+            const float zK = at(cd312::kNoseKnee);
+            for (const float sx : {-1.0f, 1.0f}) {
+                const glm::vec3 outb = mid + X * (sx * 6.0f);
+                quadN(P(sx * ihw, yB, zFl), P(sx * ihw, yIn(zFl), zFl),
+                      P(sx * ihw, yIn(zK), zK), P(sx * ihw, yB, zK), cd312::kCabWall, outb);
+                quadN(P(sx * ihw, yB, zK), P(sx * ihw, yIn(zK), zK),
+                      P(sx * ihw, yIn(zWinLo), zWinLo), P(sx * ihw, yB, zWinLo),
+                      cd312::kCabWall, outb);
+                // Above the window band the lining runs on to the ceiling.
+                quadN(P(sx * ihw, yB, zWinHi), P(sx * ihw, yIn(zWinHi), zWinHi),
+                      P(sx * ihw, yIn(zC), zC), P(sx * ihw, yB, zC), cd312::kCabWall, outb);
+            }
+
+            // --- The desk ---------------------------------------------------------------
+            // A shallow arc: a centre section square to the driver and a wing each side
+            // angled back, which is what wraps it round him. Built as three slabs; the
+            // wings are boxes yawed by eye rather than mitred, and at desk scale the
+            // corner that leaves is smaller than the moulding it stands for.
+            const float zD = zFl + cd312::kDeskH;
+            const float yDeskF = yB + so * 1.80f;   // the desk's forward edge
+            const float yDeskB = yB + so * 1.25f;   // and the edge nearest the driver
+            const glm::vec3 deskC = P(0.0f, 0.5f * (yDeskF + yDeskB), zD);
+            emitBox(X, Y, Z, deskC, 0.62f, 0.5f * std::abs(yDeskF - yDeskB), 0.035f,
+                    cd312::kDesk);
+            for (const float sx : {-1.0f, 1.0f})
+                emitBox(X, Y, Z,
+                        P(sx * 0.95f, 0.5f * (yDeskF + yDeskB) - so * 0.14f, zD - 0.01f),
+                        0.34f, 0.5f * std::abs(yDeskF - yDeskB) - 0.06f, 0.035f,
+                        cd312::kDesk);
+            // The desk's front skirt, so it is a desk and not a floating shelf.
+            emitBox(X, Y, Z, P(0.0f, yDeskB, zD - 0.5f * (cd312::kDeskH - 0.30f)), 0.62f,
+                    0.02f, 0.5f * (cd312::kDeskH - 0.30f), cd312::kCabWall);
+
+            // The instrument panel, raked back from the desk to the windscreen sill, and
+            // the coaming capping it. The rake is what puts the dials square to a seated
+            // driver's eye rather than to the roof.
+            // STEEP and close, not a shelf running away into the nose. Taken up to the
+            // nose skin first, which raked it at 22 degrees over 1.2 m of depth: from the
+            // driver's eye that is a surface seen almost edge-on, and the whole cluster
+            // reads as one blank slab however many dials are on it.
+            const float zP0 = zD + 0.02f, zP1 = zWinLo - 0.04f;
+            const float yP0 = yDeskF, yP1 = yDeskF + so * 0.26f;
+            const glm::vec3 pC = P(0.0f, 0.5f * (yP0 + yP1), 0.5f * (zP0 + zP1));
+            // Panel basis: u across the cab, v up the slope, n out of the face toward the
+            // driver. Everything mounted on the panel is placed in these.
+            const glm::vec3 pu = X;
+            const glm::vec3 pv = glm::normalize(Y * (yP1 - yP0) + Z * (zP1 - zP0));
+                // Out of the panel TOWARD THE DRIVER, and worked out by asking which way that
+            // is rather than by reasoning about the sign of a cross product. This basis is
+            // (right, tangent, up) and right is cross(up, tangent), so it is LEFT handed,
+            // and cross(pu, pv) comes out the opposite way to the one the right-hand rule
+            // suggests. Signed by hand it went wrong twice, in both directions, and each
+            // time the symptom was the same: every dial a centimetre inside the panel, the
+            // cluster gone, and a blank black slab that looks exactly like geometry nobody
+            // ever wrote.
+            const glm::vec3 seatAt = P(0.0f, yDeskB - so * cd312::kSeatBack, zD);
+            glm::vec3 pn = glm::normalize(glm::cross(pu, pv));
+            if (glm::dot(pn, seatAt - pC) < 0.0f) pn = -pn;
+            const float pHV = 0.5f * glm::length(Y * (yP1 - yP0) + Z * (zP1 - zP0));
+            quadN(pC - pu * ihw - pv * pHV, pC + pu * ihw - pv * pHV,
+                  pC + pu * ihw + pv * pHV, pC - pu * ihw + pv * pHV, cd312::kPanel,
+                  pC - pn * 6.0f);
+            emitBox(X, Y, Z, P(0.0f, yP1, zP1 + 0.05f), ihw, 0.10f, 0.05f, cd312::kCoaming);
+
+            // --- What is on the panel ---------------------------------------------------
+            // Left to right as the photograph has them. The gauge cluster is the middle
+            // third: a combined brake-power and ammeter dial, the speedometer, a red
+            // indicator, the twin-needle air gauge, and two small gauges under it.
+            const float g = 0.0f; // panel centre
+            discFace(pC, pu, pv, pn, dx(0.34f), g + 0.02f, 0.075f, 0.012f, cd312::kDialRim);
+            discFace(pC, pu, pv, pn, dx(0.34f), g + 0.02f, 0.066f, 0.014f, cd312::kDial);
+            needle(pC, pu, pv, pn, dx(0.34f), g + 0.02f, 0.056f, 0.12f, cd312::kNeedle);
+            discFace(pC, pu, pv, pn, dx(0.12f), g + 0.02f, 0.085f, 0.012f, cd312::kDialRim);
+            discFace(pC, pu, pv, pn, dx(0.12f), g + 0.02f, 0.076f, 0.014f, cd312::kDial);
+            needle(pC, pu, pv, pn, dx(0.12f), g + 0.02f, 0.064f, 0.0f, cd312::kNeedle);
+            discFace(pC, pu, pv, pn, dx(-0.02f), g + 0.08f, 0.018f, 0.014f, cd312::kRedBtn);
+            discFace(pC, pu, pv, pn, dx(-0.16f), g + 0.03f, 0.075f, 0.012f, cd312::kDialRim);
+            discFace(pC, pu, pv, pn, dx(-0.16f), g + 0.03f, 0.066f, 0.014f,
+                     cd312::kDialDark);
+            // Two needles on the one face: main reservoir and brake pipe, which is the
+            // gauge a driver actually watches.
+            needle(pC, pu, pv, pn, dx(-0.16f), g + 0.03f, 0.056f, 0.80f, cd312::kRedBtn);
+            needle(pC, pu, pv, pn, dx(-0.16f), g + 0.03f, 0.056f, 0.62f, cd312::kNeedleL);
+            for (const float sx : {-0.10f, -0.24f}) {
+                discFace(pC, pu, pv, pn, dx(sx), g - 0.06f, 0.042f, 0.012f, cd312::kDialRim);
+                discFace(pC, pu, pv, pn, dx(sx), g - 0.06f, 0.035f, 0.014f,
+                         cd312::kDialDark);
+                needle(pC, pu, pv, pn, dx(sx), g - 0.06f, 0.028f, 0.45f, cd312::kNeedleL);
+            }
+            // The fault panel on the left: rows of switches over a row of round buttons,
+            // in the colours the photograph shows - grey, amber, black, red.
+            rectFace(pC, pu, pv, pn, dx(0.62f), g + 0.02f, 0.17f, 0.11f, 0.010f,
+                     cd312::kPanel);
+            const glm::vec3 btn[4] = {cd312::kPaleBtn, cd312::kAmberBtn, cd312::kKnob,
+                                      cd312::kRedBtn};
+            for (int i = 0; i < 4; ++i)
+                discFace(pC, pu, pv, pn, dx(0.74f - 0.08f * static_cast<float>(i)),
+                         g - 0.06f, 0.019f, 0.013f, btn[i]);
+            for (int i = 0; i < 5; ++i)
+                rectFace(pC, pu, pv, pn, dx(0.74f - 0.06f * static_cast<float>(i)),
+                         g + 0.07f, 0.012f, 0.022f, 0.013f, cd312::kDialRim);
+            // The EMD screen and its keypad on the right, and the two displays outboard.
+            rectFace(pC, pu, pv, pn, dx(-0.46f), g + 0.05f, 0.11f, 0.055f, 0.012f,
+                     cd312::kScreenG);
+            for (int r = 0; r < 3; ++r)
+                for (int c = 0; c < 4; ++c)
+                    rectFace(pC, pu, pv, pn,
+                             dx(-0.38f + 0.05f * static_cast<float>(c)),
+                             g - 0.05f - 0.035f * static_cast<float>(r), 0.018f, 0.013f,
+                             0.012f, cd312::kDialRim);
+            rectFace(pC, pu, pv, pn, dx(-0.72f), g + 0.05f, 0.10f, 0.045f, 0.012f,
+                     cd312::kScreenG);
+            discFace(pC, pu, pv, pn, dx(-0.70f), g - 0.08f, 0.030f, 0.016f, cd312::kRedBtn);
+            discFace(pC, pu, pv, pn, dx(-0.58f), g - 0.08f, 0.022f, 0.014f, cd312::kGreenBtn);
+
+            // --- The handles ------------------------------------------------------------
+            // Power on the driver's left on its own raked sub-panel with a guard round it,
+            // the reverser below and inboard of it, and the brake handles to the right.
+            // Both power handles carry the big black ball knob the photograph shows.
+            auto lever = [&](float lx, float ly, float len, float tilt, float knobR) {
+                const glm::vec3 base = P(dx(lx), yDeskB + so * ly, zD + 0.02f);
+                const glm::vec3 dir = glm::normalize(Z + Y * (so * tilt));
+                emitBox(X, Y, Z, base + dir * (0.5f * len), 0.016f, 0.016f, 0.5f * len,
+                        cd312::kSeatFrame);
+                const glm::vec3 top = base + dir * len;
+                discFace(top, X, Y, Z, 0.0f, 0.0f, knobR, 0.0f, cd312::kKnob);
+                emitBox(X, Y, Z, top, knobR, knobR, knobR, cd312::kKnob);
+            };
+            emitBox(X, Y, Z, P(dx(0.30f), yDeskB + so * 0.22f, zD + 0.05f), 0.16f, 0.16f,
+                    0.05f, cd312::kPanel);                       // the power quadrant
+            lever(0.30f, 0.22f, 0.26f, -0.25f, 0.045f);           // power, ball knob
+            emitBox(X, Y, Z, P(dx(0.46f), yDeskB + so * 0.10f, zD + 0.04f), 0.09f, 0.07f,
+                    0.04f, cd312::kPanel);                        // reverser plate
+            lever(0.46f, 0.10f, 0.13f, -0.15f, 0.028f);           // reverser, smaller knob
+            for (int i = 0; i < 3; ++i)                           // the brake handles
+                lever(-0.10f - 0.11f * static_cast<float>(i), 0.20f, 0.19f, -0.10f, 0.022f);
+
+            // --- The seat ---------------------------------------------------------------
+            // Inside the curve of the desk, which is what "central driving position" means
+            // here - not a seat pushed against one wall with the desk beside it.
+            const float ys = yDeskB - so * cd312::kSeatBack;
+            emitBox(X, Y, Z, P(dx(0.02f), ys, zFl + 0.31f), 0.07f, 0.07f, 0.31f,
+                    cd312::kSeatFrame);
+            emitBox(X, Y, Z, P(dx(0.02f), ys, zFl + 0.65f), 0.26f, 0.26f, 0.05f,
+                    cd312::kSeat);
+            emitBox(X, Y, Z, P(dx(0.02f), ys - so * 0.24f, zFl + 0.92f), 0.26f, 0.06f,
+                    0.27f, cd312::kSeat);
+            emitBox(X, Y, Z, P(dx(0.02f), ys - so * 0.24f, zFl + 1.26f), 0.15f, 0.06f,
+                    0.10f, cd312::kSeatFrame);
+            for (const float sx : {-1.0f, 1.0f})                  // armrests
+                emitBox(X, Y, Z, P(dx(0.02f) + sx * 0.26f, ys, zFl + 0.82f), 0.04f, 0.18f,
+                        0.03f, cd312::kSeatFrame);
+        };
+        for (const float so : {-1.0f, 1.0f}) emitCabAt(so);
+
         // Each end: the lights on the black panel, the buffer beam and the plough.
         for (const float so : {-1.0f, 1.0f}) {
             const float yLamp = yF(at(0.22f));
@@ -2319,7 +2561,7 @@ namespace drivercam {
 namespace {
 int cabsOn(const Vehicle& v) {
     if (v.cabCount() == 0) return 0; // a carriage: no driving position at all
-    if (v.bodyStyle() == BodyDi4) return 2;
+    if (v.bodyStyle() == BodyDi4 || v.bodyStyle() == BodyCD312) return 2;
     if (v.bodyStyle() == BodyClass93 && v.bodySectionFrames().size() >= 2) return 2;
     return 0;
 }
@@ -2369,6 +2611,30 @@ bool eyePose(const Consist& c, int position, glm::vec3& eye, glm::vec3& forward)
         const float sy = so * (halfLen - 0.92f) - so * 0.95f; // seat, as in emitDi4Cab
         eye = f.pos + f.tangent * sy + f.right * (-so * 0.60f) +
               f.up * (zFl + di4::kEyeAboveFloor);
+        forward = f.tangent * so;
+        return true;
+    }
+
+    if (v.bodyStyle() == BodyCD312) {
+        // One body with a cab at each end, told apart by `so` alone, as the Di 4's are.
+        // Every offset is copied from emitCabAt and means nothing on its own: the eye has
+        // to land where that put the seat, and between the windscreen sill and its head,
+        // or the driver sits looking at bodywork - which is exactly how the Di 4's cab
+        // went wrong the first time.
+        const VehicleFrame& f = sections[0];
+        const float halfLen = 0.5f * v.length();
+        const float so = position == 0 ? -1.0f : 1.0f;
+        // The same stack emitUnit builds, and it has to be copied exactly: the bogie frame
+        // centre sits a wheel radius above the axle centre, which is itself a radius above
+        // the railhead, so the radius is counted TWICE.
+        const float zFl = wheelset::kRailTopZ + 2.0f * v.wheelRadius() + kFrameHalfHeight +
+                          cd312::kBodyRise;
+        // The seat, as emitCabAt places it: back from the desk's near edge, which is
+        // itself 0.95 m forward of the rear bulkhead.
+        const float yB = so * (halfLen - cd312::kCabLen);
+        const float sy = yB + so * 1.25f - so * cd312::kSeatBack;
+        eye = f.pos + f.tangent * sy + f.right * (-so * 0.02f) +
+              f.up * (zFl + cd312::kEyeAboveFloor);
         forward = f.tangent * so;
         return true;
     }
