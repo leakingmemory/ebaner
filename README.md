@@ -516,6 +516,17 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   go and what furniture is inside — and the standard rake is **a list and not a count**:
   `"BC5-3,FR5-1,B5-3,B5-5,A5-1"`, café **second**, 2nd class **third and fourth**, 1st class
   on the **tail**, as it is marshalled. 335.4 t, 150.3 m.
+- **The freight** — a CD 312 and 22 wagons, built to a **length limit** rather than to a
+  wagon count, which is how a freight train is actually planned. 600 m is what has to fit,
+  so this is the longest train the stock will make that does not exceed it: nine pocket
+  wagons and thirteen container flats, interleaved because a real intermodal train is
+  loaded with whatever is going that night. **598.82 m** over the couplers — 1.18 m short,
+  and no other mix of the two types gets closer. `Consist::length()` sums the bodies and
+  adds a coupler gap between each pair, so the 22 couplers are inside that figure and the
+  arithmetic has to allow for them. **112 axles, 1797 t**: a heavy train, and deliberately
+  so — it is inside what 398 kN of starting effort will lift on the Saltfjell grades, but
+  not by much, which is the whole argument for having replaced a 2450 kW locomotive with a
+  3178 kW one.
 - **The night train** — the same five with two
   [WLAB-2](https://www.norsketog.no/tog/personvogner/wlab2) **sleepers** on the back.
   Strømmen again, but 1986–87 and not a Type 5 at all: **27.0 m on a 3.24 m body**, longer
@@ -1517,7 +1528,7 @@ the corresponding sources (national rail register + NVDB roads + OSM enrichment)
 | `EBANER_NOCARVE`    | Skip carving railway cuttings into the terrain.               |
 | `EBANER_NOOVERLAY`  | Ignore the `overlay/` track edits (link fixes).               |
 | `EBANER_EDMODE`     | `ebaner-trackedit` only: start in this mode, by its menu name. |
-| `EBANER_VEHICLE`    | Skip the start screen and preselect a vehicle, by its index in `kVehicleSpecs` (`0` = a single Class 93, `1`/`2` = two and three coupled, `3` = Di 4 + 5, `4` = the night train, `5` = a light Di 4, `6` = a CD 312, `13` = a pocket wagon, `14` = a container flat). The table is ordered for the pickers, so these move when a vehicle is added - the start screen numbers the list. |
+| `EBANER_VEHICLE`    | Skip the start screen and preselect a vehicle, by its index in `kVehicleSpecs` (`0` = a single Class 93, `1`/`2` = two and three coupled, `3` = Di 4 + 5, `4` = the night train, `5` = the 600 m freight, `6` = a light Di 4, `7` = a CD 312, `14` = a pocket wagon, `15` = a container flat). The table is ordered for the pickers, so these move when a vehicle is added - the start screen numbers the list. |
 | `EBANER_CHASE`      | `1` rides the vehicle from the start (the chase camera is otherwise only reachable by pressing C, so the one view that shows the machine could not be screenshotted). |
 | `EBANER_AUDIO_DUMP` | Render a scripted brake sequence to the given WAV and exit.   |
 | `EBANER_AUDIO_DUMP_ENGINE` | Render an engine start/idle/stop to the given WAV, exit. |

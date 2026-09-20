@@ -209,6 +209,15 @@ constexpr const char* specTitle(const VehicleSpec& v) {
 const VehicleSpec* specNamed(const char* fragment);
 
 // The Di 4, named so the light engine and the train it hauls are one set of numbers.
+// The CD 312's numbers, named for the same reason the Di 4's are: the light engine and the
+// freight train it heads are one machine, and one set of figures.
+inline constexpr VehicleSpec kCD312Spec = {
+    "CargoNet CD 312 (Euro 4000)", 123000.0f, 23.02f, 2.98f, 4.26f, 3.90f, 12.30f, 2,
+    BodyCD312, 1,
+    3, 1, DriveElectric, 3178000.0f, 0.5335f, 1.00f, 400000.0f, 200.0f, 900.0f, 6.5f,
+    16, true, 0.95f, 1.3f, 0.100f, ControlSeparate, 2, false, nullptr, nullptr,
+    220000.0f, 1800000.0f, true};
+
 inline constexpr VehicleSpec kDi4Spec = {
     "NSB Di 4 (Henschel)", 120000.0f, 20.80f, 3.176f, 4.35f, 3.85f, 11.75f, 2, BodyDi4, 1,
     3, 1, DriveElectric, 2450000.0f, 0.55f, 1.00f, 360000.0f, 315.0f, 900.0f, 7.0f,
@@ -238,6 +247,22 @@ inline constexpr VehicleSpec kVehicleSpecs[] = {
     // And the night train: the same five with two sleepers on the back.
     hauling(kDi4Spec, "NSB Di 4 + 5 + 2 sleepers",
             "BC5-3,FR5-1,B5-3,B5-5,A5-1,WLAB-2,WLAB-2"),
+    // And the freight, built to a length limit rather than to a wagon count: 600 m is what
+    // has to fit, so this is the longest train of the stock there is that does not exceed
+    // it. Nine pocket wagons and thirteen container flats behind the locomotive comes to
+    // 598.82 m over the couplers - 1.18 m short - and no other mix of the two gets closer.
+    // (Consist::length() sums the bodies and adds kCouplerGap between each pair, so the
+    // couplers are in that figure and the arithmetic has to allow for 22 of them.)
+    //
+    // 1797 t, which is a heavy train and meant to be: it is inside what 398 kN of starting
+    // effort will lift on the Saltfjell grades, but not by much, and that is the point of
+    // having bought a 3178 kW locomotive to replace a 2450 kW one.
+    //
+    // The two types are interleaved rather than blocked, because a real intermodal train
+    // is loaded with whatever is going that night.
+    hauling(kCD312Spec, "CargoNet freight (599 m)",
+            "Sgnss,Sgnss,T3000e,Sgnss,T3000e,Sgnss,Sgnss,T3000e,Sgnss,T3000e,Sgnss,Sgnss,"
+            "T3000e,Sgnss,T3000e,Sgnss,Sgnss,T3000e,Sgnss,T3000e,Sgnss,T3000e"),
 
     // --- A locomotive on its own ---
     // NSB Di 4: Henschel, 1981, five built for Nordlandsbanen - this line. A Co'Co', so
@@ -279,12 +304,7 @@ inline constexpr VehicleSpec kVehicleSpecs[] = {
     // No `hauls`. That is a statement and not an omission: this is the freight locomotive,
     // its train is a freight train, and there is not one freight wagon in the model yet.
     // The passenger carriages belong to the Di 4 and are not to be hung on this instead.
-    inCat({"CargoNet CD 312 (Euro 4000)", 123000.0f, 23.02f, 2.98f, 4.26f, 3.90f, 12.30f, 2,
-           BodyCD312, 1,
-           3, 1, DriveElectric, 3178000.0f, 0.5335f, 1.00f, 400000.0f, 200.0f, 900.0f, 6.5f,
-           16, true, 0.95f, 1.3f, 0.100f, ControlSeparate, 2, false, nullptr, nullptr,
-           220000.0f, 1800000.0f, true},
-          CatLoco),
+    inCat(kCD312Spec, CatLoco),
 
     // --- Single carriages, for building a formation up by hand ---
     // NSB Type 5, Strommens Vaerksted 1977-81, 92 built. BC5-3 is a 2010-12 rebuild of a
