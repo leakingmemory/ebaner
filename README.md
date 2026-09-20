@@ -86,8 +86,9 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   Both are grouped under headings — complete **trains** first, since that is
   what someone starting the simulator is nearly always after, then single
   **locomotives**, then single **carriages** to build a formation up by hand,
-  and the bare test shapes last under **debugging** where they are out of the
-  way but still reachable. `kVehicleSpecs` is stored in that order and must stay
+  then **freight wagons** — which are the CD 312's work and not the Di 4's, so
+  they are kept apart from the passenger stock — and the bare test shapes last
+  under **debugging** where they are out of the way but still reachable. `kVehicleSpecs` is stored in that order and must stay
   in it: the pickers write a heading wherever the category changes, so a row out
   of place would print its heading twice. The choices are a
   single-axle wheelset, a dual-axle bogie (two wheelsets + frame), a full-length
@@ -422,6 +423,22 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   heard from where the trains met rather than through the near train's envelope, so a
   collision thirty kilometres away is thirty kilometres away.
   `EBANER_AUDIO_DUMP_IMPACT=out.wav` renders the range offline, as the other voices have.
+- **Sdggmrss T3000e (pocket wagon)** — the articulated double pocket wagon combined
+  transport runs on, and the first piece of freight stock here. Two platforms on **three
+  bogies with the middle one shared**, so it is one wagon that bends in the middle rather
+  than two wagons coupled: **34.20 m** over buffers, bogie pivots at **2 × 14.20 m**, 35 t
+  tare and 100 t of load on six axles, 120 km/h, and it will go round a **75 m** curve.
+  Each half carries one **semi-trailer**, and the shape of the wagon is entirely explained
+  by that: a trailer standing on a flat deck is half a metre over the loading gauge, so its
+  wheels drop into a **well** whose floor is 330 mm over the railhead, and its nose sits up
+  on a **gooseneck** over the end bogie with the kingpin at 980 mm, the container deck
+  either side at 1155 mm. Drawn **loaded** — 35 t of wagon and two laden trailers at 30 t
+  is 95 t, well inside the 135 t it is rated for; an empty one would be its own row.
+  The articulation needed **no new code**: `bodySectionFrames()` already gives a
+  three-bogie vehicle two sections, each oriented by its own pair of bogies, so the wagon
+  bends at the shared bogie and each half follows the rail it is actually on — which is
+  exactly what the "Articulated (3 bogies)" test shape at the bottom of the vehicle table
+  was built to prove, long before there was anything real to use it on.
 - **NSB Type 5 carriages, and a locomotive that hauls them** — the
   [BC5-3](https://www.norsketog.no/tog/personvogner/type-5): 25.3 m on two two-axle bogies,
   43 t, 160 km/t, built at **Strømmens Værksted** 1977–81 and rebuilt 2010–12 as
@@ -1479,7 +1496,7 @@ the corresponding sources (national rail register + NVDB roads + OSM enrichment)
 | `EBANER_NOCARVE`    | Skip carving railway cuttings into the terrain.               |
 | `EBANER_NOOVERLAY`  | Ignore the `overlay/` track edits (link fixes).               |
 | `EBANER_EDMODE`     | `ebaner-trackedit` only: start in this mode, by its menu name. |
-| `EBANER_VEHICLE`    | Skip the start screen and preselect a vehicle, by its index in `kVehicleSpecs` (`0` = a single Class 93, `1`/`2` = two and three coupled, `3` = Di 4 + 5, `4` = the night train, `5` = a light Di 4, `6` = a CD 312). The table is ordered for the pickers, so these move when a vehicle is added - the start screen numbers the list. |
+| `EBANER_VEHICLE`    | Skip the start screen and preselect a vehicle, by its index in `kVehicleSpecs` (`0` = a single Class 93, `1`/`2` = two and three coupled, `3` = Di 4 + 5, `4` = the night train, `5` = a light Di 4, `6` = a CD 312, `13` = a pocket wagon). The table is ordered for the pickers, so these move when a vehicle is added - the start screen numbers the list. |
 | `EBANER_CHASE`      | `1` rides the vehicle from the start (the chase camera is otherwise only reachable by pressing C, so the one view that shows the machine could not be screenshotted). |
 | `EBANER_AUDIO_DUMP` | Render a scripted brake sequence to the given WAV and exit.   |
 | `EBANER_AUDIO_DUMP_ENGINE` | Render an engine start/idle/stop to the given WAV, exit. |

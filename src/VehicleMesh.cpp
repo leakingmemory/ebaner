@@ -247,6 +247,34 @@ constexpr float kSeatBack = 0.80f;    // the seat, back from the near edge of th
                                       // the top of every instrument he has
 } // namespace cd312
 
+// Sdggmrss T3000e, an articulated double pocket wagon with a semi-trailer in each half.
+//
+// Heights over the RAILHEAD, which is how a wagon like this is specified and the only way
+// the numbers mean anything: the container deck at 1.155 m, the kingpin saddle at 0.98,
+// and the pocket floor at 0.33 - and it is that last one that the whole design exists for.
+// A semi-trailer standing on a flat deck is half a metre over the loading gauge, so the
+// wheels drop into a well and the nose sits up on a gooseneck over the end bogie.
+namespace pocket {
+const glm::vec3 kFrame(0.30f, 0.30f, 0.32f);   // the wagon's steelwork
+const glm::vec3 kDeck(0.24f, 0.24f, 0.25f);    // deck and pocket floor, darker
+const glm::vec3 kBox[2] = {{0.84f, 0.84f, 0.82f},  // one trailer pale
+                           {0.36f, 0.42f, 0.55f}}; // and one in a blue-grey, so a rake of
+                                                    // them does not look like one wagon
+                                                    // printed over and over
+const glm::vec3 kSkirt(0.22f, 0.22f, 0.24f);   // the trailer's chassis and running gear
+const glm::vec3 kTyre(0.08f, 0.08f, 0.09f);
+constexpr float kDeckZ = 1.155f;    // container deck over the railhead
+constexpr float kSaddleZ = 0.98f;   // kingpin saddle, ditto
+constexpr float kPocketZ = 0.33f;   // and the floor of the well
+constexpr float kPocketLen = 10.49f;
+constexpr float kPocketHalfW = 0.80f; // the well is a slot for wheels, not the whole deck
+constexpr float kGoose = 3.20f;     // gooseneck, back from the outer end
+constexpr float kTrailerLen = 13.60f;
+constexpr float kTrailerHalfW = 1.275f;
+constexpr float kTrailerFloor = 1.42f; // its chassis underside over the railhead
+constexpr float kTrailerH = 2.75f;
+} // namespace pocket
+
 // NSB Class 93 (Bombardier Talent) exterior, classic NSB livery.
 // NSB Type 5 (Strommens Vaerksted, 1977-81) passenger carriage, in the red-and-grey the
 // class wore for most of its working life behind these locomotives. 25.3 m on two two-axle
@@ -2423,6 +2451,82 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
         }
     };
 
+    // One half of the articulated pocket wagon. `so` points at its OUTER end - the one
+    // with the gooseneck over the end bogie - so the other end is the shared Jacobs
+    // bogie, and the two halves are the same drawing mirrored. `which` picks the
+    // trailer's colour.
+    auto emitPocket = [&](const VehicleFrame& f, float halfLen, float so, int which) {
+        const glm::vec3 X = f.right, Y = f.tangent, Z = f.up;
+        const float hw = 0.5f * vehicle.width();
+        auto P = [&](float lx, float ly, float lz) { return f.pos + X * lx + Y * ly + Z * lz; };
+        auto zr = [&](float overRail) { return wheelset::kRailTopZ + overRail; };
+        const float yOut = so * halfLen;            // the outer end
+        const float yGoose = yOut - so * pocket::kGoose;   // where the gooseneck stops
+        const float yWell = yGoose - so * pocket::kPocketLen; // and the well with it
+
+        // Solebars: two girders the length of the half, at deck height. The wagon is a
+        // frame with a hole in it, so these are what carries it and what is seen from the
+        // side under the trailer.
+        for (const float sx : {-1.0f, 1.0f})
+            emitBox(X, Y, Z, P(sx * (hw - 0.09f), 0.0f, zr(pocket::kDeckZ - 0.14f)), 0.09f,
+                    halfLen, 0.15f, pocket::kFrame);
+        // Deck either side of the well, and the two crossbeams that close it.
+        for (const float sx : {-1.0f, 1.0f})
+            emitBox(X, Y, Z,
+                    P(sx * 0.5f * (hw + pocket::kPocketHalfW), 0.5f * (yGoose + yWell),
+                      zr(pocket::kDeckZ - 0.03f)),
+                    0.5f * (hw - pocket::kPocketHalfW), 0.5f * pocket::kPocketLen, 0.03f,
+                    pocket::kDeck);
+        emitBox(X, Y, Z, P(0.0f, 0.5f * (yWell + (-so * halfLen)), zr(pocket::kDeckZ - 0.03f)),
+                hw, 0.5f * std::abs(yWell + so * halfLen), 0.03f, pocket::kDeck);
+        // The gooseneck: the raised deck over the end bogie that the kingpin sits on.
+        emitBox(X, Y, Z, P(0.0f, 0.5f * (yOut + yGoose), zr(pocket::kSaddleZ - 0.05f)), hw,
+                0.5f * pocket::kGoose, 0.05f, pocket::kDeck);
+        emitBox(X, Y, Z, P(0.0f, yGoose, zr(0.5f * (pocket::kSaddleZ + pocket::kPocketZ))),
+                hw, 0.06f, 0.5f * (pocket::kSaddleZ - pocket::kPocketZ), pocket::kFrame);
+        // The well floor itself, low between the solebars.
+        emitBox(X, Y, Z, P(0.0f, 0.5f * (yGoose + yWell), zr(pocket::kPocketZ)),
+                pocket::kPocketHalfW, 0.5f * pocket::kPocketLen, 0.03f, pocket::kDeck);
+        // Headstock and buffers at the outer end only - the inner end is a Jacobs bogie
+        // and has neither, which is the point of articulating it.
+        emitBox(X, Y, Z, P(0.0f, yOut, zr(pocket::kDeckZ - 0.20f)), hw, 0.08f, 0.22f,
+                pocket::kFrame);
+        for (const float sx : {-1.0f, 1.0f})
+            emitBox(X, Y, Z, P(sx * 0.875f, yOut + so * 0.14f, zr(1.05f)), 0.17f, 0.14f,
+                    0.17f, pocket::kFrame);
+
+        // --- The trailer ---------------------------------------------------------------
+        // Kingpin on the gooseneck, wheels down in the well, which is the whole geometry
+        // of combined transport in one sentence.
+        const float yNose = yOut - so * 0.55f;
+        const float yTail = yNose - so * pocket::kTrailerLen;
+        const glm::vec3& box = pocket::kBox[which & 1];
+        emitBox(X, Y, Z,
+                P(0.0f, 0.5f * (yNose + yTail),
+                  zr(pocket::kTrailerFloor + 0.5f * pocket::kTrailerH)),
+                pocket::kTrailerHalfW, 0.5f * pocket::kTrailerLen, 0.5f * pocket::kTrailerH,
+                box);
+        // Chassis rail under it, and the kingpin plate that stands on the gooseneck.
+        emitBox(X, Y, Z,
+                P(0.0f, 0.5f * (yNose + yTail), zr(pocket::kTrailerFloor - 0.06f)),
+                pocket::kTrailerHalfW - 0.10f, 0.5f * pocket::kTrailerLen, 0.06f,
+                pocket::kSkirt);
+        emitBox(X, Y, Z, P(0.0f, yNose - so * 0.60f, zr(pocket::kSaddleZ + 0.16f)), 0.55f,
+                0.55f, 0.16f, pocket::kSkirt);
+        // Three axles at the back, in the well. Drawn as wheel pairs a side rather than as
+        // a bogie: a semi-trailer has none, and that is visible from beside the wagon.
+        for (int i = 0; i < 3; ++i) {
+            const float ay = yTail + so * (1.05f + 1.31f * static_cast<float>(i));
+            for (const float sx : {-1.0f, 1.0f})
+                emitBox(X, Y, Z, P(sx * 1.02f, ay, zr(pocket::kPocketZ + 0.55f)), 0.19f,
+                        0.24f, 0.52f, pocket::kTyre);
+        }
+        // Landing legs, folded up under the nose.
+        for (const float sx : {-1.0f, 1.0f})
+            emitBox(X, Y, Z, P(sx * 0.80f, yNose - so * 2.60f, zr(pocket::kDeckZ + 0.22f)),
+                    0.07f, 0.07f, 0.24f, pocket::kSkirt);
+    };
+
     const std::vector<VehicleFrame> sections = vehicle.bodySectionFrames();
     if (!sections.empty()) {
         const float halfLen =
@@ -2444,6 +2548,11 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                 emitType5(sections[i], halfLen, t5::kWLAB2);
             } else if (vehicle.bodyStyle() == BodyCD312) {
                 emitCD312(sections[i], halfLen);
+            } else if (vehicle.bodyStyle() == BodyPocket) {
+                // Section 0's outer end is at -y and section 1's at +y: they are the same
+                // half mirrored about the shared bogie.
+                emitPocket(sections[i], halfLen, i == 0 ? -1.0f : 1.0f,
+                           static_cast<int>(i));
             } else {
                 const glm::vec3 centre =
                     sections[i].pos + sections[i].up * (frameTopZ + kUnderframeHalfHeight);

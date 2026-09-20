@@ -38,6 +38,7 @@ enum VehicleBodyStyle {
     BodyType5A = 6,     // and as 1st class: a window across the centre, and more legroom
     BodyWlab2 = 7,      // NSB WLAB-2 sleeping car: compartments, one small window each
     BodyCD312 = 8,      // CargoNet CD 312 (Vossloh/Stadler EURO 4000) freight locomotive
+    BodyPocket = 9,     // Sdggmrss T3000e articulated double pocket wagon, loaded
 };
 
 // What turns the wheels. Two machines that could hardly be less alike: one puts its engine
@@ -71,15 +72,17 @@ enum VehicleCategory {
     CatTrain = 0,    // complete formations, ready to drive
     CatLoco = 1,     // a locomotive on its own
     CatCarriage = 2, // a single carriage, for building something up
-    CatDebug = 3,    // bare wheelsets and underframes: shapes to test the physics on
+    CatWagon = 3,    // freight stock, which is the CD 312's work and not the Di 4's
+    CatDebug = 4,    // bare wheelsets and underframes: shapes to test the physics on
 };
 
-inline constexpr int kVehicleCats = 4; // how many headings the pickers will draw
+inline constexpr int kVehicleCats = 5; // how many headings the pickers will draw
 
 constexpr const char* categoryName(int c) {
     return c == CatTrain      ? "TRAINS"
            : c == CatLoco     ? "LOCOMOTIVES"
            : c == CatCarriage ? "CARRIAGES"
+           : c == CatWagon    ? "FREIGHT WAGONS"
                               : "DEBUGGING";
 }
 
@@ -395,6 +398,39 @@ inline constexpr VehicleSpec kVehicleSpecs[] = {
      .cabs = 0,
      .epBrake = false,
      .category = CatCarriage},
+
+    // --- Freight stock: the CD 312's work ---
+    // Sdggmrss T3000e, the articulated double pocket wagon combined transport runs on:
+    // two platforms on THREE bogies, the middle one shared, so it is one wagon that bends
+    // in the middle rather than two wagons coupled. 34.20 m over buffers, bogie pivots at
+    // 2 x 14.20 m, 35 t tare and 100 t of load on six axles, 120 km/h, and it will go round
+    // a 75 m curve. Each half carries one semi-trailer, wheels dropped into the pocket and
+    // the kingpin up on the gooseneck - which is the whole point of the design, because a
+    // trailer sitting on a flat deck is half a metre too tall for the loading gauge.
+    //
+    // Modelled LOADED, with a trailer in each pocket: 35 t of wagon and two laden trailers
+    // at 30 t is 95 t, well inside the 135 t gross the wagon is rated for. An empty one is
+    // a different drawing and a different mass, and would be its own row.
+    //
+    // The articulation needs no new code. bodySectionFrames() already gives a three-bogie
+    // vehicle two sections, each oriented by its own pair of bogies, so the wagon bends at
+    // the shared bogie and each half follows the rail it is actually on - which is what
+    // the "Articulated (3 bogies)" test shape at the bottom of this table was built to
+    // prove.
+    {.name = "Sdggmrss T3000e (pocket wagon)",
+     .mass = 95000.0f,
+     .length = 34.20f,
+     .width = 2.60f,
+     .height = 4.20f,
+     .wheelbase = 1.80f,     // Y25 bogie
+     .bogieSpacing = 28.40f, // 2 x 14.20 m between pivots, the middle one shared
+     .bogieCount = 3,
+     .body = BodyPocket,
+     .units = 1,
+     .wheelRadius = 0.46f, // 920 mm wheels
+     .cabs = 0,
+     .epBrake = false,
+     .category = CatWagon},
 
     // --- Bare shapes to test the physics on. Last: they are not trains ---
     {"Single-axle wheelset", 1300.0f, 0.20f, 2.20f, 0.92f, 0.00f, 0.00f, 0, BodyUnderframe, 1},
