@@ -569,10 +569,53 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   local to each vehicle and the same however long the train is. So a hauled train brakes
   **slowly but nearly together**, not front-first: a Di 4 with five carriages starts to
   pull up at **1.7 s**, much where the light locomotive does, with the last carriage
-  **0.65 s** behind it — 231 m/s down 150 m of train.
+  **0.53 s** behind it — 282 m/s down 150 m of train.
   Volume does dominate, but on the **release**, where there is no accelerator to help
   because nothing local can make air: every pipe has to be filled from the one main
   reservoir at the front, and the train takes **12 s** against the light engine's 3.4 s.
+- **A 600 m freight train found two more of these, and both were invisible on a short
+  one.** The first: the accelerator could not fire on hauled stock at all. `bpRate_` was
+  measured from inside the vehicle's own step, *after* `Consist` had already moved air
+  across the couplings — and the couplings are the only thing that moves a wagon's pipe,
+  since it has no valve, no EP and no device of its own. So a wagon's rate was always
+  exactly zero, the accelerator never tripped, and the wave above was really diffusion
+  through the hoses. On 150 m of carriages diffusion is nearly as quick, which is why the
+  figures looked right; on 600 m it is not. The pipe is now marked before anything in the
+  step touches it, so the rate is the rate of *that pipe*, hoses included.
+  The second is the one that was actually reported — an **emergency that sticks on and
+  cannot be released**. It had two halves. The vent closed when the pipe came back *up*,
+  but the open vent is precisely what holds the pipe down, so the only way out was for all
+  600 m to reach zero and have nothing left to vent: on a long train, for ever. A real
+  accelerator is a differential valve and reseats when the **rapid fall stops**, which
+  covers both of the ways that happens — the pipe is empty, or the driver is refilling
+  against it and the two have met. It then has to recharge before it can act again, which
+  is what stops a wagon dipping for one step and eating the refill. All of it is per
+  vehicle, so on a release the vents give way one at a time from the locomotive backwards
+  and the fill travels with them. The other half was the **low-reservoir safety trip at
+  6.0 bar against a compressor cut-in of 6.5**: charging a pipe costs main-reservoir air,
+  23 vehicles of it cost about 5.75 bar, and there were only 2.0 between full and the trip.
+  The train could not be charged *at all* without tripping a device meant to catch a failed
+  compressor — an emergency nobody commanded, every time, which the accelerator then
+  refused to let go of. The trip belongs well below the compressor's working range, at
+  **4.5 bar**, and there is now a third pressure between the two: the **feed valve's
+  cut-out at 5.5 bar**, opening again at 6.0. Filling a pipe is what spends reservoir air,
+  so it is the first thing to give up when the supply is falling behind — the fill stops,
+  the compressor is left to get ahead of it alone, and the fill resumes by itself once
+  there is air to do it with. It sits below the compressor's cut-in, so the compressor is
+  already working by the time it closes, and a clear bar above the emergency trip, so it
+  is what keeps the reservoir *off* that trip rather than something that happens after it.
+  The reading order is now 4.5 emergency, 5.5 feed closes, 6.0 feed opens, 6.5 compressor
+  cuts in, 8.0 cuts out. Charging 600 m from cold bottoms the reservoir out at **5.57
+  bar** — so on the worst thing in the timetable the protection is armed and does not
+  quite fire, and anything more demanding than that gets a fill in steps instead of an
+  emergency. As with the safety device it is the locomotive's own reservoir and its own
+  valve: what the wagons at the far end are doing is not something the driver can see, and
+  must not be what decides whether the pipe may be filled. The 600 m train now charges from cold in 2 minutes without tripping
+  anything, bites at the last wagon in **3.6 s**, and — with the handle thrown back to
+  release while wagons are *still* venting — has that last wagon mostly off in **55 s** and
+  the whole train off in **2 minutes**, with no vent re-opening. Nothing a wagon does holds
+  the driver's handle hostage, which is as it must be: the driver cannot see the last
+  wagon.
 - **A carriage has no main reservoir**, and no low-reservoir safety device. That device is a
   locomotive's, there to catch a **failed compressor** — and a vehicle that never had one
   cannot have one fail. Getting this wrong stopped a hauled train dead after **half an hour

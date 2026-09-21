@@ -317,6 +317,202 @@ int main() {
               worst, 3.8);
     }
 
+    // --- a 600 m freight train, which is where all of this actually went wrong -------
+    //
+    // Everything above is a short train, and a short train hides two faults because its
+    // pipe is small enough for the hoses alone to carry the air about as fast as the
+    // accelerators would.
+    //
+    // 1. Charging a pipe costs the main reservoir air. Twenty-three vehicles of it cost
+    //    more than there was between "full" and the low-reservoir threshold, so the train
+    //    could not be charged at all without tripping a safety device meant to catch a
+    //    failed compressor - an emergency nobody commanded, every single time.
+    // 2. The accelerator then would not let go of it. It closed on the pipe coming back
+    //    *up*, which its own open vent prevents, so the only way out was for all 600 m of
+    //    train to reach zero and have nothing left to vent. That is the emergency that
+    //    sticks on and cannot be released.
+    //
+    // The driver has no way of knowing what the last wagon is doing, so nothing the last
+    // wagon does may hold the driver's handle hostage. That is what this section is for.
+    std::puts("\nA 600 m freight train, from cold");
+    {
+        std::vector<glm::vec3> pts;
+        for (int i = 0; i <= 800; ++i)
+            pts.push_back({static_cast<float>(i) * 25.0f, 0.0f, 0.0f});
+        std::vector<TrackPath> paths;
+        paths.emplace_back(1u, 0u, pts, std::vector<std::uint16_t>(pts.size(), 200));
+        const VehicleSpec* freight = specNamed("CargoNet freight");
+        check(freight != nullptr, "there is a 600 m freight train to test with");
+        if (freight) {
+            Consist c(&paths, &paths[0], *freight, 8000.0f);
+            c.attachNetwork(&paths, nullptr);
+            c.toggleEngines();
+            c.setReverser(0, 1);
+            c.setBrakeNotch(0, 0);
+            const int n = c.unitCount();
+            auto worstBc = [&] {
+                float m = 0.0f;
+                for (int u = 0; u < n; ++u) m = std::max(m, c.unit(u).bcPressure());
+                return m;
+            };
+            auto vents = [&] {
+                int v = 0;
+                for (int u = 0; u < n; ++u) v += c.unit(u).accelVenting() ? 1 : 0;
+                return v;
+            };
+
+            // The charge. Nothing is commanding a brake; it must simply come off.
+            bool tripped = false;
+            for (int i = 0; i < 180 * 60; ++i) {
+                c.update(kDt, 0.0f);
+                tripped = tripped || c.emergencyLine();
+            }
+            check(!tripped, "charging it never trips a safety device by itself");
+            check(worstBc() < 0.05f, "  every one of its brakes comes off", worstBc(), 0.0);
+            float lowest = 9.9f;
+            for (int u = 0; u < n; ++u) lowest = std::min(lowest, c.unit(u).bpPressure());
+            check(lowest > 4.9f, "  and the pipe stands at 5 bar the whole way back",
+                  lowest, 5.0);
+
+            // The dump. It has to reach the far end as a wave, not seep down the hoses.
+            c.setBrakeNotch(0, Vehicle::kEmergencyNotch);
+            float tailBites = -1.0f, allOn = -1.0f;
+            for (int i = 0; i < 30 * 60; ++i) {
+                c.update(kDt, 0.0f);
+                if (tailBites < 0.0f && c.unit(n - 1).bcPressure() > 1.0f)
+                    tailBites = float(i) / 60.0f;
+                float lo = 9.9f;
+                for (int u = 0; u < n; ++u) lo = std::min(lo, c.unit(u).bcPressure());
+                if (allOn < 0.0f && lo > 3.0f) allOn = float(i) / 60.0f;
+            }
+            // 600 m of train, so the wave has a long way to go and the cylinder at the
+            // end of it still takes its own three to five seconds to fill afterwards.
+            check(tailBites > 0.0f && tailBites < 5.0f,
+                  "emergency has the last wagon of 600 m biting inside five seconds",
+                  tailBites, 3.6);
+            check(allOn > 0.0f && allOn < 8.0f, "  and has every cylinder hard on by five",
+                  allOn, 5.0);
+
+            // The release, which is the fault itself. The handle goes to release with 23
+            // vehicles venting; the vents have to give way to it rather than outlast it.
+            c.setBrakeNotch(0, 0);
+            int reopened = 0, before = vents();
+            float locoBack = -1.0f, tailMostlyOff = -1.0f, tailOff = -1.0f;
+            for (int i = 0; i < 300 * 60; ++i) {
+                c.update(kDt, 0.0f);
+                const int now = vents();
+                if (now > before) ++reopened; // a vent that re-opens eats the refill
+                before = now;
+                if (locoBack < 0.0f && c.unit(0).bpPressure() > 4.5f)
+                    locoBack = float(i) / 60.0f;
+                if (tailMostlyOff < 0.0f && c.unit(n - 1).bcPressure() < 1.5f)
+                    tailMostlyOff = float(i) / 60.0f;
+                if (tailOff < 0.0f && worstBc() < 0.05f) tailOff = float(i) / 60.0f;
+            }
+            check(reopened == 0, "no vent re-opens once the release has begun",
+                  double(reopened), 0.0);
+            check(locoBack > 0.0f && locoBack < 40.0f, "  the locomotive's pipe is back in",
+                  locoBack, 20.0);
+            check(tailMostlyOff > 0.0f && tailMostlyOff < 90.0f,
+                  "  the last wagon is mostly off within about a minute", tailMostlyOff,
+                  60.0);
+            check(tailOff > 0.0f && tailOff < 180.0f, "  and every brake is off in the end",
+                  tailOff, 120.0);
+
+            // And the case the whole thing turns on: the handle going back to release
+            // while the wagons are still dumping. The driver cannot see them and must not
+            // have to wait for them - the refill travels back along the train and the
+            // vents close ahead of it as it arrives.
+            c.setBrakeNotch(0, Vehicle::kEmergencyNotch);
+            for (int i = 0; i < 90; ++i) c.update(kDt, 0.0f); // a second and a half
+            int ventingWagons = 0;
+            for (int u = 1; u < n; ++u) ventingWagons += c.unit(u).accelVenting() ? 1 : 0;
+            check(ventingWagons > 0, "wagons are still venting when the handle comes back",
+                  double(ventingWagons), 1.0);
+            const float locoAtRelease = c.unit(0).bpPressure();
+            c.setBrakeNotch(0, 0);
+            bool locoFilledWhileWagonsVented = false;
+            float backUp = -1.0f;
+            for (int i = 0; i < 300 * 60; ++i) {
+                int stillVenting = 0;
+                for (int u = 1; u < n; ++u)
+                    stillVenting += c.unit(u).accelVenting() ? 1 : 0;
+                const float locoStart = c.unit(0).bpPressure();
+                c.update(kDt, 0.0f);
+                if (stillVenting > 0 && c.unit(0).bpPressure() > locoStart + 1e-4f)
+                    locoFilledWhileWagonsVented = true;
+                if (backUp < 0.0f && worstBc() < 0.05f) backUp = float(i) / 60.0f;
+            }
+            check(locoFilledWhileWagonsVented,
+                  "  the locomotive's own pipe fills while they do", locoAtRelease, 0.0);
+            check(backUp > 0.0f && backUp < 180.0f, "  and the train releases all the same",
+                  backUp, 120.0);
+        }
+    }
+
+    // --- the feed valve gives up before the safety device does -----------------------
+    //
+    // Filling a brake pipe is what spends main reservoir air, so it is the first thing to
+    // stop when the supply is falling behind. The feed closes at a pressure that sits
+    // between the two that were already there - below the compressor's cut-in, so the
+    // compressor is already working by the time it happens, and a clear bar above the
+    // low-reservoir emergency trip, so it is what keeps the reservoir off that trip
+    // rather than something that happens after it. Temporary in both directions: it opens
+    // again by itself once there is air to fill with.
+    std::puts("\nThe feed valve closes on a low main reservoir");
+    {
+        Bench b;
+        b.train->toggleEngines(); // there has to be a compressor for it to wait for
+        check(b.release(), "released and charged to begin with");
+        check(!b.train->unit(0).feedCutOut(), "  with the feed valve open",
+              double(b.train->unit(0).feedCutOut()), 0.0);
+
+        // A reduction, so there is something for the feed to be filling afterwards.
+        b.train->setBrakeNotch(0, 3);
+        b.step(600);
+        const float reduced = b.train->bpPressure(0);
+        check(reduced < 4.6f, "  and then a service reduction to fill back from", reduced,
+              4.0);
+
+        // Now the supply falls away under it - a compressor that cannot keep up - and the
+        // handle goes back to release. The pipe must not fill, and the reservoir must not
+        // be drawn any further down by trying.
+        b.train->unit(0).ventReservoir(5.0f);
+        b.train->setBrakeNotch(0, 0);
+        b.step(2);
+        check(b.train->unit(0).feedCutOut(), "the feed closes when the supply drops");
+        const float heldBp = b.train->bpPressure(0);
+        const float heldMr = b.train->unit(0).mrPressure();
+        bool everTripped = false, roseWhileCut = false;
+        float lastBp = heldBp;
+        int cutSteps = 0;
+        for (int i = 0; i < 60 * 60; ++i) {
+            b.train->update(kDt);
+            everTripped = everTripped || b.train->unit(0).safetyBrakeActive();
+            // The flag as the step itself used it: the feed is decided before the fill,
+            // so the step that re-opens it is allowed to fill on that same step.
+            const bool wasCut = b.train->unit(0).feedCutOut();
+            if (wasCut) {
+                ++cutSteps;
+                if (b.train->bpPressure(0) > lastBp + 1e-4f) roseWhileCut = true;
+            }
+            lastBp = b.train->bpPressure(0);
+        }
+        check(!roseWhileCut, "  and the pipe does not fill while it is closed", heldBp,
+              double(reduced));
+        check(cutSteps > 60, "  it stays closed long enough for the compressor to work",
+              cutSteps / 60.0, 1.0);
+        check(!everTripped, "  the reservoir never reaches the emergency trip", heldMr,
+              5.0);
+        check(!b.train->unit(0).feedCutOut(), "the feed opens again once it is recharged",
+              b.train->unit(0).mrPressure(), 6.0);
+        check(std::abs(b.train->bpPressure(0) - 5.0f) < 0.05f,
+              "  and the pipe fills the rest of the way by itself",
+              b.train->bpPressure(0), 5.0);
+        check(maxBc(*b.train) < 0.05f, "  so the brake does come off in the end",
+              maxBc(*b.train), 0.0);
+    }
+
     std::printf("\n%s\n", failures == 0 ? "all ok" : "FAILURES");
     return failures == 0 ? 0 : 1;
 }

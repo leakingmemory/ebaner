@@ -92,6 +92,11 @@ constexpr float kPlainAirFill = 0.22f;
 // already below a full service reduction - so a service application, which stops at 3.5,
 // never trips it however deep the driver goes.
 constexpr float kBPEmergSense = 2.9f;
+// What counts as an emergency-rate fall, what counts as that fall having stopped, and how
+// far the pipe must come back before the accelerator can act again.
+constexpr float kBPEmergTripRate = 1.2f;  // bar/s
+constexpr float kBPVentCloseRate = 0.5f;  // bar/s
+constexpr float kBPVentRearm = 0.6f;      // bar above the sense level
 // Auxiliary bar spent per bar of cylinder, which is the ratio of the two volumes. A real
 // auxiliary is sized so that emptying it into the cylinder *equalises* at the full-
 // application pressure - that is what sets kBCMax in the first place, and it is why a
@@ -103,8 +108,20 @@ constexpr float kCompRate = 0.20f;       // compressor recharge (bar/s)
 constexpr float kMRLeak = 0.001f;        // reservoir leak (bar/s)
 constexpr float kFullServiceDecel = 1.3f; // deceleration at full service (m/s^2)
 constexpr float kAdhesionMu = 0.20f;     // wheel/rail grip cap on brake force
-constexpr float kMRSafetyTrip = 6.0f;    // low reservoir -> automatic emergency
-constexpr float kMRSafetyReset = 6.5f;   // safety clears once recharged above this
+// The low-reservoir safety is there to catch a FAILED COMPRESSOR, and it has to sit far
+// enough below the compressor's working range that ordinary work never reaches it.
+// At 6.0, against a cut-in of 6.5, it did not: charging a brake pipe costs kMRPerBP a bar,
+// so a 600 m train's 23 lengths of pipe want about 5.75 bar of reservoir and there were
+// only 2.0 between full and the trip. The train could not be charged at all without
+// tripping an emergency nobody had asked for - which is where "the emergency gets stuck
+// on" began, before the accelerator then refused to let go of it.
+constexpr float kMRSafetyTrip = 4.5f;    // low reservoir -> automatic emergency
+constexpr float kMRSafetyReset = 5.5f;   // safety clears once recharged above this
+// The feed valve's own cut-out, which sits BETWEEN those two and the compressor's cut-in:
+// low enough that ordinary running never reaches it, high enough to close the feed long
+// before the reservoir gets near the emergency trip. A bar of margin either side.
+constexpr float kMRFeedCut = 5.5f;       // feed to the brake pipe closes below this
+constexpr float kMRFeedResume = 6.0f;    // and opens again once recharged above this
 
 // Diesel engines (Cummins N14E-R): crank up to a fixed idle, rev up under power.
 constexpr float kIdleRpm = 700.0f;       // low idle
@@ -244,6 +261,11 @@ void Vehicle::burstBrakePipe() {
 void Vehicle::closeBrakePipeCock() { pipeCut_ = false; }
 
 void Vehicle::nudgeBrakePipe(float dBar) { bp_ = std::max(0.0f, bp_ + dBar); }
+
+void Vehicle::beginPipeStep() {
+    bpStepStart_ = bp_;
+    pipeMarked_ = true;
+}
 
 void Vehicle::attachNetwork(const std::vector<TrackPath>* paths, SwitchNetwork* net) {
     paths_ = paths;
@@ -1149,6 +1171,24 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
     if (engineCount_ > 0) {
         if (mrPres_ < kMRSafetyTrip) safetyBrake_ = true;
         else if (mrPres_ >= kMRSafetyReset) safetyBrake_ = false;
+        // And above that, the feed valve's cut-out. Filling a brake pipe is what spends
+        // main reservoir air, so it is the first thing to give up when the supply is
+        // falling behind: the feed closes, the compressor is left to get ahead of it
+        // alone, and the fill resumes once there is air to do it with. Temporary, and
+        // latched between the two pressures so it does not chatter.
+        //
+        // It is what keeps the reservoir off the safety trip below rather than what
+        // rescues it afterwards - charging 600 m of pipe costs about 5.75 bar and will
+        // walk the reservoir straight down through both thresholds if nothing stops it.
+        // Stopping the fill costs a long train some time; letting it run costs an
+        // emergency application nobody asked for.
+        //
+        // This vehicle's own reservoir and this vehicle's own valve, as the safety device
+        // above is: what the wagons at the far end are doing is not something the
+        // locomotive can see, and must not be something that decides whether it may fill
+        // its pipe.
+        if (mrPres_ < kMRFeedCut) feedCut_ = true;
+        else if (mrPres_ >= kMRFeedResume) feedCut_ = false;
     }
     const int effNotch = effectiveNotch();
 
@@ -1161,7 +1201,10 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
     // Venting is faster than charging, and emergency far faster than either. That
     // asymmetry is not a detail: it is why a brake goes on smartly and comes off slowly,
     // and why an emergency application cannot be taken back.
-    const float bpBefore = bp_;
+    // Where the pipe stood at the top of the step. Consist marks it before it moves air
+    // across the couplings; a vehicle stepped on its own marks it here instead.
+    if (!pipeMarked_) bpStepStart_ = bp_;
+    pipeMarked_ = false;
     // A pipe that has been cut is open to atmosphere and stays open until somebody
     // closes the cock. The EP valve cannot charge against it - trying only feeds the
     // leak - so the pipe simply empties and the distributors do the rest. This is what
@@ -1190,8 +1233,21 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
     // bpRate_ still holds last step's signed rate. A vehicle standing with an empty pipe
     // is not in emergency, it simply has no air in it yet, and reading the level alone
     // latched every vehicle at start-up and left the whole fleet unable to release.
-    if (bp_ < kBPEmergSense && -bpRate_ > 0.2f) emergVent_ = true;
-    if (bpRate_ >= 0.0f) emergVent_ = false; // the pipe is coming back up: close the vent
+    // Trip on a fall at an EMERGENCY rate, not merely a falling pipe: now that the hoses
+    // are in the rate, a wagon losing air to a neighbour during an ordinary reduction
+    // shows a rate too, and that is a service application and not this.
+    if (ventArmed_ && bp_ < kBPEmergSense && -bpRate_ > kBPEmergTripRate) emergVent_ = true;
+    // And it reseats when the fast fall STOPS - which is what a differential valve does,
+    // and covers both ways that happens: the pipe is down to nothing so there is no more
+    // to vent, or the driver is refilling against it and the two have met. It used to wait
+    // for the pipe to come back UP, which an open vent prevents, so the only way out was
+    // for every last vehicle to reach zero. On a 600 m train that is the emergency that
+    // will not let go.
+    if (emergVent_ && -bpRate_ < kBPVentCloseRate) {
+        emergVent_ = false;
+        ventArmed_ = false; // and it cannot act again until the pipe has recharged
+    }
+    if (bp_ > kBPEmergSense + kBPVentRearm) ventArmed_ = true;
     const bool localDump = pipeCut_ || safetyBrake_ || emergVent_;
     const bool drives = epBrake_ || valveHere_ || localDump;
     // How fast this vehicle's own length of pipe can be emptied or filled. Air has to be
@@ -1206,9 +1262,11 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
     } else if (bpWant < bp_) {
         const float rate = (effNotch >= kEmergencyNotch) ? kBPEmergVentRate : kBPVentRate;
         bp_ = std::max(bpWant, bp_ - rate * vol * dt);
-    } else if (bpWant > bp_) {
+    } else if (bpWant > bp_ && !feedCut_) {
         // Charged from the main reservoir and limited by it: a set whose reservoir has
-        // run down cannot fill its pipe, so it cannot release.
+        // run down cannot fill its pipe, so it cannot release. Below the feed valve's
+        // cut-out it does not even try, and this branch is skipped until the compressor
+        // has put the reservoir back.
         const float reach = std::min(bpWant, mrPres_);
         const float before = bp_;
         bp_ = std::min(reach, bp_ + kBPChargeRate * vol * dt);
@@ -1294,7 +1352,9 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
         else if (mrPres_ < kMRCutIn) compOn_ = true;
     }
     compActive_ = (running > 0 && compOn_); // drives the sound + engine load
-    bpRate_ = (dt > 1e-6f) ? (bp_ - bpBefore) / dt : 0.0f; // train-line airflow, for sound
+    // The rate of this pipe over the whole step, hoses included. It is what the
+    // accelerator reads, and what the airflow sound is made from.
+    bpRate_ = (dt > 1e-6f) ? (bp_ - bpStepStart_) / dt : 0.0f;
 
     // Friction-brake force: each bogie brakes its own share of the set's weight with its
     // own cylinder, and the sum is capped by wheel/rail adhesion on the whole of it. One

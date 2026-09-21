@@ -420,7 +420,7 @@ void testLineDoesNotSpanTheGap() {
     step(*rear, 300);
     check(!b.train->emergencyLine() && !rear->emergencyLine(), "both released");
 
-    rear->unit(0).ventReservoir(5.0f); // the rear's own low-reservoir device trips
+    rear->unit(0).ventReservoir(4.0f); // the rear's own low-reservoir device trips
     rear->update(kDt);
     b.train->update(kDt);
     check(rear->emergencyLine(), "the rear's safety device brakes the rear");

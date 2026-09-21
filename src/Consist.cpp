@@ -497,6 +497,10 @@ void Consist::update(float dt, float pushInput) {
     // The ends of the train are closed cocks and hold whatever is in them. It is only
     // when a coupling is parted that an end is opened to atmosphere, and uncoupleAfter
     // does that explicitly.
+    // Mark every pipe before any of this moves, so each vehicle's rate for this step
+    // counts the air that crosses its hoses. For a hauled wagon that is the only air there
+    // is, and leaving it out left its accelerator unable to fire at all.
+    for (Vehicle& u : units_) u.beginPipeStep();
     for (int pass = 0; pass < 2; ++pass) // both directions, so it is not order-dependent
         for (std::size_t i = 1; i < units_.size(); ++i) {
             Vehicle& a = units_[pass ? units_.size() - i : i - 1];

@@ -819,6 +819,10 @@ public:
     unsigned railImpacts() const { return railImpacts_; }
     float mrPressure() const { return mrPres_; } // main reservoir (bar)
     float bpPressure() const { return bp_; }     // brake pipe, this set's length (bar)
+    // Whether this vehicle's accelerator is open - dumping its own pipe to atmosphere.
+    // Worth being able to see: a vent that will not close is what makes an emergency
+    // impossible to release, and from outside it looks like a pipe that will not fill.
+    bool accelVenting() const { return emergVent_; }
     // Brake cylinder (bar). One number for a set that has one per bogie: the mean, since
     // that is what its share of the braking is proportional to and what a gauge shows.
     float bcPressure() const;
@@ -844,6 +848,15 @@ public:
     // does. Only the consist calls this - it is the one thing about the brake that is
     // not a set's own business, because the pipe is one pipe.
     void nudgeBrakePipe(float dBar);
+    // Mark where this vehicle's pipe stands before anything in the step touches it -
+    // including the air about to cross its couplings. bpRate_ is measured from here, so
+    // that it is the rate of THIS PIPE and not merely of what this vehicle did to it.
+    //
+    // It used to be marked inside stepSubsystems, after Consist had already moved air
+    // across the hoses, which meant a hauled wagon - with no valve, no EP and no device of
+    // its own - always read a rate of exactly zero. Its accelerator could therefore never
+    // trip, and a vent that was open could never see the driver refilling against it.
+    void beginPipeStep();
     // Let air out of this set's main reservoir, down to the given pressure. A set can
     // lose its air on its own account - a leak, a compressor that has stopped - and
     // that is the fault its low-reservoir safety device exists to catch, so it has to
@@ -852,6 +865,9 @@ public:
     // True when the low-reservoir safety has forced an automatic emergency
     // application (overriding the handle) because the reservoir fell too low.
     bool safetyBrakeActive() const { return safetyBrake_; }
+    // Whether this vehicle's feed valve has closed on a low main reservoir. Temporary:
+    // it opens again of its own accord once the compressor has caught up.
+    bool feedCutOut() const { return feedCut_; }
 
     // Diesel engines (one per cab end; synchronous start/stop). Once running they
     // drive the air compressor at idle and the hydraulic transmission under power.
@@ -961,6 +977,12 @@ private:
     float dynBrake_ = 0.0f; // what the electric brake is making this step, N
     bool valveHere_ = true;  // the driver's brake valve is on this vehicle
     bool emergVent_ = false; // the accelerator: this distributor is dumping its own pipe
+    // The accelerator has to recharge before it can act again, which is also what stops a
+    // wagon eating the refill: once its vent has closed it stays closed until the pipe has
+    // come back up, however the pressure wobbles on the way.
+    bool ventArmed_ = true;
+    float bpStepStart_ = 0.0f; // where the pipe was when the step began
+    bool pipeMarked_ = false;  // whether beginPipeStep was called for this step
     float load_ = 0.0f;      // load regulator: excitation as a fraction of full
     float railPower_ = 0.0f; // W at the rail this step, for the engine-load reading
     int axlesPerBogie_ = 2, drive_ = DriveNone;
@@ -991,6 +1013,7 @@ private:
     unsigned railImpacts_ = 0;          // axles that have crossed a turnout, for the sound
     bool compOn_ = false;               // compressor state (cut-in/cut-out governor)
     bool safetyBrake_ = false;          // low-reservoir automatic emergency (latched)
+    bool feedCut_ = false;              // feed to the brake pipe closed on low reservoir
     int engineCount_ = 0;               // diesel engines (2 for a Class 93, else 0)
     bool engineOn_ = false;             // commanded on/off (both engines together)
     float engineRpm_[2] = {0.0f, 0.0f}; // per-engine speed

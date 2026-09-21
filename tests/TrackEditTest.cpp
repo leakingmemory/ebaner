@@ -607,8 +607,10 @@ int main(int argc, char** argv) {
                 for (int i = 0; i < 900; ++i) c.update(1.0f / 60.0f); // settle, released
                 check(!c.safetyBrakeActive(), "nothing tripped to begin with",
                       double(c.safetyBrakeActive()), 0.0);
-                // Low, not empty: it has to be able to brake with what is left.
-                c.unit(culprit).ventReservoir(5.0f);
+                // Low, not empty: it has to be able to brake with what is left. Below
+                // the low-reservoir threshold, which sits well under the compressor's
+                // working range so that charging a long train cannot reach it.
+                c.unit(culprit).ventReservoir(4.0f);
                 for (int i = 0; i < 300; ++i) c.update(1.0f / 60.0f);
                 std::snprintf(what, sizeof(what),
                               "set %d alone puts the train in emergency", culprit + 1);
