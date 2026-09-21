@@ -596,10 +596,25 @@ int main(int argc, char** argv) {
                         specTitle(sp), 2.0f * margin, L);
         }
         trains.clear();
-        trains.emplace_back(&paths, vpath, sp, startS);
+        // EBANER_ROLL=<m/s> starts it rolling with the brake released, so it coasts. A
+        // profile of a train standing still is a profile of a different program: nothing
+        // crosses a section boundary, so occupancy never changes, the aspects are never
+        // recomputed, the signal mesh is never rebuilt and a crossing never steps a phase.
+        // Every one of those reported ZERO calls a second while a 600 m freight sat at
+        // Rognan. There is no other way to get a moving train without a keyboard - the
+        // dataset script cannot drive one, and EBANER_TRAINS places them at a stand.
+        float roll = 0.0f;
+        if (const char* r = std::getenv("EBANER_ROLL")) roll = static_cast<float>(std::atof(r));
+        trains.emplace_back(&paths, vpath, sp, startS, roll);
         driverTrain = 0;
         vehicle = &trains.front();
         vehicle->attachNetwork(&paths, &switchNet); // divert at switches
+        if (roll != 0.0f) {
+            // Released, or it stops in a few hundred metres and the measurement with it.
+            for (int i = 0; i < 12; ++i) vehicle->moveBrake(0, -1);
+            std::printf("[Vehicle] rolling at %.1f m/s (%.0f km/h) with the brake released\n",
+                        roll, roll * 3.6f);
+        }
         vmesh.build(trains);
         g_cabCount = drivercam::count(*vehicle);
         renderer.attachVehicle(vmesh.vertices(), vmesh.indices(),
@@ -3017,6 +3032,10 @@ int main(int argc, char** argv) {
     // crossings. The frame was timed as a whole and the meshes inside it, and everything
     // between those two was guesswork.
     Stat pSim, pOcc, pCross;
+    // And the two that were never timed at all: the HUD, which builds and uploads a
+    // vertex per glyph every frame, and drawFrame itself - which is where a GPU-bound
+    // frame hides, because the wait on the frame fence is inside it.
+    Stat pHud, pDraw;
     double profileUntil = glfwGetTime() + 1.0;
     auto now_ms = [] {
         return std::chrono::duration<double, std::milli>(
@@ -4260,8 +4279,19 @@ int main(int argc, char** argv) {
             // the index buffer on the GPU still describes this geometry and only the
             // vertices need making again. Anything that changes what is in the train -
             // coupling, uncoupling, placing one - goes through build + attachVehicle.
+            // With the frustum, so a unit the camera cannot see is not built at all. The
+            // view-projection is this frame's, built the same way the push constants build
+            // it a few hundred lines below.
             const double tV = profile ? now_ms() : 0.0;
-            vmesh.refresh(trains);
+            {
+                // fbw/fbh from the top of this frame, not a fresh
+                // glfwGetFramebufferSize: that one asks the window system and can take a
+                // round trip, which is not a thing to do twice a frame for a number that
+                // has not changed since the first ask.
+                const float asp =
+                    fbh > 0 ? static_cast<float>(fbw) / static_cast<float>(fbh) : 1.0f;
+                vmesh.refresh(trains, g_camera.projMatrix(asp) * g_camera.viewMatrix());
+            }
             if (profile) pVeh.add(now_ms() - tV);
             const double tVU = profile ? now_ms() : 0.0;
             renderer.updateVehicleVertices(vmesh.mutableVertices());
@@ -4306,6 +4336,7 @@ int main(int argc, char** argv) {
 
             // HUD: in map mode, the traffic-manager overlay (with live train speed);
             // otherwise the cab HUD (speed, reservoir/brake pressures, brake notch).
+            const double tH = profile ? now_ms() : 0.0;
             if (g_mapMode) {
                 std::vector<TextVertex> tv;
                 appendMapHud(tv, fbw, fbh, vehicle);
@@ -4501,6 +4532,7 @@ int main(int argc, char** argv) {
                 }
                 renderer.setOverlayText(tv);
             }
+            if (profile) pHud.add(now_ms() - tH);
 
             // Camera control only in the cab view; the map uses a fixed ortho
             // projection, so the 3-D camera is left untouched while it's open.
@@ -4580,7 +4612,9 @@ int main(int argc, char** argv) {
             if (frame == shotAt) renderer.requestCapture(shotPath);
             if (frame == shotAt + 4) glfwSetWindowShouldClose(window, GLFW_TRUE);
         }
+        const double tD = profile ? now_ms() : 0.0;
         renderer.drawFrame(pc);
+        if (profile) pDraw.add(now_ms() - tD);
         ++frame;
         if (profile) {
             pFrame.add(now_ms() - frameT0);
@@ -4601,13 +4635,19 @@ int main(int argc, char** argv) {
                 line("occupancy", pOcc);
                 line("crossings", pCross);
                 line("vehicle mesh", pVeh);
+                if (vmesh.lastUnits() > 0)
+                    std::printf("  %-18s %d of %d units built\n", "  (culling)",
+                                vmesh.lastBuilt(), vmesh.lastUnits());
                 line("vehicle upload", pVehUp);
+                line("hud text", pHud);
+                line("drawFrame", pDraw);
                 line("map overlay", pMap);
                 std::fflush(stdout);
                 pFrame.reset(); pAspects.reset(); pDistants.reset();
                 pMesh.reset(); pUpload.reset(); pMap.reset();
                 pVeh.reset(); pVehUp.reset();
                 pSim.reset(); pOcc.reset(); pCross.reset();
+                pHud.reset(); pDraw.reset();
             }
         }
     }

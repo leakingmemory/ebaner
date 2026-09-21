@@ -13,6 +13,8 @@
 
 #include "VulkanRenderer.h"
 
+#include "Frustum.h"
+
 #include "TerrainMesh.h" // Vertex
 #include "TrackMesh.h"   // TrackVertex
 
@@ -1097,30 +1099,6 @@ namespace {
 // depth range and the Y axis run - this build flips Y by hand and does not define
 // GLM_FORCE_DEPTH_ZERO_TO_ONE - because the pair for an axis is the same two planes
 // whichever way round they are named.
-struct Frustum {
-    glm::vec4 plane[6];
-
-    explicit Frustum(const glm::mat4& m) {
-        auto row = [&](int i) { return glm::vec4(m[0][i], m[1][i], m[2][i], m[3][i]); };
-        const glm::vec4 r3 = row(3);
-        for (int i = 0; i < 3; ++i) {
-            plane[2 * i] = r3 + row(i);
-            plane[2 * i + 1] = r3 - row(i);
-        }
-        for (glm::vec4& q : plane) {
-            const float n = glm::length(glm::vec3(q));
-            if (n > 1e-9f) q /= n; // so the distance below is in metres
-        }
-    }
-
-    // Conservative: a sphere is only rejected when it is wholly outside a plane, so
-    // anything that might be on screen is drawn. Cheap to be wrong the safe way.
-    bool sees(const glm::vec3& c, float r) const {
-        for (const glm::vec4& q : plane)
-            if (glm::dot(glm::vec3(q), c) + q.w < -r) return false;
-        return true;
-    }
-};
 } // namespace
 
 void VulkanRenderer::removeTerrainChunk(std::uint64_t key) {

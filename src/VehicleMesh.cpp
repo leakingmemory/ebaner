@@ -13,6 +13,8 @@
 
 #include "VehicleMesh.h"
 
+#include "Frustum.h"
+
 #include "Consist.h"
 
 #include "Vehicle.h" // Vehicle, VehicleFrame
@@ -2724,9 +2726,65 @@ void VehicleMesh::build(const std::deque<Consist>& trains) {
     wantIndices_ = true;
     vertices_.clear();
     indices_.clear();
+    unitSpan_.clear();
     for (const Consist& t : trains)
-        for (int i = 0; i < t.unitCount(); ++i) emitUnit(t.unit(i));
+        for (int i = 0; i < t.unitCount(); ++i) {
+            const std::uint32_t at = static_cast<std::uint32_t>(vertices_.size());
+            emitUnit(t.unit(i));
+            unitSpan_.push_back({at, static_cast<std::uint32_t>(vertices_.size()) - at});
+        }
     sortGlass();
+}
+
+void VehicleMesh::refresh(const std::deque<Consist>& trains, const glm::mat4& viewProj) {
+    const Frustum fr(viewProj);
+    wantIndices_ = false;
+    const std::size_t was = vertices_.size();
+    vertices_.clear();
+    std::size_t k = 0;
+    lastBuilt_ = lastUnits_ = 0;
+    for (const Consist& t : trains)
+        for (int i = 0; i < t.unitCount(); ++i, ++k) {
+            const Vehicle& u = t.unit(i);
+            ++lastUnits_;
+            // Its bounding sphere, generously: half the body plus a margin for the plough,
+            // the buffers and whatever stands proud of the sides. Being wrong the safe way
+            // costs one unit's geometry; being wrong the other way makes a wagon vanish.
+            //
+            // From pose(), which is one poseAt on the path the vehicle is already on, and
+            // NOT from frame(): that chords the body ends and so walks the network three
+            // times per unit. A walk is not cheap out on the real railway - asking for it
+            // 23 times a frame cost 3.6 ms, more than the culling saved - and the centre
+            // of the sphere does not need that precision.
+            const glm::vec3 centre = u.pose().pos;
+            const float r = 0.5f * u.length() + u.height() + 2.0f;
+            const bool seen = fr.sees(centre, r);
+            if (seen || k >= unitSpan_.size()) {
+                emitUnit(u);
+                ++lastBuilt_;
+            } else {
+                // Out of sight: fill its slice with one repeated point. Every triangle in
+                // it is then degenerate - zero area, nothing rasterised - and the indices
+                // still address exactly the vertices they were built against.
+                const TrackVertex dead{centre, glm::vec3(0.0f, 0.0f, 1.0f),
+                                       glm::vec3(0.0f), glm::vec2(0.0f), -1.0f};
+                vertices_.insert(vertices_.end(), unitSpan_[k].second, dead);
+            }
+        }
+    wantIndices_ = true;
+    for (const std::uint32_t v : glassVerts_)
+        if (v < vertices_.size()) vertices_[v].texLayer = kGlassLayer;
+    if (was != 0 && vertices_.size() != was) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            std::fprintf(stderr,
+                         "[VehicleMesh] refresh emitted %zu vertices where the attached "
+                         "buffer holds %zu - the composition changed without an "
+                         "attachVehicle, and the train will draw as a heap of triangles\n",
+                         vertices_.size(), was);
+        }
+    }
 }
 
 void VehicleMesh::refresh(const std::deque<Consist>& trains) {

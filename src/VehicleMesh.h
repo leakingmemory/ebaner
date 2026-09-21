@@ -19,6 +19,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <utility>
 #include <vector>
 
 class Vehicle;
@@ -55,6 +56,19 @@ public:
     // away: 132 000 index pushes and a 44 000-triangle colour sort, every frame, to arrive
     // at exactly the buffer the GPU was already holding.
     void refresh(const std::deque<Consist>& trains);
+    // The same, but building geometry only for the units the camera could see. The rest
+    // have their slice of the buffer filled with one repeated point, which leaves every
+    // triangle degenerate: nothing is rasterised, the vertex count does not move, and the
+    // index buffer on the GPU stays exactly as valid as it was.
+    //
+    // This is where the time is. On the 600 m freight the walks are 4% of the mesh and the
+    // other 96% is emitting 83 388 vertices - so the only way to make it cheaper is to
+    // emit fewer of them, and the ones behind the camera are free to lose.
+    void refresh(const std::deque<Consist>& trains, const glm::mat4& viewProj);
+    // How many units were built last refresh, and how many there were: what the culling
+    // actually saved, for the profile line to report.
+    int lastBuilt() const { return lastBuilt_; }
+    int lastUnits() const { return lastUnits_; }
 
     const std::vector<TrackVertex>& vertices() const { return vertices_; }
     // For the renderer to swap with rather than copy: 3 MB a frame is worth not copying,
@@ -77,6 +91,11 @@ private:
         if (wantIndices_) indices_.push_back(i);
     }
     bool wantIndices_ = true;
+    // Where each unit's vertices sit in the buffer, recorded when it was attached. Fixed
+    // for as long as the index buffer is, which is the same condition everything else here
+    // leans on.
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> unitSpan_; // {first, count}
+    int lastBuilt_ = 0, lastUnits_ = 0;
     std::vector<std::uint32_t> glassVerts_; // vertices carrying the translucent sentinel
 
     std::vector<TrackVertex> vertices_;

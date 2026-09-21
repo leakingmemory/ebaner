@@ -734,6 +734,65 @@ joins at, each with the nearest other loose end, which is what a `link` edit
 would join. A buffer stop is a loose end too, so the distance is the tell - a
 real break is two ends facing each other a few tens of metres apart.
 
+### Measuring a train that is moving
+
+Every profile before this one was of a train **standing still**, which is a profile of a
+different program: nothing crosses a section boundary, so occupancy never changes, aspects
+are never recomputed, the signal mesh is never rebuilt and no crossing steps a phase. All
+four of those reported **zero calls a second** while a 600 m freight sat at Rognan. Moving
+at 72 km/h past the same crossings the frame was **61–64 ms**, not the 20 that standing
+still had suggested.
+
+`EBANER_ROLL=<m/s>` is what makes that measurable without a keyboard: the train spawns at
+that speed with the brake released and coasts. 1797 t against Davis resistance rolls a long
+way, which is the long window a profile wants.
+
+What the moving profile then said, at Rognan:
+
+| block | mean |
+|---|---|
+| **vehicle mesh** | **19–21 ms** |
+| crossings | 4.9 ms |
+| signal mesh rebuild + upload | 3.9 ms |
+| sim step | 3.0 ms |
+| **occupancy — the track circuits** | **1.6–2.2 ms** |
+| `drawFrame` | 1.5 ms |
+| HUD text | 1.0 ms |
+
+Two things follow. The **track circuits are not the cost** — threading them could buy 2 ms
+of 62 and would leave the interlocking acting on a frame-old world. And the frame is
+**CPU-bound**: `drawFrame` is 1.5 ms, and running the same scene in map mode, which skips
+every 3-D mesh, saves only ~6 ms.
+
+### Not building what cannot be seen
+
+The vehicle mesh was the whole top of that list, and measuring *inside* it settled how to
+cut it: of the per-frame cost, the network walks are **4 %** and emitting the 83 388
+vertices is the other 96 %. So the only way to make it cheaper is to emit fewer of them.
+
+`refresh` now takes the view-projection and builds a unit only if its bounding sphere is in
+frustum; the rest have their slice of the buffer filled with **one repeated point**, which
+leaves every triangle in it degenerate. Nothing is rasterised, the vertex count does not
+move, and the index buffer on the GPU stays exactly as valid as it was. The `Frustum` is
+the one the terrain and building draws already use, lifted out of `VulkanRenderer.cpp` into
+`Frustum.h` rather than copied.
+
+| at Rognan, 600 m freight, **moving** | before | after |
+|---|---|---|
+| **cab view** (what you drive from) | 23.4 ms (43 fps) | **18.5 ms (54 fps)** |
+| of which vehicle mesh | 8.4 ms | **2.0 ms** — 1 unit of 23 built |
+| chase view | 23.4 ms | 23.9 ms — nothing to cull, whole train in shot |
+
+Proved rather than eyeballed, because the failure mode is a wagon quietly missing: over
+**192 camera positions** round a curved train, near and far, high and low, every vertex the
+cull dropped was checked against the view volume — **5 496 156 dropped, 0 of them on
+screen**.
+
+One incidental find worth the note: calling `glfwGetFramebufferSize` a second time in the
+frame, to get the aspect for that view-projection, cost **~6 ms a frame** on this machine.
+It asks the window system and can take a round trip. The numbers were already in hand from
+the top of the frame.
+
 ### What a crossing asks an axle
 
 A level crossing has to know which of its roads each wheel is on, and it used to find out
@@ -1609,6 +1668,7 @@ the corresponding sources (national rail register + NVDB roads + OSM enrichment)
 | `EBANER_VEHICLE`    | Skip the start screen and preselect a vehicle, by its index in `kVehicleSpecs` (`0` = a single Class 93, `1`/`2` = two and three coupled, `3` = Di 4 + 5, `4` = the night train, `5` = the 600 m freight, `6` = a light Di 4, `7` = a CD 312, `14` = a pocket wagon, `15` = a container flat). The table is ordered for the pickers, so these move when a vehicle is added - the start screen numbers the list. |
 | `EBANER_PROFILE`    | Print per-frame timings once a second: whole frame, the sim step, occupancy, crossings, signal aspects, distant walks, the signal mesh, and the vehicle mesh and its upload. With `EBANER_SCREENSHOT=/dev/null EBANER_SHOTFRAME=900` the viewer exits by itself with the reports flushed, which is how a profile gets taken without a file or a keypress. |
 | `EBANER_RADIUS`     | Half-window of world to load, in metres (default 20000). Two kilometres loads in seconds where the full 40 km square takes minutes, which is what makes a profile or a frame-time measurement affordable at all. Inspection only: drive out of it and the world ends. |
+| `EBANER_ROLL`       | Spawn the train at this speed in m/s with the brake released, so it coasts. A profile of a standing train is a profile of a different program - nothing changes occupancy, so nothing downstream of it runs. |
 | `EBANER_CHASE`      | `1` rides the vehicle from the start (the chase camera is otherwise only reachable by pressing C, so the one view that shows the machine could not be screenshotted). |
 | `EBANER_AUDIO_DUMP` | Render a scripted brake sequence to the given WAV and exit.   |
 | `EBANER_AUDIO_DUMP_ENGINE` | Render an engine start/idle/stop to the given WAV, exit. |
