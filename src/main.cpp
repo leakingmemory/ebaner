@@ -2063,17 +2063,26 @@ int main(int argc, char** argv) {
         const int goneSets = trains[static_cast<std::size_t>(gone)].unitCount();
 
         // Where the driver ends up, worked out before anything moves. He is somewhere in
-        // one of these two trains, addressed by a cab index that counts two to a set along
-        // the whole train - so it shifts if sets are inserted ahead of him, and his set is
-        // renumbered from the other end if his train is the one turned round.
-        int newDriver = driverTrain, newCab = g_driverPos;
-        const int oldSet = std::max(0, g_driverPos) / 2, oldLocal = std::max(0, g_driverPos) % 2;
+        // one of these two trains, and what has to survive the coupling is his SEAT - a
+        // set and an end of it - not his cab index, which is only a numbering and shifts
+        // whenever sets are inserted ahead of him or his train is turned round.
+        //
+        // This used to work the index out directly, two cabs to a set. That is true of
+        // multiple units and false of anything hauled: a locomotive coupling to 22 wagons
+        // would put its driver in cab 2 * 22, and driveTrain clamps, so he was dumped in
+        // whatever cab happened to be last. That is the seat jumping to the other end of
+        // the locomotive on contact.
+        int newDriver = driverTrain;
+        const Consist& dtrain = trains[static_cast<std::size_t>(driverTrain)];
+        const int dCab = std::max(0, g_driverPos);
+        const int oldEnd = dtrain.cabEnd(dCab);
+        int newUnit = dtrain.cabUnit(dCab);
         if (driverTrain == gone) {
             newDriver = keep;
-            const int within = opposed ? goneSets - 1 - oldSet : oldSet;
-            newCab = 2 * (within + (tail ? keepSets : 0)) + oldLocal;
+            if (opposed) newUnit = goneSets - 1 - newUnit;
+            if (tail) newUnit += keepSets;
         } else if (driverTrain == keep && !tail) {
-            newCab = 2 * (oldSet + goneSets) + oldLocal;
+            newUnit += goneSets;
         }
 
         trains[static_cast<std::size_t>(keep)].absorb(
@@ -2091,6 +2100,16 @@ int main(int argc, char** argv) {
         if (markedTrain < 0) markedCoupler = -1;
         if (newDriver > gone) --newDriver;
 
+        // Now that the sets are one train, that seat has a cab number again.
+        const Consist& merged = trains[static_cast<std::size_t>(newDriver)];
+        int newCab = merged.cabIndex(newUnit, oldEnd);
+        // Unless the coupling happened against the very cab he is sitting in, which is
+        // what driving onto a train nose-first does. That cab is shut down now, and a
+        // driver in that position walks through his own locomotive to the other end
+        // rather than sitting at dead controls wondering why.
+        if (newCab >= 0 && !merged.cabDrivable(newCab))
+            for (int c = 0; c < merged.cabCount(); ++c)
+                if (merged.cabUnit(c) == newUnit && merged.cabDrivable(c)) newCab = c;
         const bool wasOutside = g_driverPos < 0;
         const bool wasChasing = g_chase;
         driveTrain(newDriver, std::max(0, newCab));
@@ -4030,6 +4049,12 @@ int main(int argc, char** argv) {
                 } else if (armedTrain == nearTrain && armedCoupler == nearCoupler) {
                     const int k = nearCoupler;
                     const int setsBefore = t.unitCount();
+                    // Read the driver's seat off the train before it is parted: after the
+                    // split the sets he was addressing may be in the other object.
+                    const int dUnit = (nearTrain == driverTrain)
+                                          ? t.cabUnit(std::max(0, g_driverPos)) : 0;
+                    const int dEnd = (nearTrain == driverTrain)
+                                         ? t.cabEnd(std::max(0, g_driverPos)) : 0;
                     std::optional<Consist> rear = t.uncoupleAfter(k);
                     armedTrain = armedCoupler = -1;
                     if (rear) {
@@ -4040,10 +4065,15 @@ int main(int argc, char** argv) {
                         // ended up. Not in one, he keeps the portion whose identity was
                         // preserved - the front, which is still where it was. Either way
                         // he can now step into the other portion from the menu.
+                        // His seat again, not his cab number: which set he is in decides
+                        // which portion he leaves with, and the number he answers to in
+                        // that portion has to be looked up there. Two cabs to a set is
+                        // only true of a train that is all cabs.
                         int stay = driverTrain, cab = g_driverPos;
-                        if (nearTrain == driverTrain && g_driverPos >= 2 * (k + 1)) {
+                        if (nearTrain == driverTrain && dUnit > k) {
                             stay = static_cast<int>(trains.size()) - 1;
-                            cab = g_driverPos - 2 * (k + 1);
+                            cab = trains[static_cast<std::size_t>(stay)].cabIndex(
+                                dUnit - (k + 1), dEnd);
                         }
                         const bool wasChasing = g_chase;
                         const bool wasOutside = g_driverPos < 0;

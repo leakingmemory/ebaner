@@ -95,6 +95,10 @@ public:
     // coupler are shut down, as they are in practice, and only the two at the ends of
     // the train can drive. A shut-down cab can still be sat in and looked out of.
     bool cabDrivable(int cab) const;
+    // The cab index of one end of one set, which is the inverse of cabUnit/cabEnd. -1 if
+    // that set has no cab at that end. Anything holding on to a driving position across a
+    // coupling wants this: the index moves, the seat does not.
+    int cabIndex(int unit, int end) const;
     void setBrakeNotch(int cab, int notch);
     int brakeNotch(int cab) const;
     void setPowerNotch(int cab, int notch);

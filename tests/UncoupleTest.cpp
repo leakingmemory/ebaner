@@ -452,6 +452,89 @@ void testCabsRenumber() {
     }
 }
 
+// --- 10. the run-around: a locomotive that is not set 0 ---------------------------
+//
+// Everything above is multiple units, where every set has two cabs and a cab index is
+// twice the set plus the end. A hauled train is not like that: the locomotive may be the
+// LAST set of twenty-three, and then cab 0 and cab 1 are both on set 22. Three places
+// still did the old arithmetic, and all three of them quietly addressed a wagon.
+//
+// The move that found it: stand a 600 m freight in a loop, draw the locomotive off,
+// run it round to the other end and couple on again.
+void testRunAround() {
+    std::printf("A locomotive running round its train\n");
+    std::vector<glm::vec3> pts;
+    for (int i = 0; i <= 800; ++i)
+        pts.push_back({static_cast<float>(i) * 25.0f, 0.0f, 0.0f});
+    std::vector<TrackPath> paths;
+    paths.emplace_back(1u, 0u, pts, std::vector<std::uint16_t>(pts.size(), 200));
+    const VehicleSpec* freight = specNamed("CargoNet freight");
+    check(freight != nullptr, "there is a freight train to run round");
+    if (!freight) return;
+    Consist c(&paths, &paths[0], *freight, 8000.0f);
+    c.attachNetwork(&paths, nullptr);
+    c.toggleEngines();
+    c.setReverser(0, 1);
+    c.setBrakeNotch(0, 0);
+    for (int i = 0; i < 200 * 60; ++i) c.update(kDt, 0.0f);
+
+    std::optional<Consist> rake = c.uncoupleAfter(0);
+    if (!rake) { check(false, "the locomotive comes off"); return; }
+    check(rake->cabCount() == 0, "the wagons have no cab between them", rake->cabCount(), 0.0);
+    c.setReverser(0, 0);
+    c.update(kDt);
+    c.setReverser(0, 1); // the cycle that clears his own hold
+    c.setBrakeNotch(0, 0);
+    for (int i = 0; i < 60 * 60; ++i) c.update(kDt, 0.0f);
+    check(!c.emergencyLine(), "and is free to run round");
+
+    // Back on at the other end, so the wagons go onto the FRONT of his train and the
+    // locomotive becomes the last set of twenty-three.
+    c.absorb(std::move(*rake), /*tail=*/false, /*reverseOther=*/false);
+    check(c.unitCount() == 23, "coupled: one train again", c.unitCount(), 23.0);
+    check(c.cabCount() == 2, "  two cabs, both on the locomotive", c.cabCount(), 2.0);
+    check(c.cabUnit(0) == 22 && c.cabUnit(1) == 22, "  which is set 22, not set 0",
+          c.cabUnit(0), 22.0);
+    check(c.cabIndex(22, 0) == 0 && c.cabIndex(22, 1) == 1,
+          "  and the seat maps back to those numbers", c.cabIndex(22, 1), 1.0);
+    check(c.cabIndex(0, 0) < 0, "  while a wagon has no cab index at all",
+          c.cabIndex(0, 0), -1.0);
+
+    // Coupling onto a held portion inherits the hold, and that hold is cleared by a
+    // reverser cycle that is SAMPLED - so the cabs have to be left at Neutral for the
+    // sample to have an edge to find. Arriving in gear used to leave the hold standing
+    // with no move from the cab that could shift it.
+    check(c.emergencyLine(), "the hold comes across with the wagons");
+    check(c.activeCab() < 0, "  with the reverser dropped to Neutral to take over",
+          c.activeCab(), -1.0);
+    for (int i = 0; i < 60; ++i) c.update(kDt, 0.0f);
+
+    // His selection, from whichever cab he is working. Putting one cab into gear takes
+    // the other out of it - and the other one is on the same set, which is exactly what
+    // the old `cab / 2` could not express: it centred wagon 0 and left this cab in gear,
+    // so two were in gear at once, the interlock read neither, and the train seized.
+    c.setReverser(1, 1);
+    check(c.reverser(0) == 0, "selecting one cab centres the other on the same set",
+          c.reverser(0), 0.0);
+    check(c.activeCab() == 1, "  so exactly one cab is in charge", c.activeCab(), 1.0);
+    check(!c.interlockEmergency(), "  and the interlock is satisfied");
+
+    // The gauges in front of him are his locomotive's, not the first wagon's.
+    check(c.bpPressure(1) == c.unit(22).bpPressure(), "the cab's gauges read set 22",
+          c.bpPressure(1), c.unit(22).bpPressure());
+    check(c.mrPressure(1) == c.unit(22).mrPressure(), "  main reservoir too",
+          c.mrPressure(1), c.unit(22).mrPressure());
+
+    // And it goes.
+    c.setBrakeNotch(1, 0);
+    c.setPowerNotch(1, 4);
+    for (int i = 0; i < 150 * 60; ++i) c.update(kDt, 0.0f);
+    check(!c.emergencyLine(), "the hold releases on that selection");
+    check(c.bpPressure(1) > 4.9f, "  the pipe charges the length of the train",
+          c.bpPressure(1), 5.0);
+    check(c.speed() > 5.0f, "  and the train pulls away", c.speed(), 13.6);
+}
+
 } // namespace
 
 int main() {
@@ -465,6 +548,7 @@ int main() {
     testItRollsAway();
     testLineDoesNotSpanTheGap();
     testCabsRenumber();
+    testRunAround();
     std::printf("%s\n", failures == 0 ? "all ok" : "FAILURES");
     return failures == 0 ? 0 : 1;
 }

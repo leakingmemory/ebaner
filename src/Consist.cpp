@@ -155,7 +155,20 @@ bool Consist::cabDrivable(int cab) const {
     // Coupled, only the cabs at the two ends of the train drive; the ones at the
     // coupler are shut down. A single set has both of its cabs live, which is the
     // same rule read on a train of one.
+    //
+    // Read on cab indices, so what it shuts down is a cab with another CAB across the
+    // coupler - two sets nose to nose. A locomotive keeps both of its own cabs when what
+    // is coupled behind it has no cab of its own: wagons do not key a locomotive out, and
+    // a driver may work from either end of his machine. See HaulTest.
     return cab == 0 || cab == cabCount() - 1;
+}
+
+int Consist::cabIndex(int unit, int end) const {
+    if (unit < 0 || unit >= static_cast<int>(units_.size())) return -1;
+    if (end < 0 || end >= units_[unit].cabCount()) return -1;
+    int n = 0;
+    for (int i = 0; i < unit; ++i) n += units_[static_cast<std::size_t>(i)].cabCount();
+    return n + end;
 }
 
 void Consist::setBrakeNotch(int cab, int notch) {
@@ -225,7 +238,7 @@ void Consist::setReverser(int cab, int dir) {
     // sit in, which is why it surfaced the day the Di 4 got its second one.
     if (dir != 0)
         for (int c = 0; c < cabCount(); ++c)
-            if (c != cab) units_[c / 2].setReverser(c % 2, 0);
+            if (c != cab) units_[cabUnit(c)].setReverser(cabEnd(c), 0);
     units_[cabUnit(cab)].setReverser(cabEnd(cab), dir);
 }
 int Consist::reverser(int cab) const {
@@ -353,8 +366,8 @@ void Consist::absorb(Consist&& other, bool tail, bool reverseOther) {
     // without making two and tripping the interlock.
     for (int c = 0; c < cabCount(); ++c) {
         if (cabDrivable(c)) continue;
-        units_[static_cast<std::size_t>(c / 2)].setReverser(c % 2, 0);
-        units_[static_cast<std::size_t>(c / 2)].setPowerNotch(c % 2, 0);
+        units_[static_cast<std::size_t>(cabUnit(c))].setReverser(cabEnd(c), 0);
+        units_[static_cast<std::size_t>(cabUnit(c))].setPowerNotch(cabEnd(c), 0);
     }
     // The hoses are coupled up again at the joint, so the two lengths of pipe become
     // one; update()'s diffusion pass carries air across it from the next step. A rough
@@ -363,8 +376,25 @@ void Consist::absorb(Consist&& other, bool tail, bool reverseOther) {
     // Whichever half was held stays held: coupling to a portion standing in emergency
     // does not release it, and the reverser cycle that clears the hold is now one
     // sequence for one train.
-    if (other.hold_ != UncoupleHold::None && hold_ == UncoupleHold::None)
+    //
+    // That cycle is detected by sampling the reversers - Neutral, then out of it - which
+    // relies on a held train having nothing in gear. It is true of a train that has just
+    // been parted, because uncoupleAfter centres the cabs at the break. It is NOT true of
+    // one that drove up and coupled on: the driver arrives in gear, the sample never sees
+    // Neutral, and the hold stands for ever with the train in emergency and no move from
+    // the cab that will shift it. That is a locomotive running round its train and finding
+    // it cannot take it away again.
+    //
+    // So taking over a held portion starts where taking over any held portion starts,
+    // with the reverser in Neutral. His next selection is the cycle, and it releases.
+    if (other.hold_ != UncoupleHold::None && hold_ == UncoupleHold::None) {
         hold_ = other.hold_;
+        for (int c = 0; c < cabCount(); ++c)
+            units_[static_cast<std::size_t>(cabUnit(c))].setReverser(cabEnd(c), 0);
+        std::printf("[Couple] coupled to a portion standing in emergency - reverser to "
+                    "Neutral, select again to take charge\n");
+        std::fflush(stdout);
+    }
     tractiveEffort_ = brakeForce_ = 0.0f;
 }
 
@@ -641,11 +671,11 @@ TippingLimit Consist::tippingLimit(float curvature, float cant) const {
 }
 
 float Consist::mrPressure(int cab) const {
-    const int u = (cab >= 0 && cab < cabCount()) ? cab / 2 : 0;
+    const int u = (cab >= 0 && cab < cabCount()) ? cabUnit(cab) : 0;
     return units_[u].mrPressure();
 }
 float Consist::bcPressure(int cab) const {
-    const int u = (cab >= 0 && cab < cabCount()) ? cab / 2 : 0;
+    const int u = (cab >= 0 && cab < cabCount()) ? cabUnit(cab) : 0;
     return units_[u].bcPressure();
 }
 
@@ -669,7 +699,7 @@ float Consist::bpRate() const {
 }
 
 float Consist::bpPressure(int cab) const {
-    const int u = (cab >= 0 && cab < cabCount()) ? cab / 2 : 0;
+    const int u = (cab >= 0 && cab < cabCount()) ? cabUnit(cab) : 0;
     return units_[static_cast<std::size_t>(u)].bpPressure();
 }
 

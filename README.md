@@ -628,6 +628,22 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   **auxiliary** reservoirs fed from the train pipe and nothing else. The real fault is still
   modelled: a machine that *has* a compressor and is not running it does lose its air, and
   does trip, at 34 minutes.
+- **A cab index is not two per set**, and a locomotive running round its train is what
+  proves it. `cabCount` counts only real driving positions, so a Di 4 on five carriages has
+  two cabs and not twelve — but three places still worked the index out as `set * 2 + end`,
+  which is true only of a train that is all cabs. Draw the locomotive off a 600 m freight,
+  run it to the other end and couple on, and it becomes set **22** of 23 while still
+  holding cabs 0 and 1. `setReverser`'s "centre every other cab" then centred *wagon 0*, so
+  selecting the near cab left the far one in gear as well: two cabs in gear, `activeCab`
+  reads neither, the reverser interlock calls for emergency and the controls are dead. The
+  cab gauges read wagon 0's brake pipe at the same time, and the driver's seat was worked
+  out as cab `2 × 22`, which `driveTrain` clamps — so on contact he was thrown to the other
+  end of his locomotive. All of it goes through `cabUnit`/`cabEnd` now, with `cabIndex` as
+  their inverse for anything that has to hold a seat across a coupling. The last piece was
+  the **uncouple hold**: it is released by *sampling* the reversers for Neutral and then
+  gear, which assumes a held train has nothing in gear — true of one just parted, false of
+  one a driver has just coupled onto in gear. Taking over a held portion now starts at
+  Neutral, and his next selection is the cycle that releases it.
 - **One reverser, one driving cab** — the train takes its commands from the cab holding
   the reverser, so putting a cab into gear **centres every other cab**: a locomotive has one
   reverser handle and the driver carries it to the end he is working from. This is also a
