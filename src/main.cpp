@@ -3931,15 +3931,15 @@ int main(int argc, char** argv) {
             // The keyboard drives the cab you are sitting in (driver view V), or
             // the front cab (0) in any other view.
             const int cab = (g_driverPos >= 0) ? g_driverPos : 0;
-            const bool split = vehicle->controls() == ControlSeparate;
+            const bool split = vehicle->controls(cab) == ControlSeparate;
             const bool bD = down(GLFW_KEY_COMMA), bU = down(GLFW_KEY_PERIOD),
                        bE = down(GLFW_KEY_SPACE);
             const bool kRel = split && down(GLFW_KEY_K), kApp = split && down(GLFW_KEY_L);
             // The independent brake on H / J, immediately left of the train brake's K / L,
             // so the two read left to right along the row: loco brake, then train brake,
             // each with release on the left and apply on the right.
-            const bool iRel = vehicle->hasIndependentBrake() && down(GLFW_KEY_H);
-            const bool iApp = vehicle->hasIndependentBrake() && down(GLFW_KEY_J);
+            const bool iRel = vehicle->hasIndependentBrake(cab) && down(GLFW_KEY_H);
+            const bool iApp = vehicle->hasIndependentBrake(cab) && down(GLFW_KEY_J);
             const int prevPos = vehicle->handlePosition(cab);
             const int prevPow = vehicle->powerNotch(cab), prevBrk = vehicle->brakeNotch(cab);
             const int prevInd = vehicle->independentNotch(cab);
@@ -4416,7 +4416,7 @@ int main(int argc, char** argv) {
                                                         : "SHUT DOWN (coupled)");
                 appendText(tv, buf, x, y, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
                 y += lh;
-                if (vehicle->controls() == ControlSeparate) {
+                if (vehicle->controls(cab) == ControlSeparate) {
                     // One controller with a range either side of neutral, so the label
                     // has to say which side it is on - otherwise E2 and P2 read alike and
                     // the driver cannot tell pulling from pushing.
@@ -4424,10 +4424,10 @@ int main(int argc, char** argv) {
                     char ctl[40];
                     if (np < 0)
                         std::snprintf(ctl, sizeof(ctl), "E-BRAKE E%d  %3.0f kN", -np,
-                                      vehicle->lead().dynamicBrakeForce() / 1000.0f);
+                                      vehicle->dynamicBrakeForce() / 1000.0f);
                     else
                         std::snprintf(ctl, sizeof(ctl), "POWER P%d", np);
-                    if (vehicle->hasIndependentBrake())
+                    if (vehicle->hasIndependentBrake(cab))
                         std::snprintf(buf, sizeof(buf),
                                       "%-22s , / .   LOCO L%d  H/J   TRAIN %s  K/L / Space",
                                       ctl, vehicle->independentNotch(cab),

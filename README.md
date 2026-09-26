@@ -644,6 +644,14 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   gear, which assumes a held train has nothing in gear — true of one just parted, false of
   one a driver has just coupled onto in gear. Taking over a held portion now starts at
   Neutral, and his next selection is the cycle that releases it.
+  The same run-around then showed the other half of it: what the driver has *in front of
+  him* was read off `lead()`, the front of the train. With the locomotive at the back that
+  is a wagon, so the CD 312's cab offered one combined handle in place of its power
+  controller, train brake and locomotive brake, and the electric brake read 0 kN. The
+  reverser interlock was asked of the same wagon, which has no engines — so it had quietly
+  stopped applying to hauled trains altogether. `controls`, `hasIndependentBrake` and the
+  interlock now ask the set in charge: the one holding the reverser, or the first set with
+  a cab when nothing is in gear, which is the locomotive wherever it has ended up.
 - **One reverser, one driving cab** — the train takes its commands from the cab holding
   the reverser, so putting a cab into gear **centres every other cab**: a locomotive has one
   reverser handle and the driver carries it to the end he is working from. This is also a

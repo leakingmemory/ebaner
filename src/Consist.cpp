@@ -256,11 +256,32 @@ int Consist::activeCab() const {
     return count == 1 ? active : -1; // none, or more than one - including one per set
 }
 
+int Consist::drivingUnit(int cab) const {
+    if (cab >= 0 && cab < cabCount()) return cabUnit(cab);
+    const int a = activeCab();
+    if (a >= 0) return cabUnit(a);
+    // Nothing in gear: the first set that has a cab at all, which on a hauled train is
+    // the locomotive wherever in the train it has ended up, and never a wagon.
+    for (std::size_t i = 0; i < units_.size(); ++i)
+        if (units_[i].cabCount() > 0) return static_cast<int>(i);
+    return 0;
+}
+
+float Consist::dynamicBrakeForce() const {
+    float f = 0.0f;
+    for (const Vehicle& u : units_) f += u.dynamicBrakeForce();
+    return f;
+}
+
 bool Consist::interlockEmergency() const {
     // Any machine with engines and cabs, rather than one named body style: the rule is
     // about there being exactly one driving position in charge, which is as true of a
     // locomotive as of a railcar. An unpowered vehicle has nothing to interlock.
-    return lead().engineCount() > 0 && activeCab() < 0;
+    //
+    // Asked of the set in charge and not of the front of the train, or a locomotive that
+    // has run round to the back leaves a wagon answering for it - a wagon has no engines,
+    // so the interlock quietly stopped applying to the whole train.
+    return units_[drivingUnit()].engineCount() > 0 && activeCab() < 0;
 }
 
 int Consist::trippedUnit() const {

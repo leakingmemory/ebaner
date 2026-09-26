@@ -108,8 +108,22 @@ public:
     void moveBrake(int cab, int dir);
     void moveIndependent(int cab, int dir);
     int independentNotch(int cab) const;
-    bool hasIndependentBrake() const { return lead().hasIndependentBrake(); }
-    int controls() const { return lead().controls(); }
+    // What the driver has in front of him, which belongs to the set he is sitting in and
+    // not to the front of the train. `lead()` is only the same thing while the locomotive
+    // happens to be set 0: run it round to the other end and the front of the train is a
+    // wagon, which reported a wagon's controls - one combined handle in place of the
+    // CD 312's power, train brake and locomotive brake.
+    //
+    // Pass the cab being driven; -1 asks for the set in charge, which is the one holding
+    // the reverser, or the first set with a cab if none is in gear.
+    bool hasIndependentBrake(int cab = -1) const {
+        return units_[drivingUnit(cab)].hasIndependentBrake();
+    }
+    int controls(int cab = -1) const { return units_[drivingUnit(cab)].controls(); }
+    // The electric brake the whole train is making, which is every set that has one.
+    float dynamicBrakeForce() const;
+    // The set a cab belongs to, or - for cab < 0 - the set in charge of the train.
+    int drivingUnit(int cab = -1) const;
     // The hardest-working set of grids in the train, 0..1 - what the blower answers to.
     float dynamicBrakeFrac() const;
     const char* brakeNotchName(int cab) const;

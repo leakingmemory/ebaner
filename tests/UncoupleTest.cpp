@@ -519,6 +519,22 @@ void testRunAround() {
     check(c.activeCab() == 1, "  so exactly one cab is in charge", c.activeCab(), 1.0);
     check(!c.interlockEmergency(), "  and the interlock is satisfied");
 
+    // And so are the handles. A CD 312 is driven with a power/electric-brake controller,
+    // a train brake and a locomotive brake; a wagon has none of that, and asking the
+    // front of the train put one combined handle in the cab of a machine that has three.
+    check(c.controls(1) == ControlSeparate, "the cab has the locomotive's own controls",
+          double(c.controls(1)), double(ControlSeparate));
+    check(c.hasIndependentBrake(1), "  including its locomotive brake");
+    check(c.controls() == c.controls(1), "  asked either way round",
+          double(c.controls()), double(c.controls(1)));
+    // The reverser interlock is the locomotive's too. Read off the front of the train it
+    // found a wagon, which has no engines, and quietly stopped applying at all.
+    const int held = c.reverser(1);
+    c.setReverser(1, 0);
+    check(c.interlockEmergency(), "nothing in gear still trips the reverser interlock");
+    c.setReverser(1, held);
+    check(!c.interlockEmergency(), "  and back in gear it lets go");
+
     // The gauges in front of him are his locomotive's, not the first wagon's.
     check(c.bpPressure(1) == c.unit(22).bpPressure(), "the cab's gauges read set 22",
           c.bpPressure(1), c.unit(22).bpPressure());
