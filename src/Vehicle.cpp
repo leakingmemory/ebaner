@@ -147,6 +147,26 @@ constexpr float kUpshiftRpm = 1450.0f;   // auto upshift threshold (on geared sp
 constexpr float kDownshiftRpm = 950.0f;  // auto downshift threshold (on geared speed)
 constexpr float kConvFloorRpm = 1150.0f; // converter stall speed at full throttle
 constexpr float kShiftDwell = 0.4f;      // s of cut traction across an upshift
+// The engine brake. Motoring drag on its own - the friction and pumping of an engine
+// being turned over with the fuel shut off - is about a tenth of rated torque, which on
+// 70 t works out at 0.05 m/s^2 and would be invisible beside the smallest brake notch.
+// What makes it a brake on this machine is COMPRESSION RELEASE: the Cummins N14 is a
+// classic Jacobs application, and a compression brake gives back a large fraction of
+// rated power. 0.7 is the top of the credible range for one, and it is the only figure in
+// the engine brake that is chosen rather than derived.
+//
+// It is a braking TORQUE, near enough constant with engine speed (the work is done once
+// per cycle, so the POWER rises with revs and the torque does not). So what reaches the
+// rail goes with the gear: the box is in 1st at walking pace and 5th at line speed, and
+// the engine brake is worth two and a half times as much in the first as in the last.
+// That is the right shape - engine braking is for holding a speed down a bank, not for
+// stopping - and it is why the friction brake still does the stopping.
+constexpr float kEngBrakeFrac = 0.70f;   // of rated power, at governed speed
+// And it fades as the geared engine speed falls back to idle: below that the wheels are
+// no longer turning the engine over, the converter is freewheeling, and there is nothing
+// to brake against. In 1st that happens at about 7 m/s, so it has handed over to the
+// shoes well before the train comes to rest.
+constexpr float kEngBrakeBand = 250.0f;  // rpm above idle over which it comes in
 constexpr float kTractionMu = 0.33f;     // wheel/rail adhesion under power
 constexpr float kDrivenFrac = 0.67f;     // fraction of weight on driven axles (~4/6)
 constexpr float kEta = 0.9f;             // driveline efficiency
@@ -186,6 +206,23 @@ float targetBP(int notch) {
     const float span = (kBPRelease - kBPFullService) - kBPMinReduction;
     return kBPRelease - (kBPMinReduction + span * static_cast<float>(notch - 1) / 3.0f);
 }
+// What a service notch asks of the train, as a deceleration.
+//
+// Not a new set of numbers: it is derived from the ones the distributor already works to,
+// so the two cannot drift apart. The notch sets a pipe reduction, the reduction sets a
+// cylinder pressure through kBCPerBPDrop, and kFullServiceDecel says what a full cylinder
+// is worth. B1..B4 come out at 0.35, 0.66, 0.98 and 1.30 m/s^2 - and 1.30 at full service
+// sits against the 1.2 m/s^2 quoted for the Talent's German sister, the DB 643.
+//
+// Expressed this way the demand is load-corrected for free, because the force it asks for
+// is a deceleration times this vehicle's own mass. It is deliberately NOT corrected for
+// gradient: the driver still has to brake harder down a bank, as he does on the real one.
+float serviceDecel(int notch) {
+    if (notch <= 0 || notch >= Vehicle::kEmergencyNotch) return 0.0f;
+    const float bc = std::min(kBCMax, (kBPRelease - targetBP(notch)) * kBCPerBPDrop);
+    return kFullServiceDecel * bc / kBCMax;
+}
+
 } // namespace
 
 Vehicle::Vehicle(const TrackPath* path, const VehicleSpec& spec, float s,
@@ -1055,6 +1092,9 @@ void Vehicle::updateTraction(float demandSigned, float demand, bool powering,
     // Which machine this is. The two share the notch, the adhesion cap and the reverse
     // speed cap, and nothing else - a torque converter and a generator are not variants
     // of one another.
+    // An engine brake is a mechanical transmission's alone, and it is worked out fresh
+    // every step - so clear it here, before the electric drive takes its own way out.
+    engBrake_ = 0.0f;
     if (drive_ == DriveElectric) {
         updateElectricDrive(demandSigned, demand, powering, reverse, dt);
         return;
@@ -1072,6 +1112,31 @@ void Vehicle::updateTraction(float demandSigned, float demand, bool powering,
     if (shiftTimer_ <= 0.0f) {
         if (gear_ < 5 && rpmLock >= kUpshiftRpm) { ++gear_; shiftTimer_ = kShiftDwell; }
         else if (gear_ > 1 && rpmLock <= kDownshiftRpm) { --gear_; }
+    }
+
+    // The engine brake, before the coasting return - it is the one thing the driveline
+    // does when it is not pulling. With the throttle shut and the handle in the
+    // retardation zone the fuel is cut, and the wheels turn the engine over against its
+    // own compression. What comes back is a torque at the crank, geared to the rail.
+    //
+    // Cancelled outright by an emergency, a safety trip or a burst pipe: then what is
+    // wanted is every shoe there is, applied pneumatically, and nothing clever.
+    const int notch = effectiveNotch();
+    const bool retarding = notch > 0 && notch < kEmergencyNotch && !trainEmerg_ &&
+                           !safetyBrake_ && !pipeCut_;
+    if (retarding && !powering && enginesRunning()) {
+        // Engaged only while the wheels are turning the engine faster than it idles.
+        // Below that the converter is freewheeling and there is nothing to brake on.
+        const float engaged = std::clamp((rpmLock - idleRpm_) / kEngBrakeBand, 0.0f, 1.0f);
+        if (engaged > 0.0f) {
+            const float torque = kEngBrakeFrac * powerW_ / (governedRpm_ * kRpmToRad);
+            engBrake_ = engaged * torque * kGearRatio[gear_ - 1] / wheelRadius_;
+            // And the engine is being driven, so the revs follow the road through the
+            // gearbox instead of sitting at idle. That is what an engine brake sounds
+            // like, and Audio reads these directly.
+            const float driven = std::clamp(rpmLock, idleRpm_, governedRpm_);
+            for (int i = 0; i < engineCount_; ++i) engineRpm_[i] = driven;
+        }
     }
 
     if (!powering) return; // coasting: engines idle (handled in update), no traction
@@ -1290,6 +1355,21 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
         // released, not merely discounted afterwards, so the gauge tells the truth.
         // An emergency, a safety trip or a burst pipe all override it.
         if (dynBrake_ > 0.0f && !trainEmerg_ && !safetyBrake_ && !pipeCut_) autoWant = 0.0f;
+        // Blended braking. The notch asks for a deceleration; the engine brake supplies
+        // what it can of it, and only the shortfall is asked of the shoes. So the first
+        // notch on a Class 93 at a fair speed is the engine brake and nothing else, and
+        // the pads are spent last rather than first.
+        //
+        // `min` is the safe direction: this can hold the cylinders BELOW what the pipe
+        // says and never raise them above it. A burst pipe, a parted train and the
+        // low-reservoir trip therefore still apply everything, and so does emergency -
+        // all three are excluded here as well, twice over, because the engine brake is
+        // already cancelled in those cases.
+        if (engBrake_ > 0.0f && !trainEmerg_ && !safetyBrake_ && !pipeCut_) {
+            const float wantN = serviceDecel(effNotch) * mass_;
+            const float shortfall = std::max(0.0f, wantN - engBrake_);
+            autoWant = std::min(autoWant, kBCMax * shortfall / (kFullServiceDecel * mass_));
+        }
         // And the independent brake on top, by a double check valve: the two feed the
         // same cylinders and whichever asks for more gets it. This one is the driver's
         // own hand and is NOT held off by the interlock - if he wants shoes as well as
@@ -1372,7 +1452,11 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
     // burst pipe all override it, because then what is wanted is every shoe there is.
     // The interlock is applied at the cylinders now rather than here, so whatever
     // pressure they have is real and makes the force it looks like it should.
-    brakeForce_ = std::min(bf + dynBrake_, kAdhesionMu * mass_ * kG);
+    // The engine brake joins the sum. Strictly it works through the driven axles only -
+    // kDrivenFrac of the weight - and so has a lower adhesion ceiling of its own than the
+    // shoes on every wheel do; at the forces it makes here that limit is never reached,
+    // and saying so is better than code that pretends the difference does not exist.
+    brakeForce_ = std::min(bf + dynBrake_ + engBrake_, kAdhesionMu * mass_ * kG);
 
     UnitStep out;
     // Back into the physical frame for the train to add up.

@@ -287,6 +287,144 @@ int main() {
         check(worst < 0.05f, "above it the grids hold their rating (worst err)", worst, 0.0);
     }
 
+    // --- the railcar's engine brake, and the blend it feeds -------------------------
+    //
+    // The Class 93 is the Talent's diesel-MECHANICAL variant: a converter to launch on
+    // and then mechanical gears, which connect the engine to the wheels solidly enough
+    // for the engine to brake the train. The Di 4 drives through a generator and cannot
+    // do it at all - that is what the electric brake above is instead.
+    //
+    // What the handle asks for is a deceleration. The engine brake supplies what it can
+    // of that and the shoes are asked only for the shortfall, so the pads are spent last
+    // rather than first. The train slows exactly as it did before; what changes is which
+    // part of it is doing the work.
+    std::puts("\nThe railcar brakes on its engine before it brakes on its shoes");
+    {
+        Consist r(&w.paths, &w.paths[0], *c93, 10000.0f);
+        r.attachNetwork(&w.paths, nullptr);
+        check(r.lead().hasEngineBrake(), "the railcar has an engine brake");
+        Consist l(&w.paths, &w.paths[0], *di4, 10000.0f);
+        l.attachNetwork(&w.paths, nullptr);
+        check(!l.lead().hasEngineBrake(),
+              "  and the locomotive has none - a generator cannot be braked against");
+    }
+
+    {
+        // Each notch, from a road speed, with the machine charged and running. The
+        // deceleration is the number that must NOT move: these are the same figures the
+        // pneumatic brake gave on its own, because the notch asks for the same thing and
+        // only the source of the force has changed.
+        auto run = [&](int notch, float& decel, float& cyl, float& eng, float& rpm) {
+            Consist c(&w.paths, &w.paths[0], *c93, 1000.0f, 25.0f);
+            c.attachNetwork(&w.paths, nullptr);
+            c.toggleEngines();
+            c.setReverser(0, 1);
+            c.setBrakeNotch(0, 0);
+            for (int i = 0; i < 30 * 60; ++i) c.update(1.0f / 60.0f, 0.0f);
+            c.setBrakeNotch(0, notch);
+            for (int i = 0; i < 3 * 60; ++i) c.update(1.0f / 60.0f, 0.0f);
+            const float v0 = c.speed();
+            for (int i = 0; i < 60; ++i) c.update(1.0f / 60.0f, 0.0f);
+            decel = v0 - c.speed(); // over exactly one second
+            cyl = c.unit(0).bcPressure();
+            eng = c.unit(0).engineBrakeForce();
+            rpm = c.unit(0).engineRpm(0);
+        };
+        // B1..B4 ask for 0.35, 0.66, 0.98 and 1.30 m/s^2; what is measured is that plus
+        // the rolling resistance the set has anyway, which is a few hundredths.
+        const double want[4] = {0.35, 0.66, 0.98, 1.30};
+        for (int n = 1; n <= 4; ++n) {
+            float decel = 0.0f, cyl = 0.0f, eng = 0.0f, rpm = 0.0f;
+            run(n, decel, cyl, eng, rpm);
+            char what[64];
+            std::snprintf(what, sizeof(what), "B%d still slows it by what B%d always did",
+                          n, n);
+            check(std::abs(decel - want[n - 1]) < 0.09, what, decel, want[n - 1]);
+            std::printf("      B%d: %.2f m/s2, %.2f bar in the cylinders, %.0f kN of "
+                        "engine brake, %.0f rpm\n", n, decel, cyl, eng / 1000.0f, rpm);
+        }
+
+        float decel = 0.0f, cyl = 0.0f, eng = 0.0f, rpm = 0.0f;
+        run(1, decel, cyl, eng, rpm);
+        // Pneumatically B1 is 1.01 bar of cylinder. Most of that is now the engine.
+        check(cyl < 0.5f, "at B1 the shoes are barely touched (bar, was 1.01)", cyl, 0.26);
+        check(eng > 10000.0f, "  because the engine is taking it", eng / 1000.0f, 18.1);
+        check(rpm > 900.0f, "  and being driven by the train, it is heard doing it (rpm)",
+              rpm, 1063.0);
+
+        run(4, decel, cyl, eng, rpm);
+        check(cyl > 2.0f, "at full service the shoes still do most of the work (bar)", cyl,
+              2.83);
+        check(eng > 10000.0f, "  with the engine underneath it", eng / 1000.0f, 23.2);
+    }
+
+    std::puts("\nEmergency is pneumatic, and takes the engine brake away");
+    {
+        Consist c(&w.paths, &w.paths[0], *c93, 1000.0f, 25.0f);
+        c.attachNetwork(&w.paths, nullptr);
+        c.toggleEngines();
+        c.setReverser(0, 1);
+        c.setBrakeNotch(0, 0);
+        for (int i = 0; i < 30 * 60; ++i) c.update(1.0f / 60.0f, 0.0f);
+        c.setBrakeNotch(0, Vehicle::kEmergencyNotch);
+        for (int i = 0; i < 3 * 60; ++i) c.update(1.0f / 60.0f, 0.0f);
+        check(c.unit(0).engineBrakeForce() == 0.0f, "the engine brake is cancelled",
+              c.unit(0).engineBrakeForce(), 0.0);
+        check(c.unit(0).bcPressure() > 3.7f, "  and every cylinder is filled instead",
+              c.unit(0).bcPressure(), 3.8);
+    }
+    {
+        // A burst pipe is the other case the blend must keep its hands off: nothing is
+        // commanding anything, the distributor is answering a pipe that has gone, and
+        // what is wanted is all of it.
+        Consist c(&w.paths, &w.paths[0], *c93, 1000.0f, 25.0f);
+        c.attachNetwork(&w.paths, nullptr);
+        c.toggleEngines();
+        c.setReverser(0, 1);
+        c.setBrakeNotch(0, 0);
+        for (int i = 0; i < 30 * 60; ++i) c.update(1.0f / 60.0f, 0.0f);
+        c.setBrakeNotch(0, 1); // a light application, which the engine would have covered
+        c.unit(0).burstBrakePipe();
+        for (int i = 0; i < 5 * 60; ++i) c.update(1.0f / 60.0f, 0.0f);
+        check(c.unit(0).bcPressure() > 3.7f, "a burst pipe still applies everything",
+              c.unit(0).bcPressure(), 3.8);
+        check(c.unit(0).engineBrakeForce() == 0.0f, "  and the blend keeps out of it",
+              c.unit(0).engineBrakeForce(), 0.0);
+    }
+
+    std::puts("\nAnd it hands over to the shoes before the train stops");
+    {
+        Consist c(&w.paths, &w.paths[0], *c93, 1000.0f, 25.0f);
+        c.attachNetwork(&w.paths, nullptr);
+        c.toggleEngines();
+        c.setReverser(0, 1);
+        c.setBrakeNotch(0, 0);
+        for (int i = 0; i < 30 * 60; ++i) c.update(1.0f / 60.0f, 0.0f);
+        c.setBrakeNotch(0, 2);
+        float engAtSpeed = 0.0f, cylAtSpeed = 0.0f;
+        bool measured = false;
+        int steps = 0;
+        while (c.speed() > 0.001f && steps < 200 * 60) {
+            c.update(1.0f / 60.0f, 0.0f);
+            ++steps;
+            if (!measured && c.speed() < 14.0f) { // well up the speed range
+                engAtSpeed = c.unit(0).engineBrakeForce();
+                cylAtSpeed = c.unit(0).bcPressure();
+                measured = true;
+            }
+        }
+        std::printf("      stopped in %.1f s; at 14 m/s it was %.0f kN of engine and "
+                    "%.2f bar of air\n", steps / 60.0, engAtSpeed / 1000.0f, cylAtSpeed);
+        check(engAtSpeed > 10000.0f, "at speed the engine is doing a share of B2",
+              engAtSpeed / 1000.0f, 23.2);
+        check(c.speed() <= 0.001f, "the train does come to a stand", c.speed(), 0.0);
+        check(c.unit(0).engineBrakeForce() == 0.0f,
+              "  with the engine brake faded out by then",
+              c.unit(0).engineBrakeForce(), 0.0);
+        check(c.unit(0).bcPressure() > 1.5f, "  and the shoes holding it (bar)",
+              c.unit(0).bcPressure(), 1.94);
+    }
+
     std::printf("\n%s\n", failures == 0 ? "all ok" : "FAILURES");
     return failures == 0 ? 0 : 1;
 }

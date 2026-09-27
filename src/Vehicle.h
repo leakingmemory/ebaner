@@ -58,7 +58,12 @@ enum ControlLayout {
 
 enum DriveKind {
     DriveNone = 0,      // unpowered: a wagon, a carriage, a bare wheelset
-    DriveHydraulic = 1, // torque converter + 5-speed box (Class 93)
+    // A converter to launch on and then MECHANICAL gears - which is what the Talent's
+    // diesel-mechanical variant is, and the Class 93 is one of those. It matters beyond
+    // the name: gears connect the engine to the wheels solidly, so the engine can brake
+    // the train. A purely hydrodynamic drive cannot, which is why calling it hydraulic
+    // was also a statement that it had no engine brake.
+    DriveMechanical = 1, // torque converter + 5-speed box (Class 93)
     DriveElectric = 2,  // prime mover -> alternator -> traction motors (Di 4)
 };
 
@@ -233,14 +238,14 @@ inline constexpr VehicleSpec kVehicleSpecs[] = {
     // 2 x 306 kW through a torque converter and five gears, 0.84 m wheels, four of its
     // six axles driven. These were the file-scope constants every vehicle shared.
     inCat({"NSB Class 93 (Talent)", 70000.0f, 41.5f, 2.75f, 3.80f, 2.50f, 30.00f, 3, BodyClass93, 1,
-     2, 2, DriveHydraulic, 612000.0f, 0.42f, 0.67f, 0.0f}, CatTrain),
+     2, 2, DriveMechanical, 612000.0f, 0.42f, 0.67f, 0.0f}, CatTrain),
     // Two sets coupled: the figures stay per set and `units` says how many. A Class 93
     // runs in multiple in service, and the two sets keep their own air, engines and
     // safety systems - see Consist.
     inCat({"NSB Class 93 x2 (Talent)", 70000.0f, 41.5f, 2.75f, 3.80f, 2.50f, 30.00f, 3, BodyClass93, 2,
-     2, 2, DriveHydraulic, 612000.0f, 0.42f, 0.67f, 0.0f}, CatTrain),
+     2, 2, DriveMechanical, 612000.0f, 0.42f, 0.67f, 0.0f}, CatTrain),
     inCat({"NSB Class 93 x3 (Talent)", 70000.0f, 41.5f, 2.75f, 3.80f, 2.50f, 30.00f, 3, BodyClass93, 3,
-     2, 2, DriveHydraulic, 612000.0f, 0.42f, 0.67f, 0.0f}, CatTrain),
+     2, 2, DriveMechanical, 612000.0f, 0.42f, 0.67f, 0.0f}, CatTrain),
     // The standard rake, as it is marshalled: cafe second, 2nd class third and fourth,
     // and 1st class on the tail.
     hauling(kDi4Spec, "NSB Di 4 + 5 (cafe 2nd)", "BC5-3,FR5-1,B5-3,B5-5,A5-1"),
@@ -755,6 +760,11 @@ public:
     int controls() const { return controls_; }
     int cabCount() const { return cabs_; }  // 0 on a carriage: driven from nowhere
     bool hasDynamicBrake() const { return dynBrakeN_ > 0.0f; }
+    // The engine brake, N at the rail. A machine with mechanical gears can be braked by
+    // its own engine; one driving through a generator cannot, and one with no engine has
+    // nothing to brake with. See the blend in stepSubsystems.
+    bool hasEngineBrake() const { return drive_ == DriveMechanical && engineCount_ > 0; }
+    float engineBrakeForce() const { return engBrake_; }
     float dynamicBrakeForce() const { return dynBrake_; } // N this step, >= 0
     // How hard the grids are working, 0..1. What the blower is fed from.
     float dynamicBrakeFrac() const {
@@ -1012,6 +1022,7 @@ private:
     float brakeForce_ = 0.0f;           // N of friction brake this step, for the sound
     unsigned railImpacts_ = 0;          // axles that have crossed a turnout, for the sound
     bool compOn_ = false;               // compressor state (cut-in/cut-out governor)
+    float engBrake_ = 0.0f;             // engine brake this step (N at the rail)
     bool safetyBrake_ = false;          // low-reservoir automatic emergency (latched)
     bool feedCut_ = false;              // feed to the brake pipe closed on low reservoir
     int engineCount_ = 0;               // diesel engines (2 for a Class 93, else 0)

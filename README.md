@@ -129,13 +129,21 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   weaker than the first: cycling the brake down a long descent wears it out, because
   the auxiliaries refill from the pipe far more slowly than the cylinders empty.
   Braking force is capped by wheel–rail adhesion and also holds the vehicle at rest. On the power side the vehicle **drives** through a modelled
-  **diesel-hydraulic transmission** (per the real Di 93): a **torque converter** for
+  **diesel-mechanical transmission**: a **torque converter** for
   launch (torque multiplication while it slips, so the revs flare then couple) feeding
   a **5-speed automatic gearbox** that shifts on road speed (the engine steps down at
   each upshift); tractive effort is the least of the geared/converter limit, the
   constant-power hyperbola and the adhesion cap, so it launches hard then tapers toward
   a level top speed. The gearbox is modelled but not shown — only speed and rpm are on
-  the HUD. Each cab has its **own** power/brake lever and reverser, operating
+  the HUD. This said **diesel-hydraulic** for a long time, and the word was wrong: the
+  Talent family comes as diesel-mechanical (630 kW), diesel-electric (1,100 kW — the DB
+  644) and electric, and the Class 93's 612 kW from two [Cummins
+  N14E-R](https://en.wikipedia.org/wiki/Norske_Tog_Class_93) through "a five-stage gear
+  box" puts it with the [DB 643](https://de-academic.com/dic.nsf/dewiki/292064) in the
+  **mechanical** group. It is not pedantry: gears connect the engine to the wheels
+  solidly and a hydrodynamic drive does not, so the label was also a statement that the
+  machine had no **engine brake** — see the blend below, which is the thing that was
+  missing because of it. Each cab has its **own** power/brake lever and reverser, operating
   independently; the keyboard drives the cab you are seated in (driver view `V`, else
   the front cab). The **reverser** (`F` / `N` / `R`) gates both across both cabs: with
   both handles in Neutral, or both out of Neutral, the brakes go to emergency and no
@@ -290,6 +298,34 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   working the locomotive's **own friction brake is held off**, since applying both
   duplicates the effort and cooks the shoes; the carriages brake on air as usual, and an
   emergency drops the electric brake out and fills every cylinder there is.
+- **The railcar brakes on its engine before it brakes on its shoes.** A mechanical
+  transmission connects the engine to the wheels solidly enough to be braked against, so
+  moving the Class 93's lever into the retardation zone cuts the fuel and lets the train
+  turn the engine over — and the notch is read as a **deceleration** rather than as a
+  brake pressure. The engine brake supplies what it can of that and the **shoes are asked
+  only for the shortfall**, which is how a modern unit brakes and is why its pads last.
+  The targets are not new numbers: each notch already implied one, through the reduction
+  it commands and `kFullServiceDecel`, so B1–B4 come out at **0.35, 0.66, 0.98 and 1.30
+  m/s²** — and the 1.30 at full service sits against the **1.2 m/s²** quoted for the DB
+  643. Expressed as a deceleration the demand is **load-corrected for free** and
+  deliberately *not* corrected for gradient: the driver still brakes harder down a bank.
+  Measured, B1 at 17 m/s went from 1.01 bar of cylinder to **0.26** for the same 0.41
+  m/s², and the engine is *heard* doing it — being driven by the train, the revs follow
+  the road through the gearbox instead of sitting at idle.
+  The one figure that is chosen rather than derived is how hard an engine brakes. Plain
+  motoring drag is about a tenth of rated torque, which on 70 t is 0.05 m/s² and would be
+  invisible; what makes it a brake is **compression release**, and the N14 is a classic
+  Jacobs application, so the model takes **0.7 of rated power at governed speed** as a
+  braking *torque* — near enough constant with revs, because the work is done once per
+  cycle. So what reaches the rail goes with the **gear**: 11 kN in 5th, 18 in 3rd, 30 in
+  1st, and
+  the brake gets stronger as the box comes down, which is the right shape for something
+  meant to hold a speed down a bank rather than to stop a train. It **fades out** as the
+  geared engine speed falls back to idle — around 7 m/s in 1st — so the shoes have taken
+  over well before the train comes to rest, and they are what holds it there.
+  Emergency, a **burst pipe** and the low-reservoir trip all cancel the engine brake and
+  apply everything pneumatically, as before. The blend can only ever hold the cylinders
+  *below* what the pipe says and never above it, which is what makes that safe.
 - **The independent brake** — the *Zusatzbremse*, a second valve straight on to the
   locomotive's own cylinders from its own main reservoir, touching neither the train pipe
   nor anything behind the drawbar. Every mainline locomotive has one, because without it
