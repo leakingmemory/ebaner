@@ -297,6 +297,8 @@ void Vehicle::burstBrakePipe() {
 
 void Vehicle::closeBrakePipeCock() { pipeCut_ = false; }
 
+float Vehicle::notchDecel(int notch) { return serviceDecel(notch); }
+
 void Vehicle::nudgeBrakePipe(float dBar) { bp_ = std::max(0.0f, bp_ + dBar); }
 
 void Vehicle::beginPipeStep() {
@@ -726,11 +728,23 @@ bool Vehicle::walkTo(float bodyOffset, int& cp, float& cs, int& nose) const {
 // difference is that each stretch is written out before the walk crosses onto the next
 // path.
 bool Vehicle::walkSpans(float bodyOffset, std::vector<PathSpan>& out) const {
+    // A view over walkRoad: the same stretches with the direction and the running
+    // distance dropped, which is all occupancy needs. Appends, because spansBetween walks
+    // twice into one vector.
+    static thread_local std::vector<RoadStretch> scratch;
+    const bool ok = walkRoad(bodyOffset, scratch);
+    for (const RoadStretch& r : scratch)
+        out.push_back({r.pathIdx, std::min(r.sFrom, r.sTo), std::max(r.sFrom, r.sTo)});
+    return ok;
+}
+
+bool Vehicle::walkRoad(float bodyOffset, std::vector<RoadStretch>& out) const {
+    out.clear();
     if (!paths_ || pathIdx_ < 0) return false;
     if (!net_) { // no network: one straight stretch on this path
         const float a = s_;
         const float b = s_ + static_cast<float>(orient_) * bodyOffset;
-        out.push_back({pathIdx_, std::min(a, b), std::max(a, b)});
+        out.push_back({pathIdx_, a, b, 0.0f});
         return true;
     }
     int cp = pathIdx_;
@@ -741,11 +755,12 @@ bool Vehicle::walkSpans(float bodyOffset, std::vector<PathSpan>& out) const {
     const std::vector<Turnout>& tos = net_->turnouts();
     const int walkSign = bodyOffset >= 0.0f ? 1 : -1; // +1 toward nose, -1 toward tail
     float remaining = std::abs(bodyOffset);
+    float run = 0.0f;                           // how far the walk has come
     int prevCross = -1;                         // don't immediately re-cross a turnout
 
     auto keep = [&](int path, float from, float to) {
         if (from == to) return;
-        out.push_back({path, std::min(from, to), std::max(from, to)});
+        out.push_back({path, from, to, run});
     };
 
     for (int guard = 0; guard < 64 && remaining > 1e-4f; ++guard) {
@@ -790,6 +805,7 @@ bool Vehicle::walkSpans(float bodyOffset, std::vector<PathSpan>& out) const {
         keep(cp, cs, cs + arcDir * bestDist);
         cs += arcDir * bestDist;
         remaining -= bestDist;
+        run += bestDist;
         const glm::vec3 fwdWorld = static_cast<float>(arcDir) * P.poseAt(cs).tangent;
         const int contArcDir =
             glm::dot(fwdWorld, (*paths_)[toPath].poseAt(toS).tangent) >= 0.0f ? 1 : -1;

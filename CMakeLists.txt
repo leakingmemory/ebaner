@@ -115,6 +115,7 @@ add_library(ebaner_engine STATIC
     src/Occupancy.cpp
     src/SignalMesh.cpp
     src/SpeedLimits.cpp
+    src/AutoDriver.cpp
     src/SpeedSignMesh.cpp
     src/TunnelMesh.cpp
     src/RoadMesh.cpp
@@ -327,6 +328,15 @@ add_dependencies(AirBrakeTest shaders)
 target_link_libraries(AirBrakeTest PRIVATE ebaner_engine)
 target_include_directories(AirBrakeTest PRIVATE src)
 add_test(NAME air-brake COMMAND AirBrakeTest)
+
+# The auto-driver. Its judgement is a pure function over a list of numbers, so most of
+# this runs with no dataset, no signals and no stations - only a synthetic road.
+add_executable(AutoDriveTest tests/AutoDriveTest.cpp src/Vehicle.cpp src/Consist.cpp
+               src/AutoDriver.cpp)
+add_dependencies(AutoDriveTest shaders)
+target_link_libraries(AutoDriveTest PRIVATE ebaner_engine)
+target_include_directories(AutoDriveTest PRIVATE src)
+add_test(NAME auto-drive COMMAND AutoDriveTest)
 
 # Coupling two trains into one, and the collision when it is taken too fast. No dataset -
 # a kilometre of straight TrackPath is the whole world, as UncoupleTest and AirBrakeTest.

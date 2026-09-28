@@ -609,6 +609,35 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   Volume does dominate, but on the **release**, where there is no accelerator to help
   because nothing local can make air: every pipe has to be filled from the one main
   reservoir at the front, and the train takes **12 s** against the light engine's 3.4 s.
+- **A train that drives itself.** Every train was driven by hand, which is fine for one
+  and impossible for a scenario: the level crossings, the block signals and the train-order
+  network are all about trains *meeting* each other, and there was no way to have a second
+  one moving. `P` hands the train over. It runs forward along whatever road the switches
+  are set for, up to the line speed, and stops where a stop is called for — **70 km/h** on
+  anything that is not main line, **40** through a manned station worked by hand signals,
+  a stand at a **signal that is not offering a road**, and a stand at that station's **flag
+  post** unless it is showing green. A signal it has stopped for starts it again by itself
+  when it clears; a station stop hands the train back, because the order there is given by
+  hand and a driver has to be sent on. A hand on the controls takes it back at any time.
+  The judgement is a **pure function** of a list of distances and speeds
+  (`planDrive`, `src/AutoDriver.h`), which is why most of it is tested to the metre with
+  no dataset at all; only the *scan* knows what a signal or a station is. The braking is
+  planned at **0.5 m/s²** — gentler than the 1.3 the brake can make, because a driver who
+  plans to the limit of his brake has nothing left for what he did not plan for — and the
+  notch is chosen from the deceleration the road is actually asking for,
+  `(v² − v_limit²) / 2d`, rather than from how far over a target the train is. That last
+  point is what makes it arrive **at** a restriction: picking the notch by overspeed
+  instead had it crossing into a 70 stretch doing 54, and stopping either half a metre
+  past the mark or 38 m short of it. It reads the road **five times a second**, not every
+  frame, and costs about 0.1 ms when it does.
+  Three things it got wrong on the way are worth keeping. It held the brake whenever a
+  stop existed *anywhere* ahead, so a train standing at a station with a red signal a
+  kilometre up the line never moved at all. Then, once that was fixed, it crept the last
+  few metres at 0.9 km/h for ever — too slow for the braking curve to ask for anything and
+  too slow for rolling resistance to finish the job. And in testing it ran off the end of
+  its own road at 70 km/h after a minute, which is the two cabs of a set facing opposite
+  ways: **cab 0 drives toward decreasing s**, so a train put down a kilometre along its
+  path and told to go forward has a kilometre of road and then nothing.
 - **A 600 m freight train found two more of these, and both were invisible on a short
   one.** The first: the accelerator could not fire on hauled stock at all. `bpRate_` was
   measured from inside the vehicle's own step, *after* `Consist` had already moved air
@@ -1028,6 +1057,7 @@ counts, and vehicle physics (mass, inertia, tipping limit).
 | Space        | Emergency brake                 |
 | F / N / R    | Reverser: Forward / Neutral / Reverse (the viewed cab) |
 | T            | Throw the switch under the crosshair (straight ⇄ diverging) |
+| P            | Hand the train to the **auto-driver**, or take it back |
 | M            | Mute / unmute sound             |
 | Tab          | Release/grab cursor             |
 | Esc          | Open menu (Exit); press again to resume |
@@ -1772,6 +1802,7 @@ the corresponding sources (national rail register + NVDB roads + OSM enrichment)
 | `EBANER_PROFILE`    | Print per-frame timings once a second: whole frame, the sim step, occupancy, crossings, signal aspects, distant walks, the signal mesh, and the vehicle mesh and its upload. With `EBANER_SCREENSHOT=/dev/null EBANER_SHOTFRAME=900` the viewer exits by itself with the reports flushed, which is how a profile gets taken without a file or a keypress. |
 | `EBANER_RADIUS`     | Half-window of world to load, in metres (default 20000). Two kilometres loads in seconds where the full 40 km square takes minutes, which is what makes a profile or a frame-time measurement affordable at all. Inspection only: drive out of it and the world ends. |
 | `EBANER_ROLL`       | Spawn the train at this speed in m/s with the brake released, so it coasts. A profile of a standing train is a profile of a different program - nothing changes occupancy, so nothing downstream of it runs. |
+| `EBANER_AUTO`       | Hand the train to the auto-driver at startup and log what it is doing once a second. A train that drives a real line with no keyboard, which is what makes the signalling and the crossings testable without a driver sitting in the cab. |
 | `EBANER_CHASE`      | `1` rides the vehicle from the start (the chase camera is otherwise only reachable by pressing C, so the one view that shows the machine could not be screenshotted). |
 | `EBANER_AUDIO_DUMP` | Render a scripted brake sequence to the given WAV and exit.   |
 | `EBANER_AUDIO_DUMP_ENGINE` | Render an engine start/idle/stop to the given WAV, exit. |

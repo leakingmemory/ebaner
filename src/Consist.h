@@ -214,6 +214,29 @@ public:
     // False if part of the train found no rail under it.
     bool occupiedSpans(std::vector<PathSpan>& out) const;
 
+    // Which way the train will move when power is applied: +1 toward the front of the
+    // train (set 0's nose), -1 toward the back, 0 with no cab in gear.
+    //
+    // Not obvious and worth having in one place: the two cabs of a set face opposite
+    // ways, so the direction is the cab's own facing times its reverser - and the front
+    // of the TRAIN is set 0's nose whatever set the driving cab happens to be in. A
+    // locomotive that has run round to the back of its train drives it from cab 1, and
+    // pulling away then moves the train toward set 0, which is the far end of the rake.
+    int headingSign() const;
+    // Whether this train is being driven by the computer rather than by hand, and which
+    // mark it has already served - the flag post it stopped at, so that arming it again
+    // sends it out of the station instead of stopping it where it stands. Kept on the
+    // train because a train is what it belongs to: coupling erases a Consist, and an
+    // index into a parallel array beside `trains` would quietly follow the wrong one.
+    bool autoDriving() const { return autoDrive_; }
+    void setAutoDriving(bool on) { autoDrive_ = on; }
+    int autoServedStop() const { return autoServed_; }
+    void setAutoServedStop(int ref) { autoServed_ = ref; }
+    // The road in front of the train, `metres` of it, crossing turnouts as they are
+    // currently set - measured from the nose of whichever end is leading. False if it
+    // ran out of track, which is itself worth knowing. See Vehicle::walkRoad.
+    bool roadAhead(float metres, std::vector<Vehicle::RoadStretch>& out) const;
+
     // --- uncoupling -------------------------------------------------------------
     // Part the train at the coupler behind set `k` (0-based): sets 0..k stay here and
     // sets k+1.. leave as a train of their own, which is returned.
@@ -288,5 +311,7 @@ private:
     float v_ = 0.0f;                 // m/s, + = the direction the train faces
     float tractiveEffort_ = 0.0f;    // N, summed over the sets (for the HUD)
     float brakeForce_ = 0.0f;        // N, summed over the sets
+    bool autoDrive_ = false; // the computer has this train
+    int autoServed_ = -1;    // the stop it has already answered for
     UncoupleHold hold_ = UncoupleHold::None;
 };

@@ -44,6 +44,7 @@
 #include "TrackCircuits.h"
 #include "TrackGraph.h"
 #include "TrackMesh.h"
+#include "AutoDriver.h"
 #include "SpeedLimits.h"
 #include "SpeedSignMesh.h"
 #include "StationPicker.h"
@@ -77,6 +78,7 @@
 #include <limits>
 #include <optional>
 #include <sstream>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -93,6 +95,8 @@ float g_driverYaw = 0.0f, g_driverPitch = 0.0f; // look offsets relative to the 
 constexpr float kLookSens = 0.0022f; // radians per pixel (matches Camera)
 Audio* g_audio = nullptr; // for the M mute toggle in the key callback
 bool g_throwSwitch = false; // T pressed: throw the switch under the crosshair
+bool g_toggleAuto = false;  // P pressed: hand the train to the auto-driver, or take it back
+DriverDemand g_autoDemand;  // what the auto-driver last decided, for the HUD
 bool g_menuOpen = false;    // Escape menu overlay (pauses the sim)
 int g_menuSel = 0;          // highlighted menu item
 bool g_mapMode = false;     // traffic-manager 2-D map view
@@ -209,6 +213,8 @@ void keyCallback(GLFWwindow* win, int key, int, int action, int) {
     if (key == GLFW_KEY_M && action == GLFW_PRESS && g_audio) g_audio->toggleMuted();
     // T throws the switch stand the crosshair is aimed at.
     if (key == GLFW_KEY_T && action == GLFW_PRESS) g_throwSwitch = true;
+    // P hands the train to the auto-driver, or takes it back.
+    if (key == GLFW_KEY_P && action == GLFW_PRESS) g_toggleAuto = true;
     // O toggles the traffic-manager 2-D map (overview).
     if (key == GLFW_KEY_O && action == GLFW_PRESS) {
         g_mapMode = !g_mapMode;
@@ -601,8 +607,9 @@ int main(int argc, char** argv) {
         // crosses a section boundary, so occupancy never changes, the aspects are never
         // recomputed, the signal mesh is never rebuilt and a crossing never steps a phase.
         // Every one of those reported ZERO calls a second while a 600 m freight sat at
-        // Rognan. There is no other way to get a moving train without a keyboard - the
-        // dataset script cannot drive one, and EBANER_TRAINS places them at a stand.
+        // Rognan. It was the only way to get a moving train without a keyboard until the
+        // auto-driver; EBANER_AUTO now gives a train that drives itself properly, and
+        // this remains the way to get one coasting at an exact speed.
         float roll = 0.0f;
         if (const char* r = std::getenv("EBANER_ROLL")) roll = static_cast<float>(std::atof(r));
         trains.emplace_back(&paths, vpath, sp, startS, roll);
@@ -904,6 +911,59 @@ int main(int argc, char** argv) {
     std::vector<FlagColour> flagShown(flagPosts.size(), FlagColour::None);
     if (!flagPosts.empty())
         std::printf("[FlagPost] %zu post(s)\n", flagPosts.size());
+
+    // --- what a self-driving train has to read off the road -------------------------
+    //
+    // A signal and a flag post are both an authored trackId:frac, and the road a train is
+    // on is a path and an arc length. Bridging the two is the same job resolveSectionSpans
+    // does for the track circuits, and it is done here for the same reason: once, at load,
+    // rather than hunting for every mark on every path several times a second.
+    struct RoadMark {
+        int pathIdx = -1;
+        float s = 0.0f;
+        glm::dvec2 forward{0.0}; // the direction it governs; (0,0) reads from either way
+        glm::dvec3 world{0.0};
+        int kind = 0; // 0 = signal placement, 1 = flag post
+        int ref = -1; // index into sigPlacements / flagPosts
+        std::string station; // for a flag post and a simple entry: whose it is
+    };
+    std::vector<RoadMark> roadMarks;
+    {
+        auto place = [&](std::uint32_t trackId, double frac, const glm::dvec2& fwd,
+                         int kind, int ref, const std::string& station) {
+            for (std::size_t p = 0; p < paths.size(); ++p) {
+                float s = 0.0f;
+                if (!paths[p].fracToS(trackId, frac, s)) continue;
+                RoadMark m;
+                m.pathIdx = static_cast<int>(p);
+                m.s = s;
+                m.forward = fwd;
+                m.world = fracToWorld(polys, trackId, frac);
+                m.kind = kind;
+                m.ref = ref;
+                m.station = station;
+                roadMarks.push_back(m);
+            }
+        };
+        for (std::size_t i = 0; i < sigPlacements.size(); ++i)
+            place(sigPlacements[i].at.trackId, sigPlacements[i].at.frac,
+                  sigPlacements[i].forward, 0, static_cast<int>(i), std::string());
+        for (std::size_t i = 0; i < flagPosts.size(); ++i)
+            place(flagPosts[i].trackId, flagPosts[i].frac, glm::dvec2(0.0), 1,
+                  static_cast<int>(i), flagPostStation[i].name);
+        std::printf("[AutoDrive] %zu mark(s) on the road (%zu signal, %zu flag)\n",
+                    roadMarks.size(), sigPlacements.size(), flagPosts.size());
+    }
+    // The resolved line speed of each path, both ways round, worked out the first time it
+    // is wanted. Paths do not change after load, so this is a cache and never stale.
+    std::map<std::pair<int, int>, std::vector<SpeedStretch>> speedCache;
+    auto speedsOf = [&](int pathIdx, int dir) -> const std::vector<SpeedStretch>& {
+        const auto key = std::make_pair(pathIdx, dir);
+        auto it = speedCache.find(key);
+        if (it == speedCache.end())
+            it = speedCache.emplace(key, resolveSpeeds(paths[pathIdx], dir)).first;
+        return it->second;
+    };
 
     // Avalanche warning signals. They answer to nothing here: no route runs through one,
     // no aspect logic reads one, and no station owns one. What they show is a property of
@@ -3051,6 +3111,9 @@ int main(int argc, char** argv) {
     // crossings. The frame was timed as a whole and the meshes inside it, and everything
     // between those two was guesswork.
     Stat pSim, pOcc, pCross;
+    // And the auto-driver's read of the road, which walks 2 km ahead of every armed
+    // train - the one thing here that grows with how far a train can see.
+    Stat pAuto;
     // And the two that were never timed at all: the HUD, which builds and uploads a
     // vertex per glyph every frame, and drawFrame itself - which is where a GPU-bound
     // frame hides, because the wait on the frame fence is inside it.
@@ -3063,6 +3126,95 @@ int main(int argc, char** argv) {
     };
 
     double lastTime = glfwGetTime();
+    // --- the auto-driver's eyes ------------------------------------------------------
+    //
+    // What the road in front of a train holds, in metres from its nose. The judgement
+    // about what to do with it is AutoDriver's and has no dataset in it; this is the part
+    // that does, and it is the only part that knows what a signal or a flag post is.
+    std::vector<Vehicle::RoadStretch> autoStretches;
+    // The 40 through a station is answered by how close the train is to it rather than by
+    // where the station "begins", because a station worked by simple signals has no
+    // borders to begin at - that is exactly what makes it the simple kind.
+    constexpr float kStationSlowM = 600.0f;
+    constexpr int kSidingKmh = 70;
+    constexpr int kStationKmh = 40;
+    auto stationManned = [&](const std::string& name) {
+        const auto it = simpleStationState.find(name);
+        return it != simpleStationState.end() && it->second.manned;
+    };
+    auto scanRoad = [&](const Consist& t) {
+        RoadAhead road;
+        road.here = kDefaultKmh;
+        road.roadRunsOut = !t.roadAhead(kLookAheadM, autoStretches);
+        if (autoStretches.empty()) return road;
+
+        // Standing in a manned station worked by hand signals, wherever in it: 40.
+        const glm::dvec3 org = data.sceneOrigin();
+        const glm::vec3 p = t.frame().pos;
+        const glm::dvec3 hereWorld(org.x + p.x, org.y + p.y, org.z + p.z);
+        bool inStation = false;
+        for (const RoadMark& m : roadMarks) {
+            if (m.kind != 1 || !stationManned(m.station)) continue;
+            if (glm::distance(glm::dvec2(hereWorld), glm::dvec2(m.world)) < kStationSlowM)
+                inStation = true;
+        }
+
+        bool first = true;
+        for (const Vehicle::RoadStretch& st : autoStretches) {
+            const int dir = st.sTo >= st.sFrom ? 1 : -1;
+            const int typeCap =
+                paths[st.pathIdx].trackType() != 0 ? kSidingKmh : 1000; // siding / yard
+            int cur = kDefaultKmh;
+            for (const SpeedStretch& e : speedsOf(st.pathIdx, dir)) {
+                const bool before = dir > 0 ? (e.s <= st.sFrom) : (e.s >= st.sFrom);
+                if (before) { cur = e.kmh; continue; }
+                if (dir > 0 ? (e.s > st.sTo) : (e.s < st.sTo)) break;
+                road.limits.push_back({st.dist0 + std::abs(e.s - st.sFrom),
+                                       std::min(e.kmh, typeCap)});
+            }
+            const int entry = std::min(cur, typeCap);
+            if (first) road.here = inStation ? std::min(entry, kStationKmh) : entry;
+            else road.limits.push_back({st.dist0, entry});
+
+            // The marks standing on this stretch, in front of the train.
+            const float lo = std::min(st.sFrom, st.sTo), hi = std::max(st.sFrom, st.sTo);
+            for (const RoadMark& m : roadMarks) {
+                if (m.pathIdx != st.pathIdx || m.s < lo || m.s > hi) continue;
+                const float d = st.dist0 + std::abs(m.s - st.sFrom);
+                if (m.kind == 0) {
+                    // A signal governs movements leaving its border one way only, so one
+                    // facing the other way is not ours to obey - it is the signal for
+                    // trains coming the other way, standing beside our road.
+                    const glm::vec3 tg = paths[st.pathIdx].poseAt(m.s).tangent;
+                    const glm::dvec2 travel(static_cast<double>(dir) * tg.x,
+                                            static_cast<double>(dir) * tg.y);
+                    if (glm::dot(travel, m.forward) <= 0.0) continue;
+                    if (!signalGivesAuthority(sigPlacements[m.ref]))
+                        road.stops.push_back({d, RoadAhead::StopKind::Signal, m.ref});
+                } else {
+                    // A flag post: stop for the station's order unless it is waving the
+                    // train through. A post already answered is behind us as far as this
+                    // train is concerned until it has run clear of it.
+                    if (!stationManned(m.station)) continue;
+                    if (flagShown[m.ref] == FlagColour::Green) continue;
+                    if (t.autoServedStop() == m.ref) continue;
+                    road.stops.push_back({d, RoadAhead::StopKind::FlagPost, m.ref});
+                }
+                if (m.kind == 1 && stationManned(m.station))
+                    road.limits.push_back({d, kStationKmh});
+            }
+            first = false;
+        }
+        return road;
+    };
+
+    // EBANER_AUTO=1 hands the train to the auto-driver at startup and logs what it is
+    // doing once a second - a train that drives itself down a real line, with no keyboard,
+    // which is what makes the signalling and the crossings testable without a driver.
+    const bool autoLog = std::getenv("EBANER_AUTO") != nullptr;
+    if (autoLog) g_toggleAuto = true; // armed through the same path the P key uses
+    double autoLogAt = 0.0;
+
     while (!glfwWindowShouldClose(window)) {
         const double frameT0 = profile ? now_ms() : 0.0;
         glfwPollEvents();
@@ -3964,6 +4116,13 @@ int main(int argc, char** argv) {
                                         vehicle->brakeNotch(cab) != prevBrk ||
                                         vehicle->independentNotch(cab) != prevInd)
                                      : vehicle->handlePosition(cab) != prevPos;
+            // A hand on the controls takes the train back. One rule, so the driver and
+            // the computer are never both working the same handles - which would read as
+            // a train that ignores you.
+            if (moved && vehicle->autoDriving()) {
+                vehicle->setAutoDriving(false);
+                setMapMsg("auto-drive off - you have the controls", true);
+            }
             if (moved) {
                 if (split) {
                     const int np = vehicle->powerNotch(cab);
@@ -4126,6 +4285,96 @@ int main(int argc, char** argv) {
                 std::fflush(stdout);
             }
             prevEngine = iKey;
+
+            // --- the auto-driver -------------------------------------------------
+            //
+            // Arming takes the train the way a driver takes it: engines running, a cab in
+            // gear, brakes off. Disarming leaves it braked, because a train handed back
+            // with the power on and nobody watching is how a runaway starts.
+            const int autoCab = (g_driverPos >= 0) ? g_driverPos : 0;
+            if (g_toggleAuto) {
+                g_toggleAuto = false;
+                Consist& t = *vehicle;
+                if (t.autoDriving()) {
+                    t.setAutoDriving(false);
+                    t.setPowerNotch(autoCab, 0);
+                    t.setBrakeNotch(autoCab, 2);
+                    setMapMsg("auto-drive off - the train is yours", true);
+                } else if (t.state() != VehicleState::OnRail) {
+                    setMapMsg("auto-drive: this train is not on the rails");
+                } else {
+                    if (!t.enginesRunning()) t.toggleEngines();
+                    if (t.activeCab() < 0) t.setReverser(autoCab, 1);
+                    t.setPowerNotch(t.activeCab() < 0 ? autoCab : t.activeCab(), 0);
+                    t.setBrakeNotch(t.activeCab() < 0 ? autoCab : t.activeCab(), 0);
+                    if (t.activeCab() < 0) {
+                        setMapMsg("auto-drive: no cab will take the reverser");
+                    } else {
+                        t.setAutoDriving(true);
+                        setMapMsg("auto-drive on", true);
+                    }
+                }
+            }
+            // Re-read the road five times a second rather than every frame. A driver
+            // reads it that way too, and a 2 km walk per armed train per frame is the
+            // kind of cost the profiling work spent a week taking out.
+            static double autoPlanAt = 0.0;
+            const bool autoPlanNow = now >= autoPlanAt;
+            if (autoPlanNow) autoPlanAt = now + 0.2;
+            for (Consist& t : trains) {
+                if (!t.autoDriving()) continue;
+                const int acab = t.activeCab();
+                if (acab < 0 || t.state() != VehicleState::OnRail) {
+                    t.setAutoDriving(false);
+                    if (&t == vehicle) setMapMsg("auto-drive off - it lost the road");
+                    continue;
+                }
+                // A flag post it has already answered for stops being a stop until the
+                // train is clear of the station, so arming again leaves rather than
+                // standing still against the same mark.
+                if (t.autoServedStop() >= 0) {
+                    const glm::dvec3 org = data.sceneOrigin();
+                    const glm::vec3 fp = t.frame().pos;
+                    bool clear = true;
+                    for (const RoadMark& m : roadMarks)
+                        if (m.kind == 1 && m.ref == t.autoServedStop() &&
+                            glm::distance(glm::dvec2(org.x + fp.x, org.y + fp.y),
+                                          glm::dvec2(m.world)) < kStationSlowM)
+                            clear = false;
+                    if (clear) t.setAutoServedStop(-1);
+                }
+                if (!autoPlanNow) continue;
+                const double tA = profile ? now_ms() : 0.0;
+                const RoadAhead road = scanRoad(t);
+                const DriverDemand d = planDrive(road, t.speed());
+                applyDrive(t, acab, d);
+                if (profile) pAuto.add(now_ms() - tA);
+                if (&t == vehicle) g_autoDemand = d;
+                if (autoLog && &t == vehicle && now >= autoLogAt) {
+                    autoLogAt = now + 1.0;
+                    std::printf("[AutoDrive] %5.1f km/h  target %5.1f  P%d B%d  bp %.2f "
+                                "bc %.2f  emerg %d  %s%s\n",
+                                t.speed() * 3.6f, d.targetMs * 3.6f, t.powerNotch(acab),
+                                t.brakeNotch(acab), t.bpPressure(acab), t.bcPressure(acab),
+                                int(t.emergencyLine()),
+                                d.stopping ? "stopping for " : "running",
+                                d.stopping
+                                    ? (d.stopKind == RoadAhead::StopKind::FlagPost
+                                           ? "a flag post" : "a signal")
+                                    : "");
+                    std::fflush(stdout);
+                }
+                // Standing at a station's flag post is the end of this movement: the
+                // order is given by hand, and the driver has to be sent on again.
+                if (d.stopKind == RoadAhead::StopKind::FlagPost &&
+                    arrivedAtStop(d, t.speed())) {
+                    t.setAutoServedStop(d.stopRef);
+                    t.setAutoDriving(false);
+                    if (&t == vehicle)
+                        setMapMsg("auto-drive: standing at the station - press P to go on",
+                                  true);
+                }
+            }
 
             const float simDt = std::min(dt, 0.05f);
             const VehicleState prev = vehicle->state();
@@ -4540,6 +4789,23 @@ int main(int argc, char** argv) {
                     appendText(tv, buf, x, y, sc, glm::vec3(0.7f, 0.85f, 0.7f), fbw, fbh);
                     y += lh;
                 }
+                // The auto-driver, when it has the train: what it is holding to, and what
+                // it is holding back for. A driver watching it needs to know which of the
+                // two it is doing, or a train slowing for a signal a kilometre off looks
+                // like a train losing power.
+                if (vehicle->autoDriving()) {
+                    if (g_autoDemand.stopping)
+                        std::snprintf(buf, sizeof(buf), "AUTO %3.0f km/h   stopping: %s in %.0f m",
+                                      g_autoDemand.targetMs * 3.6f,
+                                      g_autoDemand.stopKind == RoadAhead::StopKind::FlagPost
+                                          ? "FLAG" : "SIGNAL",
+                                      g_autoDemand.stopIn);
+                    else
+                        std::snprintf(buf, sizeof(buf), "AUTO %3.0f km/h   P to take over",
+                                      g_autoDemand.targetMs * 3.6f);
+                    appendText(tv, buf, x, y, sc, glm::vec3(0.6f, 0.9f, 1.0f), fbw, fbh);
+                    y += lh;
+                }
                 // Centre crosshair + the aimed switch's state and throw prompt.
                 appendText(tv, "+", fbw * 0.5f - 3.0f * sc, fbh * 0.5f - 6.0f * sc, sc,
                            glm::vec3(1.0f, 1.0f, 1.0f), fbw, fbh);
@@ -4662,6 +4928,7 @@ int main(int argc, char** argv) {
                 line("mesh rebuild", pMesh);
                 line("mesh upload", pUpload);
                 line("sim step", pSim);
+                line("auto-driver", pAuto);
                 line("occupancy", pOcc);
                 line("crossings", pCross);
                 line("vehicle mesh", pVeh);
@@ -4676,7 +4943,7 @@ int main(int argc, char** argv) {
                 pFrame.reset(); pAspects.reset(); pDistants.reset();
                 pMesh.reset(); pUpload.reset(); pMap.reset();
                 pVeh.reset(); pVehUp.reset();
-                pSim.reset(); pOcc.reset(); pCross.reset();
+                pSim.reset(); pOcc.reset(); pCross.reset(); pAuto.reset();
                 pHud.reset(); pDraw.reset();
             }
         }

@@ -249,6 +249,27 @@ const char* Consist::reverserName(int cab) const {
     return r > 0 ? "F" : (r < 0 ? "R" : "N");
 }
 
+int Consist::headingSign() const {
+    const int a = activeCab();
+    if (a < 0) return 0;
+    // The same cabSign the link command is built with: even cabs face -, odd faces +.
+    const float cabSign = (a % 2 == 0) ? -1.0f : 1.0f;
+    return cabSign * static_cast<float>(reverser(a)) >= 0.0f ? 1 : -1;
+}
+
+bool Consist::roadAhead(float metres, std::vector<Vehicle::RoadStretch>& out) const {
+    out.clear();
+    const int h = headingSign();
+    if (h == 0 || units_.empty()) return false;
+    // The leading vehicle is the one at the end the train is moving toward, and the walk
+    // leaves it by that end: out over its own nose going forward, out over its tail going
+    // back. Starting the walk half a body length out puts the zero of the distances at
+    // the front of the train rather than at the middle of its first set.
+    const Vehicle& head = h > 0 ? units_.front() : units_.back();
+    const float reach = 0.5f * head.length() + metres;
+    return head.walkRoad(h > 0 ? reach : -reach, out);
+}
+
 int Consist::activeCab() const {
     int active = -1, count = 0;
     for (int c = 0; c < cabCount(); ++c)

@@ -677,6 +677,18 @@ public:
     // walk follows the rails, so a consist uses it to cover its whole length in one go.
     // The two must straddle the body centre, which is where the walk starts from.
     bool spansBetween(float offsetA, float offsetB, std::vector<PathSpan>& out) const;
+    // The same walk again, but keeping what a PathSpan throws away: which way along each
+    // path the walk actually ran, and how far from the start of the walk each stretch
+    // begins. Occupancy does not care - a train covers a stretch of road whichever way it
+    // is facing - but anything looking AHEAD does, because the only useful thing to know
+    // about a signal or a speed change is how many metres away it is. See AutoDriver.
+    struct RoadStretch {
+        int pathIdx = -1;
+        float sFrom = 0.0f, sTo = 0.0f; // in walk order, so sFrom > sTo running against s
+        float dist0 = 0.0f;             // metres from the start of the walk to sFrom
+    };
+    bool walkRoad(float bodyOffset, std::vector<RoadStretch>& out) const;
+
     // Sort by path and arc length, then coalesce what touches. Published because a consist
     // gathers its sets' spans and has to do the same to them.
     static void coalesceSpans(std::vector<PathSpan>& spans);
@@ -725,6 +737,12 @@ public:
     // waiting to happen rather than a rounding difference.
     static constexpr float kGravity = 9.81f; // m/s^2
     static constexpr int kEmergencyNotch = 5;
+    // What a service notch is worth, as a deceleration (m/s^2). The same for every
+    // vehicle, because brake force is computed as a fraction of full service and full
+    // service is one number for the whole simulator - so B1..B4 are 0.35, 0.66, 0.98 and
+    // 1.30 whatever is being braked. Published because a driver planning a stop has to
+    // know what each notch will give him; see AutoDriver.
+    static float notchDecel(int notch);
     static constexpr int kMaxPowerNotch = 5; // combined lever: N .. P1..P5 power side
     // And, on a machine whose controller doubles as its electric brake, the range below
     // neutral: E1..E5. Only reachable where dynBrakeN says there is a brake to command.
