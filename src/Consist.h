@@ -236,6 +236,13 @@ public:
     // hand on the controller adjusting it five times a second, and a train whose notches
     // change that often hunts - audibly, and in the speedometer. See AutoDriver.
     float autoSinceChange() const { return autoSince_; }
+    // Whether this movement is a SHUNT - authorised by a dwarf rather than by a main
+    // signal - which is what limits it to shunting speed. Not the same as "no main
+    // signal has spoken": a train running the open line between stations has no signal
+    // within miles and is not shunting, so this is false until a dwarf is what is
+    // letting the movement go, and false again the moment a main signal offers it a road.
+    bool autoShunting() const { return autoShunt_; }
+    void setAutoShunting(bool on) { autoShunt_ = on; }
     void setAutoSinceChange(float s) { autoSince_ = s; }
     // The road in front of the train, `metres` of it, crossing turnouts as they are
     // currently set - measured from the nose of whichever end is leading. False if it
@@ -319,5 +326,6 @@ private:
     bool autoDrive_ = false; // the computer has this train
     int autoServed_ = -1;    // the stop it has already answered for
     float autoSince_ = 99.0f; // seconds since a handle was last moved
+    bool autoShunt_ = false; // authorised by a dwarf, so limited to shunting speed
     UncoupleHold hold_ = UncoupleHold::None;
 };

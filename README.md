@@ -648,15 +648,32 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   at the limit **before** the board: the curve aims 60 m early, because the controller
   allows itself a little over the target and aiming at the board puts the train through it
   a few km/h fast.
-  Five faults, and every one came from driving it rather than from reading it. It held the
+  Seven faults, and every one came from driving it rather than from reading it. It held the
   brake whenever a stop existed *anywhere* ahead, so a train standing with a red signal a
   kilometre off never moved. Fixed, it crept the last few metres at 0.9 km/h for ever —
   too slow for the curve to ask for anything, too slow for rolling resistance to finish.
   Fixed again, it found the band between the slowest speed it would drive toward and a
   stand, and sat six metres short of a signal with the handles off and the brakes
-  *released*. It obeyed **dwarf signals**, which govern shunting and stand at danger
-  because nobody has asked them for anything — leaving Bodø with the T1 exit route set
-  that is a train braking hard at each of a row of them in turn. And every distance was
+  *released*. It stopped at a
+  **distant**, which carries no authority at all: it repeats, from braking distance, what
+  the first main signal ahead is showing, so a train that stops at one stops a kilometre
+  short of the signal that actually meant it. Which signals mean stop is now
+  `signalStopsTrain` in `src/SignalPaths.h`, beside `signalGivesAuthority` — one statement
+  in the file that owns what a signal means, rather than a condition buried in a road scan
+  where no test could reach it. Nothing passes a signal at danger, a **dwarf included**;
+  what a dwarf can do is the other way round, authorising a movement past a *main* signal
+  at danger, which is what shunting past a red exit is. A movement a dwarf is letting go
+  is a shunt and runs at **shunting speed**; one a main signal has offered a road to is a
+  train and runs at the line speed, and keeps it past the signal that gave it. The nearest
+  signal ahead decides which it is — not "is there a main signal at all", which would have
+  made a train on open line with no signals for miles into a shunt.
+  And the braking in a row leaving Bodø, which looked like phantom signals, was real ones
+  read a moment too late: **a dwarf falls to danger as the train moves over it**, and the
+  road is re-read five times a second, so there is one tick where the signal being passed
+  is a metre *ahead* of the nose and newly at danger. `needDecel` is `v²/2d`, which at a
+  metre is enormous, so full service went on and came off again a tick later — once per
+  signal passed. Anything closer than one tick of travel has been passed, and is ignored.
+  And every distance was
   half a train too long, because `walkRoad` starts at the leading set's **centre**: it
   stood 20 m past each signal it stopped at. It now stands 4 m short of a 400 m mark and
   496 m from a 500 m one.

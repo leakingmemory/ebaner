@@ -932,6 +932,26 @@ int main(int argc, char** argv) {
         auto place = [&](std::uint32_t trackId, double frac, const glm::dvec2& fwd,
                          int kind, int ref, const std::string& station) {
             for (std::size_t p = 0; p < paths.size(); ++p) {
+                // The path has to actually cover this PART of the track, not merely
+                // touch the track somewhere.
+                //
+                // fracToS clamps: given a fraction outside the run it holds, it returns
+                // the nearest end of that run and says yes. That is right for a border a
+                // hair past a seam, and quite wrong here - a signal authored at frac 0.9
+                // was then placed on every path holding any piece of that track, pinned
+                // to the end of whatever piece each held. Those ends are junctions, which
+                // is exactly where a train running through a station goes, so the train
+                // met a row of signals that were nowhere near it and stopped at each.
+                // That is the "phantom stop" leaving Bodo, and it was never the dwarfs:
+                // it was dwarfs from elsewhere, planted at the junctions on the way out.
+                bool covers = false;
+                for (const TrackPath::TrackRun& r : paths[p].trackRuns()) {
+                    if (r.trackId != trackId) continue;
+                    const double lo = std::min(r.frac0, r.frac1) - 1e-4;
+                    const double hi = std::max(r.frac0, r.frac1) + 1e-4;
+                    if (frac >= lo && frac <= hi) { covers = true; break; }
+                }
+                if (!covers) continue;
                 float s = 0.0f;
                 if (!paths[p].fracToS(trackId, frac, s)) continue;
                 RoadMark m;
@@ -3142,9 +3162,16 @@ int main(int argc, char** argv) {
         const auto it = simpleStationState.find(name);
         return it != simpleStationState.end() && it->second.manned;
     };
+    // How often the road is re-read. A driver reads it about this often too, and a 2 km
+    // walk per armed train per frame is the kind of cost the profiling work removed.
+    constexpr float kAutoPlanS = 0.2f;
+    // Signal marks found ahead, held over until the whole road has been read.
+    struct SigAhead { float d; int ref; };
+    std::vector<SigAhead> autoSignalsAhead;
     auto scanRoad = [&](const Consist& t) {
         RoadAhead road;
         road.here = kDefaultKmh;
+        autoSignalsAhead.clear();
         road.roadRunsOut = !t.roadAhead(kLookAheadM, autoStretches);
         if (autoStretches.empty()) return road;
 
@@ -3181,16 +3208,21 @@ int main(int argc, char** argv) {
             for (const RoadMark& m : roadMarks) {
                 if (m.pathIdx != st.pathIdx || m.s < lo || m.s > hi) continue;
                 const float d = st.dist0 + std::abs(m.s - st.sFrom);
-                if (d < 0.0f) continue; // already passed: it is behind the nose
+                // Behind the nose, or so close to it that the train is on top of it:
+                // either way it has been passed.
+                //
+                // The margin matters and is not a fudge. A dwarf falls to danger as the
+                // train moves over it, and the road is re-read five times a second - so
+                // there is a tick where the signal the train is passing is a metre AHEAD
+                // of the nose and newly at danger. needDecel is v^2/2d, which at a metre
+                // is enormous, so the brake goes to full service; a tick later the mark
+                // is behind and it comes off again. That is one hard application per
+                // signal passed, which is what running out of Bodo on a set route looked
+                // like. Scaled by speed because it is exactly one tick of travel, and
+                // never less than a couple of metres. A signal being obeyed is stood at
+                // kStopShortM away, well outside this, so nothing is crept past.
+                if (d < std::max(2.0f, t.speed() * kAutoPlanS)) continue;
                 if (m.kind == 0) {
-                    const SignalPlacement& sp = sigPlacements[m.ref];
-                    // Main signals only. A dwarf governs SHUNTING over the same rails and
-                    // is at danger most of the time because nobody has asked it for
-                    // anything - a train running a main route past a station passes a row
-                    // of them, every one of which read as a stop. Leaving Bodo with the
-                    // T1 exit route set that is a train braking hard at each of them in
-                    // turn, for signals that were never addressed to it.
-                    if (sp.kind == SignalKind::Dwarf) continue;
                     // A signal governs movements leaving its border one way only, so one
                     // facing the other way is not ours to obey - it is the signal for
                     // trains coming the other way, standing beside our road.
@@ -3198,14 +3230,10 @@ int main(int argc, char** argv) {
                     const glm::dvec2 travel(static_cast<double>(dir) * tg.x,
                                             static_cast<double>(dir) * tg.y);
                     if (glm::dot(travel, m.forward) <= 0.0) continue;
-                    // The MAIN head's own aspect, not signalGivesAuthority, which also
-                    // clears for a dwarf sharing the pole - that dwarf's authority is for
-                    // a shunt move and is not this train's to take.
-                    const bool proceed = sp.aspect == SignalAspect::Clear ||
-                                         sp.aspect == SignalAspect::ClearReduced ||
-                                         sp.aspect == SignalAspect::Dark;
-                    if (!proceed)
-                        road.stops.push_back({d, RoadAhead::StopKind::Signal, m.ref});
+                    // Held over: which of these stops the train cannot be decided one at
+                    // a time. It depends on whether a main signal has authorised the
+                    // movement, and that is a property of all of them together.
+                    autoSignalsAhead.push_back({d, m.ref});
                 } else {
                     // A flag post: stop for the station's order unless it is waving the
                     // train through. A post already answered is behind us as far as this
@@ -3220,12 +3248,51 @@ int main(int argc, char** argv) {
             }
             first = false;
         }
+
+        // What stops the train is each signal's own business, asked of it one at a time.
+        // What has to be read as a SET is how fast the movement may go, because that
+        // depends on what is letting it go: the NEAREST signal ahead decides. A dwarf
+        // makes it a shunt, at shunting speed. A main signal offering a road makes it a
+        // train, at the line speed. A main signal at danger with its dwarf off is a shunt
+        // past it. Anything else leaves it as it was, which is what carries a train's
+        // line speed past the green signal that gave it - and what leaves a train out on
+        // the open line, with no signal within miles, running as the train it is.
+        std::sort(autoSignalsAhead.begin(), autoSignalsAhead.end(),
+                  [](const SigAhead& a, const SigAhead& b) { return a.d < b.d; });
+        bool shunting = t.autoShunting();
+        for (const SigAhead& sa : autoSignalsAhead) {
+            const SignalPlacement& sp = sigPlacements[sa.ref];
+            if (sp.kind == SignalKind::Distant) continue;
+            if (sp.kind == SignalKind::Dwarf) shunting = true;
+            else if (signalGivesMainAuthority(sp)) shunting = false;
+            else if (sp.withDwarf && !signalStopsTrain(sp)) shunting = true;
+            break; // the nearest signal is the one that decides
+        }
+        road.shunting = shunting;
+        if (shunting) {
+            road.here = std::min(road.here, kShuntingKmh);
+            for (RoadAhead::Limit& l : road.limits) l.kmh = std::min(l.kmh, kShuntingKmh);
+        }
+        for (const SigAhead& sa : autoSignalsAhead)
+            if (signalStopsTrain(sigPlacements[sa.ref]))
+                road.stops.push_back({sa.d, RoadAhead::StopKind::Signal, sa.ref});
         return road;
     };
 
     // EBANER_AUTO=1 hands the train to the auto-driver at startup and logs what it is
     // doing once a second - a train that drives itself down a real line, with no keyboard,
     // which is what makes the signalling and the crossings testable without a driver.
+    auto signalKindName = [](SignalKind k) {
+        switch (k) {
+            case SignalKind::Dwarf: return "a DWARF";
+            case SignalKind::Exit: return "an exit";
+            case SignalKind::Entry: return "an entry";
+            case SignalKind::Distant: return "a distant";
+            case SignalKind::StationEntry: return "a station signal";
+            case SignalKind::Block: return "a block signal";
+        }
+        return "a signal";
+    };
     const bool autoLog = std::getenv("EBANER_AUTO") != nullptr;
     if (autoLog) g_toggleAuto = true; // armed through the same path the P key uses
     double autoLogAt = 0.0;
@@ -4335,7 +4402,7 @@ int main(int argc, char** argv) {
             // kind of cost the profiling work spent a week taking out.
             static double autoPlanAt = 0.0;
             const bool autoPlanNow = now >= autoPlanAt;
-            if (autoPlanNow) autoPlanAt = now + 0.2;
+            if (autoPlanNow) autoPlanAt = now + kAutoPlanS;
             for (Consist& t : trains) {
                 if (!t.autoDriving()) continue;
                 const int acab = t.activeCab();
@@ -4362,9 +4429,10 @@ int main(int argc, char** argv) {
                 const double tA = profile ? now_ms() : 0.0;
                 const RoadAhead road = scanRoad(t);
                 const DriverDemand d = planDrive(road, t.speed());
-                applyDrive(t, acab, d, 0.2f); // the planning interval
+                applyDrive(t, acab, d, kAutoPlanS);
                 if (profile) pAuto.add(now_ms() - tA);
                 if (&t == vehicle) g_autoDemand = d;
+                t.setAutoShunting(road.shunting);
                 if (autoLog && &t == vehicle && now >= autoLogAt) {
                     autoLogAt = now + 1.0;
                     std::printf("[AutoDrive] %5.1f km/h  target %5.1f  P%d B%d  bp %.2f "
@@ -4375,7 +4443,8 @@ int main(int argc, char** argv) {
                                 d.stopping ? "stopping for " : "running",
                                 d.stopping
                                     ? (d.stopKind == RoadAhead::StopKind::FlagPost
-                                           ? "a flag post" : "a signal")
+                                           ? "a flag post"
+                                           : signalKindName(sigPlacements[d.stopRef].kind))
                                     : "");
                     std::fflush(stdout);
                 }

@@ -262,6 +262,32 @@ struct SignalPlacement {
 // read that as permission.
 bool signalGivesAuthority(const SignalPlacement& sp);
 
+// Whether a movement must come to a stand at this signal.
+//
+// A DISTANT never stops anything: it carries no authority of its own and repeats, from
+// braking distance, what the first main signal ahead is showing - a train that stopped at
+// one would stop a kilometre short of the signal that actually meant it. A DARK head is a
+// station switched off rather than a road refused, and trains run past it.
+//
+// Everything else at danger is a stop, and a DWARF at danger is a stop like any other:
+// nothing passes a signal at danger without being told to. What a dwarf can do is the
+// other way round - it can authorise a movement past a MAIN signal at danger, which is
+// what shunting past a red exit is. So a main head at danger with a cleared dwarf on its
+// pole does not stop the movement; a dwarf at danger stops it whatever the main head says.
+//
+// Note this is not signalGivesAuthority, which asks whether anything at all may pass.
+bool signalStopsTrain(const SignalPlacement& sp);
+
+// Whether this signal, being passed, puts the movement under a main signal's authority -
+// a main head offering a road. Once it does, the movement runs as a train rather than as
+// a shunt until it is stopped or another main signal says otherwise. What the movement is
+// decides its SPEED, not what stops it: a shunt authorised by a dwarf alone runs at
+// shunting speed, where a train on a main signal's road runs at the line speed.
+bool signalGivesMainAuthority(const SignalPlacement& sp);
+
+// The speed a movement runs at when a dwarf is what authorised it and no main signal has.
+inline constexpr int kShuntingKmh = 40;
+
 // Where a route begins and which way it sets off: the world point of its first interval's
 // `from` and the unit direction leaving it. False if the track is missing or degenerate.
 bool routeStartPose(const SignalPath& p, const std::vector<TrackPoly>& polys,

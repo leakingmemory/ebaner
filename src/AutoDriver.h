@@ -52,6 +52,10 @@ struct RoadAhead {
     std::vector<Stop> stops;
     int here = 40;         // the ceiling the train is under where it stands
     bool roadRunsOut = false; // the walk hit the end of the track within the lookahead
+    // Whether this movement is a shunt - a dwarf is what is letting it go, rather than a
+    // main signal. Not a property of the road alone, since it depends on what the train
+    // has already passed, but it comes out of the same scan and the caller keeps it.
+    bool shunting = false;
 };
 
 // What the driver has decided: a speed to hold, and whether it is coming to a stand.

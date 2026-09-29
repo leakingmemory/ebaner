@@ -26,6 +26,7 @@
 
 #include "AutoDriver.h"
 #include "Consist.h"
+#include "SignalPaths.h"
 #include "TrackPath.h"
 #include "Vehicle.h"
 
@@ -369,6 +370,58 @@ int main() {
         check(!powered, "running down to it, none either");
         check(shortBy > 0.0f && shortBy < 30.0f, "  and gravity does not carry it past (m)",
               shortBy, 2.9);
+    }
+
+    std::puts("\nWhich signals actually mean stop");
+    {
+        // The auto-driver stopped at a distant, which is a warning of a signal a
+        // kilometre further on and carries no authority of its own. The rule lives in
+        // SignalPaths beside signalGivesAuthority now, so it is one statement in the file
+        // that owns what a signal means rather than a condition in the middle of the road
+        // scan, where no test could reach it and it was got wrong twice.
+        auto sig = [](SignalKind k, SignalAspect a) {
+            SignalPlacement sp;
+            sp.kind = k;
+            sp.aspect = a;
+            return sp;
+        };
+        check(signalStopsTrain(sig(SignalKind::Exit, SignalAspect::Stop)),
+              "an exit signal at danger stops the train");
+        check(signalStopsTrain(sig(SignalKind::Entry, SignalAspect::Stop)),
+              "  so does an entry");
+        check(signalStopsTrain(sig(SignalKind::Block, SignalAspect::Stop)),
+              "  and a block signal out on the line");
+        check(signalStopsTrain(sig(SignalKind::StationEntry, SignalAspect::Stop)),
+              "  and a simple station signal at red");
+        check(signalStopsTrain(sig(SignalKind::Dwarf, SignalAspect::Stop)),
+              "  and a DWARF at danger, which is a signal at danger like any other");
+        check(signalStopsTrain(sig(SignalKind::Dwarf, SignalAspect::TrainOnTrack)),
+              "  as is one showing a train standing in the road ahead");
+        check(!signalStopsTrain(sig(SignalKind::Distant, SignalAspect::Stop)),
+              "a distant never does - it repeats a signal a mile further on");
+        check(!signalStopsTrain(sig(SignalKind::StationEntry, SignalAspect::Dark)),
+              "nor a dark one, which is a station switched off, not a road refused");
+        check(!signalStopsTrain(sig(SignalKind::Exit, SignalAspect::Clear)),
+              "and a signal offering a road does not stop anything");
+        check(!signalStopsTrain(sig(SignalKind::Exit, SignalAspect::ClearReduced)),
+              "  including one offering it at a reduced speed");
+        check(!signalStopsTrain(sig(SignalKind::Dwarf, SignalAspect::Clear)),
+              "  a dwarf included");
+
+        // The one that goes the other way round: a dwarf can authorise a movement PAST a
+        // main signal at danger, which is what shunting past a red exit is. It does not
+        // work in reverse - a main signal cannot wave a movement past a dwarf at danger.
+        SignalPlacement shunt = sig(SignalKind::Exit, SignalAspect::Stop);
+        shunt.withDwarf = true;
+        shunt.dwarfAspect = SignalAspect::Clear;
+        check(!signalStopsTrain(shunt),
+              "a dwarf off under a red exit lets a shunt past the exit");
+        check(!signalGivesMainAuthority(shunt),
+              "  but it is a shunt, not a train: no main authority is given");
+        check(signalGivesMainAuthority(sig(SignalKind::Exit, SignalAspect::Clear)),
+              "  which a green exit does give");
+        check(!signalGivesMainAuthority(sig(SignalKind::Dwarf, SignalAspect::Clear)),
+              "  and a dwarf never does, however clear it is");
     }
 
     std::puts("\nThe end of the road is a stop like any other");

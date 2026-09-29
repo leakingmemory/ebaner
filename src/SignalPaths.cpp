@@ -477,6 +477,27 @@ bool signalGivesAuthority(const SignalPlacement& sp) {
     return sp.withDwarf && proceed(sp.dwarfAspect);
 }
 
+namespace {
+bool proceeds(SignalAspect a) {
+    return a == SignalAspect::Clear || a == SignalAspect::ClearReduced;
+}
+} // namespace
+
+bool signalGivesMainAuthority(const SignalPlacement& sp) {
+    return sp.kind != SignalKind::Dwarf && sp.kind != SignalKind::Distant &&
+           proceeds(sp.aspect);
+}
+
+bool signalStopsTrain(const SignalPlacement& sp) {
+    if (sp.kind == SignalKind::Distant) return false;
+    if (sp.aspect == SignalAspect::Dark) return false; // a station switched off
+    // A dwarf at danger stops the movement like anything else at danger.
+    if (sp.kind == SignalKind::Dwarf) return !proceeds(sp.aspect);
+    // A main head at danger is passed only by a shunt, which is what a dwarf on the same
+    // pole showing off is: the dwarf authorises the move the main signal will not.
+    return !proceeds(sp.aspect) && !(sp.withDwarf && proceeds(sp.dwarfAspect));
+}
+
 std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& paths,
                                               const std::vector<TrackPoly>& polys,
                                               SignalKind kind) {
