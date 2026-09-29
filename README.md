@@ -615,29 +615,56 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   one moving. `P` hands the train over. It runs forward along whatever road the switches
   are set for, up to the line speed, and stops where a stop is called for — **70 km/h** on
   anything that is not main line, **40** through a manned station worked by hand signals,
-  a stand at a **signal that is not offering a road**, and a stand at that station's **flag
-  post** unless it is showing green. A signal it has stopped for starts it again by itself
-  when it clears; a station stop hands the train back, because the order there is given by
-  hand and a driver has to be sent on. A hand on the controls takes it back at any time.
+  a stand at a **main signal that is not offering a road**, and a stand at that station's
+  **flag post** unless it is showing green. A signal it has stopped for starts it again by
+  itself when it clears; a station stop hands the train back, because the order there is
+  given by hand and a driver has to be sent on. A hand on the controls takes it back.
   The judgement is a **pure function** of a list of distances and speeds
   (`planDrive`, `src/AutoDriver.h`), which is why most of it is tested to the metre with
-  no dataset at all; only the *scan* knows what a signal or a station is. The braking is
-  planned at **0.5 m/s²** — gentler than the 1.3 the brake can make, because a driver who
-  plans to the limit of his brake has nothing left for what he did not plan for — and the
-  notch is chosen from the deceleration the road is actually asking for,
-  `(v² − v_limit²) / 2d`, rather than from how far over a target the train is. That last
-  point is what makes it arrive **at** a restriction: picking the notch by overspeed
-  instead had it crossing into a 70 stretch doing 54, and stopping either half a metre
-  past the mark or 38 m short of it. It reads the road **five times a second**, not every
-  frame, and costs about 0.1 ms when it does.
-  Three things it got wrong on the way are worth keeping. It held the brake whenever a
-  stop existed *anywhere* ahead, so a train standing at a station with a red signal a
-  kilometre up the line never moved at all. Then, once that was fixed, it crept the last
-  few metres at 0.9 km/h for ever — too slow for the braking curve to ask for anything and
-  too slow for rolling resistance to finish the job. And in testing it ran off the end of
-  its own road at 70 km/h after a minute, which is the two cabs of a set facing opposite
-  ways: **cab 0 drives toward decreasing s**, so a train put down a kilometre along its
-  path and told to go forward has a kilometre of road and then nothing.
+  no dataset at all; only the *scan* knows what a signal or a station is.
+  **Whether** to brake comes from the target, which already carries the braking curve for
+  everything ahead; **how hard** from the deceleration the road is asking for,
+  `(v² − v_limit²) / 2d`, matched against what each notch is worth (`Vehicle::notchDecel`,
+  the same `serviceDecel` the blend works to). Deciding *both* from the need was the
+  mistake that made it hunt: the need is over half a metre per second squared the moment a
+  70 restriction comes within braking distance at 130, so the train braked while sitting
+  exactly **on** the curve it was meant to be following, released, drifted up, braked
+  again, and arrived at the restriction doing 52 instead of 70. Braking is planned at
+  **0.5 m/s²**, gentler than the 1.3 the brake can make, because a driver who plans to the
+  limit of his brake has nothing left for what he did not plan for.
+  **Braking reverses to power** where it has to. Climbing to a signal the train loses
+  speed to gravity and would stall short of it, so below **18 km/h** on the approach the
+  power comes back on and draws it up to the mark — on a 2 % climb it holds about 18 and
+  stands 5.9 m short, where on the level and running downhill it uses no power at all.
+  That is the *only* time it powers toward a stop, and the restriction matters as much as
+  the allowance: the braking curve toward a signal at danger permits 87 km/h at 600 m, so
+  a controller that simply tracks it accelerates hard **at** a red signal and then brakes
+  hard at it. Safe by construction, since the curve is the guarantee, and not what anybody
+  does. Approaching a stop the driver holds what he has and lets it fall.
+  What stops it hunting is what a driver does rather than what a controller does: a band
+  around the target inside which **nothing moves**, and a **1.5 s dwell** after any handle
+  moves before it may move again — waived only for *more* brake, since a brake that has to
+  wait is not a brake. It holds an open 70 between 68 and 72 on one notch of power, and is
+  at the limit **before** the board: the curve aims 60 m early, because the controller
+  allows itself a little over the target and aiming at the board puts the train through it
+  a few km/h fast.
+  Five faults, and every one came from driving it rather than from reading it. It held the
+  brake whenever a stop existed *anywhere* ahead, so a train standing with a red signal a
+  kilometre off never moved. Fixed, it crept the last few metres at 0.9 km/h for ever —
+  too slow for the curve to ask for anything, too slow for rolling resistance to finish.
+  Fixed again, it found the band between the slowest speed it would drive toward and a
+  stand, and sat six metres short of a signal with the handles off and the brakes
+  *released*. It obeyed **dwarf signals**, which govern shunting and stand at danger
+  because nobody has asked them for anything — leaving Bodø with the T1 exit route set
+  that is a train braking hard at each of a row of them in turn. And every distance was
+  half a train too long, because `walkRoad` starts at the leading set's **centre**: it
+  stood 20 m past each signal it stopped at. It now stands 4 m short of a 400 m mark and
+  496 m from a 500 m one.
+  The bench lied too, which is worth its own line: given a positive initial speed and
+  driven from **cab 0**, the power pushes against the train's own momentum, because the
+  two cabs of a set face opposite ways. The trace showed a train shedding 90 km/h at full
+  power with no brake on — a fault in the test, read for an hour as a fault in the driver.
+  It reads the road **five times a second**, not every frame, and costs about 0.1 ms.
 - **A 600 m freight train found two more of these, and both were invisible on a short
   one.** The first: the accelerator could not fire on hauled stock at all. `bpRate_` was
   measured from inside the vehicle's own step, *after* `Consist` had already moved air

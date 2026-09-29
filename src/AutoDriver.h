@@ -77,6 +77,11 @@ inline constexpr float kAutoDecel = 0.5f; // m/s^2
 // How far short of the mark to come to a stand. A signal is passed at danger by a
 // centimetre as surely as by a metre.
 inline constexpr float kStopShortM = 5.0f;
+// And how far before a speed restriction to be down to it. The controller allows itself
+// a little over the target before it brakes, so aiming AT the board puts the train a few
+// km/h over as it crosses - which is exactly the thing the board is there to prevent.
+// A driver is at the limit before the limit starts.
+inline constexpr float kLimitEarlyM = 60.0f;
 // How far ahead to read the road. Enough to lose 130 km/h at kAutoDecel (1.3 km) with
 // room to see the next thing beyond it.
 inline constexpr float kLookAheadM = 2000.0f;
@@ -88,12 +93,17 @@ inline constexpr float kLookAheadM = 2000.0f;
 // with a limit of zero, placed kStopShortM before the mark.
 DriverDemand planDrive(const RoadAhead& road, float speedMs);
 
-// Work the handles toward a demand. Power on below the target, power off and a service
-// application above it, with dead bands so it does not hunt between the two - and never
-// power and brake at once, which is the one thing a driver never does.
+// Work the handles toward a demand, `dt` seconds since the last time this was called.
+//
+// Two things keep it from hunting, and both are what a driver does rather than what a
+// controller does. There is a wide band around the target inside which NOTHING moves -
+// a train two km/h under the limit is a train at the limit, not a train to be corrected.
+// And a handle that has just moved is left alone for a moment before it moves again, so
+// the train answers one notch before being given another. Only an increase in braking
+// ignores that, because a brake that has to wait is not a brake.
 //
 // `cab` is the driving position; the caller has already put it in gear.
-void applyDrive(Consist& train, int cab, const DriverDemand& demand);
+void applyDrive(Consist& train, int cab, const DriverDemand& demand, float dt);
 
 // Whether the train is standing at the mark it was stopping for: stopped, and the mark is
 // no further than the margin the plan aims for. What tells the caller a station stop is

@@ -58,22 +58,26 @@ struct Bench {
     std::vector<TrackPath> paths;
     std::optional<Consist> train;
 
-    explicit Bench(float startMs = 0.0f) {
+    explicit Bench(float startMs = 0.0f, float grade = 0.0f) {
         std::vector<glm::vec3> pts;
         for (int i = 0; i <= 2000; ++i)
-            pts.push_back({static_cast<float>(i) * 25.0f, 0.0f, 0.0f});
+            pts.push_back({static_cast<float>(i) * 25.0f, 0.0f,
+                           static_cast<float>(i) * 25.0f * grade});
         paths.emplace_back(1u, 0u, pts, std::vector<std::uint16_t>(pts.size(), 200));
         const VehicleSpec* c93 = specNamed("Class 93 (T");
-        // Well up the path, because cab 0 drives toward DECREASING s: the two cabs of a
-        // set face opposite ways and cab 0 faces -s, so a train put down at s = 1000 and
-        // told to go forward has a kilometre of road and then runs off the end of it.
-        // Which is what the first version of this did, and it read as the auto-driver
-        // mysteriously stopping dead at 70 km/h after a minute.
-        train.emplace(&paths, &paths[0], *c93, 45000.0f, startMs);
+        // Driven from CAB 1, and this matters more than it looks. The two cabs of a set
+        // face opposite ways: cab 0 drives the train toward -v and cab 1 toward +v, which
+        // is the direction a consist given a positive initial speed is already moving.
+        // Driving a moving train from cab 0 sets the power against its own momentum - the
+        // bench did exactly that at first, and the trace showed a train shedding 90 km/h
+        // at full power with no brake on, which reads as a fault in the auto-driver and
+        // was a fault in the bench. Cab 1 keeps speed, power and the road ahead all
+        // pointing the same way.
+        train.emplace(&paths, &paths[0], *c93, 20000.0f, startMs);
         train->attachNetwork(&paths, nullptr);
         train->toggleEngines();
-        train->setReverser(0, 1);
-        train->setBrakeNotch(0, 0);
+        train->setReverser(1, 1);
+        train->setBrakeNotch(1, 0);
     }
     // Charge the pipe and let the brakes come off, holding whatever speed it started at.
     void ready() {
@@ -98,7 +102,7 @@ RunResult run(Bench& b, float secs, RoadFn road) {
     for (int i = 0; i < steps; ++i) {
         if (i % 12 == 0) { // 5 Hz
             d = planDrive(road(r.travelled), b.train->speed());
-            applyDrive(*b.train, 0, d);
+            applyDrive(*b.train, 1, d, 0.2f);
         }
         const float before = b.train->speed();
         b.train->update(kDt, 0.0f);
@@ -192,7 +196,7 @@ int main() {
                 RoadAhead road = openRoad(travelled < drop ? 130 : 70);
                 if (travelled < drop) road.limits.push_back({drop - travelled, 70});
                 d = planDrive(road, b.train->speed());
-                applyDrive(*b.train, 0, d);
+                applyDrive(*b.train, 1, d, 0.2f);
             }
             const float before = b.train->speed();
             b.train->update(kDt, 0.0f);
@@ -201,9 +205,11 @@ int main() {
         }
         std::printf("      %.1f km/h crossing into the 70, %.1f km/h a minute later\n",
                     atDrop, b.kmh());
-        check(atDrop > 0.0f && atDrop < 74.0f, "at the limit where the limit begins (km/h)",
+        // Within the band it holds anywhere - it sits between 68 and 72 cruising an open
+        // 70 as well - and not a train that has thrown away half its speed getting there.
+        check(atDrop > 0.0f && atDrop < 73.0f, "at the limit where the limit begins (km/h)",
               atDrop, 70.0);
-        check(atDrop > 55.0f, "  and not crawling into it having braked far too early",
+        check(atDrop > 62.0f, "  and not crawling into it having braked far too early",
               atDrop, 70.0);
     }
 
@@ -222,7 +228,7 @@ int main() {
                 RoadAhead road = openRoad(70);
                 if (red) road.stops.push_back({mark - travelled, RoadAhead::StopKind::Signal, 2});
                 d = planDrive(road, b.train->speed());
-                applyDrive(*b.train, 0, d);
+                applyDrive(*b.train, 1, d, 0.2f);
             }
             const float before = b.train->speed();
             b.train->update(kDt, 0.0f);
@@ -242,6 +248,127 @@ int main() {
         check(travelled > stoppedAt + 200.0f,
               "  and it went on by itself, with no second arming", travelled - stoppedAt,
               200.0);
+    }
+
+    // --- what driving it on the real line found, and the synthetic road did not ------
+    std::puts("\nThings only a real line found");
+    {
+        // Distances are measured from the NOSE. The walk starts at the leading set's
+        // CENTRE, so left unshifted every mark reads half a body length further off than
+        // it is - 20.75 m on a Class 93 - and the train stands that far PAST every signal
+        // it stops at, which is a signal passed at danger.
+        Bench b;
+        b.ready();
+        std::vector<Vehicle::RoadStretch> road;
+        check(b.train->roadAhead(500.0f, road), "the road ahead is there to be read");
+        check(!road.empty(), "  and comes back in stretches", double(road.size()), 1.0);
+        if (!road.empty()) {
+            const float half = 0.5f * b.train->lead().length();
+            check(std::abs(road.front().dist0 + half) < 0.01f,
+                  "  measured from the nose, not the middle of the first set",
+                  road.front().dist0, -half);
+        }
+    }
+    {
+        // A train standing with a stop a long way off must MOVE. The first version held
+        // the brake whenever a stop existed anywhere ahead, so a train standing at a
+        // station with a red signal a kilometre up the line never went anywhere at all.
+        Bench b;
+        b.ready();
+        const RunResult r = run(b, 60.0f, [](float run) {
+            RoadAhead road = openRoad(70);
+            road.stops.push_back({1000.0f - run, RoadAhead::StopKind::Signal, 3});
+            return road;
+        });
+        std::printf("      ran %.0f m toward a signal 1000 m off, now %.1f km/h\n",
+                    r.travelled, b.kmh());
+        check(r.travelled > 50.0f, "it sets off toward a stop that is far away (m)",
+              r.travelled, 50.0);
+    }
+    {
+        // ...and standing AT one it must hold the brake on. Between the speed the
+        // controller will drive toward and a stand there was a band it could neither
+        // reach nor hold, and it sat six metres short of a signal with the handles off
+        // and the brakes released - which on a grade is a train that rolls away.
+        Bench b;
+        b.ready();
+        DriverDemand d;
+        for (int i = 0; i < 40 * 60; ++i) {
+            if (i % 12 == 0) {
+                RoadAhead road = openRoad(70);
+                road.stops.push_back({5.8f, RoadAhead::StopKind::Signal, 4}); // just short
+                d = planDrive(road, b.train->speed());
+                applyDrive(*b.train, 1, d, 0.2f);
+            }
+            b.train->update(kDt, 0.0f);
+        }
+        std::printf("      standing 5.8 m short: target %.1f km/h, cylinders %.2f bar\n",
+                    d.targetMs * kMsToKmh, b.train->lead().bcPressure());
+        check(b.train->speed() < 0.05f, "standing at a mark it stays standing",
+              b.train->speed(), 0.0);
+        check(b.train->lead().bcPressure() > 1.0f, "  with the brake on, not coasting",
+              b.train->lead().bcPressure(), 1.94);
+    }
+
+    std::puts("\nA signal at the top of a climb");
+    {
+        // Two things at once, and they pull opposite ways. Climbing to a signal the train
+        // loses speed to gravity and would stall short of it, so power has to come back
+        // on - braking reversed to power, which nothing else here ever does. But the
+        // braking curve toward a stop allows a great deal of speed a long way out - 87
+        // km/h at 600 m - so a controller that simply tracks it accelerates hard AT a
+        // signal at danger and brakes hard at it, which is safe and is not driving.
+        //
+        // The rule that serves both: approaching a stop, power only to keep the train
+        // moving, never to gain speed.
+        auto approach = [&](float grade, float& shortBy, bool& powered, float& topKmh) {
+            Bench b(20.0f, grade);
+            b.ready();
+            const float mark = 600.0f;
+            float travelled = 0.0f;
+            powered = false;
+            topKmh = 0.0f;
+            DriverDemand d;
+            for (int i = 0; i < 300 * 60; ++i) {
+                if (i % 12 == 0) {
+                    RoadAhead road = openRoad(130);
+                    road.stops.push_back({mark - travelled, RoadAhead::StopKind::Signal, 5});
+                    d = planDrive(road, b.train->speed());
+                    applyDrive(*b.train, 1, d, 0.2f);
+                    if (b.train->powerNotch(1) > 0) powered = true;
+                }
+                const float before = b.train->speed();
+                b.train->update(kDt, 0.0f);
+                travelled += 0.5f * (before + b.train->speed()) * kDt;
+                topKmh = std::max(topKmh, b.kmh());
+            }
+            shortBy = mark - travelled;
+        };
+
+        float shortBy = 0.0f, topKmh = 0.0f;
+        bool powered = false;
+        approach(0.02f, shortBy, powered, topKmh);
+        std::printf("      up 2%%: stood %.2f m short, topped %.1f km/h, power used %s\n",
+                    shortBy, topKmh, powered ? "yes" : "no");
+        check(powered, "climbing to it, power comes back on rather than stalling short");
+        check(shortBy > 0.0f && shortBy < 30.0f, "  and it still draws up to the mark (m)",
+              shortBy, 5.9);
+        check(topKmh < 30.0f, "  without charging at a signal at danger (km/h)", topKmh,
+              22.0);
+
+        approach(0.0f, shortBy, powered, topKmh);
+        std::printf("      level: stood %.2f m short, power used %s\n", shortBy,
+                    powered ? "yes" : "no");
+        check(!powered, "on the level it coasts and brakes, using no power at all");
+        check(shortBy > 0.0f && shortBy < 30.0f, "  and stops short of the mark (m)",
+              shortBy, 3.7);
+
+        approach(-0.02f, shortBy, powered, topKmh);
+        std::printf("      down 2%%: stood %.2f m short, power used %s\n", shortBy,
+                    powered ? "yes" : "no");
+        check(!powered, "running down to it, none either");
+        check(shortBy > 0.0f && shortBy < 30.0f, "  and gravity does not carry it past (m)",
+              shortBy, 2.9);
     }
 
     std::puts("\nThe end of the road is a stop like any other");

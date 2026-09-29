@@ -232,6 +232,11 @@ public:
     void setAutoDriving(bool on) { autoDrive_ = on; }
     int autoServedStop() const { return autoServed_; }
     void setAutoServedStop(int ref) { autoServed_ = ref; }
+    // Seconds since the auto-driver last moved a handle. A driver does not sit with his
+    // hand on the controller adjusting it five times a second, and a train whose notches
+    // change that often hunts - audibly, and in the speedometer. See AutoDriver.
+    float autoSinceChange() const { return autoSince_; }
+    void setAutoSinceChange(float s) { autoSince_ = s; }
     // The road in front of the train, `metres` of it, crossing turnouts as they are
     // currently set - measured from the nose of whichever end is leading. False if it
     // ran out of track, which is itself worth knowing. See Vehicle::walkRoad.
@@ -313,5 +318,6 @@ private:
     float brakeForce_ = 0.0f;        // N, summed over the sets
     bool autoDrive_ = false; // the computer has this train
     int autoServed_ = -1;    // the stop it has already answered for
+    float autoSince_ = 99.0f; // seconds since a handle was last moved
     UncoupleHold hold_ = UncoupleHold::None;
 };

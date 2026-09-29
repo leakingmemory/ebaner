@@ -263,11 +263,19 @@ bool Consist::roadAhead(float metres, std::vector<Vehicle::RoadStretch>& out) co
     if (h == 0 || units_.empty()) return false;
     // The leading vehicle is the one at the end the train is moving toward, and the walk
     // leaves it by that end: out over its own nose going forward, out over its tail going
-    // back. Starting the walk half a body length out puts the zero of the distances at
-    // the front of the train rather than at the middle of its first set.
+    // back.
+    //
+    // The walk starts at the vehicle's CENTRE, so the reach has to cover half a body
+    // before it covers any road - and the distances that come back are measured from that
+    // centre. They are shifted here so that zero is the front of the train, which is the
+    // only place a driver measures from. Left unshifted every mark read half a body
+    // length further away than it was, and the train stood that far PAST every signal it
+    // was stopping at: twenty metres on a Class 93, and a signal passed at danger.
     const Vehicle& head = h > 0 ? units_.front() : units_.back();
-    const float reach = 0.5f * head.length() + metres;
-    return head.walkRoad(h > 0 ? reach : -reach, out);
+    const float halfLen = 0.5f * head.length();
+    const bool ok = head.walkRoad(h > 0 ? (halfLen + metres) : -(halfLen + metres), out);
+    for (Vehicle::RoadStretch& r : out) r.dist0 -= halfLen;
+    return ok;
 }
 
 int Consist::activeCab() const {

@@ -3181,7 +3181,16 @@ int main(int argc, char** argv) {
             for (const RoadMark& m : roadMarks) {
                 if (m.pathIdx != st.pathIdx || m.s < lo || m.s > hi) continue;
                 const float d = st.dist0 + std::abs(m.s - st.sFrom);
+                if (d < 0.0f) continue; // already passed: it is behind the nose
                 if (m.kind == 0) {
+                    const SignalPlacement& sp = sigPlacements[m.ref];
+                    // Main signals only. A dwarf governs SHUNTING over the same rails and
+                    // is at danger most of the time because nobody has asked it for
+                    // anything - a train running a main route past a station passes a row
+                    // of them, every one of which read as a stop. Leaving Bodo with the
+                    // T1 exit route set that is a train braking hard at each of them in
+                    // turn, for signals that were never addressed to it.
+                    if (sp.kind == SignalKind::Dwarf) continue;
                     // A signal governs movements leaving its border one way only, so one
                     // facing the other way is not ours to obey - it is the signal for
                     // trains coming the other way, standing beside our road.
@@ -3189,7 +3198,13 @@ int main(int argc, char** argv) {
                     const glm::dvec2 travel(static_cast<double>(dir) * tg.x,
                                             static_cast<double>(dir) * tg.y);
                     if (glm::dot(travel, m.forward) <= 0.0) continue;
-                    if (!signalGivesAuthority(sigPlacements[m.ref]))
+                    // The MAIN head's own aspect, not signalGivesAuthority, which also
+                    // clears for a dwarf sharing the pole - that dwarf's authority is for
+                    // a shunt move and is not this train's to take.
+                    const bool proceed = sp.aspect == SignalAspect::Clear ||
+                                         sp.aspect == SignalAspect::ClearReduced ||
+                                         sp.aspect == SignalAspect::Dark;
+                    if (!proceed)
                         road.stops.push_back({d, RoadAhead::StopKind::Signal, m.ref});
                 } else {
                     // A flag post: stop for the station's order unless it is waving the
@@ -4347,7 +4362,7 @@ int main(int argc, char** argv) {
                 const double tA = profile ? now_ms() : 0.0;
                 const RoadAhead road = scanRoad(t);
                 const DriverDemand d = planDrive(road, t.speed());
-                applyDrive(t, acab, d);
+                applyDrive(t, acab, d, 0.2f); // the planning interval
                 if (profile) pAuto.add(now_ms() - tA);
                 if (&t == vehicle) g_autoDemand = d;
                 if (autoLog && &t == vehicle && now >= autoLogAt) {
