@@ -424,13 +424,59 @@ int main() {
               "  and a dwarf never does, however clear it is");
     }
 
-    std::puts("\nThe end of the road is a stop like any other");
+    std::puts("\nThe end of the rails");
     {
-        RoadAhead road = openRoad(130);
-        road.roadRunsOut = true;
-        check(planDrive(road, 30.0f).targetMs < 1.0f,
-              "a road that runs out inside the lookahead brings it down to a crawl",
-              planDrive(road, 30.0f).targetMs, 0.8);
+        // Driven at a real dead end, with the road read the way the sim reads it, because
+        // the thing being tested is the distance the walk reports when it runs out.
+        //
+        // This used to be answered by clamping the whole target to a crawl whenever the
+        // lookahead failed to cover its two kilometres. Approaching Bodo, which is the
+        // end of the line, that is a train doing 3 km/h for the last two kilometres of a
+        // 40 km/h station approach - the driver found the buffers and answered by
+        // slowing down everywhere instead of planning a stop at them.
+        std::vector<glm::vec3> pts;
+        for (int i = 0; i <= 60; ++i) pts.push_back({static_cast<float>(i) * 25.0f, 0, 0});
+        std::vector<TrackPath> paths;
+        paths.emplace_back(1u, 0u, pts, std::vector<std::uint16_t>(pts.size(), 200));
+        const float railsEnd = paths[0].length();
+        Consist c(&paths, &paths[0], *specNamed("Class 93 (T"), 700.0f, 0.0f);
+        c.attachNetwork(&paths, nullptr);
+        c.toggleEngines();
+        c.setReverser(1, 1);
+        c.setBrakeNotch(1, 0);
+        for (int i = 0; i < 40 * 60; ++i) c.update(kDt, 0.0f);
+
+        std::vector<Vehicle::RoadStretch> stretches;
+        float topKmh = 0.0f;
+        DriverDemand d;
+        for (int i = 0; i < 300 * 60; ++i) {
+            if (i % 12 == 0) {
+                RoadAhead road;
+                road.here = 130;
+                road.roadRunsOut = !c.roadAhead(kLookAheadM, stretches);
+                if (road.roadRunsOut && !stretches.empty()) {
+                    const Vehicle::RoadStretch& last = stretches.back();
+                    const float reach = last.dist0 + std::abs(last.sTo - last.sFrom);
+                    road.stops.push_back({std::max(0.0f, reach - kEndOfTrackM),
+                                          RoadAhead::StopKind::EndOfTrack, -1});
+                }
+                d = planDrive(road, c.speed());
+                applyDrive(c, 1, d, 0.2f);
+            }
+            c.update(kDt, 0.0f);
+            topKmh = std::max(topKmh, c.speed() * kMsToKmh);
+        }
+        // Where the nose finished, against where the rails stop.
+        const float nose = c.lead().s() + 0.5f * c.lead().length();
+        std::printf("      rails end at %.0f m; the nose stopped %.1f m short, "
+                    "having run up to %.1f km/h\n", railsEnd, railsEnd - nose, topKmh);
+        check(c.speed() < 0.05f, "it comes to a stand", c.speed(), 0.0);
+        check(nose < railsEnd, "  before the rails end, not past them (m short)",
+              railsEnd - nose, kEndOfTrackM);
+        check(railsEnd - nose < 60.0f, "  and close enough to have used the road",
+              railsEnd - nose, kEndOfTrackM);
+        check(topKmh > 20.0f,
+              "  and it ran there rather than crawling the whole way (km/h)", topKmh, 29.0);
     }
 
     std::printf("\n%s\n", failures == 0 ? "all ok" : "FAILURES");

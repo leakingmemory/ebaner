@@ -39,9 +39,9 @@ struct RoadAhead {
         float d = 0.0f;
         int kmh = 0;
     };
-    // Something to stop at: a signal that is not offering a road, or the flag post of a
-    // manned station that is not waving the train through.
-    enum class StopKind { Signal, FlagPost };
+    // Something to stop at: a signal that is not offering a road, the flag post of a
+    // manned station that is not waving the train through, or the end of the rails.
+    enum class StopKind { Signal, FlagPost, EndOfTrack };
     struct Stop {
         float d = 0.0f;
         StopKind kind = StopKind::Signal;
@@ -51,7 +51,11 @@ struct RoadAhead {
     std::vector<Limit> limits;
     std::vector<Stop> stops;
     int here = 40;         // the ceiling the train is under where it stands
-    bool roadRunsOut = false; // the walk hit the end of the track within the lookahead
+    // The walk hit the end of the road inside the lookahead - the rails stop, or a
+    // facing switch is set against the train and there is nowhere to go. It arrives as a
+    // stop like any other rather than as a state of its own, so it is planned for with
+    // the same braking curve as a signal.
+    bool roadRunsOut = false;
     // Whether this movement is a shunt - a dwarf is what is letting it go, rather than a
     // main signal. Not a property of the road alone, since it depends on what the train
     // has already passed, but it comes out of the same scan and the caller keeps it.
@@ -81,6 +85,10 @@ inline constexpr float kAutoDecel = 0.5f; // m/s^2
 // How far short of the mark to come to a stand. A signal is passed at danger by a
 // centimetre as surely as by a metre.
 inline constexpr float kStopShortM = 5.0f;
+// And how far short of the END of the rails, which is a different kind of mark: there is
+// no signal there to stop at, only a buffer stop or a broken rail, and nothing is gained
+// by going near it.
+inline constexpr float kEndOfTrackM = 20.0f;
 // And how far before a speed restriction to be down to it. The controller allows itself
 // a little over the target before it brakes, so aiming AT the board puts the train a few
 // km/h over as it crosses - which is exactly the thing the board is there to prevent.

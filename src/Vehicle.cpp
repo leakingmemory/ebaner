@@ -742,10 +742,16 @@ bool Vehicle::walkRoad(float bodyOffset, std::vector<RoadStretch>& out) const {
     out.clear();
     if (!paths_ || pathIdx_ < 0) return false;
     if (!net_) { // no network: one straight stretch on this path
+        // Clamped to the path, and honest about it. Unclamped this handed back a stretch
+        // running off the end of the rails and said the walk had succeeded - so a train
+        // reading the road ahead was told there were two kilometres of it when the track
+        // stopped in eight hundred metres, and drove off the end without ever being told
+        // the road had run out.
         const float a = s_;
-        const float b = s_ + static_cast<float>(orient_) * bodyOffset;
+        const float b = std::clamp(s_ + static_cast<float>(orient_) * bodyOffset, 0.0f,
+                                   (*paths_)[pathIdx_].length());
         out.push_back({pathIdx_, a, b, 0.0f});
-        return true;
+        return std::abs(b - a) >= std::abs(bodyOffset) - 1e-4f;
     }
     int cp = pathIdx_;
     float cs = s_;

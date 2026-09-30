@@ -3174,6 +3174,17 @@ int main(int argc, char** argv) {
         autoSignalsAhead.clear();
         road.roadRunsOut = !t.roadAhead(kLookAheadM, autoStretches);
         if (autoStretches.empty()) return road;
+        if (road.roadRunsOut) {
+            // The end of the road is a stop, at the place it actually is - not a reason
+            // to crawl. Clamping the whole target to a crawl instead is what had a train
+            // approaching Bodo, which is the end of the line, doing 3 km/h for the last
+            // two kilometres: the lookahead found the buffers and the driver answered by
+            // slowing down everywhere rather than by planning a stop at them.
+            const Vehicle::RoadStretch& last = autoStretches.back();
+            const float reach = last.dist0 + std::abs(last.sTo - last.sFrom);
+            road.stops.push_back({std::max(0.0f, reach - kEndOfTrackM),
+                                  RoadAhead::StopKind::EndOfTrack, -1});
+        }
 
         // Standing in a manned station worked by hand signals, wherever in it: 40.
         const glm::dvec3 org = data.sceneOrigin();
@@ -4444,6 +4455,8 @@ int main(int argc, char** argv) {
                                 d.stopping
                                     ? (d.stopKind == RoadAhead::StopKind::FlagPost
                                            ? "a flag post"
+                                       : d.stopKind == RoadAhead::StopKind::EndOfTrack
+                                           ? "the end of the track"
                                            : signalKindName(sigPlacements[d.stopRef].kind))
                                     : "");
                     std::fflush(stdout);
@@ -4882,7 +4895,9 @@ int main(int argc, char** argv) {
                         std::snprintf(buf, sizeof(buf), "AUTO %3.0f km/h   stopping: %s in %.0f m",
                                       g_autoDemand.targetMs * 3.6f,
                                       g_autoDemand.stopKind == RoadAhead::StopKind::FlagPost
-                                          ? "FLAG" : "SIGNAL",
+                                          ? "FLAG"
+                                      : g_autoDemand.stopKind == RoadAhead::StopKind::EndOfTrack
+                                          ? "END OF TRACK" : "SIGNAL",
                                       g_autoDemand.stopIn);
                     else
                         std::snprintf(buf, sizeof(buf), "AUTO %3.0f km/h   P to take over",

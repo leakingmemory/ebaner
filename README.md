@@ -648,7 +648,7 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   at the limit **before** the board: the curve aims 60 m early, because the controller
   allows itself a little over the target and aiming at the board puts the train through it
   a few km/h fast.
-  Seven faults, and every one came from driving it rather than from reading it. It held the
+  Eight faults, and every one came from driving it rather than from reading it. It held the
   brake whenever a stop existed *anywhere* ahead, so a train standing with a red signal a
   kilometre off never moved. Fixed, it crept the last few metres at 0.9 km/h for ever —
   too slow for the curve to ask for anything, too slow for rolling resistance to finish.
@@ -673,6 +673,18 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   is a metre *ahead* of the nose and newly at danger. `needDecel` is `v²/2d`, which at a
   metre is enormous, so full service went on and came off again a tick later — once per
   signal passed. Anything closer than one tick of travel has been passed, and is ignored.
+  And approaching Bodø it ran at **3 km/h** for the last two kilometres. Bodø is the end
+  of the line, so the lookahead found the buffers — and the answer to a road that runs out
+  was to clamp the whole target to a crawl, everywhere, rather than to plan a stop at the
+  place the rails actually stop. The end of the road is a **stop like any other** now,
+  20 m short of the rails, planned for with the same braking curve as a signal: on a dead
+  end 780 m off the train runs up to it properly and stands **25 m short**. The same
+  change stopped a related nonsense — withholding power from the moment a stop becomes
+  the binding constraint, which for a stand two kilometres off still allows 160 km/h, so
+  a train approaching a terminus was held down for the whole approach. That only applies
+  within 800 m now. Underneath both was a latent one: with no switch network attached,
+  the road walk handed back a stretch running off the end of the rails and reported
+  success, so nothing was ever told the road had run out.
   And every distance was
   half a train too long, because `walkRoad` starts at the leading set's **centre**: it
   stood 20 m past each signal it stopped at. It now stands 4 m short of a 400 m mark and

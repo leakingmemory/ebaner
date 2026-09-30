@@ -39,12 +39,15 @@ constexpr float kOverBandMs = 1.0f;   // m/s over target: a brake, not just less
 // hold on the approach to one. Below it a train climbing to a signal would stall short;
 // above it, powering toward a signal at danger is nobody's idea of driving.
 constexpr float kApproachMs = 5.0f; // m/s, about 18 km/h
+// ...and how close the stop has to be for that to apply at all. Withholding power from
+// the moment a stop becomes the binding constraint is far too early: the curve to a stand
+// two kilometres off still allows 160 km/h, so a train approaching a terminus would be
+// held to a crawl for the last two kilometres of a 40 km/h station approach. Beyond this
+// the stop is just another thing on the road and the train runs normally toward it.
+constexpr float kApproachFromM = 800.0f;
 // How long a handle is left alone after it moves. A driver gives a notch time to answer.
 constexpr float kDwellS = 1.5f;
 
-// The braking curve asks for a speed that reaches zero AT the mark, which is a speed no
-// controller can hold; below this the driver is simply stopping.
-constexpr float kCrawlMs = 0.8f;
 // Ask for rather more than the arithmetic says, because the cylinders take two or three
 // seconds to fill and the train keeps running while they do.
 constexpr float kBrakeMargin = 1.15f;
@@ -93,9 +96,6 @@ DriverDemand planDrive(const RoadAhead& road, float speedMs) {
         out.stopping = true;
     }
 
-    // The end of the track is a stop like any other, and a train that drives off the end
-    // of its road is the one failure this mode must not have.
-    if (road.roadRunsOut) out.targetMs = std::min(out.targetMs, kCrawlMs);
 
     out.targetMs = std::max(0.0f, out.targetMs);
     return out;
@@ -147,7 +147,7 @@ void applyDrive(Consist& train, int cab, const DriverDemand& demand, float dt) {
             }
         wantBrake = std::max(1, wantBrake);
     } else if (v < demand.targetMs - kUnderBandMs &&
-               (!demand.stopping || v < kApproachMs)) {
+               (!demand.stopping || demand.stopIn > kApproachFromM || v < kApproachMs)) {
         // Well under what is allowed: take another notch.
         //
         // Except when what is holding the train back is a STOP, and then only to keep it
@@ -167,7 +167,8 @@ void applyDrive(Consist& train, int cab, const DriverDemand& demand, float dt) {
         wantBrake = 0;                       // inside the band: leave everything alone
         // Coasting toward a stop, the power comes off rather than being left where it
         // was: the train is being allowed to run down, not held at a speed.
-        if (demand.stopping) wantPower = std::max(0, power - 1);
+        if (demand.stopping && demand.stopIn <= kApproachFromM)
+            wantPower = std::max(0, power - 1);
     }
 
     // Nothing ever commands emergency. An auto-driver that dumped the pipe at every stop
