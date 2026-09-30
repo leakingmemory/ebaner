@@ -77,17 +77,43 @@ struct DriverDemand {
     float needDecel = 0.0f; // m/s^2
 };
 
-// The rate the driver plans his braking at. Deliberately gentler than the brake can
-// manage - full service on a Class 93 is 1.3 m/s^2 - because a driver who plans to the
-// limit of the brake arrives at every restriction having used all of it, and has nothing
-// left for the thing he did not plan for.
-inline constexpr float kAutoDecel = 0.5f; // m/s^2
-// How far short of the mark to come to a stand. A signal is passed at danger by a
-// centimetre as surely as by a metre.
-inline constexpr float kStopShortM = 5.0f;
+// The rate the driver plans his braking at, far out from whatever he is braking for.
+// Deliberately gentler than the brake can manage - full service on a Class 93 is
+// 1.3 m/s^2 - because a driver who plans to the limit of the brake arrives at every
+// restriction having used all of it, and has nothing left for what he did not plan for.
+inline constexpr float kAutoDecel = 0.55f; // m/s^2
+// ...and the rate he plans for the last stretch of it. Shallower, so the brake is coming
+// OFF as the mark arrives rather than still going on: a curve planned at one rate all the
+// way is steepest exactly where it matters, and a train following it is still shedding
+// speed hard at the moment it should be settling. Easing the plan at the end means the
+// speed is already low when the distance runs out, which is both how it is driven and
+// where the margin against overshooting comes from.
+// Below what the lightest notch is worth (B1 gives 0.35), which is deliberate: a rate
+// between notches is held by cycling the handle, and the average is what the train
+// feels. A light set answers quickly enough for that to be smooth, and a long heavy one
+// averages it along its own length anyway - it is slow to apply and slow to let go, so
+// asking it for a rate it cannot hold steadily is exactly what a light cycled
+// application avoids.
+inline constexpr float kEndDecel = 0.25f; // m/s^2, at the mark
+// How far out the easing starts, and it is generous on purpose. The transition has to be
+// early enough that the train is ALREADY braking lightly well before the mark: come down
+// the steep part too long and it arrives under the curve with the brake still hard on,
+// stops short, and has to be driven up again.
+inline constexpr float kShallowM = 400.0f;
+// What the brake costs before it does anything: the seconds between the handle moving
+// and the shoes being on, which the train runs through at whatever speed it had. Counted
+// out of the distance available rather than hidden in a fudge factor, so it scales with
+// speed - and with the train, because a long one is slower to apply and slower to let go.
+inline constexpr float kBuildUpS = 3.0f;
+// How far short of the mark to come to a stand.
+inline constexpr float kStopShortM = 20.0f;
+// And how close is close enough to stop planning and simply hold it. Inside this the
+// brake goes on and stays on: there is nothing to be gained by easing a train the last
+// twenty metres up to a signal at danger, and a good deal to be lost.
+inline constexpr float kStopHoldM = 25.0f;
 // And how far short of the END of the rails, which is a different kind of mark: there is
 // no signal there to stop at, only a buffer stop or a broken rail, and nothing is gained
-// by going near it.
+// by going near it. On top of the stopping margin, so the train stands 40 m off.
 inline constexpr float kEndOfTrackM = 20.0f;
 // And how far before a speed restriction to be down to it. The controller allows itself
 // a little over the target before it brakes, so aiming AT the board puts the train a few
@@ -99,10 +125,13 @@ inline constexpr float kLimitEarlyM = 60.0f;
 inline constexpr float kLookAheadM = 2000.0f;
 
 // The whole policy: the fastest this train may be going *now* such that every limit and
-// every stop ahead can still be met by braking at kAutoDecel.
+// every stop ahead can still be met.
 //
-// v = sqrt(v_limit^2 + 2*a*d) over each of them, and the smallest wins. A stop is the same
-// with a limit of zero, placed kStopShortM before the mark.
+// v = sqrt(v_limit^2 + 2*a*d) over each of them, and the smallest wins - but neither `a`
+// nor `d` is quite what it looks like. `d` has the build-up run taken out of it, because
+// the first seconds of a brake application stop nothing. And `a` is not one number: it
+// eases from kAutoDecel far out to kEndDecel at the mark, so the plan asks for less
+// braking exactly where a curve of one rate asks for most.
 DriverDemand planDrive(const RoadAhead& road, float speedMs);
 
 // Work the handles toward a demand, `dt` seconds since the last time this was called.

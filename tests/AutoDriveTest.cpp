@@ -125,14 +125,17 @@ RoadAhead openRoad(int kmh) {
 int main() {
     std::puts("\nThe plan, before any train is attached to it");
     {
-        // The braking curve, read straight off. At kAutoDecel a stop 400 m away may be
-        // approached at sqrt(2 * 0.5 * 395) = 19.9 m/s, and no faster.
+        // The braking curve, read straight off. A stop 400 m away is aimed at kStopShortM
+        // before the mark, so 380 m of it are usable; the train is at rest here, so
+        // nothing comes off for the build-up run. 380 m is just inside kShallowM, where
+        // the planned rate has eased a little off kAutoDecel - 0.25 + 0.3 * 0.95^2 =
+        // 0.52 - so sqrt(2 * 0.52 * 380) = 19.9 m/s.
         RoadAhead road = openRoad(130);
         road.stops.push_back({400.0f, RoadAhead::StopKind::Signal, 7});
         const DriverDemand d = planDrive(road, 0.0f);
         check(d.stopping, "a stop ahead is a stop, not a limit");
-        check(std::abs(d.targetMs - 19.87f) < 0.1f, "  and sets the speed it may be met at",
-              d.targetMs, 19.87);
+        check(std::abs(d.targetMs - 19.89f) < 0.1f, "  and sets the speed it may be met at",
+              d.targetMs, 19.89);
         check(d.stopRef == 7, "  naming which mark is being aimed at", d.stopRef, 7.0);
 
         // Far enough away and it does not bind at all: the line speed wins.
@@ -353,7 +356,7 @@ int main() {
                     shortBy, topKmh, powered ? "yes" : "no");
         check(powered, "climbing to it, power comes back on rather than stalling short");
         check(shortBy > 0.0f && shortBy < 30.0f, "  and it still draws up to the mark (m)",
-              shortBy, 5.9);
+              shortBy, 24.4);
         check(topKmh < 30.0f, "  without charging at a signal at danger (km/h)", topKmh,
               22.0);
 
@@ -361,15 +364,15 @@ int main() {
         std::printf("      level: stood %.2f m short, power used %s\n", shortBy,
                     powered ? "yes" : "no");
         check(!powered, "on the level it coasts and brakes, using no power at all");
-        check(shortBy > 0.0f && shortBy < 30.0f, "  and stops short of the mark (m)",
-              shortBy, 3.7);
+        check(shortBy > 0.0f && shortBy < 35.0f, "  and stops short of the mark (m)",
+              shortBy, 24.1);
 
         approach(-0.02f, shortBy, powered, topKmh);
         std::printf("      down 2%%: stood %.2f m short, power used %s\n", shortBy,
                     powered ? "yes" : "no");
         check(!powered, "running down to it, none either");
-        check(shortBy > 0.0f && shortBy < 30.0f, "  and gravity does not carry it past (m)",
-              shortBy, 2.9);
+        check(shortBy > 0.0f && shortBy < 35.0f, "  and gravity does not carry it past (m)",
+              shortBy, 23.2);
     }
 
     std::puts("\nWhich signals actually mean stop");
@@ -473,8 +476,8 @@ int main() {
         check(c.speed() < 0.05f, "it comes to a stand", c.speed(), 0.0);
         check(nose < railsEnd, "  before the rails end, not past them (m short)",
               railsEnd - nose, kEndOfTrackM);
-        check(railsEnd - nose < 60.0f, "  and close enough to have used the road",
-              railsEnd - nose, kEndOfTrackM);
+        check(railsEnd - nose < 80.0f, "  and close enough to have used the road",
+              railsEnd - nose, kEndOfTrackM + kStopShortM);
         check(topKmh > 20.0f,
               "  and it ran there rather than crawling the whole way (km/h)", topKmh, 29.0);
     }

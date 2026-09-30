@@ -45,12 +45,57 @@ constexpr float kApproachMs = 5.0f; // m/s, about 18 km/h
 // held to a crawl for the last two kilometres of a 40 km/h station approach. Beyond this
 // the stop is just another thing on the road and the train runs normally toward it.
 constexpr float kApproachFromM = 800.0f;
+// Slow enough to call stopped for the purpose of easing the brake right off.
+constexpr float kCrawlMs = 0.3f;
+// A beat between the steps of an application, so it goes on in stages.
+constexpr float kBrakeStepS = 0.5f;
 // How long a handle is left alone after it moves. A driver gives a notch time to answer.
 constexpr float kDwellS = 1.5f;
 
 // Ask for rather more than the arithmetic says, because the cylinders take two or three
 // seconds to fill and the train keeps running while they do.
-constexpr float kBrakeMargin = 1.15f;
+constexpr float kBrakeMargin = 1.05f;
+
+} // namespace
+
+namespace {
+
+// The deceleration the plan plans for, `d` metres from whatever it is braking for.
+// Shallower as it closes, so the last stretch is eased rather than fought.
+float plannedDecel(float d) {
+    // Squared rather than linear, so the rate is already most of the way down to
+    // kEndDecel by the middle of the transition instead of half way. The point of the
+    // easing is to be in light braking EARLY; a straight line leaves it too late.
+    const float t = std::clamp(d / kShallowM, 0.0f, 1.0f);
+    return kEndDecel + (kAutoDecel - kEndDecel) * t * t;
+}
+
+// The fastest a train may be doing `d` metres from something it must be down to `vLimit`
+// for. The build-up run comes out of the distance first: the brake does nothing for the
+// first few seconds, and the train covers that at the speed it already has.
+float allowedAt(float d, float vLimit, float speedMs) {
+    const float usable = std::max(0.0f, d - speedMs * kBuildUpS);
+    return std::sqrt(vLimit * vLimit + 2.0f * plannedDecel(usable) * usable);
+}
+
+// ...and the deceleration that would actually be needed from here, which is what picks
+// the notch. Measured over the same usable distance, or the answer is the deceleration
+// of a brake that comes on instantly.
+float neededDecel(float d, float vLimit, float speedMs) {
+    if (speedMs <= vLimit) return 0.0f;
+    const float usable = std::max(1.0f, d - speedMs * kBuildUpS);
+    return (speedMs * speedMs - vLimit * vLimit) / (2.0f * usable);
+}
+
+// The smallest service notch that gives at least this deceleration, with a small margin
+// for the cylinders still filling. Full service is what is left when nothing else covers
+// it, which is where it belongs: an auto-driver that reaches for everything it has at
+// each restriction has nothing in hand for the one it misjudged.
+int notchFor(float need) {
+    for (int n = 1; n <= Vehicle::kMaxBrakeNotch; ++n)
+        if (Vehicle::notchDecel(n) >= need * kBrakeMargin) return n;
+    return Vehicle::kMaxBrakeNotch;
+}
 
 } // namespace
 
@@ -59,43 +104,32 @@ DriverDemand planDrive(const RoadAhead& road, float speedMs) {
     // The ceiling where the train stands. Everything else can only lower it.
     out.targetMs = static_cast<float>(road.here) * kKmhToMs;
 
-    // Each limit ahead: the speed from which that limit can still be reached by braking
-    // at kAutoDecel over the distance to it. Beyond the point where the drop happens the
-    // limit itself is the answer, which falls out of d <= 0.
     for (const RoadAhead::Limit& l : road.limits) {
         const float vl = static_cast<float>(l.kmh) * kKmhToMs;
         const float d = std::max(0.0f, l.d - kLimitEarlyM);
-        const float allow = std::sqrt(vl * vl + 2.0f * kAutoDecel * d);
-        out.targetMs = std::min(out.targetMs, allow);
-        // The same early margin in the strength as in the curve, or the brake is chosen
-        // for a restriction thirty metres further on than the one being aimed at.
-        if (speedMs > vl)
-            out.needDecel = std::max(out.needDecel,
-                                     (speedMs * speedMs - vl * vl) / (2.0f * std::max(d, 1.0f)));
-
+        out.targetMs = std::min(out.targetMs, allowedAt(d, vl, speedMs));
+        out.needDecel = std::max(out.needDecel, neededDecel(d, vl, speedMs));
     }
 
-    // A stop is a limit of zero, placed short of the mark so the train stands before it
-    // and not on it. The nearest one that actually binds is the one reported, so the HUD
-    // and the caller's "have we arrived" test agree about which mark is being aimed at.
+    // A stop is the same with a limit of zero, placed kStopShortM before the mark. The
+    // nearest one that binds is the one reported, so the HUD and the caller's "have we
+    // arrived" test agree about which mark is being aimed at.
     float bestStopAllow = 1e9f;
     for (const RoadAhead::Stop& s : road.stops) {
         const float d = std::max(0.0f, s.d - kStopShortM);
-        const float allow = std::sqrt(2.0f * kAutoDecel * d);
+        const float allow = allowedAt(d, 0.0f, speedMs);
         if (allow < bestStopAllow) {
             bestStopAllow = allow;
             out.stopIn = s.d;
             out.stopKind = s.kind;
             out.stopRef = s.ref;
         }
-        out.needDecel =
-            std::max(out.needDecel, speedMs * speedMs / (2.0f * std::max(d, 1.0f)));
+        out.needDecel = std::max(out.needDecel, neededDecel(d, 0.0f, speedMs));
     }
     if (bestStopAllow < out.targetMs) {
         out.targetMs = bestStopAllow;
         out.stopping = true;
     }
-
 
     out.targetMs = std::max(0.0f, out.targetMs);
     return out;
@@ -113,7 +147,7 @@ void applyDrive(Consist& train, int cab, const DriverDemand& demand, float dt) {
     // without being written into each of them.
     int wantPower = power, wantBrake = brake;
 
-    if (demand.stopping && demand.targetMs <= kUnderBandMs) {
+    if (demand.stopping && (demand.stopIn <= kStopHoldM || demand.targetMs <= kUnderBandMs)) {
         // The mark is here: the brake goes on and stays on, moving or not.
         //
         // The threshold is the slowest speed the controller will drive toward, and it has
@@ -124,9 +158,18 @@ void applyDrive(Consist& train, int cab, const DriverDemand& demand, float dt) {
         // released, which on a grade is a train that rolls away. Nobody creeps the last
         // five metres up to a signal anyway.
         wantPower = 0;
-        wantBrake = 2;
+        wantBrake = std::max(2, notchFor(demand.needDecel));
     } else if (v > demand.targetMs + kOverBandMs ||
-               (brake > 0 && v > demand.targetMs - kSettleBandMs)) {
+               (brake > 0 && v > demand.targetMs - kSettleBandMs) ||
+               (demand.stopping && brake > 1 && v > kCrawlMs)) {
+        // The third clause eases a heavy application down rather than throwing it away:
+        // anything above the lightest notch is worked down a step at a time while the
+        // train is still moving toward a stop. The lightest one may come off, and is
+        // meant to - a rate below what B1 gives is held by cycling it, and that average
+        // is what the train feels. Holding the application all the way to the stand
+        // instead over-braked it: a steady B1 is more than the shallow end of the curve
+        // asks for, so the train arrived at a stand fifty metres short and had to be
+        // driven up again.
         // WHETHER to brake is decided by the target, which already carries the braking
         // curve for everything ahead; HOW HARD by what the road needs. Deciding both from
         // the need was the mistake: the need is over half a metre per second squared the
@@ -139,13 +182,7 @@ void applyDrive(Consist& train, int cab, const DriverDemand& demand, float dt) {
         // the speed is properly back under, rather than letting go the moment it touches
         // the curve and having to take it again two seconds later.
         wantPower = 0;
-        wantBrake = Vehicle::kMaxBrakeNotch;
-        for (int n = 1; n <= Vehicle::kMaxBrakeNotch; ++n)
-            if (Vehicle::notchDecel(n) >= demand.needDecel * kBrakeMargin) {
-                wantBrake = n;
-                break;
-            }
-        wantBrake = std::max(1, wantBrake);
+        wantBrake = std::max(1, notchFor(demand.needDecel));
     } else if (v < demand.targetMs - kUnderBandMs &&
                (!demand.stopping || demand.stopIn > kApproachFromM || v < kApproachMs)) {
         // Well under what is allowed: take another notch.
@@ -178,11 +215,22 @@ void applyDrive(Consist& train, int cab, const DriverDemand& demand, float dt) {
 
     // A handle that has just moved is left to have its effect. Harder braking is the
     // exception: a brake that has to wait its turn is not a brake.
-    // ...and a brake whose reason has gone comes off without waiting either, or the
-    // train spends the dwell still braking for a restriction it has already met and
-    // arrives well under it.
-    const bool urgent = wantBrake > brake || (wantBrake == 0 && brake > 0);
-    if (!urgent && since < kDwellS) return;
+    // An application goes on a notch at a time rather than in one movement, which is how
+    // a brake is worked and what keeps the train from being snatched: the shoes take
+    // seconds to fill, and a handle wound straight to 3 has the train braking harder a
+    // moment later than anything asked for. The exception is a demand hard enough that
+    // the stop is genuinely in question - then it goes on at once and in full.
+    const bool severe = demand.needDecel >= Vehicle::notchDecel(3);
+    if (wantBrake > brake + 1 && !severe) wantBrake = brake + 1;
+
+    // How long the handles are left alone: a beat between steps of an application, the
+    // full dwell for everything else, and nothing at all for a brake going off - or the
+    // train spends the dwell braking for a restriction it has already met, and arrives
+    // well under it.
+    const float wait = wantBrake > brake  ? (severe ? 0.0f : kBrakeStepS)
+                       : wantBrake == 0 && brake > 0 ? 0.0f
+                                                     : kDwellS;
+    if (since < wait) return;
     if (wantPower == power && wantBrake == brake) return;
     if (wantBrake != brake) train.setBrakeNotch(cab, wantBrake);
     if (wantPower != power) train.setPowerNotch(cab, wantPower);
@@ -190,5 +238,7 @@ void applyDrive(Consist& train, int cab, const DriverDemand& demand, float dt) {
 }
 
 bool arrivedAtStop(const DriverDemand& demand, float speedMs) {
-    return demand.stopping && speedMs < 0.05f && demand.stopIn <= kStopShortM + 2.0f;
+    // Anywhere inside the distance the driver stops planning and simply holds - he was
+    // never going to get closer than that, so standing there IS having arrived.
+    return demand.stopping && speedMs < 0.05f && demand.stopIn <= kStopHoldM + 2.0f;
 }

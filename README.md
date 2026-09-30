@@ -629,9 +629,30 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   mistake that made it hunt: the need is over half a metre per second squared the moment a
   70 restriction comes within braking distance at 130, so the train braked while sitting
   exactly **on** the curve it was meant to be following, released, drifted up, braked
-  again, and arrived at the restriction doing 52 instead of 70. Braking is planned at
-  **0.5 m/s²**, gentler than the 1.3 the brake can make, because a driver who plans to the
-  limit of his brake has nothing left for what he did not plan for.
+  again, and arrived at the restriction doing 52 instead of 70.
+  The curve is not one rate over one distance. It is planned at **0.55 m/s²** far out,
+  easing to **0.25** at the mark over the last **400 m** — squared rather than linear, so
+  it is most of the way into light braking by the middle of the transition. And the
+  distance it plans over has the **build-up run** taken out of it first, `d − v·3 s`,
+  because the seconds between the handle moving and the shoes being on stop nothing and
+  the train covers them at the speed it already had. Counted out of the distance rather
+  than hidden in a fudge factor it scales with speed and with the train — a long one is
+  slow to apply and slow to let go, and this is what makes it brake earlier.
+  The end rate is below what the lightest notch gives (B1 is worth 0.35), which is
+  deliberate: a rate between notches is held by **cycling** the handle, and the average is
+  what the train feels — a light set answers quickly enough for that to be smooth, and a
+  long heavy one averages it along its own length. Trying instead to hold a steady
+  application to the stand over-braked it: a steady B1 is more than the shallow end asks
+  for, so the train came to rest fifty metres short and had to be driven up again. What
+  *is* held rather than thrown away is anything above the lightest notch, worked down a
+  step at a time. Applications go **on** in steps too, a notch at a time with a beat
+  between, unless the stop is genuinely in question. Full service is what is left when
+  nothing lighter covers the need — an auto-driver that reaches for everything it has at
+  each restriction has nothing in hand for the one it misjudged.
+  Stopping at a signal it aims **20 m** short and simply holds the brake inside 25 m.
+  From 700 m out at 64 km/h it now tracks the curve to within a km/h or two the whole way
+  down — 36.6 against 37.5, 26.8 against 26.7, 15.4 against 15.8 — and stands 24 m short,
+  on B2 at worst. The 600 m freight stands 22 m short.
   **Braking reverses to power** where it has to. Climbing to a signal the train loses
   speed to gravity and would stall short of it, so below **18 km/h** on the approach the
   power comes back on and draws it up to the mark — on a 2 % climb it holds about 18 and
