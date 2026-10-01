@@ -615,8 +615,8 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   one moving. `P` hands the train over. It runs forward along whatever road the switches
   are set for, up to the line speed, and stops where a stop is called for — **70 km/h** on
   anything that is not main line, **40** through a manned station worked by hand signals,
-  a stand at a **main signal that is not offering a road**, and a stand at that station's
-  **flag post** unless it is showing green. A signal it has stopped for starts it again by
+  a stand at a **main signal that is not offering a road**, and a stand at a manned
+  station unless its flag is showing green. A signal it has stopped for starts it again by
   itself when it clears; a station stop hands the train back, because the order there is
   given by hand and a driver has to be sent on. A hand on the controls takes it back.
   The judgement is a **pure function** of a list of distances and speeds
@@ -714,6 +714,47 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   driven from **cab 0**, the power pushes against the train's own momentum, because the
   two cabs of a set face opposite ways. The trace showed a train shedding 90 km/h at full
   power with no brake on — a fault in the test, read for an hour as a fault in the driver.
+  **Where** it stands at a station is worked out, not authored. The flag post is a point
+  on **one track** — Oteråga's stands on the main — and the driver only looked for marks
+  on the road it was taking, so a train routed into the loop never met it: crossing two
+  trains there, the red flag was out, the first ran straight through and the two nearly
+  met head on. The flag belongs to the **station**, and every road through it is stopped.
+  The post is a poor mark anyway: it says where the TXP stands, not where a train belongs.
+  What a train crossing another has to do is stand **clear of the switches at both ends**,
+  so the band between the outermost switches on its own road is the rule — the two that
+  its loop leaves and rejoins the main by, or the outermost pair on the main, and a yard
+  as complicated as Fauske falls out of that rather than needing its own case. Inside the
+  band: a **platform** for a train carrying people, positioned as near the TXP as the
+  platform allows; else the **TXP's own spot**, which is authored per track (`NO OTR TRACK
+  1` on the main, `NO OTR TRACK 2` on the loop) and is the best answer there is; else the
+  middle. A platform outside the band is ignored rather than clamped to its edge, because
+  the edge is the switch. Two switches make a band and one does not — a single switch
+  ahead means the train is already inside with the other end behind it, and calling that a
+  band would put the stop exactly on the switch. The mark is **booked** when the station
+  stop is first raised and aimed at thereafter, since half the switches fall behind as the
+  train runs in and a mark recomputed from what is left jumps forward to the exit switch
+  just as the train nears the middle.
+  Two more came out of driving it at Oteråga, and both were about **booking too early**.
+  The mark was booked from whatever the first scan saw, and the first scan sees the
+  station from two kilometres away — beyond both its switches, so with no band at all and
+  nothing to go on but the fallback. Worse, "is the station on this road" allowed a
+  closest approach of **500 m**, which is exactly how far off the last sample of a 2 km
+  walk is when the station is still beyond it: the station read as being on the road, at
+  the far end of the walk, and the mark was frozen there — about 500 m short of the
+  station, which at Oteråga is outside its entry signal. That is where the train stood.
+  So the band is worked out **fresh whenever it can be** and the booking is used only
+  when it cannot — which is the one case it was for, the entry switch falling behind as
+  the train runs in — and only a real band is ever booked. The threshold is 250 m, since
+  a station node stands beside its own tracks.
+  That is twice this scan was fixed by reading it and twice it was still wrong, so the
+  deciding came out of the road loop into `stationStopDistance` where a test can reach
+  it — and the test drives Oteråga's own distances off the ground: entry signal at 31 m,
+  switch at 278, flag post at 498, far switch at 1104, and the train standing at **691**.
+  Attaching switches to stations by "nearest station" was wrong once, too: the station
+  list holds every stopping place on the line, and an unstaffed halt a few hundred metres
+  off is nearer to a crossing station's switches than the station itself — which left
+  Oteråga's turnouts attached elsewhere and the band empty at the one station that
+  mattered. It is nearest among the stations that **have a flag**.
   It reads the road **five times a second**, not every frame, and costs about 0.1 ms.
 - **A 600 m freight train found two more of these, and both were invisible on a short
   one.** The first: the accelerator could not fire on hauled stock at all. `bpRate_` was

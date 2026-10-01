@@ -99,6 +99,57 @@ int notchFor(float need) {
 
 } // namespace
 
+float stationStopPoint(const StationStop& s) {
+    if (!s.haveBand) return s.fallback;
+    const float lo = std::min(s.bandFrom, s.bandTo);
+    const float hi = std::max(s.bandFrom, s.bandTo);
+    if (s.passenger && s.havePlatform) {
+        // Only the part of the platform that is inside the band. A platform standing
+        // clear of the switches at one end is no use to a train that has to keep clear
+        // of them, so if none of it is in the band it is ignored rather than clamped -
+        // clamping would put the train exactly on the switch it is avoiding.
+        const float plo = std::max(lo, std::min(s.platformFrom, s.platformTo));
+        const float phi = std::min(hi, std::max(s.platformFrom, s.platformTo));
+        if (phi > plo)
+            return s.haveTxp ? std::clamp(s.txpAt, plo, phi) : 0.5f * (plo + phi);
+    }
+    // The TXP's own spot, which is authored per track and is the best answer there is
+    // where the road has one - as near the person giving the order as the road allows.
+    if (s.haveTxp) return std::clamp(s.txpAt, lo, hi);
+    return 0.5f * (lo + hi);
+}
+
+float stationStopDistance(const StationStopInputs& in) {
+    if (!in.onRoad) return -1.0f;
+    StationStop ss;
+    ss.passenger = in.passenger;
+    ss.haveTxp = in.haveTxp;
+    ss.txpAt = in.txpAt;
+    ss.havePlatform = in.havePlatform;
+    ss.platformFrom = in.platformFrom;
+    ss.platformTo = in.platformTo;
+    ss.fallback = in.nodeAt;
+
+    // Two switches make a band; one does not. A single switch ahead means the train is
+    // already inside the station with the other end behind it, and calling that a band
+    // would put the stop exactly ON the switch - the one place this is all to avoid.
+    for (const float d : in.switchesAhead) {
+        if (!ss.haveBand) { ss.bandFrom = ss.bandTo = d; ss.haveBand = true; continue; }
+        ss.bandFrom = std::min(ss.bandFrom, d);
+        ss.bandTo = std::max(ss.bandTo, d);
+    }
+    ss.haveBand = in.switchesAhead.size() >= 2;
+
+    // The band is worked out fresh whenever it CAN be, and the booking is only there for
+    // when it cannot. Preferring the booking instead froze whatever was decided the
+    // first moment the station came into view - which, if only one of its switches was
+    // in range then, is the fallback: the station's own node, and a train stopping short
+    // of the station rather than between its switches.
+    if (ss.haveBand) return stationStopPoint(ss);
+    if (in.booked) return in.bookedAt;
+    return ss.fallback;
+}
+
 DriverDemand planDrive(const RoadAhead& road, float speedMs) {
     DriverDemand out;
     // The ceiling where the train stands. Everything else can only lower it.

@@ -39,9 +39,9 @@ struct RoadAhead {
         float d = 0.0f;
         int kmh = 0;
     };
-    // Something to stop at: a signal that is not offering a road, the flag post of a
-    // manned station that is not waving the train through, or the end of the rails.
-    enum class StopKind { Signal, FlagPost, EndOfTrack };
+    // Something to stop at: a signal that is not offering a road, a manned station that
+    // is not waving the train through, or the end of the rails.
+    enum class StopKind { Signal, Station, EndOfTrack };
     struct Stop {
         float d = 0.0f;
         StopKind kind = StopKind::Signal;
@@ -123,6 +123,62 @@ inline constexpr float kLimitEarlyM = 60.0f;
 // How far ahead to read the road. Enough to lose 130 km/h at kAutoDecel (1.3 km) with
 // room to see the next thing beyond it.
 inline constexpr float kLookAheadM = 2000.0f;
+
+// Where a train stops at a station worked by hand signals, in metres ahead of its nose.
+//
+// The flag post is not it. The post marks where the TXP stands, which is a good thing to
+// be near and a poor thing to stop at: what a train crossing another one has to do is
+// stand clear of the switches at BOTH ends, so the other train can get past it. That is
+// the band, and everything else is a preference inside it.
+//
+// Filled in by the caller, which is the only part that knows what a turnout or a platform
+// is; the choosing is here so it can be tested to the metre with no dataset at all.
+struct StationStop {
+    // The crossing area: the outermost switches on the road this train is on. On a loop
+    // that is where its road leaves the main and rejoins it, on the main the outermost
+    // pair. Without it there is nothing to reason about and `fallback` is used.
+    float bandFrom = 0.0f, bandTo = 0.0f;
+    bool haveBand = false;
+    // A platform over this road, if any, and where the TXP stands for it.
+    float platformFrom = 0.0f, platformTo = 0.0f;
+    bool havePlatform = false;
+    float txpAt = 0.0f;
+    bool haveTxp = false;
+    // The station node put on the road, for a station with no switches on this road at
+    // all - a dead-end siding, or a stopping place that is not a crossing station.
+    float fallback = 0.0f;
+    bool passenger = false; // a platform is only of interest to a train carrying people
+};
+
+// The band, and inside it: a platform for a passenger train, positioned as near the TXP
+// as the platform allows; else the TXP itself; else the middle of the band. A platform
+// lying outside the band is ignored rather than clamped to its edge - crossing comes
+// first, and the edge of the band is exactly where a train must not stand.
+float stationStopPoint(const StationStop& s);
+
+// Everything the caller found about one station on the road in front of one train, and
+// the distance to stop at - negative for "no stop here".
+//
+// The gathering is the caller's: only it knows what a turnout or a platform is. The
+// DECIDING is here, because deciding it in the middle of the road scan put it somewhere
+// no test could reach, and it was got wrong twice running - once stopping nothing at all
+// on a loop, and once stopping a train short of the station altogether.
+struct StationStopInputs {
+    std::vector<float> switchesAhead; // this station's switches on this road, metres
+    bool onRoad = false;              // the station is on the road in front of the train
+    float nodeAt = 0.0f;              // where the road passes closest to its node
+    bool haveTxp = false;
+    float txpAt = 0.0f;
+    bool havePlatform = false;
+    float platformFrom = 0.0f, platformTo = 0.0f;
+    bool passenger = false;
+    // What this train booked last time it could see the whole station. Used ONLY when
+    // the band cannot be worked out now - which happens once the train is inside and the
+    // switch it came in by is behind it.
+    bool booked = false;
+    float bookedAt = 0.0f;
+};
+float stationStopDistance(const StationStopInputs& in);
 
 // The whole policy: the fastest this train may be going *now* such that every limit and
 // every stop ahead can still be met.

@@ -427,6 +427,131 @@ int main() {
               "  and a dwarf never does, however clear it is");
     }
 
+    std::puts("\nWhere a train stands at a station worked by hand signals");
+    {
+        // Crossing two trains at Oteraga, the red flag was out and the first was routed
+        // into the loop. It ran straight through and nearly met the other head on: the
+        // flag post is authored as a point on ONE track - the main - and the driver only
+        // looked for marks on the road it was taking, so a train in the loop never met
+        // it. The flag belongs to the station; where the train stands is worked out from
+        // the road it is on. This is that working out, with no dataset in it.
+        StationStop ss;
+        check(std::abs(stationStopPoint(ss) - 0.0f) < 0.01f,
+              "with nothing known it falls back", stationStopPoint(ss), 0.0);
+        ss.fallback = 310.0f;
+        check(std::abs(stationStopPoint(ss) - 310.0f) < 0.01f,
+              "  to the station itself, put on the road", stationStopPoint(ss), 310.0);
+
+        // The band: between the switches at each end. On a loop that is where its road
+        // leaves the main and rejoins it; on the main, the outermost pair. One rule, and
+        // a station as complicated as Fauske falls out of it rather than needing its own.
+        ss.haveBand = true;
+        ss.bandFrom = 200.0f;
+        ss.bandTo = 700.0f;
+        check(std::abs(stationStopPoint(ss) - 450.0f) < 0.01f,
+              "between the switches, it stands in the middle of them",
+              stationStopPoint(ss), 450.0);
+
+        // The TXP's own spot is better than the middle, being where the order is given,
+        // and is authored per track - Oteraga has one on the main and one on the loop.
+        ss.haveTxp = true;
+        ss.txpAt = 380.0f;
+        check(std::abs(stationStopPoint(ss) - 380.0f) < 0.01f,
+              "  unless the TXP stands somewhere inside it", stationStopPoint(ss), 380.0);
+        ss.txpAt = 900.0f; // beyond the far switch
+        check(std::abs(stationStopPoint(ss) - 700.0f) < 0.01f,
+              "  and never outside it, however far out the TXP is",
+              stationStopPoint(ss), 700.0);
+        ss.txpAt = 380.0f;
+
+        // A passenger train stops at a platform, positioned as near the TXP as the
+        // platform allows.
+        ss.passenger = true;
+        ss.havePlatform = true;
+        ss.platformFrom = 250.0f;
+        ss.platformTo = 330.0f;
+        check(std::abs(stationStopPoint(ss) - 330.0f) < 0.01f,
+              "a passenger train stops at the platform, nearest the TXP",
+              stationStopPoint(ss), 330.0);
+        ss.passenger = false;
+        check(std::abs(stationStopPoint(ss) - 380.0f) < 0.01f,
+              "  which is no business of a freight train", stationStopPoint(ss), 380.0);
+        ss.passenger = true;
+
+        // ...and the crossing area wins where the two disagree. A platform outside the
+        // band is ignored rather than clamped to its edge: the edge is the switch, and
+        // standing on the switch is the one thing this is all for.
+        ss.platformFrom = 800.0f;
+        ss.platformTo = 900.0f;
+        check(std::abs(stationStopPoint(ss) - 380.0f) < 0.01f,
+              "a platform outside the switches is not used at all",
+              stationStopPoint(ss), 380.0);
+        // Half in, half out: the half that is inside is what it stops at.
+        ss.platformFrom = 600.0f;
+        ss.platformTo = 900.0f;
+        ss.txpAt = 380.0f;
+        check(std::abs(stationStopPoint(ss) - 600.0f) < 0.01f,
+              "  and one half inside is used for the half that is",
+              stationStopPoint(ss), 600.0);
+    }
+
+    std::puts("\nOteraga, with the real distances off the ground");
+    {
+        // The station that found both of these bugs, measured off the dataset. Along the
+        // main, from the east: the entry signal OTR 1 at 31 m, the switch into the loop
+        // at 278, the flag post at 498, the far switch at 1104, OTR 2 at 1206. A train
+        // coming from Fauske runs past the signal and should stand at 691 - midway
+        // between the two switches, which is the road the other train needs left clear.
+        auto approach = [](float run, bool booked, float bookedAt) {
+            StationStopInputs in;
+            in.onRoad = true;
+            in.nodeAt = 498.0f - run; // the node, near the flag post
+            for (const float sw : {277.5f, 1103.8f})
+                if (sw - run > 0.0f) in.switchesAhead.push_back(sw - run);
+            in.booked = booked;
+            in.bookedAt = bookedAt - run;
+            return stationStopDistance(in);
+        };
+        const float first = approach(0.0f, false, 0.0f);
+        std::printf("      from the east: stop %.0f m ahead, which is %.0f m along\n",
+                    first, first);
+        check(std::abs(first - 690.65f) < 1.0f,
+              "it stands midway between the two switches (m)", first, 690.65);
+        check(first > 277.5f && first < 1103.8f, "  which is inside the station",
+              first, 690.65);
+        check(first > 31.0f, "  and not short of the entry signal at 31 m", first, 690.65);
+
+        // Running in: once the entry switch is behind, only one is ahead and the band
+        // cannot be worked out. The booking is what holds the mark still - and it must
+        // hold it where it was, not let it jump forward to the far switch.
+        const float inside = approach(400.0f, true, 690.65f);
+        check(std::abs(inside - 290.65f) < 1.0f,
+              "400 m in, the mark has not moved relative to the ground", inside + 400.0f,
+              690.65);
+        check(std::abs(approach(400.0f, false, 0.0f) - 98.0f) < 1.0f,
+              "  and with nothing booked it falls back to the station, not the far switch",
+              approach(400.0f, false, 0.0f), 98.0);
+
+        // The bug this started as: the whole station seen at once must not be answered
+        // from the fallback. Booking the first thing seen - which, if only one switch is
+        // in range, IS the fallback - is what stopped a train short of the station.
+        StationStopInputs stale;
+        stale.onRoad = true;
+        stale.nodeAt = 498.0f;
+        stale.switchesAhead = {277.5f, 1103.8f};
+        stale.booked = true;
+        stale.bookedAt = 20.0f; // a stale mark from before the station was fully in view
+        check(std::abs(stationStopDistance(stale) - 690.65f) < 1.0f,
+              "a band in view beats anything booked earlier",
+              stationStopDistance(stale), 690.65);
+
+        // And a station that is not on this road at all is not a stop.
+        StationStopInputs away;
+        away.switchesAhead = {277.5f, 1103.8f};
+        check(stationStopDistance(away) < 0.0f, "a station off this road raises nothing",
+              stationStopDistance(away), -1.0);
+    }
+
     std::puts("\nThe end of the rails");
     {
         // Driven at a real dead end, with the road read the way the sim reads it, because

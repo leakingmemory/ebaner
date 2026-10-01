@@ -912,6 +912,43 @@ int main(int argc, char** argv) {
     if (!flagPosts.empty())
         std::printf("[FlagPost] %zu post(s)\n", flagPosts.size());
 
+    // The resolved line speed of each path, both ways round, worked out the first time it
+    // is wanted. Paths do not change after load, so this is a cache and never stale.
+    std::map<std::pair<int, int>, std::vector<SpeedStretch>> speedCache;
+    auto speedsOf = [&](int pathIdx, int dir) -> const std::vector<SpeedStretch>& {
+        const auto key = std::make_pair(pathIdx, dir);
+        auto it = speedCache.find(key);
+        if (it == speedCache.end())
+            it = speedCache.emplace(key, resolveSpeeds(paths[pathIdx], dir)).first;
+        return it->second;
+    };
+
+    // Avalanche warning signals. They answer to nothing here: no route runs through one,
+    // no aspect logic reads one, and no station owns one. What they show is a property of
+    // the mountainside.
+    const std::vector<AvalancheSignal> avalanches = loadAvalancheSignals(datasetRoot);
+    // One aspect per signal, and every one of them is Clear. Nothing in this program can
+    // make it anything else - the detector that would raise a warning does not exist. It
+    // is a vector rather than a constant so that when one does, it writes here and the
+    // rebuild that already runs draws it: no new buffer, no new mesh path, no new plumbing.
+    std::vector<AvalancheAspect> avalancheShown(avalanches.size(), AvalancheAspect::Clear);
+    if (!avalanches.empty())
+        std::printf("[Avalanche] %zu warning signal(s)\n", avalanches.size());
+
+    // Where the TXP stands to give a train permission to leave. One position showing per
+    // station: a person really can only be in one place, which is what separates this
+    // from the flags in their fixtures. Held outside StationState on purpose - that is
+    // about manning, and this does not depend on it.
+    const std::vector<TxpPosition> txpPositions = loadTxpPositions(datasetRoot);
+    const std::vector<SignalStation> txpStation =
+        attachStations(txpPositions, stations, polys);
+    std::unordered_map<std::string, int> txpShowingAt; // station -> position, absent none
+    // Where a platform puts them above the rail. Static, so found once rather than on
+    // every rebuild - it costs a search over every platform and path.
+    const std::vector<float> txpLift = txpStandLift(txpPositions, polys, data, paths);
+    if (!txpPositions.empty())
+        std::printf("[TxpPosition] %zu position(s)\n", txpPositions.size());
+
     // --- what a self-driving train has to read off the road -------------------------
     //
     // A signal and a flag post are both an authored trackId:frac, and the road a train is
@@ -923,7 +960,7 @@ int main(int argc, char** argv) {
         float s = 0.0f;
         glm::dvec2 forward{0.0}; // the direction it governs; (0,0) reads from either way
         glm::dvec3 world{0.0};
-        int kind = 0; // 0 = signal placement, 1 = flag post
+        int kind = 0; // 0 = signal placement, 1 = flag post, 2 = TXP position
         int ref = -1; // index into sigPlacements / flagPosts
         std::string station; // for a flag post and a simple entry: whose it is
     };
@@ -971,45 +1008,43 @@ int main(int argc, char** argv) {
         for (std::size_t i = 0; i < flagPosts.size(); ++i)
             place(flagPosts[i].trackId, flagPosts[i].frac, glm::dvec2(0.0), 1,
                   static_cast<int>(i), flagPostStation[i].name);
-        std::printf("[AutoDrive] %zu mark(s) on the road (%zu signal, %zu flag)\n",
-                    roadMarks.size(), sigPlacements.size(), flagPosts.size());
+        // The TXP positions, which are authored PER TRACK - "NO OTR TRACK 1" on the main
+        // and "NO OTR TRACK 2" on the loop. That makes them the best expression there is
+        // of where a train stops to be given its order, and the flag post, which is one
+        // point on one track for the whole station, is not one at all.
+        for (std::size_t i = 0; i < txpPositions.size(); ++i)
+            place(txpPositions[i].trackId, txpPositions[i].frac, glm::dvec2(0.0), 2,
+                  static_cast<int>(i), txpStation[i].name);
+        std::printf("[AutoDrive] %zu mark(s) on the road (%zu signal, %zu flag, %zu txp)\n",
+                    roadMarks.size(), sigPlacements.size(), flagPosts.size(),
+                    txpPositions.size());
     }
-    // The resolved line speed of each path, both ways round, worked out the first time it
-    // is wanted. Paths do not change after load, so this is a cache and never stale.
-    std::map<std::pair<int, int>, std::vector<SpeedStretch>> speedCache;
-    auto speedsOf = [&](int pathIdx, int dir) -> const std::vector<SpeedStretch>& {
-        const auto key = std::make_pair(pathIdx, dir);
-        auto it = speedCache.find(key);
-        if (it == speedCache.end())
-            it = speedCache.emplace(key, resolveSpeeds(paths[pathIdx], dir)).first;
-        return it->second;
-    };
-
-    // Avalanche warning signals. They answer to nothing here: no route runs through one,
-    // no aspect logic reads one, and no station owns one. What they show is a property of
-    // the mountainside.
-    const std::vector<AvalancheSignal> avalanches = loadAvalancheSignals(datasetRoot);
-    // One aspect per signal, and every one of them is Clear. Nothing in this program can
-    // make it anything else - the detector that would raise a warning does not exist. It
-    // is a vector rather than a constant so that when one does, it writes here and the
-    // rebuild that already runs draws it: no new buffer, no new mesh path, no new plumbing.
-    std::vector<AvalancheAspect> avalancheShown(avalanches.size(), AvalancheAspect::Clear);
-    if (!avalanches.empty())
-        std::printf("[Avalanche] %zu warning signal(s)\n", avalanches.size());
-
-    // Where the TXP stands to give a train permission to leave. One position showing per
-    // station: a person really can only be in one place, which is what separates this
-    // from the flags in their fixtures. Held outside StationState on purpose - that is
-    // about manning, and this does not depend on it.
-    const std::vector<TxpPosition> txpPositions = loadTxpPositions(datasetRoot);
-    const std::vector<SignalStation> txpStation =
-        attachStations(txpPositions, stations, polys);
-    std::unordered_map<std::string, int> txpShowingAt; // station -> position, absent none
-    // Where a platform puts them above the rail. Static, so found once rather than on
-    // every rebuild - it costs a search over every platform and path.
-    const std::vector<float> txpLift = txpStandLift(txpPositions, polys, data, paths);
-    if (!txpPositions.empty())
-        std::printf("[TxpPosition] %zu position(s)\n", txpPositions.size());
+    // Which station each turnout belongs to, worked out once: what bounds "the switches
+    // at the ends of this station" without a radius that would reach into the next one.
+    //
+    // Nearest among the stations that HAVE A FLAG, not nearest of all of them. The
+    // station list holds every stopping place on the line, and an unstaffed halt a few
+    // hundred metres from a crossing station will be nearer to its switches than the
+    // station itself is - which left Oteraga's turnouts attached to somewhere else, and
+    // the band empty at the one station the train was supposed to stop at.
+    std::vector<int> turnoutStation(switchNet.turnouts().size(), -1);
+    {
+        std::vector<int> flagged;
+        for (const SignalStation& fs : flagPostStation)
+            for (std::size_t k = 0; k < stations.size(); ++k)
+                if (stations[k].name == fs.name) { flagged.push_back(static_cast<int>(k)); break; }
+        const glm::dvec3 org = data.sceneOrigin();
+        for (std::size_t i = 0; i < switchNet.turnouts().size(); ++i) {
+            const glm::dvec3 w = switchNet.turnouts()[i].world + org;
+            double best = 1e18;
+            for (const int k : flagged) {
+                const double d = glm::distance(glm::dvec2(w), glm::dvec2(stations[k].world));
+                if (d < best) { best = d; turnoutStation[i] = k; }
+            }
+        }
+        std::printf("[AutoDrive] %zu turnout(s) attached to %zu flagged station(s)\n",
+                    turnoutStation.size(), flagged.size());
+    }
     // Who can pass a train order to whom. Derived from the positions above rather than
     // authored: a station is a TXP station because one was placed at it, and the next
     // station along the running line is its neighbour. Nothing to keep in step.
@@ -3165,13 +3200,75 @@ int main(int argc, char** argv) {
     // How often the road is re-read. A driver reads it about this often too, and a 2 km
     // walk per armed train per frame is the kind of cost the profiling work removed.
     constexpr float kAutoPlanS = 0.2f;
-    // Signal marks found ahead, held over until the whole road has been read.
+    // Marks found ahead, held over until the whole road has been read: which of them
+    // matter cannot be decided one at a time.
     struct SigAhead { float d; int ref; };
     std::vector<SigAhead> autoSignalsAhead;
-    auto scanRoad = [&](const Consist& t) {
+    struct TxpAhead { float d; std::string station; };
+    std::vector<TxpAhead> autoTxpAhead;
+    struct SwAhead { float d; int station; };
+    std::vector<SwAhead> autoSwitchesAhead;
+    // Where a platform covers the road, inside the band. Sampled along it rather than
+    // looked up, because a platform is an OSM footprint and the only question it answers
+    // is whether it covers a point - so the road is walked over the band and asked.
+    // Twenty metres is finer than a platform is short, and it only runs for a passenger
+    // train at a station it is actually stopping at.
+    auto roadPointAt = [&](const std::vector<Vehicle::RoadStretch>& stretches, float d,
+                           glm::dvec2& world) {
+        for (const Vehicle::RoadStretch& st : stretches) {
+            const float len = std::abs(st.sTo - st.sFrom);
+            if (d < st.dist0 || d > st.dist0 + len) continue;
+            const float dir2 = st.sTo >= st.sFrom ? 1.0f : -1.0f;
+            const glm::vec3 p = paths[st.pathIdx].poseAt(st.sFrom + dir2 * (d - st.dist0)).pos;
+            const glm::dvec3 org = data.sceneOrigin();
+            world = glm::dvec2(org.x + p.x, org.y + p.y);
+            return true;
+        }
+        return false;
+    };
+    auto platformSpanOnRoad = [&](const std::vector<Vehicle::RoadStretch>& stretches,
+                                  float from, float to, StationStop& ss) {
+        constexpr float kStep = 20.0f;
+        bool any = false;
+        for (float d = from; d <= to; d += kStep) {
+            glm::dvec2 w(0.0);
+            if (!roadPointAt(stretches, d, w)) continue;
+            float topZ = 0.0f;
+            if (platformTopAt(data, paths, w.x, w.y, topZ)) {
+                if (!any) { ss.platformFrom = d; any = true; }
+                ss.platformTo = d;
+            }
+        }
+        ss.havePlatform = any;
+    };
+    // Where the road passes closest to a station's node, and how close. Both the test
+    // for "is this station on the road ahead at all" and the fallback stopping point for
+    // one whose switches are not.
+    auto stationOnRoad = [&](const std::vector<Vehicle::RoadStretch>& stretches,
+                             const glm::dvec3& node, float& atOut) {
+        const Vehicle::RoadStretch& last = stretches.back();
+        const float reach = last.dist0 + std::abs(last.sTo - last.sFrom);
+        double best = 1e18;
+        for (float d = 0.0f; d <= reach; d += 20.0f) {
+            glm::dvec2 w(0.0);
+            if (!roadPointAt(stretches, d, w)) continue;
+            const double dist = glm::distance(w, glm::dvec2(node));
+            if (dist < best) { best = dist; atOut = d; }
+        }
+        // A station node stands beside its own tracks, not half a kilometre off. The
+        // threshold was 500 m, and that is how far the closest SAMPLE is when the
+        // station is still beyond the lookahead - so a station two kilometres off was
+        // read as being on the road, at the far end of the walk, and the stop was booked
+        // there: 500 m short of the station and, at Oteraga, outside its entry signal.
+        return best < 250.0;
+    };
+
+    auto scanRoad = [&](Consist& t) {
         RoadAhead road;
         road.here = kDefaultKmh;
         autoSignalsAhead.clear();
+        autoTxpAhead.clear();
+        autoSwitchesAhead.clear();
         road.roadRunsOut = !t.roadAhead(kLookAheadM, autoStretches);
         if (autoStretches.empty()) return road;
         if (road.roadRunsOut) {
@@ -3245,17 +3342,27 @@ int main(int argc, char** argv) {
                     // a time. It depends on whether a main signal has authorised the
                     // movement, and that is a property of all of them together.
                     autoSignalsAhead.push_back({d, m.ref});
-                } else {
-                    // A flag post: stop for the station's order unless it is waving the
-                    // train through. A post already answered is behind us as far as this
-                    // train is concerned until it has run clear of it.
-                    if (!stationManned(m.station)) continue;
-                    if (flagShown[m.ref] == FlagColour::Green) continue;
-                    if (t.autoServedStop() == m.ref) continue;
-                    road.stops.push_back({d, RoadAhead::StopKind::FlagPost, m.ref});
+                } else if (m.kind == 2) {
+                    autoTxpAhead.push_back({d, m.station}); // where the TXP stands
                 }
                 if (m.kind == 1 && stationManned(m.station))
                     road.limits.push_back({d, kStationKmh});
+            }
+            // Every turnout on this stretch, with the station it belongs to. Not from
+            // the walk, which reports a turnout only where it DIVERTS - a train running
+            // straight through a station crosses its switches without the walk noticing,
+            // and those are exactly the ones bounding the road it is on.
+            for (std::size_t ti = 0; ti < switchNet.turnouts().size(); ++ti) {
+                const Turnout& to = switchNet.turnouts()[ti];
+                float ts = 0.0f;
+                if (to.mainPath == st.pathIdx && to.sMain >= lo && to.sMain <= hi)
+                    ts = to.sMain;
+                else if (to.sidingPath == st.pathIdx && to.sSiding >= lo && to.sSiding <= hi)
+                    ts = to.sSiding;
+                else
+                    continue;
+                autoSwitchesAhead.push_back(
+                    {st.dist0 + std::abs(ts - st.sFrom), turnoutStation[ti]});
             }
             first = false;
         }
@@ -3287,6 +3394,68 @@ int main(int argc, char** argv) {
         for (const SigAhead& sa : autoSignalsAhead)
             if (signalStopsTrain(sigPlacements[sa.ref]))
                 road.stops.push_back({sa.d, RoadAhead::StopKind::Signal, sa.ref});
+
+        // --- the station stop -------------------------------------------------------
+        //
+        // The flag is the STATION's, not the post's. It is authored as a point on one
+        // track - Oteraga's stands on the main - and a train sent into the loop never
+        // met it, so a red flag stopped nothing and two trains nearly met head on. What
+        // the flag says applies to every road through the station; where the train
+        // stands is worked out from the road it is actually on.
+        for (std::size_t fi = 0; fi < flagPosts.size(); ++fi) {
+            const std::string& stName = flagPostStation[fi].name;
+            if (!stationManned(stName)) continue;
+            if (flagShown[fi] == FlagColour::Green) continue; // waved through
+            if (t.autoServedStop() == static_cast<int>(fi)) continue; // already answered
+            int stIdx = -1;
+            for (std::size_t k = 0; k < stations.size(); ++k)
+                if (stations[k].name == stName) { stIdx = static_cast<int>(k); break; }
+
+            StationStopInputs in;
+            in.passenger = t.carriesPassengers();
+            for (const SwAhead& sw : autoSwitchesAhead)
+                if (sw.station == stIdx) in.switchesAhead.push_back(sw.d);
+            for (const TxpAhead& tx : autoTxpAhead)
+                if (tx.station == stName) { in.txpAt = tx.d; in.haveTxp = true; break; }
+            if (stIdx >= 0)
+                in.onRoad = stationOnRoad(autoStretches, stations[stIdx].world, in.nodeAt);
+            if (in.passenger && in.switchesAhead.size() >= 2) {
+                StationStop sp;
+                const auto mm = std::minmax_element(in.switchesAhead.begin(),
+                                                    in.switchesAhead.end());
+                platformSpanOnRoad(autoStretches, *mm.first, *mm.second, sp);
+                in.havePlatform = sp.havePlatform;
+                in.platformFrom = sp.platformFrom;
+                in.platformTo = sp.platformTo;
+            }
+            // What this train booked while it could still see both ends of the station.
+            if (t.autoStopRef() == static_cast<int>(fi)) {
+                for (const Vehicle::RoadStretch& st : autoStretches) {
+                    if (st.pathIdx != t.autoStopPath()) continue;
+                    const float lo = std::min(st.sFrom, st.sTo), hi = std::max(st.sFrom, st.sTo);
+                    if (t.autoStopS() < lo || t.autoStopS() > hi) continue;
+                    in.booked = true;
+                    in.bookedAt = st.dist0 + std::abs(t.autoStopS() - st.sFrom);
+                    break;
+                }
+            }
+            const float at = stationStopDistance(in);
+            // Book whatever was decided from a whole station, so it survives the entry
+            // switch falling behind. Only from a real band: booking a fallback would
+            // freeze the very guess the band is there to replace.
+            if (at >= 0.0f && in.switchesAhead.size() >= 2) {
+                for (const Vehicle::RoadStretch& st : autoStretches) {
+                    const float len = std::abs(st.sTo - st.sFrom);
+                    if (at < st.dist0 || at > st.dist0 + len) continue;
+                    const float dir2 = st.sTo >= st.sFrom ? 1.0f : -1.0f;
+                    t.bookAutoStop(static_cast<int>(fi), st.pathIdx,
+                                   st.sFrom + dir2 * (at - st.dist0));
+                    break;
+                }
+            }
+            if (at >= 0.0f)
+                road.stops.push_back({at, RoadAhead::StopKind::Station, static_cast<int>(fi)});
+        }
         return road;
     };
 
@@ -4434,7 +4603,10 @@ int main(int argc, char** argv) {
                             glm::distance(glm::dvec2(org.x + fp.x, org.y + fp.y),
                                           glm::dvec2(m.world)) < kStationSlowM)
                             clear = false;
-                    if (clear) t.setAutoServedStop(-1);
+                    if (clear) {
+                        t.setAutoServedStop(-1);
+                        t.clearAutoStop(); // and the point booked against it
+                    }
                 }
                 if (!autoPlanNow) continue;
                 const double tA = profile ? now_ms() : 0.0;
@@ -4453,8 +4625,8 @@ int main(int argc, char** argv) {
                                 int(t.emergencyLine()),
                                 d.stopping ? "stopping for " : "running",
                                 d.stopping
-                                    ? (d.stopKind == RoadAhead::StopKind::FlagPost
-                                           ? "a flag post"
+                                    ? (d.stopKind == RoadAhead::StopKind::Station
+                                           ? "the station"
                                        : d.stopKind == RoadAhead::StopKind::EndOfTrack
                                            ? "the end of the track"
                                            : signalKindName(sigPlacements[d.stopRef].kind))
@@ -4463,9 +4635,10 @@ int main(int argc, char** argv) {
                 }
                 // Standing at a station's flag post is the end of this movement: the
                 // order is given by hand, and the driver has to be sent on again.
-                if (d.stopKind == RoadAhead::StopKind::FlagPost &&
+                if (d.stopKind == RoadAhead::StopKind::Station &&
                     arrivedAtStop(d, t.speed())) {
                     t.setAutoServedStop(d.stopRef);
+                    t.clearAutoStop(); // answered; the next visit books afresh
                     t.setAutoDriving(false);
                     if (&t == vehicle)
                         setMapMsg("auto-drive: standing at the station - press P to go on",
@@ -4894,8 +5067,8 @@ int main(int argc, char** argv) {
                     if (g_autoDemand.stopping)
                         std::snprintf(buf, sizeof(buf), "AUTO %3.0f km/h   stopping: %s in %.0f m",
                                       g_autoDemand.targetMs * 3.6f,
-                                      g_autoDemand.stopKind == RoadAhead::StopKind::FlagPost
-                                          ? "FLAG"
+                                      g_autoDemand.stopKind == RoadAhead::StopKind::Station
+                                          ? "STATION"
                                       : g_autoDemand.stopKind == RoadAhead::StopKind::EndOfTrack
                                           ? "END OF TRACK" : "SIGNAL",
                                       g_autoDemand.stopIn);

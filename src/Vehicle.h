@@ -67,6 +67,15 @@ enum DriveKind {
     DriveElectric = 2,  // prime mover -> alternator -> traction motors (Di 4)
 };
 
+// Whether this body carries people. Not derivable from the category: `hauling` marks
+// every formation CatTrain, the 600 m freight included, so the only thing that actually
+// says is what the vehicle IS. A locomotive is neither - it is the train around it that
+// decides whether a platform is of any interest.
+constexpr bool bodyCarriesPassengers(int body) {
+    return body == BodyClass93 || body == BodyType5 || body == BodyType5Fr ||
+           body == BodyType5B || body == BodyType5A || body == BodyWlab2;
+}
+
 // A selectable rail vehicle type. The running gear is described by a bogie count
 // (0 = single bare axle, 1 = one bogie, 2 = end bogies, 3 = end + middle),
 // bogieSpacing (end-bogie-to-end-bogie distance) and wheelbase (axle spacing

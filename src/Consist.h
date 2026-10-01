@@ -232,6 +232,23 @@ public:
     void setAutoDriving(bool on) { autoDrive_ = on; }
     int autoServedStop() const { return autoServed_; }
     void setAutoServedStop(int ref) { autoServed_ = ref; }
+    // The station stop this train has booked: which station, and the point on the road
+    // it is aiming at. Booked once and then aimed at, because the point is worked out
+    // from the switches at both ends of the station and half of those fall behind the
+    // train as it runs in - recomputed every tick it would jump forward to the exit
+    // switch just as the train got near the middle.
+    int autoStopRef() const { return autoStopRef_; }
+    int autoStopPath() const { return autoStopPath_; }
+    float autoStopS() const { return autoStopS_; }
+    void bookAutoStop(int ref, int pathIdx, float s) {
+        autoStopRef_ = ref;
+        autoStopPath_ = pathIdx;
+        autoStopS_ = s;
+    }
+    void clearAutoStop() { autoStopRef_ = autoStopPath_ = -1; }
+    // Whether anything in this train carries people, which is what decides if a platform
+    // is of any interest to it.
+    bool carriesPassengers() const;
     // Seconds since the auto-driver last moved a handle. A driver does not sit with his
     // hand on the controller adjusting it five times a second, and a train whose notches
     // change that often hunts - audibly, and in the speedometer. See AutoDriver.
@@ -327,5 +344,8 @@ private:
     int autoServed_ = -1;    // the stop it has already answered for
     float autoSince_ = 99.0f; // seconds since a handle was last moved
     bool autoShunt_ = false; // authorised by a dwarf, so limited to shunting speed
+    int autoStopRef_ = -1;   // the station whose stop is booked
+    int autoStopPath_ = -1;  // ...and where on the road it is
+    float autoStopS_ = 0.0f;
     UncoupleHold hold_ = UncoupleHold::None;
 };

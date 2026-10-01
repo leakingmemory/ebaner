@@ -249,6 +249,12 @@ const char* Consist::reverserName(int cab) const {
     return r > 0 ? "F" : (r < 0 ? "R" : "N");
 }
 
+bool Consist::carriesPassengers() const {
+    for (const Vehicle& u : units_)
+        if (bodyCarriesPassengers(u.bodyStyle())) return true;
+    return false;
+}
+
 int Consist::headingSign() const {
     const int a = activeCab();
     if (a < 0) return 0;
