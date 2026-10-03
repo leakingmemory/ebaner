@@ -539,9 +539,90 @@ int main() {
         check(notchCapAt(2.0f) == 2, "under 14 km/h, B2 is the hardest there is",
               notchCapAt(2.0f), 2.0);
         check(notchCapAt(6.0f) == 3, "  B3 up to 29", notchCapAt(6.0f), 3.0);
-        check(notchCapAt(20.0f) == Vehicle::kMaxBrakeNotch,
+        check(notchCapAt(20.0f) == Vehicle::kFullServiceNotch,
               "  and full service only at a speed worth it", notchCapAt(20.0f),
-              double(Vehicle::kMaxBrakeNotch));
+              double(Vehicle::kFullServiceNotch));
+        // And never past full service, whatever is asked of it. kMaxBrakeNotch is the
+        // ELECTRIC brake's range on the power controller and happens to equal the
+        // emergency notch, so reaching for it on the train brake handle dumps the pipe.
+        check(notchCapAt(50.0f) < Vehicle::kEmergencyNotch,
+              "the cap is a service notch, never the emergency one", notchCapAt(50.0f),
+              double(Vehicle::kFullServiceNotch));
+        check(Vehicle::notchDecel(Vehicle::kEmergencyNotch) == 0.0f,
+              "  the emergency notch is not a service rate at all, which is the trap",
+              Vehicle::notchDecel(Vehicle::kEmergencyNotch), 0.0);
+    }
+
+    std::puts("\nA machine with separate handles brakes in the right order");
+    {
+        // Grids first while they are worth anything, the locomotive's own brake once
+        // they have faded, and the train brake for whatever is left over either way -
+        // which on a long train is most of it, since the grids and the loco's shoes
+        // work on one vehicle out of twenty.
+        std::vector<glm::vec3> pts;
+        for (int i = 0; i <= 2000; ++i) pts.push_back({static_cast<float>(i) * 25.0f, 0, 0});
+        std::vector<TrackPath> paths;
+        paths.emplace_back(1u, 0u, pts, std::vector<std::uint16_t>(pts.size(), 200));
+        const VehicleSpec* sp = specNamed("Di 4 + 5 (cafe");
+        check(sp != nullptr, "there is a locomotive-hauled train to brake");
+        if (sp) {
+            Consist c(&paths, &paths[0], *sp, 20000.0f, 0.0f);
+            c.attachNetwork(&paths, nullptr);
+            c.toggleEngines();
+            c.setReverser(1, 1);
+            c.setBrakeNotch(1, 0);
+            for (int i = 0; i < 220 * 60; ++i) c.update(kDt, 0.0f);
+            check(c.controls(1) == ControlSeparate, "it has separate brake handles",
+                  double(c.controls(1)), double(ControlSeparate));
+            check(c.hasDynamicBrake(), "  and grids");
+            check(c.independentCapacity() > 0.0f, "  and a locomotive brake (m/s2)",
+                  c.independentCapacity(), 0.3);
+
+            const float mark = 2500.0f;
+            float travelled = 0.0f;
+            int dynFast = 0, trainFast = 0, indSlow = 0, holdTrain = 0, stood = 0;
+            int worstTrain = 0;
+            DriverDemand d;
+            for (int i = 0; i < 600 * 60; ++i) {
+                if (i % 12 == 0) {
+                    RoadAhead road = openRoad(100);
+                    road.stops.push_back({mark - travelled, RoadAhead::StopKind::Station, 1});
+                    d = planDrive(road, c.speed());
+                    applyDrive(c, 1, d, 0.2f);
+                    const int dyn = c.powerNotch(1) < 0 ? -c.powerNotch(1) : 0;
+                    const bool braking = dyn > 0 || c.brakeNotch(1) > 0 ||
+                                         c.independentNotch(1) > 0;
+                    if (braking && c.speed() > 8.33f) {
+                        dynFast = std::max(dynFast, dyn);
+                        trainFast = std::max(trainFast, c.brakeNotch(1));
+                    }
+                    if (braking && c.speed() < 8.33f && c.speed() > 0.1f)
+                        indSlow = std::max(indSlow, c.independentNotch(1));
+                    if (c.speed() < 0.05f && travelled > 500.0f)
+                        holdTrain = std::max(holdTrain, c.brakeNotch(1));
+                    worstTrain = std::max(worstTrain, c.brakeNotch(1));
+                }
+                const float before = c.speed();
+                c.update(kDt, 0.0f);
+                travelled += 0.5f * (before + c.speed()) * kDt;
+                // ...and stand there a while: the hold goes on the tick AFTER it stops,
+                // so breaking the moment the wheels stop turning reads B0 and calls it
+                // a train left with its brakes off.
+                if (c.speed() < 0.02f && travelled > 500.0f && ++stood > 10 * 60) break;
+            }
+            std::printf("      fast: grids E%d with train B%d; slow: loco L%d; "
+                        "holding B%d; stood %.1f m short\n", dynFast, trainFast, indSlow,
+                        holdTrain, mark - travelled);
+            check(dynFast > 0, "above 30 km/h the grids are used", dynFast, 5.0);
+            check(indSlow > 0, "below it the locomotive brake is", indSlow, 4.0);
+            check(holdTrain >= 3, "and the train brake holds it firmly at a stand",
+                  holdTrain, 3.0);
+            check(worstTrain < Vehicle::kEmergencyNotch,
+                  "  with no emergency application anywhere", worstTrain,
+                  double(Vehicle::kFullServiceNotch));
+            check(mark - travelled > 0.0f && mark - travelled < 45.0f,
+                  "  and it stands short of the mark (m)", mark - travelled, 22.6);
+        }
     }
 
     std::puts("\nThe end of the rails");

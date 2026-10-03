@@ -667,6 +667,25 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   by how far over the limit the train is, which is the distinction the old sum missed.
   Approaching a stop from a stand 150 m off it now uses **nothing harder than B2** and
   stands 24 m short, where before it slammed on and bounced.
+  **A machine with separate handles is braked in the order a driver uses them**, which is
+  not "apply the train brake harder". Above **30 km/h** the grids go on first — they cost
+  nothing, they are quick, and they wear nothing out. Below it the grids have faded, so
+  the **locomotive's own brake** goes on first. The **train brake takes whatever is left
+  over**, and on a long train that is most of it: the grids and the loco's shoes work on
+  one vehicle out of twenty, which the independent's worth to the whole train makes
+  explicit — 0.47 m/s² behind a Di 4 and five carriages, 0.09 behind the 600 m freight.
+  What is left over is measured rather than guessed, since the grids report the force
+  they are actually making. At a stand the train brake goes on **firmly** and the grids
+  are let go, which do nothing there anyway. Braking a Di 4 and five carriages to a stop
+  2.5 km off: E5 with B2 at 88 km/h, E5 with B1 at 44, the grids off and **L4** at 10,
+  then L1 with B3 to hold — standing 22.6 m short.
+  It also turned up the reason the brake kept going to **emergency**, which three
+  separate rounds of this had been chasing. `kMaxBrakeNotch` is the ELECTRIC brake's
+  range on the power controller, E1–E5, and is *the same number* as `kEmergencyNotch` —
+  so `notchFor`, whose fallback was `kMaxBrakeNotch`, dumped the pipe every time a
+  restriction wanted more than full service, and the comment saying it never commanded
+  an emergency was simply false. Full service is one notch below, and now has a name:
+  `kFullServiceNotch`.
   Stopping at a signal it aims **20 m** short and simply holds the brake inside 25 m.
   From 700 m out at 64 km/h it now tracks the curve to within a km/h or two the whole way
   down — 36.6 against 37.5, 26.8 against 26.7, 15.4 against 15.8 — and stands 24 m short,

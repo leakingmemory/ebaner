@@ -122,6 +122,13 @@ public:
     int controls(int cab = -1) const { return units_[drivingUnit(cab)].controls(); }
     // The electric brake the whole train is making, which is every set that has one.
     float dynamicBrakeForce() const;
+    // Whether anything in the train has grids to brake on at all.
+    bool hasDynamicBrake() const;
+    // What the locomotive brake is worth to the WHOLE train, as a deceleration: it
+    // works the cylinders of the sets that have one, and those sets are a fraction of
+    // what is being stopped. On a light engine that is everything; on a 600 m freight it
+    // is a twentieth, which is why it is the first thing used and rarely the last.
+    float independentCapacity() const;
     // The set a cab belongs to, or - for cab < 0 - the set in charge of the train.
     int drivingUnit(int cab = -1) const;
     // The hardest-working set of grids in the train, 0..1 - what the blower answers to.

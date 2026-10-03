@@ -35,6 +35,9 @@ constexpr float kKmhToMs = 1.0f / 3.6f;
 constexpr float kUnderBandMs = 1.0f;  // m/s under target: take another notch
 constexpr float kSettleBandMs = 0.3f; // m/s under target: start easing off
 constexpr float kOverBandMs = 1.0f;   // m/s over target: a brake, not just less power
+// Above this the grids are worth using and are what a driver reaches for; below it they
+// have faded and the locomotive's own brake is the first thing to hand.
+constexpr float kDynFromMs = 8.33f; // m/s, 30 km/h
 // The speed a driver draws up to a signal at, and the only speed he will use power to
 // hold on the approach to one. Below it a train climbing to a signal would stall short;
 // above it, powering toward a signal at danger is nobody's idea of driving.
@@ -110,9 +113,9 @@ float neededDecel(float d, float vLimit, float speedMs) {
 // it, which is where it belongs: an auto-driver that reaches for everything it has at
 // each restriction has nothing in hand for the one it misjudged.
 int notchFor(float need) {
-    for (int n = 1; n <= Vehicle::kMaxBrakeNotch; ++n)
+    for (int n = 1; n <= Vehicle::kFullServiceNotch; ++n)
         if (Vehicle::notchDecel(n) >= need * kBrakeMargin) return n;
-    return Vehicle::kMaxBrakeNotch;
+    return Vehicle::kFullServiceNotch;
 }
 
 } // namespace
@@ -128,7 +131,7 @@ int notchFor(float need) {
 int notchCapAt(float speedMs) {
     if (speedMs < kSlowMs) return 2;      // under ~14 km/h: nothing harder than B2
     if (speedMs < 2.0f * kSlowMs) return 3;
-    return Vehicle::kMaxBrakeNotch;
+    return Vehicle::kFullServiceNotch;
 }
 
 float stationStopPoint(const StationStop& s) {
@@ -199,6 +202,28 @@ void applyDrive(Consist& train, int cab, const DriverDemand& demand, float dt) {
     // without being written into each of them.
     int wantPower = power, wantBrake = brake;
 
+    // A machine with separate handles is braked in the order a driver uses them, which
+    // is not "apply the train brake harder". Above kDynFromMs the grids go on first:
+    // they cost nothing, they are quick and they wear nothing out. Below it the grids
+    // have faded, so the LOCOMOTIVE brake goes on first. The train brake is what takes
+    // whatever is left over - and on a long train that is most of it, because the grids
+    // and the loco's own shoes work on one vehicle out of twenty.
+    //
+    // What is left over is measured, not guessed: the grids report the force they are
+    // actually making, and the locomotive brake is worth a known share of the train.
+    const bool separate = train.controls(cab) == ControlSeparate;
+    const int ind = train.independentNotch(cab);
+    int wantDyn = separate && power < 0 ? -power : 0;
+    int wantInd = ind;
+    float residual = demand.needDecel;
+    if (separate) {
+        const float m = std::max(1.0f, train.mass());
+        residual -= train.dynamicBrakeForce() / m;
+        residual -= train.independentCapacity() *
+                    (static_cast<float>(ind) / static_cast<float>(Vehicle::kMaxIndNotch));
+        residual = std::max(0.0f, residual);
+    }
+
     if (demand.stopping && (demand.stopIn <= kStopHoldM || demand.targetMs <= kUnderBandMs)) {
         // The mark is here: the brake goes on and stays on, moving or not.
         //
@@ -209,8 +234,12 @@ void applyDrive(Consist& train, int cab, const DriverDemand& demand, float dt) {
         // brake (not yet stopping), so it sat there with the handles off and the brakes
         // released, which on a grade is a train that rolls away. Nobody creeps the last
         // five metres up to a signal anyway.
+        // Standing at the mark: the TRAIN brake, firmly, and the grids let go - they do
+        // nothing at a stand. The locomotive brake stays where the approach left it.
         wantPower = 0;
+        wantDyn = 0;
         wantBrake = std::min(std::max(2, notchFor(demand.needDecel)), notchCapAt(v));
+        if (separate) wantBrake = std::max(wantBrake, 3);
     } else if (v > demand.targetMs + kOverBandMs ||
                (brake > 0 && v > demand.targetMs - kSettleBandMs) ||
                (demand.stopping && brake > 1 && v > kCrawlMs)) {
@@ -234,7 +263,18 @@ void applyDrive(Consist& train, int cab, const DriverDemand& demand, float dt) {
         // the speed is properly back under, rather than letting go the moment it touches
         // the curve and having to take it again two seconds later.
         wantPower = 0;
-        wantBrake = std::clamp(notchFor(demand.needDecel), 1, notchCapAt(v));
+        if (separate) {
+            // Grids first above the threshold, the locomotive's own brake below it, and
+            // the train brake for the shortfall either way.
+            const bool grids = v >= kDynFromMs && train.hasDynamicBrake();
+            wantDyn = grids ? std::min(Vehicle::kMaxBrakeNotch, wantDyn + 1) : 0;
+            wantInd = grids ? 0 : std::min(Vehicle::kMaxIndNotch, wantInd + 1);
+            wantBrake = residual > 0.0f
+                            ? std::clamp(notchFor(residual), 1, notchCapAt(v))
+                            : 0;
+        } else {
+            wantBrake = std::clamp(notchFor(demand.needDecel), 1, notchCapAt(v));
+        }
     } else if (v < demand.targetMs - kUnderBandMs &&
                (!demand.stopping || demand.stopIn > kApproachFromM || v < kApproachMs)) {
         // Well under what is allowed: take another notch.
@@ -248,7 +288,9 @@ void applyDrive(Consist& train, int cab, const DriverDemand& demand, float dt) {
         // signal, which is the case this allows for: climbing to one, power comes back on
         // below kApproachMs and draws the train up to the mark.
         wantBrake = 0;
-        wantPower = std::min(Vehicle::kMaxPowerNotch, power + 1);
+        wantDyn = 0;
+        wantInd = 0; // everything off before anything is pulled
+        wantPower = std::min(Vehicle::kMaxPowerNotch, std::max(0, power) + 1);
     } else if (v > demand.targetMs - kSettleBandMs) {
         wantBrake = 0;                       // closing on it: ease off, do not brake
         wantPower = std::max(0, power - 1);
@@ -260,9 +302,12 @@ void applyDrive(Consist& train, int cab, const DriverDemand& demand, float dt) {
             wantPower = std::max(0, power - 1);
     }
 
-    // Nothing ever commands emergency. An auto-driver that dumped the pipe at every stop
-    // would spend two minutes recharging afterwards, as the 600 m freight showed.
-    wantBrake = std::min(wantBrake, Vehicle::kMaxBrakeNotch);
+    // Nothing ever commands emergency, and now that is true. It was not: the ceiling was
+    // kMaxBrakeNotch, which is the ELECTRIC brake's range on the power controller and
+    // the same number as the emergency notch - so every demand harder than full service
+    // dumped the pipe, and the train then spent two minutes recharging, as the 600 m
+    // freight showed.
+    wantBrake = std::min(wantBrake, Vehicle::kFullServiceNotch);
     if (wantBrake > 0) wantPower = 0; // never both, which is the one thing a driver never does
 
     // A handle that has just moved is left to have its effect. Harder braking is the
@@ -283,6 +328,15 @@ void applyDrive(Consist& train, int cab, const DriverDemand& demand, float dt) {
                        : wantBrake == 0 && brake > 0 ? 0.0f
                                                      : kDwellS;
     if (since < wait) return;
+
+    // The two handles a machine with separate controls has beyond the train brake. The
+    // electric brake lives on the power controller's own range below neutral, so it is
+    // written through wantPower; the locomotive brake is stepped, as it is by hand.
+    if (separate) {
+        if (wantDyn > 0) wantPower = -wantDyn;
+        else if (wantPower < 0) wantPower = 0;
+        if (wantInd != ind) train.moveIndependent(cab, wantInd > ind ? +1 : -1);
+    }
     if (wantPower == power && wantBrake == brake) return;
     if (wantBrake != brake) train.setBrakeNotch(cab, wantBrake);
     if (wantPower != power) train.setPowerNotch(cab, wantPower);

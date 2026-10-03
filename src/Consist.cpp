@@ -302,6 +302,21 @@ int Consist::drivingUnit(int cab) const {
     return 0;
 }
 
+bool Consist::hasDynamicBrake() const {
+    for (const Vehicle& u : units_)
+        if (u.hasDynamicBrake()) return true;
+    return false;
+}
+
+float Consist::independentCapacity() const {
+    float on = 0.0f, all = 0.0f;
+    for (const Vehicle& u : units_) {
+        all += u.mass();
+        if (u.hasIndependentBrake()) on += u.mass();
+    }
+    return all > 0.0f ? (on / all) * Vehicle::notchDecel(Vehicle::kFullServiceNotch) : 0.0f;
+}
+
 float Consist::dynamicBrakeForce() const {
     float f = 0.0f;
     for (const Vehicle& u : units_) f += u.dynamicBrakeForce();

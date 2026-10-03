@@ -746,6 +746,13 @@ public:
     // waiting to happen rather than a rounding difference.
     static constexpr float kGravity = 9.81f; // m/s^2
     static constexpr int kEmergencyNotch = 5;
+    // The hardest SERVICE application: one notch below emergency. Worth its own name,
+    // because kMaxBrakeNotch below is not it - that is the electric brake's range on the
+    // power controller, E1..E5, and happens to be the same number. Reaching for
+    // kMaxBrakeNotch on the train brake handle therefore dumps the pipe, which is how an
+    // auto-driver that was documented as never commanding an emergency spent months
+    // commanding one every time a restriction needed more than full service.
+    static constexpr int kFullServiceNotch = kEmergencyNotch - 1;
     // What a service notch is worth, as a deceleration (m/s^2). The same for every
     // vehicle, because brake force is computed as a fraction of full service and full
     // service is one number for the whole simulator - so B1..B4 are 0.35, 0.66, 0.98 and
