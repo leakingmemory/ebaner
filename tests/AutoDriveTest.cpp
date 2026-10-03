@@ -597,6 +597,15 @@ int main() {
               railsEnd - nose, kEndOfTrackM + kStopShortM);
         check(topKmh > 20.0f,
               "  and it ran there rather than crawling the whole way (km/h)", topKmh, 29.0);
+        // And it reads as HAVING ARRIVED, which is what hands the train back. Every way
+        // this mode ends bar a signal ends the same way - stopped, and handed over - so
+        // that something starting it can rely on what it finds when it is given back.
+        check(arrivedAtStop(d, c.speed()),
+              "  and it counts as arrived, so auto-drive hands the train back");
+        check(d.stopKind == RoadAhead::StopKind::EndOfTrack,
+              "  for the end of the track, not for something else",
+              double(static_cast<int>(d.stopKind)),
+              double(static_cast<int>(RoadAhead::StopKind::EndOfTrack)));
     }
 
     std::printf("\n%s\n", failures == 0 ? "all ok" : "FAILURES");

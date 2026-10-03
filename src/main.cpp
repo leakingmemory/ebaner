@@ -4700,14 +4700,25 @@ int main(int argc, char** argv) {
                                     : "");
                     std::fflush(stdout);
                 }
-                // Standing at a station's flag post is the end of this movement: the
-                // order is given by hand, and the driver has to be sent on again.
-                if (d.stopKind == RoadAhead::StopKind::Station &&
-                    arrivedAtStop(d, t.speed())) {
-                    t.setAutoServedStop(d.stopRef);
+                // Standing at a station is the end of this movement: the order is
+                // given by hand, and the driver has to be sent on again. So is standing
+                // at the end of the rails - there is nowhere further to go, and a train
+                // left armed against a buffer stop is a driver waiting for something
+                // that will not happen.
+                //
+                // A signal is the exception and stays armed, because a signal clears of
+                // its own accord and the train should then go. Every other way this mode
+                // ends, it ends the same way: stopped, and handed back. A scenario that
+                // starts it can rely on that, which is the point of making them alike.
+                if (arrivedAtStop(d, t.speed()) &&
+                    d.stopKind != RoadAhead::StopKind::Signal) {
+                    const bool station = d.stopKind == RoadAhead::StopKind::Station;
+                    if (station) t.setAutoServedStop(d.stopRef);
                     t.setAutoDriving(false);
                     if (&t == vehicle)
-                        setMapMsg("auto-drive: standing at the station - press P to go on",
+                        setMapMsg(station
+                                      ? "auto-drive: standing at the station - P to go on"
+                                      : "auto-drive: standing at the end of the track",
                                   true);
                 }
             }

@@ -617,8 +617,13 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   anything that is not main line, **40** through a manned station worked by hand signals,
   a stand at a **main signal that is not offering a road**, and a stand at a manned
   station unless its flag is showing green. A signal it has stopped for starts it again by
-  itself when it clears; a station stop hands the train back, because the order there is
-  given by hand and a driver has to be sent on. A hand on the controls takes it back.
+  itself when it clears — that is the one exception, because a signal clears of its own
+  accord and the train should then go. **Every other way the mode ends, it ends the
+  same**: stopped, and handed back. A station, because the order there is given by hand
+  and a driver has to be sent on; the end of the rails, because there is nowhere further
+  to go and a train left armed against a buffer stop is waiting for something that will
+  not happen. Making them alike is the point — something that starts the mode can rely
+  on what it finds when it is given back. A hand on the controls takes it back too.
   The judgement is a **pure function** of a list of distances and speeds
   (`planDrive`, `src/AutoDriver.h`), which is why most of it is tested to the metre with
   no dataset at all; only the *scan* knows what a signal or a station is.
