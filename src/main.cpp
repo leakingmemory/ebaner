@@ -3293,14 +3293,12 @@ int main(int argc, char** argv) {
                 const TrackPose tp = paths[pathIdx].poseAt(sm);
                 const glm::vec2 side(-tp.tangent.y, tp.tangent.x);
                 bool here = false;
-                for (const float off : {-kPlatformReachM, kPlatformReachM}) {
-                    float topZ = 0.0f;
-                    if (platformTopAt(data, paths, org.x + tp.pos.x + side.x * off,
-                                      org.y + tp.pos.y + side.y * off, topZ)) {
+                for (const float off : {-kPlatformReachM, kPlatformReachM})
+                    if (platformCovers(data, org.x + tp.pos.x + side.x * off,
+                                       org.y + tp.pos.y + side.y * off)) {
                         here = true;
                         break;
                     }
-                }
                 if (!here) continue;
                 if (!ss.havePlatform) { ss.platformFrom = sm; ss.havePlatform = true; }
                 ss.platformTo = sm;

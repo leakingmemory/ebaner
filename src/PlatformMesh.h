@@ -31,6 +31,15 @@ class TrackPath;
 bool platformTopAt(const TerrainData& data, const std::vector<TrackPath>& paths,
                    double worldX, double worldY, float& topZ);
 
+// Whether any platform covers this world point, without working out how high its top is.
+//
+// A separate question from the one above and an enormously cheaper one. Finding the top
+// means finding the rail the platform is built against, which searches every path in the
+// network - fine once per platform when the slab is built, ruinous as a containment test:
+// asking it along a station road, two samples every ten metres, took fifteen seconds and
+// froze the simulator while a train pulled away.
+bool platformCovers(const TerrainData& data, double worldX, double worldY);
+
 // Extrudes OSM station-platform footprints into low lit concrete slabs (walls +
 // flat top). Reuses TrackVertex and the track pipeline; deduped by geometry
 // (platforms carry no id). The slab top is placed a standard step height above

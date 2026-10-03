@@ -796,6 +796,14 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   Sampling the centreline found no platform anywhere on the line, which read as the
   dataset having none — the tile holding Oteråga has one. It looks 4 m to either side
   now, and Oteråga's platform is found on both roads.
+  Finding it froze the simulator for **fifteen seconds** as the train pulled away, which
+  the profiler put squarely on the auto-driver's first call. `platformTopAt` answers "is
+  there a platform here, **and how high is its top**" — and the top means finding the
+  rail the slab is built against, which searches **every path in the network**, twice,
+  plus a dense ground sample along every footprint edge. Reasonable once per platform
+  when the slab is built; ruinous as a containment test asked twice every ten metres
+  along a station road. `platformCovers` answers only the half that was wanted:
+  **15,641 ms → 5.8 ms**, same answer.
   Attaching switches to stations by "nearest station" was wrong once, too: the station
   list holds every stopping place on the line, and an unstaffed halt a few hundred metres
   off is nearer to a crossing station's switches than the station itself — which left

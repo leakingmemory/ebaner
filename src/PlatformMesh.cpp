@@ -355,6 +355,14 @@ void PlatformMesh::build(const TerrainData& data,
                 uniq.size(), vertices_.size(), indices_.size() / 3);
 }
 
+bool platformCovers(const TerrainData& data, double worldX, double worldY) {
+    for (const auto& [tileKey, tilePtr] : data.tiles())
+        for (const PlatformSegment& p : tilePtr->platforms)
+            if (p.footprint.size() >= 3 && insideRing(p.footprint, worldX, worldY))
+                return true;
+    return false;
+}
+
 bool platformTopAt(const TerrainData& data, const std::vector<TrackPath>& paths,
                    double worldX, double worldY, float& topZ) {
     // No dedup needed: a footprint straddling a tile boundary appears in both tiles as
