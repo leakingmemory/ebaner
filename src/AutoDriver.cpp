@@ -47,6 +47,13 @@ constexpr float kApproachMs = 5.0f; // m/s, about 18 km/h
 constexpr float kApproachFromM = 800.0f;
 // Slow enough to call stopped for the purpose of easing the brake right off.
 constexpr float kCrawlMs = 0.3f;
+// The least distance the braking arithmetic is allowed to work over, and the speed below
+// which a heavy application is never the answer.
+constexpr float kMinUsableM = 8.0f;
+// The shortest thing worth calling a crossing area. Shorter than this and the two
+// switches are the same switch counted twice, or a station no train could cross in.
+constexpr float kMinBandM = 50.0f;
+constexpr float kSlowMs = 4.0f; // m/s, about 14 km/h
 // A beat between the steps of an application, so it goes on in stages.
 constexpr float kBrakeStepS = 0.5f;
 // How long a handle is left alone after it moves. A driver gives a notch time to answer.
@@ -83,7 +90,18 @@ float allowedAt(float d, float vLimit, float speedMs) {
 // of a brake that comes on instantly.
 float neededDecel(float d, float vLimit, float speedMs) {
     if (speedMs <= vLimit) return 0.0f;
-    const float usable = std::max(1.0f, d - speedMs * kBuildUpS);
+    // The build-up run may not eat the distance. Taking v * 3 s off it and then flooring
+    // the remainder at a metre is what made the brake savage at low speed: ten km/h with
+    // the mark eight metres off leaves d - v*t negative, the floor hands back one metre,
+    // and the arithmetic asks for over 3 m/s^2 to lose five km/h. That is full service,
+    // for a train five km/h fast - which stops it dead, short of the mark, and it has to
+    // be driven up again. Several times over, which is what was reported.
+    //
+    // So never less than a third of the distance that is actually there, and never less
+    // than kMinUsableM. Both are floors on the same thing: the answer stops being a
+    // deceleration and becomes a divide-by-nearly-nothing.
+    const float usable =
+        std::max({kMinUsableM, 0.33f * d, d - speedMs * kBuildUpS});
     return (speedMs * speedMs - vLimit * vLimit) / (2.0f * usable);
 }
 
@@ -98,6 +116,20 @@ int notchFor(float need) {
 }
 
 } // namespace
+
+// ...and the hardest notch worth using at this speed.
+//
+// Being 100 per cent over the limit sounds alarming and is not, when the limit is five
+// km/h: it is five km/h of overspeed, and the energy in 5-10 km/h is a quarter of what
+// is in 10-15. A brake chosen from the deceleration the arithmetic asks for does not
+// know that, and at low speed the arithmetic asks for a great deal. So it is capped by
+// how fast the train is actually going - not by how far over it is - and the cap is what
+// keeps a crawling train from being slammed to a stand for being a few km/h fast.
+int notchCapAt(float speedMs) {
+    if (speedMs < kSlowMs) return 2;      // under ~14 km/h: nothing harder than B2
+    if (speedMs < 2.0f * kSlowMs) return 3;
+    return Vehicle::kMaxBrakeNotch;
+}
 
 float stationStopPoint(const StationStop& s) {
     if (!s.haveBand) return s.fallback;
@@ -117,37 +149,6 @@ float stationStopPoint(const StationStop& s) {
     // where the road has one - as near the person giving the order as the road allows.
     if (s.haveTxp) return std::clamp(s.txpAt, lo, hi);
     return 0.5f * (lo + hi);
-}
-
-float stationStopDistance(const StationStopInputs& in) {
-    if (!in.onRoad) return -1.0f;
-    StationStop ss;
-    ss.passenger = in.passenger;
-    ss.haveTxp = in.haveTxp;
-    ss.txpAt = in.txpAt;
-    ss.havePlatform = in.havePlatform;
-    ss.platformFrom = in.platformFrom;
-    ss.platformTo = in.platformTo;
-    ss.fallback = in.nodeAt;
-
-    // Two switches make a band; one does not. A single switch ahead means the train is
-    // already inside the station with the other end behind it, and calling that a band
-    // would put the stop exactly ON the switch - the one place this is all to avoid.
-    for (const float d : in.switchesAhead) {
-        if (!ss.haveBand) { ss.bandFrom = ss.bandTo = d; ss.haveBand = true; continue; }
-        ss.bandFrom = std::min(ss.bandFrom, d);
-        ss.bandTo = std::max(ss.bandTo, d);
-    }
-    ss.haveBand = in.switchesAhead.size() >= 2;
-
-    // The band is worked out fresh whenever it CAN be, and the booking is only there for
-    // when it cannot. Preferring the booking instead froze whatever was decided the
-    // first moment the station came into view - which, if only one of its switches was
-    // in range then, is the fallback: the station's own node, and a train stopping short
-    // of the station rather than between its switches.
-    if (ss.haveBand) return stationStopPoint(ss);
-    if (in.booked) return in.bookedAt;
-    return ss.fallback;
 }
 
 DriverDemand planDrive(const RoadAhead& road, float speedMs) {
@@ -209,7 +210,7 @@ void applyDrive(Consist& train, int cab, const DriverDemand& demand, float dt) {
         // released, which on a grade is a train that rolls away. Nobody creeps the last
         // five metres up to a signal anyway.
         wantPower = 0;
-        wantBrake = std::max(2, notchFor(demand.needDecel));
+        wantBrake = std::min(std::max(2, notchFor(demand.needDecel)), notchCapAt(v));
     } else if (v > demand.targetMs + kOverBandMs ||
                (brake > 0 && v > demand.targetMs - kSettleBandMs) ||
                (demand.stopping && brake > 1 && v > kCrawlMs)) {
@@ -233,7 +234,7 @@ void applyDrive(Consist& train, int cab, const DriverDemand& demand, float dt) {
         // the speed is properly back under, rather than letting go the moment it touches
         // the curve and having to take it again two seconds later.
         wantPower = 0;
-        wantBrake = std::max(1, notchFor(demand.needDecel));
+        wantBrake = std::clamp(notchFor(demand.needDecel), 1, notchCapAt(v));
     } else if (v < demand.targetMs - kUnderBandMs &&
                (!demand.stopping || demand.stopIn > kApproachFromM || v < kApproachMs)) {
         // Well under what is allowed: take another notch.

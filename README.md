@@ -649,6 +649,19 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   between, unless the stop is genuinely in question. Full service is what is left when
   nothing lighter covers the need — an auto-driver that reaches for everything it has at
   each restriction has nothing in hand for the one it misjudged.
+  **A crawl is not an emergency.** Being a hundred per cent over the limit sounds
+  alarming and is not, when the limit is 5 km/h: it is five km/h of overspeed, and the
+  energy in 5–10 km/h is a quarter of what is in 10–15. The brake was chosen from the
+  deceleration the arithmetic asked for, and at low speed the arithmetic asks for a great
+  deal — at 10 km/h with the mark 8 m off, the build-up run `v·3 s` took the whole
+  distance, the floor handed back **one metre**, and the sum came out above 3 m/s². Full
+  service, to lose five km/h: the train stopped dead short of the mark, had to be driven
+  up again, and did it over and over. The usable distance is now floored at a third of
+  what is actually there and never under 8 m, and the notch is **capped by the speed** —
+  B2 under 14 km/h, B3 under 29, full service only above. Capped by the speed, note, not
+  by how far over the limit the train is, which is the distinction the old sum missed.
+  Approaching a stop from a stand 150 m off it now uses **nothing harder than B2** and
+  stands 24 m short, where before it slammed on and bounced.
   Stopping at a signal it aims **20 m** short and simply holds the brake inside 25 m.
   From 700 m out at 64 km/h it now tracks the curve to within a km/h or two the whole way
   down — 36.6 against 37.5, 26.8 against 26.7, 15.4 against 15.8 — and stands 24 m short,
@@ -750,6 +763,39 @@ buffer-stop end of track 1, resolved from the track geometry rather than named h
   deciding came out of the road loop into `stationStopDistance` where a test can reach
   it — and the test drives Oteråga's own distances off the ground: entry signal at 31 m,
   switch at 278, flag post at 498, far switch at 1104, and the train standing at **691**.
+  And then the loop failed anyway, with the target flicking between 40 and 0 and the
+  brake slamming on for tenths of a second at a time while the train ran out the far end.
+  `Turnout::world` is **already world coordinates** — the header says so — and the
+  attachment added the scene origin to it, moving every turnout to the same nonsense
+  place. They all attached to whichever flagged station was nearest *that*, which is one
+  station for the whole network and **a different one depending on where the session
+  started**: it came out right from one start and wrong from another, which is why the
+  same move behaved differently for me than it did in the cab. With no switches belonging
+  to the station there is no band, so the fallback was used — and the fallback is the
+  road's closest approach to the station node, which flickers in and out of range as the
+  node goes by. Hence a stop that appeared at nothing-metres, vanished, and reappeared.
+  It failed once more after that, and the right answer was to stop asking the question
+  every tick. **Where a train stands at a station is a property of the station and the
+  track**, not of where the train happens to be — so it is worked out once per road, the
+  first time that station is wanted, and then left alone. Everything bolted on to stop
+  the answer moving under the train — booking the first one seen, falling back to the
+  station node, refusing a band of one switch — was patching something that should never
+  have been recomputed. It is lazy rather than done at load because a platform can only
+  be found in a tile that is in memory, and at load only the ground around the start is.
+  Three more faults fell out of making it deterministic, each visible in the line it now
+  prints per road. **A turnout at the end of a loop lies on two of the road's stretches
+  at once** — the main by its arc length there, the loop by its own — so it was counted
+  twice, and two entries made a "band" out of one switch whose two ends are the same
+  place: the stop landed exactly on the switch. **Nearest-station is not enough on its
+  own**: there are seven flagged stations on the line and turnouts everywhere between
+  them, so a siding out in the country attached to whichever was least far away — Oteråga
+  came out with three roads through it, two of them somebody else's, each with a stopping
+  point a train could be sent to. A turnout now has to be within 1,500 m of the node.
+  And **a platform lies beside the rails, not over them**: the footprint covers the
+  surface people stand on, so a point taken on the track centre is never inside one.
+  Sampling the centreline found no platform anywhere on the line, which read as the
+  dataset having none — the tile holding Oteråga has one. It looks 4 m to either side
+  now, and Oteråga's platform is found on both roads.
   Attaching switches to stations by "nearest station" was wrong once, too: the station
   list holds every stopping place on the line, and an unstaffed halt a few hundred metres
   off is nearer to a crossing station's switches than the station itself — which left
@@ -1920,6 +1966,8 @@ the corresponding sources (national rail register + NVDB roads + OSM enrichment)
 | `EBANER_PROFILE`    | Print per-frame timings once a second: whole frame, the sim step, occupancy, crossings, signal aspects, distant walks, the signal mesh, and the vehicle mesh and its upload. With `EBANER_SCREENSHOT=/dev/null EBANER_SHOTFRAME=900` the viewer exits by itself with the reports flushed, which is how a profile gets taken without a file or a keypress. |
 | `EBANER_RADIUS`     | Half-window of world to load, in metres (default 20000). Two kilometres loads in seconds where the full 40 km square takes minutes, which is what makes a profile or a frame-time measurement affordable at all. Inspection only: drive out of it and the world ends. |
 | `EBANER_ROLL`       | Spawn the train at this speed in m/s with the brake released, so it coasts. A profile of a standing train is a profile of a different program - nothing changes occupancy, so nothing downstream of it runs. |
+| `EBANER_GREEN`      | `"OTR 1"` — clear one simple entry signal by name before the first frame, manning its station. The other half of setting up a crossing without a keyboard: with every signal at danger a train stops at the first one, and nothing that happens inside a station could be watched. |
+| `EBANER_THROW`      | `"x,y;x,y"` — throw the turnout nearest each world point to diverging before the first frame. A crossing move is a train taking the loop rather than the main, and until this there was no way to set one up without a keyboard, so every bug in what the driver makes of a loop had to be found by hand. |
 | `EBANER_AUTO`       | Hand the train to the auto-driver at startup and log what it is doing once a second. A train that drives a real line with no keyboard, which is what makes the signalling and the crossings testable without a driver sitting in the cab. |
 | `EBANER_CHASE`      | `1` rides the vehicle from the start (the chase camera is otherwise only reachable by pressing C, so the one view that shows the machine could not be screenshotted). |
 | `EBANER_AUDIO_DUMP` | Render a scripted brake sequence to the given WAV and exit.   |

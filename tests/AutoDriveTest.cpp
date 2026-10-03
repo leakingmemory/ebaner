@@ -495,61 +495,53 @@ int main() {
               stationStopPoint(ss), 600.0);
     }
 
-    std::puts("\nOteraga, with the real distances off the ground");
+    std::puts("\nA crawl is not an emergency");
     {
-        // The station that found both of these bugs, measured off the dataset. Along the
-        // main, from the east: the entry signal OTR 1 at 31 m, the switch into the loop
-        // at 278, the flag post at 498, the far switch at 1104, OTR 2 at 1206. A train
-        // coming from Fauske runs past the signal and should stand at 691 - midway
-        // between the two switches, which is the road the other train needs left clear.
-        auto approach = [](float run, bool booked, float bookedAt) {
-            StationStopInputs in;
-            in.onRoad = true;
-            in.nodeAt = 498.0f - run; // the node, near the flag post
-            for (const float sw : {277.5f, 1103.8f})
-                if (sw - run > 0.0f) in.switchesAhead.push_back(sw - run);
-            in.booked = booked;
-            in.bookedAt = bookedAt - run;
-            return stationStopDistance(in);
-        };
-        const float first = approach(0.0f, false, 0.0f);
-        std::printf("      from the east: stop %.0f m ahead, which is %.0f m along\n",
-                    first, first);
-        check(std::abs(first - 690.65f) < 1.0f,
-              "it stands midway between the two switches (m)", first, 690.65);
-        check(first > 277.5f && first < 1103.8f, "  which is inside the station",
-              first, 690.65);
-        check(first > 31.0f, "  and not short of the entry signal at 31 m", first, 690.65);
+        // Being a hundred per cent over the limit sounds alarming and is not, when the
+        // limit is five km/h. The energy in 5-10 km/h is a quarter of what is in 10-15,
+        // and a brake chosen from the deceleration the arithmetic asks for does not know
+        // that: at ten km/h with the mark eight metres off, the old sum took the
+        // build-up run out of the distance, floored the remainder at a metre, and asked
+        // for over 3 m/s2 - full service, to lose five km/h. The train stopped dead
+        // short of the mark, had to be driven up again, and did it over and over.
+        Bench b;
+        b.ready();
+        const float mark = 150.0f;
+        int hardest = 0, restarts = 0;
+        bool wasStopped = true;
+        float travelled = 0.0f;
+        DriverDemand d;
+        for (int i = 0; i < 200 * 60; ++i) {
+            if (i % 12 == 0) {
+                RoadAhead road = openRoad(40);
+                road.stops.push_back({mark - travelled, RoadAhead::StopKind::Station, 1});
+                d = planDrive(road, b.train->speed());
+                applyDrive(*b.train, 1, d, 0.2f);
+                hardest = std::max(hardest, b.train->brakeNotch(1));
+            }
+            const float before = b.train->speed();
+            b.train->update(kDt, 0.0f);
+            travelled += 0.5f * (before + b.train->speed()) * kDt;
+            const bool stopped = b.train->speed() < 0.02f;
+            if (wasStopped && !stopped) ++restarts;
+            wasStopped = stopped;
+        }
+        std::printf("      stood %.1f m short, hardest B%d, %d start(s) from a stand\n",
+                    mark - travelled, hardest, restarts);
+        check(hardest <= 2, "nothing harder than B2 is used up to a stop at a crawl",
+              hardest, 2.0);
+        check(restarts <= 1, "  and it is not stopped dead and driven up again, over and "
+              "over (starts)", restarts, 1.0);
+        check(mark - travelled > 0.0f && mark - travelled < 35.0f,
+              "  it still stands short of the mark (m)", mark - travelled, 24.0);
 
-        // Running in: once the entry switch is behind, only one is ahead and the band
-        // cannot be worked out. The booking is what holds the mark still - and it must
-        // hold it where it was, not let it jump forward to the far switch.
-        const float inside = approach(400.0f, true, 690.65f);
-        check(std::abs(inside - 290.65f) < 1.0f,
-              "400 m in, the mark has not moved relative to the ground", inside + 400.0f,
-              690.65);
-        check(std::abs(approach(400.0f, false, 0.0f) - 98.0f) < 1.0f,
-              "  and with nothing booked it falls back to the station, not the far switch",
-              approach(400.0f, false, 0.0f), 98.0);
-
-        // The bug this started as: the whole station seen at once must not be answered
-        // from the fallback. Booking the first thing seen - which, if only one switch is
-        // in range, IS the fallback - is what stopped a train short of the station.
-        StationStopInputs stale;
-        stale.onRoad = true;
-        stale.nodeAt = 498.0f;
-        stale.switchesAhead = {277.5f, 1103.8f};
-        stale.booked = true;
-        stale.bookedAt = 20.0f; // a stale mark from before the station was fully in view
-        check(std::abs(stationStopDistance(stale) - 690.65f) < 1.0f,
-              "a band in view beats anything booked earlier",
-              stationStopDistance(stale), 690.65);
-
-        // And a station that is not on this road at all is not a stop.
-        StationStopInputs away;
-        away.switchesAhead = {277.5f, 1103.8f};
-        check(stationStopDistance(away) < 0.0f, "a station off this road raises nothing",
-              stationStopDistance(away), -1.0);
+        // The cap is on the SPEED, not on how far over the limit the train is.
+        check(notchCapAt(2.0f) == 2, "under 14 km/h, B2 is the hardest there is",
+              notchCapAt(2.0f), 2.0);
+        check(notchCapAt(6.0f) == 3, "  B3 up to 29", notchCapAt(6.0f), 3.0);
+        check(notchCapAt(20.0f) == Vehicle::kMaxBrakeNotch,
+              "  and full service only at a speed worth it", notchCapAt(20.0f),
+              double(Vehicle::kMaxBrakeNotch));
     }
 
     std::puts("\nThe end of the rails");

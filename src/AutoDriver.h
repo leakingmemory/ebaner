@@ -156,29 +156,10 @@ struct StationStop {
 // first, and the edge of the band is exactly where a train must not stand.
 float stationStopPoint(const StationStop& s);
 
-// Everything the caller found about one station on the road in front of one train, and
-// the distance to stop at - negative for "no stop here".
-//
-// The gathering is the caller's: only it knows what a turnout or a platform is. The
-// DECIDING is here, because deciding it in the middle of the road scan put it somewhere
-// no test could reach, and it was got wrong twice running - once stopping nothing at all
-// on a loop, and once stopping a train short of the station altogether.
-struct StationStopInputs {
-    std::vector<float> switchesAhead; // this station's switches on this road, metres
-    bool onRoad = false;              // the station is on the road in front of the train
-    float nodeAt = 0.0f;              // where the road passes closest to its node
-    bool haveTxp = false;
-    float txpAt = 0.0f;
-    bool havePlatform = false;
-    float platformFrom = 0.0f, platformTo = 0.0f;
-    bool passenger = false;
-    // What this train booked last time it could see the whole station. Used ONLY when
-    // the band cannot be worked out now - which happens once the train is inside and the
-    // switch it came in by is behind it.
-    bool booked = false;
-    float bookedAt = 0.0f;
-};
-float stationStopDistance(const StationStopInputs& in);
+// The hardest brake notch worth using at this speed. Published so the rule can be tested
+// for what it is: a cap on the SPEED, not on how far over a limit the train happens to
+// be. Five km/h over a five km/h limit is a hundred per cent and is still five km/h.
+int notchCapAt(float speedMs);
 
 // The whole policy: the fastest this train may be going *now* such that every limit and
 // every stop ahead can still be met.

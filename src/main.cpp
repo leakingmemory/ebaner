@@ -1027,20 +1027,40 @@ int main(int argc, char** argv) {
     // hundred metres from a crossing station will be nearer to its switches than the
     // station itself is - which left Oteraga's turnouts attached to somewhere else, and
     // the band empty at the one station the train was supposed to stop at.
+    // How far from its node a turnout can be and still belong to a station. Longer than
+    // the longest yard here - Fauske's is about a kilometre - and far shorter than the
+    // gap between stations.
+    constexpr double kStationReachM = 1500.0;
+    // How far to the side of the rails to look for a platform: past the gauge and the
+    // clearance, onto the surface itself.
+    constexpr float kPlatformReachM = 4.0f;
     std::vector<int> turnoutStation(switchNet.turnouts().size(), -1);
     {
         std::vector<int> flagged;
         for (const SignalStation& fs : flagPostStation)
             for (std::size_t k = 0; k < stations.size(); ++k)
                 if (stations[k].name == fs.name) { flagged.push_back(static_cast<int>(k)); break; }
-        const glm::dvec3 org = data.sceneOrigin();
+        // Turnout::world is already world coords - "Geometry (world coords, EPSG:25833)"
+        // - and adding the scene origin to it, as this did, moved every turnout to the
+        // same nonsense place. They then all attached to whichever flagged station was
+        // nearest to THAT, which is one station for the whole network and a different
+        // one depending on where the session started. At Oteraga it happened to come out
+        // right from one start and wrong from another, so a train took the loop and
+        // found no switches belonging to the station at all: no band, the fallback, and
+        // a stop that flickered in and out as the node passed.
         for (std::size_t i = 0; i < switchNet.turnouts().size(); ++i) {
-            const glm::dvec3 w = switchNet.turnouts()[i].world + org;
+            const glm::dvec3 w = switchNet.turnouts()[i].world;
             double best = 1e18;
             for (const int k : flagged) {
                 const double d = glm::distance(glm::dvec2(w), glm::dvec2(stations[k].world));
                 if (d < best) { best = d; turnoutStation[i] = k; }
             }
+            // Nearest is not enough on its own: there are seven flagged stations on the
+            // line and turnouts everywhere between them, so a siding out in the country
+            // attaches to whichever station is least far away and is then taken for one
+            // of its ends. Oteraga came out with three roads through it, two of them
+            // somebody else's, each with a stopping point a train might be sent to.
+            if (best > kStationReachM) turnoutStation[i] = -1;
         }
         std::printf("[AutoDrive] %zu turnout(s) attached to %zu flagged station(s)\n",
                     turnoutStation.size(), flagged.size());
@@ -3206,61 +3226,97 @@ int main(int argc, char** argv) {
     std::vector<SigAhead> autoSignalsAhead;
     struct TxpAhead { float d; std::string station; };
     std::vector<TxpAhead> autoTxpAhead;
-    struct SwAhead { float d; int station; };
+    struct SwAhead { float d; int station; int turnout; };
     std::vector<SwAhead> autoSwitchesAhead;
     // Where a platform covers the road, inside the band. Sampled along it rather than
     // looked up, because a platform is an OSM footprint and the only question it answers
     // is whether it covers a point - so the road is walked over the band and asked.
     // Twenty metres is finer than a platform is short, and it only runs for a passenger
     // train at a station it is actually stopping at.
-    auto roadPointAt = [&](const std::vector<Vehicle::RoadStretch>& stretches, float d,
-                           glm::dvec2& world) {
-        for (const Vehicle::RoadStretch& st : stretches) {
-            const float len = std::abs(st.sTo - st.sFrom);
-            if (d < st.dist0 || d > st.dist0 + len) continue;
-            const float dir2 = st.sTo >= st.sFrom ? 1.0f : -1.0f;
-            const glm::vec3 p = paths[st.pathIdx].poseAt(st.sFrom + dir2 * (d - st.dist0)).pos;
+    // --- where a train stands at each station, worked out once per road ------------
+    //
+    // A fixed property of the station and the track, not of where the train happens to
+    // be. Worked out from the switches at the ends of that road, the TXP's own spot on
+    // it and any platform over it, and then left alone.
+    //
+    // Deciding it afresh every time the road was read is what made this so hard to get
+    // right: the band is built from the switches the train can SEE, and half of them
+    // fall behind as it runs in, so the answer moved under the train. Everything that
+    // was bolted on to stop it moving - booking the first answer, falling back to the
+    // station node, refusing a band of one switch - was patching a thing that should
+    // never have been recomputed at all.
+    //
+    // Lazily, because a platform can only be found in a tile that is loaded, and at load
+    // only the tiles around the start are. By the time a station is first asked about,
+    // the train is a kilometre or two from it and its ground is in memory.
+    struct StationRoadStop {
+        int pathIdx = -1;
+        float s = 0.0f;
+        bool fromPlatform = false;
+    };
+    std::map<int, std::vector<StationRoadStop>> stationStops; // station index -> its roads
+    auto stopsForStation = [&](int stIdx) -> const std::vector<StationRoadStop>& {
+        auto it = stationStops.find(stIdx);
+        if (it != stationStops.end()) return it->second;
+        std::vector<StationRoadStop> out;
+        // Which roads run through this station, and where its switches sit on each.
+        std::map<int, std::vector<float>> onPath;
+        for (std::size_t i = 0; i < switchNet.turnouts().size(); ++i) {
+            if (turnoutStation[i] != stIdx) continue;
+            const Turnout& to = switchNet.turnouts()[i];
+            if (to.mainPath >= 0) onPath[to.mainPath].push_back(to.sMain);
+            if (to.sidingPath >= 0) onPath[to.sidingPath].push_back(to.sSiding);
+        }
+        for (auto& [pathIdx, sList] : onPath) {
+            std::sort(sList.begin(), sList.end());
+            const float lo = sList.front(), hi = sList.back();
+            if (hi - lo < 50.0f) continue; // one switch, or the same one twice
+            StationStop ss;
+            ss.haveBand = true;
+            ss.bandFrom = lo;
+            ss.bandTo = hi;
+            ss.passenger = true; // worked out for both; the train picks which it wants
+            // The TXP authored on this very road, which is the best mark there is.
+            for (const RoadMark& m : roadMarks)
+                if (m.kind == 2 && m.pathIdx == pathIdx && m.s >= lo && m.s <= hi) {
+                    ss.txpAt = m.s;
+                    ss.haveTxp = true;
+                    break;
+                }
+            // And a platform along it. BESIDE the road, not over it: a platform
+            // footprint covers the surface people stand on, which is alongside the
+            // rails, so a point taken on the track centre is never inside one. Sampling
+            // the centreline found no platform anywhere on the line, which read as the
+            // dataset having none - and the tile holding Oteraga has one.
             const glm::dvec3 org = data.sceneOrigin();
-            world = glm::dvec2(org.x + p.x, org.y + p.y);
-            return true;
-        }
-        return false;
-    };
-    auto platformSpanOnRoad = [&](const std::vector<Vehicle::RoadStretch>& stretches,
-                                  float from, float to, StationStop& ss) {
-        constexpr float kStep = 20.0f;
-        bool any = false;
-        for (float d = from; d <= to; d += kStep) {
-            glm::dvec2 w(0.0);
-            if (!roadPointAt(stretches, d, w)) continue;
-            float topZ = 0.0f;
-            if (platformTopAt(data, paths, w.x, w.y, topZ)) {
-                if (!any) { ss.platformFrom = d; any = true; }
-                ss.platformTo = d;
+            for (float sm = lo; sm <= hi; sm += 10.0f) {
+                const TrackPose tp = paths[pathIdx].poseAt(sm);
+                const glm::vec2 side(-tp.tangent.y, tp.tangent.x);
+                bool here = false;
+                for (const float off : {-kPlatformReachM, kPlatformReachM}) {
+                    float topZ = 0.0f;
+                    if (platformTopAt(data, paths, org.x + tp.pos.x + side.x * off,
+                                      org.y + tp.pos.y + side.y * off, topZ)) {
+                        here = true;
+                        break;
+                    }
+                }
+                if (!here) continue;
+                if (!ss.havePlatform) { ss.platformFrom = sm; ss.havePlatform = true; }
+                ss.platformTo = sm;
             }
+            StationRoadStop rs;
+            rs.pathIdx = pathIdx;
+            rs.s = stationStopPoint(ss);
+            rs.fromPlatform = ss.havePlatform;
+            out.push_back(rs);
+            std::printf("[AutoDrive] %s road %d: switches %.0f..%.0f, txp %s, platform %s"
+                        " -> stop at %.0f\n",
+                        stIdx >= 0 ? stations[stIdx].name.c_str() : "?", pathIdx, lo, hi,
+                        ss.haveTxp ? "yes" : "no", ss.havePlatform ? "yes" : "no", rs.s);
         }
-        ss.havePlatform = any;
-    };
-    // Where the road passes closest to a station's node, and how close. Both the test
-    // for "is this station on the road ahead at all" and the fallback stopping point for
-    // one whose switches are not.
-    auto stationOnRoad = [&](const std::vector<Vehicle::RoadStretch>& stretches,
-                             const glm::dvec3& node, float& atOut) {
-        const Vehicle::RoadStretch& last = stretches.back();
-        const float reach = last.dist0 + std::abs(last.sTo - last.sFrom);
-        double best = 1e18;
-        for (float d = 0.0f; d <= reach; d += 20.0f) {
-            glm::dvec2 w(0.0);
-            if (!roadPointAt(stretches, d, w)) continue;
-            const double dist = glm::distance(w, glm::dvec2(node));
-            if (dist < best) { best = dist; atOut = d; }
-        }
-        // A station node stands beside its own tracks, not half a kilometre off. The
-        // threshold was 500 m, and that is how far the closest SAMPLE is when the
-        // station is still beyond the lookahead - so a station two kilometres off was
-        // read as being on the road, at the far end of the walk, and the stop was booked
-        // there: 500 m short of the station and, at Oteraga, outside its entry signal.
-        return best < 250.0;
+        std::fflush(stdout);
+        return stationStops.emplace(stIdx, std::move(out)).first->second;
     };
 
     auto scanRoad = [&](Consist& t) {
@@ -3361,8 +3417,8 @@ int main(int argc, char** argv) {
                     ts = to.sSiding;
                 else
                     continue;
-                autoSwitchesAhead.push_back(
-                    {st.dist0 + std::abs(ts - st.sFrom), turnoutStation[ti]});
+                autoSwitchesAhead.push_back({st.dist0 + std::abs(ts - st.sFrom),
+                                             turnoutStation[ti], static_cast<int>(ti)});
             }
             first = false;
         }
@@ -3411,45 +3467,16 @@ int main(int argc, char** argv) {
             for (std::size_t k = 0; k < stations.size(); ++k)
                 if (stations[k].name == stName) { stIdx = static_cast<int>(k); break; }
 
-            StationStopInputs in;
-            in.passenger = t.carriesPassengers();
-            for (const SwAhead& sw : autoSwitchesAhead)
-                if (sw.station == stIdx) in.switchesAhead.push_back(sw.d);
-            for (const TxpAhead& tx : autoTxpAhead)
-                if (tx.station == stName) { in.txpAt = tx.d; in.haveTxp = true; break; }
-            if (stIdx >= 0)
-                in.onRoad = stationOnRoad(autoStretches, stations[stIdx].world, in.nodeAt);
-            if (in.passenger && in.switchesAhead.size() >= 2) {
-                StationStop sp;
-                const auto mm = std::minmax_element(in.switchesAhead.begin(),
-                                                    in.switchesAhead.end());
-                platformSpanOnRoad(autoStretches, *mm.first, *mm.second, sp);
-                in.havePlatform = sp.havePlatform;
-                in.platformFrom = sp.platformFrom;
-                in.platformTo = sp.platformTo;
-            }
-            // What this train booked while it could still see both ends of the station.
-            if (t.autoStopRef() == static_cast<int>(fi)) {
+            // Where this station's stops are is fixed; all that is asked here is
+            // whether one of them is on the road in front of this train, and how far.
+            float at = -1.0f;
+            for (const StationRoadStop& rs : stopsForStation(stIdx)) {
                 for (const Vehicle::RoadStretch& st : autoStretches) {
-                    if (st.pathIdx != t.autoStopPath()) continue;
+                    if (st.pathIdx != rs.pathIdx) continue;
                     const float lo = std::min(st.sFrom, st.sTo), hi = std::max(st.sFrom, st.sTo);
-                    if (t.autoStopS() < lo || t.autoStopS() > hi) continue;
-                    in.booked = true;
-                    in.bookedAt = st.dist0 + std::abs(t.autoStopS() - st.sFrom);
-                    break;
-                }
-            }
-            const float at = stationStopDistance(in);
-            // Book whatever was decided from a whole station, so it survives the entry
-            // switch falling behind. Only from a real band: booking a fallback would
-            // freeze the very guess the band is there to replace.
-            if (at >= 0.0f && in.switchesAhead.size() >= 2) {
-                for (const Vehicle::RoadStretch& st : autoStretches) {
-                    const float len = std::abs(st.sTo - st.sFrom);
-                    if (at < st.dist0 || at > st.dist0 + len) continue;
-                    const float dir2 = st.sTo >= st.sFrom ? 1.0f : -1.0f;
-                    t.bookAutoStop(static_cast<int>(fi), st.pathIdx,
-                                   st.sFrom + dir2 * (at - st.dist0));
+                    if (rs.s < lo || rs.s > hi) continue;
+                    const float d = st.dist0 + std::abs(rs.s - st.sFrom);
+                    if (d >= 0.0f && (at < 0.0f || d < at)) at = d;
                     break;
                 }
             }
@@ -3458,6 +3485,49 @@ int main(int argc, char** argv) {
         }
         return road;
     };
+
+    // EBANER_GREEN="OTR 1" clears one simple entry signal, by name, before the first
+    // frame - the other half of setting up a crossing without a keyboard. With every
+    // signal at danger a train stops at the first one and the station stop beyond it is
+    // never reached, so none of what happens inside a station could be watched.
+    if (const char* want = std::getenv("EBANER_GREEN")) {
+        for (std::size_t i = 0; i < simpleEntries.size(); ++i) {
+            if (simpleEntries[i].name != want) continue;
+            StationState& st = simpleStationState[simpleEntryStation[i].name];
+            st.manned = true;
+            st.green = static_cast<int>(i);
+            simpleSignalsChanged = true;
+            std::printf("[SimpleEntry] \"%s\" cleared at %s\n", want,
+                        simpleEntryStation[i].name.c_str());
+        }
+    }
+
+    // EBANER_THROW="x,y;x,y" throws the turnout nearest each world point to diverging
+    // before the first frame. The scenarios worth testing are the ones where a train
+    // takes the loop rather than the main - a crossing move is nothing else - and until
+    // this there was no way to set one up without a keyboard, so every bug in what the
+    // driver makes of a loop had to be found by hand and guessed at afterwards.
+    if (const char* pts = std::getenv("EBANER_THROW")) {
+        std::istringstream is(pts);
+        std::string one;
+        while (std::getline(is, one, ';')) {
+            double x = 0.0, y = 0.0;
+            if (std::sscanf(one.c_str(), "%lf,%lf", &x, &y) != 2) continue;
+            int best = -1;
+            double bestD = 1e18;
+            for (std::size_t i = 0; i < switchNet.turnouts().size(); ++i) {
+                const glm::dvec3 w = switchNet.turnouts()[i].world;
+                const double d = glm::distance(glm::dvec2(w), glm::dvec2(x, y));
+                if (d < bestD) { bestD = d; best = static_cast<int>(i); }
+            }
+            if (best >= 0 && bestD < 50.0) {
+                switchNet.setState(best, SwitchState::Diverging);
+                std::printf("[Switch] thrown to diverging %.0f m from %.0f,%.0f\n", bestD,
+                            x, y);
+            }
+        }
+        switchesChanged = true;
+    }
 
     // EBANER_AUTO=1 hands the train to the auto-driver at startup and logs what it is
     // doing once a second - a train that drives itself down a real line, with no keyboard,
@@ -4605,7 +4675,6 @@ int main(int argc, char** argv) {
                             clear = false;
                     if (clear) {
                         t.setAutoServedStop(-1);
-                        t.clearAutoStop(); // and the point booked against it
                     }
                 }
                 if (!autoPlanNow) continue;
@@ -4638,7 +4707,6 @@ int main(int argc, char** argv) {
                 if (d.stopKind == RoadAhead::StopKind::Station &&
                     arrivedAtStop(d, t.speed())) {
                     t.setAutoServedStop(d.stopRef);
-                    t.clearAutoStop(); // answered; the next visit books afresh
                     t.setAutoDriving(false);
                     if (&t == vehicle)
                         setMapMsg("auto-drive: standing at the station - press P to go on",
