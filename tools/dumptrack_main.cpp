@@ -32,6 +32,7 @@
 #include <utility>
 #include <vector>
 
+#include "Paths.h"
 #include "TerrainData.h"
 #include "TrackCircuits.h"
 #include "TrackGraph.h"
@@ -44,10 +45,12 @@ namespace {
 
 void usage() {
     std::puts(
-        "usage: ebaner-dumptrack <datasetRoot> [--near <x> <y> <radius>]\n"
+        "usage: ebaner-dumptrack [datasetRoot] [--near <x> <y> <radius>]\n"
         "                       [--switches <x> <y> <radius>] [--route <a> <b>]\n"
         "                       [--gaps <x> <y> <radius>] [<trackIdHex> ...]\n"
         "\n"
+        "  datasetRoot           the terrainmapper export. Optional: without one the\n"
+        "                        standard places are searched, $EBANER_DATA first.\n"
         "  --near x y radius     list the tracks whose geometry comes within radius\n"
         "                        metres of a point, nearest first\n"
         "  <trackIdHex> ...      print every vertex of those tracks, in order, as\n"
@@ -94,12 +97,20 @@ const char* mediumName(std::uint8_t m) {
 } // namespace
 
 int main(int argc, char** argv) {
+    Paths::init(argv[0]);
     if (argc < 2) { usage(); return 2; }
-    const std::string root = argv[1];
-    if (!std::filesystem::exists(root)) {
-        std::fprintf(stderr, "no dataset at %s\n", root.c_str());
+    // The dataset root is optional now that there are standard places to find one in,
+    // which leaves it to be told from the first query. A directory that exists is the
+    // root; anything else - a flag, or a bare hex track id - is a query, and the root is
+    // searched for. "5b6" is a good track id and a very unlikely directory name, so the
+    // two cannot be confused in practice, and spelling the root out still wins.
+    const bool rootGiven = std::filesystem::is_directory(argv[1]);
+    const std::string root = Paths::datasetRoot(rootGiven ? argv[1] : nullptr);
+    if (root.empty()) {
+        Paths::reportMissingDataset("ebaner-dumptrack");
         return 1;
     }
+    const int firstQuery = rootGiven ? 2 : 1;
 
     std::vector<std::pair<Border, Border>> routeQs;
     bool haveSw = false;
@@ -109,7 +120,7 @@ int main(int argc, char** argv) {
     bool haveGaps = false;
     double gx = 0.0, gy = 0.0, gr = 0.0;
     std::vector<std::uint32_t> ids;
-    for (int i = 2; i < argc; ++i) {
+    for (int i = firstQuery; i < argc; ++i) {
         if (std::strcmp(argv[i], "--near") == 0 && i + 3 < argc) {
             // The radius is required rather than optional: an optional one cannot
             // be told from a track id, since "300" is a perfectly good hex id.

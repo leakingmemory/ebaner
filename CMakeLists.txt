@@ -18,6 +18,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # So clangd can resolve includes outside src/ (the tests) without guessing.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# bindir, datadir, docdir and the rest, with the GNU meanings and the usual overrides.
+include(GNUInstallDirs)
+
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
@@ -126,6 +129,7 @@ add_library(ebaner_engine STATIC
     src/SwitchTypes.cpp
     src/EarClip.cpp
     src/Font.cpp
+    src/Paths.cpp
     src/Script.cpp
     src/VulkanRenderer.cpp)
 
@@ -145,9 +149,16 @@ else()
     message(STATUS "No Lua found: building without overlay.lua scripting")
 endif()
 
-# Directory holding the compiled .spv files, exposed to apps at runtime.
-target_compile_definitions(ebaner_engine PUBLIC
-    SHADER_DIR="${SHADER_OUT_DIR}")
+# Where an installed copy keeps its files, compiled in for Paths.cpp to search. No
+# build-tree path is compiled in at all: the binary and the shaders sit side by side in
+# the build directory, so the same "beside the binary" rule that serves a Windows
+# install finds them there too, and nothing has to know it is running from a build.
+#
+# PRIVATE, deliberately. Only Paths.cpp needs this, and a PUBLIC definition would put it
+# on the command line of every file in every target that links the engine - which is how
+# SHADER_DIR came to be compiled into fifteen translation units with no use for it.
+target_compile_definitions(ebaner_engine PRIVATE
+    EBANER_DATADIR="${CMAKE_INSTALL_FULL_DATADIR}/ebaner")
 
 # ---- ebaner (viewer + vehicle sim) ----------------------------------------
 add_executable(ebaner
@@ -185,6 +196,19 @@ add_executable(ebaner-dumptrack
 add_dependencies(ebaner-dumptrack shaders)
 target_link_libraries(ebaner-dumptrack PRIVATE ebaner_engine)
 target_include_directories(ebaner-dumptrack PRIVATE src)
+
+# ---- install --------------------------------------------------------------
+# A GNU-standard install: programs in bin/, the compiled shaders in share/ebaner/.
+#
+# The DATASET is not installed from here and cannot be. A terrainmapper export runs to
+# tens of gigabytes, which is why it is not in this repository and not in a package; it
+# is put in place separately. This is the reading side only - the program looks for one
+# in $EBANER_DATA, then the XDG data directories, then beside the binary, then
+# ${CMAKE_INSTALL_FULL_DATADIR}/ebaner. See src/Paths.h for the full order.
+install(TARGETS ebaner ebaner-trackedit ebaner-dumptrack
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES ${SHADER_SPV} DESTINATION ${CMAKE_INSTALL_DATADIR}/ebaner/shaders)
+install(FILES README.md LICENSE DESTINATION ${CMAKE_INSTALL_DOCDIR})
 
 # ---- tests ----------------------------------------------------------------
 # They run against a real terrainmapper export, since everything here is shaped by

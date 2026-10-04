@@ -1218,6 +1218,7 @@ report as skipped rather than failing, so a build without one is still clean.
 ```sh
 ./build/ebaner ../norway-rails            # pick the station on the start screen
 ./build/ebaner ../norway-rails Fauske     # or name it, and skip straight past
+./build/ebaner "" Fauske                  # dataset from $EBANER_DATA or an install
 ```
 
 ### Where to start
@@ -1233,9 +1234,69 @@ Starting far afield is free — the scene is built around whichever station you 
 Driving a long way from it is a different matter, and is what the floating-origin work
 still outstanding is for.
 
-The dataset path defaults to `../norway-rails` if omitted. On startup the console
-prints the resolved start point (UTM 33N), the look direction, tile/triangle
-counts, and vehicle physics (mass, inertia, tipping limit).
+On startup the console prints the resolved start point (UTM 33N), the look direction,
+tile/triangle counts, and vehicle physics (mass, inertia, tipping limit) — and, first of
+all, two `[Paths]` lines saying which dataset and which shaders it settled on, which is
+the first question to ask of a build that will not start.
+
+### Where the dataset is looked for
+
+The export is **installed separately**. The tiles run to tens of gigabytes, so they are
+in neither this repository nor any package built from it, and nothing here installs
+them; this is the reading side only. Named on the command line it is taken as given —
+a wrong path is reported as the wrong path rather than quietly replaced. Otherwise the
+first of these that holds a `tiles/` directory wins:
+
+| | where |
+|---|---|
+| 1 | `$EBANER_DATA` |
+| 2 | `$XDG_DATA_HOME/ebaner`, or `~/.local/share/ebaner` *(Unix)* |
+| 3 | `<directory of the binary>/data` |
+| 4 | `<directory of the binary>/../share/ebaner` |
+| 5 | each of `$XDG_DATA_DIRS` + `/ebaner`, by default `/usr/local/share` then `/usr/share` *(Unix)* |
+| 6 | the `datadir` this build was configured with, `$prefix/share/ebaner` |
+
+Rows 3 and 4 are what a Windows build will have, where there is no XDG and the binary's
+own directory is the only thing to go on. Found nothing, the program lists every place
+it looked and stops.
+
+**No development path is searched and none is compiled in.** Working on the program
+means saying where the data is — on the command line, or in `EBANER_DATA`:
+
+```sh
+./build/ebaner ../norway-rails Fauske
+EBANER_DATA=../norway-rails ./build/ebaner "" Fauske
+```
+
+The compiled shaders need no such help and are found the same way: `$EBANER_SHADERS`,
+then `<binary>/shaders`, then `<binary>/../share/ebaner/shaders`, then the configured
+`datadir`. The second of those is the Windows install layout and the build tree both —
+CMake puts the `.spv` files in `build/shaders` beside `build/ebaner` — so nothing has to
+know it is running from a build, and no build path is baked into the binary.
+
+"<binary>" is the directory the running executable is in. It comes from the OS where
+there is a way to ask (`/proc/self/exe`, `GetModuleFileName`); failing that, from
+`argv[0]`, which is used as given when it is a path and looked up on `$PATH` when it is
+a bare name — the same search the shell did, against the same `PATH`, finding the same
+file.
+
+## Install
+
+```sh
+cmake --install build --prefix /usr/local     # or DESTDIR=... for packaging
+```
+
+A plain GNU layout, through `GNUInstallDirs`, so `-DCMAKE_INSTALL_LIBDIR=...` and the
+rest work as expected:
+
+| | |
+|---|---|
+| `$prefix/bin` | `ebaner`, `ebaner-trackedit`, `ebaner-dumptrack` |
+| `$prefix/share/ebaner/shaders` | the compiled `.spv` files |
+| `$prefix/share/doc/ebaner` | `README.md`, `LICENSE` |
+
+Put the export at `$prefix/share/ebaner` (beside `shaders/`), or anywhere else in the
+list above.
 
 ## Controls
 
@@ -1988,6 +2049,8 @@ the corresponding sources (national rail register + NVDB roads + OSM enrichment)
 
 | Variable            | Effect                                                        |
 |---------------------|--------------------------------------------------------------|
+| `EBANER_DATA`       | The terrainmapper export to use, ahead of every other place searched (a path given on the command line still wins). |
+| `EBANER_SHADERS`    | The directory holding the compiled `.spv` files, ahead of every other place searched. |
 | `EBANER_SCREENSHOT` | Render ~20 frames, write that frame to the given PPM, exit.   |
 | `EBANER_CAM`        | Scripted camera `"x,y,z,yawDeg,pitchDeg"` (scene-relative m). |
 | `EBANER_NOSTITCH`   | Skip the seam-stitching pass (to inspect raw tile seams).     |

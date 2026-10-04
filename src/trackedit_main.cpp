@@ -25,6 +25,7 @@
 #include "PlatformMesh.h"
 #include "RoadMesh.h"
 #include "StationPicker.h"
+#include "Paths.h"
 #include "Stations.h"
 #include "SwitchMesh.h"
 #include "SwitchNetwork.h"
@@ -124,7 +125,18 @@ void resizeCallback(GLFWwindow*, int, int) {
 } // namespace
 
 int main(int argc, char** argv) {
-    const std::string datasetRoot = (argc > 1) ? argv[1] : "../norway-rails";
+    Paths::init(argv[0]);
+    const std::string datasetRoot = Paths::datasetRoot((argc > 1) ? argv[1] : nullptr);
+    if (datasetRoot.empty()) {
+        Paths::reportMissingDataset("ebaner-trackedit");
+        return EXIT_FAILURE;
+    }
+
+    // Worth a line: where these two came from is the first question asked of a build
+    // that will not start, and the answer differs between the tree, an install and a
+    // relocated copy.
+    std::printf("[Paths] dataset %s\n[Paths] shaders %s\n", datasetRoot.c_str(),
+                Paths::shaderDir().c_str());
 
     // Which station to open at. Authoring is a deliberate act, so this is the argument
     // and nothing else - unlike the viewer, there is no start screen to choose on.

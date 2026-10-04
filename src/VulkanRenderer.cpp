@@ -14,6 +14,7 @@
 #include "VulkanRenderer.h"
 
 #include "Frustum.h"
+#include "Paths.h"
 
 #include "TerrainMesh.h" // Vertex
 #include "TrackMesh.h"   // TrackVertex
@@ -32,9 +33,13 @@
 #include <stdexcept>
 #include <string>
 
-#ifndef SHADER_DIR
-#define SHADER_DIR "shaders"
-#endif
+// Where the .spv files are is a question for installation, not for the renderer: it
+// differs between the build tree, a GNU install and a Windows one. Paths::shaderDir()
+// does the search once and the answer is the same for every pipeline built here.
+static std::string shaderPath(const char* name) {
+    static const std::string dir = Paths::shaderDir();
+    return dir + "/" + name;
+}
 
 namespace {
 
@@ -437,8 +442,8 @@ void VulkanRenderer::createFramebuffers() {
 }
 
 void VulkanRenderer::createGraphicsPipeline() {
-    auto vertCode = readFile(std::string(SHADER_DIR) + "/terrain.vert.spv");
-    auto fragCode = readFile(std::string(SHADER_DIR) + "/terrain.frag.spv");
+    auto vertCode = readFile(shaderPath("terrain.vert.spv"));
+    auto fragCode = readFile(shaderPath("terrain.frag.spv"));
     VkShaderModule vert = createShaderModule(vertCode);
     VkShaderModule frag = createShaderModule(fragCode);
 
@@ -561,8 +566,8 @@ void VulkanRenderer::createGraphicsPipeline() {
 void VulkanRenderer::createTrackPipeline() {
     // Reuses pipelineLayout_ and renderPass_ (created by createGraphicsPipeline).
     // Ribbons are triangles; vertex is position-only; a single solid colour.
-    auto vertCode = readFile(std::string(SHADER_DIR) + "/track.vert.spv");
-    auto fragCode = readFile(std::string(SHADER_DIR) + "/track.frag.spv");
+    auto vertCode = readFile(shaderPath("track.vert.spv"));
+    auto fragCode = readFile(shaderPath("track.frag.spv"));
     VkShaderModule vert = createShaderModule(vertCode);
     VkShaderModule frag = createShaderModule(fragCode);
 
@@ -691,9 +696,9 @@ void VulkanRenderer::createOverlayPipelines() {
     // (links) and a round point sprite (geo-points). Both reuse pipelineLayout_ and
     // renderPass_; the vertex is position + colour only. Cheap to create even for
     // the viewer, which never attaches an overlay (the draws are simply skipped).
-    auto vertCode = readFile(std::string(SHADER_DIR) + "/overlay.vert.spv");
-    auto lineFrag = readFile(std::string(SHADER_DIR) + "/overlay_line.frag.spv");
-    auto pointFrag = readFile(std::string(SHADER_DIR) + "/overlay_point.frag.spv");
+    auto vertCode = readFile(shaderPath("overlay.vert.spv"));
+    auto lineFrag = readFile(shaderPath("overlay_line.frag.spv"));
+    auto pointFrag = readFile(shaderPath("overlay_point.frag.spv"));
     VkShaderModule vert = createShaderModule(vertCode);
     VkShaderModule lfrag = createShaderModule(lineFrag);
     VkShaderModule pfrag = createShaderModule(pointFrag);
@@ -1502,8 +1507,8 @@ void VulkanRenderer::attachVehicle(const std::vector<TrackVertex>& vertices,
 
 void VulkanRenderer::createTextPipeline() {
     // 2-D overlay: reuses pipelineLayout_/renderPass_; no depth so it draws on top.
-    auto vertCode = readFile(std::string(SHADER_DIR) + "/text.vert.spv");
-    auto fragCode = readFile(std::string(SHADER_DIR) + "/text.frag.spv");
+    auto vertCode = readFile(shaderPath("text.vert.spv"));
+    auto fragCode = readFile(shaderPath("text.frag.spv"));
     VkShaderModule vert = createShaderModule(vertCode);
     VkShaderModule frag = createShaderModule(fragCode);
     VkPipelineShaderStageCreateInfo vs{
