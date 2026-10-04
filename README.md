@@ -1298,6 +1298,45 @@ rest work as expected:
 Put the export at `$prefix/share/ebaner` (beside `shaders/`), or anywhere else in the
 list above.
 
+### Windows
+
+`.github/workflows/windows.yml` builds x64 executables with MSVC and vcpkg. It is
+**dispatched by hand, and runs on a pushed `v*` tag** — nothing else. A Windows runner
+bills at twice the Linux rate, and the project is developed and tested here.
+
+It installs the Vulkan SDK from LunarG (headers, `vulkan-1.lib`, and `glslc`), takes
+glfw3, glm, lua and portaudio from `vcpkg.json`, builds against the
+**`x64-windows-static`** triplet, runs `ctest`, and packs `cmake --install` output into
+`ebaner-windows-x64.zip` — the same `bin/` and `share/ebaner/shaders/` layout as above,
+which the path search finds with no help. On a tag the zip is attached to the release.
+
+Static on purpose: the zip needs no DLLs beside it and no MSVC redistributable. The one
+thing loaded at run time is `vulkan-1.dll`, which comes with the graphics driver and is
+not ours to ship. The dataset is still installed separately — put it in `data\` beside
+the executables, or point `EBANER_DATA` at it.
+
+Of the 18 tests, 11 run on the runner and 7 report skipped, having found no export.
+
+`vcpkg.json` is inert for a Linux build: manifest mode engages only when the vcpkg
+toolchain file is passed, which it never is here.
+
+**Before spending a run on it**, the whole tree can be compiled for Windows locally with
+the mingw-w64 cross compiler. It is not MSVC and will not find everything MSVC objects
+to, but it catches anything POSIX that has crept in, and it costs nothing:
+
+```sh
+mkdir -p /tmp/wininc && ln -sfn /usr/include/{vulkan,vk_video,GLFW,glm} /tmp/wininc/
+for f in src/*.cpp tools/*.cpp tests/*.cpp; do
+    x86_64-w64-mingw32-g++ -std=c++20 -fsyntax-only -I src -I /tmp/wininc \
+        -DEBANER_DATADIR='"C:/x"' "$f" || echo "FAILED: $f"
+done
+```
+
+All 70 translation units pass it today. `src/Paths.cpp` goes further than that and has
+been run: cross-compiled and executed under wine, it resolves its own directory through
+`GetModuleFileNameW` and finds both the installed layout (`bin\..\share\ebaner`) and
+the portable one (`shaders\` and `data\` beside the executable).
+
 ## Controls
 
 | Input        | Action                          |

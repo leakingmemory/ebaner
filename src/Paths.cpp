@@ -19,9 +19,15 @@
 
 #ifdef _WIN32
 // Both before windows.h or it defines min/max as macros and brings in half the SDK,
-// either of which breaks <filesystem> above in ways that are tedious to read.
+// either of which breaks <filesystem> above in ways that are tedious to read. Guarded
+// because they are not ours alone: the build defines them too, and mingw's libstdc++
+// has already set NOMINMAX by the time any of this is read.
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 #else
 #include <unistd.h> // access(), for the X_OK that decides a PATH hit
@@ -59,7 +65,10 @@ void add(std::vector<std::string>& out, const std::string& p) {
     out.push_back(p);
 }
 
-// Split a PATH-style list on ':'. Windows has no XDG, so the separator need not vary.
+#ifndef _WIN32
+// Split a PATH-style list on ':'. This is for XDG_DATA_DIRS, which is a Unix idea; the
+// PATH walk below does its own splitting, because it has a separator and an extension
+// list of its own to think about.
 void addList(std::vector<std::string>& out, const std::string& list, const char* suffix) {
     std::size_t i = 0;
     while (i <= list.size()) {
@@ -70,6 +79,7 @@ void addList(std::vector<std::string>& out, const std::string& list, const char*
         i = j + 1;
     }
 }
+#endif
 
 bool isDir(const std::string& p) {
     if (p.empty()) return false;

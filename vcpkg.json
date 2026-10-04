@@ -1,0 +1,12 @@
+{
+  "name": "ebaner",
+  "version-string": "0.1.0",
+  "description": "A Vulkan viewer for terrainmapper rail/terrain exports",
+  "homepage": "https://github.com/leakingmemory/ebaner",
+  "dependencies": [
+    "glfw3",
+    "glm",
+    "lua",
+    "portaudio"
+  ]
+}

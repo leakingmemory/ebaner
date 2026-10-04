@@ -25,6 +25,23 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
+if(MSVC)
+    # Not cosmetic. Seven string literals in the sources are UTF-8 - "Bodo" with the
+    # slashed o as the editor's default station among them - and MSVC without this reads
+    # them in the active code page and writes them out in it again, so the name no longer
+    # matches what the dataset spells. GCC and clang are UTF-8 both ways already, which
+    # is why this has never had to be said before.
+    add_compile_options(/utf-8)
+    # Some of these translation units are long - main.cpp is over four thousand lines -
+    # and the default section limit in a COFF object is the kind of thing only found by
+    # hitting it. Cheaper to ask for the big one than to read C1128 once.
+    add_compile_options(/bigobj)
+    # So that <windows.h>, wherever it is dragged in from, does not arrive with min and
+    # max as macros. Paths.cpp defines both before including it; this covers anything
+    # that picks the header up indirectly.
+    add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
+
 # ---- Dependencies ---------------------------------------------------------
 find_package(Vulkan REQUIRED)
 
@@ -44,6 +61,13 @@ find_package(glm QUIET)
 # Audio (optional): procedural brake sounds. Prefer PulseAudio (talks to the sound
 # server directly, like other desktop apps); fall back to PortAudio. The build stays
 # silent if neither is present.
+#
+# Found through pkg-config where there is one, and through a CMake config package where
+# there is not - which is every Windows build, since pkg-config is not part of that
+# toolchain and vcpkg ships config packages instead. pkg-config stays FIRST so that
+# nothing about a Linux build changes: it answers there, and the fallbacks are never
+# reached. Each dependency ends as one *_TARGET variable to link against, whichever
+# route found it, the way GLFW_TARGET above already works.
 find_package(PkgConfig QUIET)
 if(PkgConfig_FOUND)
     pkg_check_modules(PULSE QUIET IMPORTED_TARGET libpulse-simple)
@@ -59,11 +83,57 @@ if(PkgConfig_FOUND)
     pkg_search_module(LUA QUIET IMPORTED_TARGET lua5.4 lua-5.4 lua54)
 endif()
 
+if(PULSE_FOUND)
+    set(PULSE_TARGET PkgConfig::PULSE)
+endif()
+
+if(PORTAUDIO_FOUND)
+    set(PORTAUDIO_TARGET PkgConfig::PORTAUDIO)
+else()
+    # vcpkg's port exports one of these two names depending on the triplet.
+    find_package(portaudio CONFIG QUIET)
+    foreach(cand portaudio portaudio_static)
+        if(TARGET ${cand})
+            set(PORTAUDIO_TARGET ${cand})
+            set(PORTAUDIO_FOUND TRUE)
+            break()
+        endif()
+    endforeach()
+endif()
+
+if(LUA_FOUND)
+    set(LUA_TARGET PkgConfig::LUA)
+    set(EBANER_LUA_VERSION ${LUA_VERSION})
+else()
+    # CMake's own module, which looks for the header and the library rather than a .pc
+    # file. It reports include dir and libraries rather than a target, so wrap them in
+    # one - everything downstream wants a target and should not care which route found
+    # it. Guarded by the version, because FindLua will happily hand back a 5.1.
+    find_package(Lua QUIET)
+    if(LUA_FOUND AND LUA_VERSION_STRING VERSION_GREATER_EQUAL 5.4)
+        add_library(ebaner_lua INTERFACE)
+        target_include_directories(ebaner_lua INTERFACE ${LUA_INCLUDE_DIR})
+        target_link_libraries(ebaner_lua INTERFACE ${LUA_LIBRARIES})
+        set(LUA_TARGET ebaner_lua)
+        set(EBANER_LUA_VERSION ${LUA_VERSION_STRING})
+    else()
+        set(LUA_FOUND FALSE)
+    endif()
+endif()
+
 # ---- Shader compilation ---------------------------------------------------
-find_program(GLSLC glslc HINTS ${Vulkan_GLSLC_EXECUTABLE})
+# FindVulkan reports glslc directly when the SDK carries one, which is how a Windows
+# build gets it - there is no PATH to find it on there. Taken as the answer when it is
+# set; HINTS would not do, since that wants directories and this is the program itself.
+if(Vulkan_GLSLC_EXECUTABLE)
+    set(GLSLC ${Vulkan_GLSLC_EXECUTABLE})
+else()
+    find_program(GLSLC glslc)
+endif()
 if(NOT GLSLC)
     message(FATAL_ERROR "glslc not found; required to compile shaders")
 endif()
+message(STATUS "Shader compiler: ${GLSLC}")
 
 set(SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
 set(SHADER_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
@@ -142,9 +212,9 @@ endif()
 # PRIVATE: no Lua header escapes Script.cpp, so nothing that uses the engine needs the
 # include path. CMake still carries the link requirement through for a static library.
 if(LUA_FOUND)
-    target_link_libraries(ebaner_engine PRIVATE PkgConfig::LUA)
+    target_link_libraries(ebaner_engine PRIVATE ${LUA_TARGET})
     target_compile_definitions(ebaner_engine PRIVATE HAVE_LUA=1)
-    message(STATUS "Lua found (${LUA_VERSION}): overlay.lua scripting enabled")
+    message(STATUS "Lua found (${EBANER_LUA_VERSION}): overlay.lua scripting enabled")
 else()
     message(STATUS "No Lua found: building without overlay.lua scripting")
 endif()
@@ -172,12 +242,12 @@ add_executable(ebaner
 add_dependencies(ebaner shaders)
 target_link_libraries(ebaner PRIVATE ebaner_engine)
 if(PULSE_FOUND)
-    target_link_libraries(ebaner PRIVATE PkgConfig::PULSE)
+    target_link_libraries(ebaner PRIVATE ${PULSE_TARGET})
     target_compile_definitions(ebaner PRIVATE HAVE_PULSE=1)
     message(STATUS "PulseAudio found: brake sounds via PulseAudio (preferred)")
 endif()
 if(PORTAUDIO_FOUND)
-    target_link_libraries(ebaner PRIVATE PkgConfig::PORTAUDIO)
+    target_link_libraries(ebaner PRIVATE ${PORTAUDIO_TARGET})
     target_compile_definitions(ebaner PRIVATE HAVE_PORTAUDIO=1)
     message(STATUS "PortAudio found: brake sounds via PortAudio (fallback)")
 endif()

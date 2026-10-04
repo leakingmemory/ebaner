@@ -1,0 +1,150 @@
+# Windows executables.
+#
+# Run by hand, and on a tag. Not on every push: a Windows runner bills at twice the rate
+# of a Linux one, the project is developed and tested on Linux, and a build nobody has
+# asked for is a build nobody reads.
+#
+# The dataset is not here and cannot be - it is tens of gigabytes of terrain tiles,
+# installed separately - so this builds, runs the tests that need no export, and packs
+# the result. The seven tests that do need one report themselves skipped.
+name: Windows
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write # only for attaching the zip to a release; nothing else is written
+
+    env:
+      BUILD_TYPE: Release
+      VCPKG_TARGET_TRIPLET: x64-windows-static
+      # Somewhere predictable to cache. vcpkg will not create this itself.
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-cache
+      VULKAN_SDK_ROOT: ${{ github.workspace }}/vulkan-sdk
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- the Vulkan SDK: headers, vulkan-1.lib, and glslc ------------------
+      # Straight from LunarG rather than through a third-party action. It is one
+      # documented silent install, it pins nothing we cannot see, and --root puts it
+      # where the cache can find it again.
+      - name: Cache the Vulkan SDK
+        id: vulkan-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VULKAN_SDK_ROOT }}
+          key: vulkan-sdk-latest-${{ runner.os }}
+
+      - name: Install the Vulkan SDK
+        if: steps.vulkan-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $root = $env:VULKAN_SDK_ROOT -replace '/','\'
+          curl.exe -L -o "$env:RUNNER_TEMP\vulkan_sdk.exe" `
+            https://sdk.lunarg.com/sdk/download/latest/windows/vulkan_sdk.exe
+          & "$env:RUNNER_TEMP\vulkan_sdk.exe" --root "$root" `
+            --accept-licenses --default-answer --confirm-command install
+          if ($LASTEXITCODE -ne 0) { throw "Vulkan SDK install failed ($LASTEXITCODE)" }
+          exit 0
+
+      - name: Put the SDK on the environment
+        shell: pwsh
+        run: |
+          $root = $env:VULKAN_SDK_ROOT -replace '/','\'
+          "VULKAN_SDK=$root" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "$root\Bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          & "$root\Bin\glslc.exe" --version
+          exit 0
+
+      # --- the rest of the dependencies, through vcpkg -----------------------
+      # glfw3, glm, lua and portaudio, from vcpkg.json. Static, so the zip needs no
+      # DLLs alongside it: the only thing loaded at run time is vulkan-1.dll, which
+      # comes with the user's graphics driver and is not ours to ship.
+      - name: Cache the vcpkg builds
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: vcpkg-${{ env.VCPKG_TARGET_TRIPLET }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-${{ env.VCPKG_TARGET_TRIPLET }}-
+
+      - name: Make the binary cache directory
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE
+
+      - name: Configure
+        shell: pwsh
+        run: >
+          cmake -S . -B build -A x64
+          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          -DVCPKG_TARGET_TRIPLET=$env:VCPKG_TARGET_TRIPLET
+          -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+
+      - name: Build
+        run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
+
+      # 11 of the 18 run here. The other 7 need a terrainmapper export, find none, and
+      # return 77 - which ctest reports as skipped, not as a failure.
+      - name: Test
+        run: ctest --test-dir build -C ${{ env.BUILD_TYPE }} --output-on-failure
+
+      # The first thing that has ever exercised the Win32 half of Paths.cpp: the list of
+      # places it prints is built from the executable's own directory, so an empty or
+      # wrong list here means GetModuleFileName did not do what it was written to do.
+      - name: Check the path resolution
+        shell: pwsh
+        run: |
+          # It exits non-zero on purpose - there is no dataset - so the output is what
+          # is read, not the status.
+          $exe = "build\$env:BUILD_TYPE\ebaner-dumptrack.exe"
+          $out = (& $exe --near 1 2 3 2>&1 | Out-String)
+          Write-Host $out
+          if ($out -notmatch "no terrainmapper export found") {
+            throw "expected the missing-dataset report"
+          }
+          if ($out -notmatch [regex]::Escape("$PWD\build")) {
+            throw "no path under the build directory was listed, so exeDir() failed"
+          }
+          Write-Host "exeDir() resolved and the search was built from it"
+          exit 0
+
+      - name: Stage the install
+        run: cmake --install build --config ${{ env.BUILD_TYPE }} --prefix staging
+
+      - name: Pack
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse staging | ForEach-Object { $_.FullName }
+          Compress-Archive -Path staging\* -DestinationPath ebaner-windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ebaner-windows-x64
+          path: ebaner-windows-x64.zip
+          if-no-files-found: error
+
+      # Create the release if the tag was pushed without one, upload into it if it is
+      # already there - either is a normal way to cut a release.
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          gh release view $tag 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag ebaner-windows-x64.zip --clobber
+          } else {
+            gh release create $tag --title $tag --generate-notes ebaner-windows-x64.zip
+          }
+          if ($LASTEXITCODE -ne 0) { throw "release upload failed" }
