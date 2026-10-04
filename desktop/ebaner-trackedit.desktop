@@ -1,0 +1,18 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=ebaner Track Editor
+Name[nb]=ebaner sporeditor
+GenericName=Railway Track and Signalling Editor
+GenericName[nb]=Spor- og signalanleggseditor
+Comment=Author track geometry, signalling and interlocking for ebaner
+Comment[nb]=Rediger sporgeometri, signaler og sikringsanlegg for ebaner
+Exec=ebaner-trackedit
+TryExec=ebaner-trackedit
+Icon=ebaner-trackedit
+Terminal=false
+Categories=Game;Simulation;
+Keywords=train;railway;track;editor;signalling;interlocking;turnout;
+Keywords[nb]=tog;jernbane;spor;editor;signal;sikringsanlegg;sporveksel;
+StartupNotify=true
+StartupWMClass=ebaner-trackedit

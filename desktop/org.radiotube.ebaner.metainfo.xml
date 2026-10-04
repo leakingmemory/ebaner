@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright (C) 2026 Jan-Espen Oversand <sigsegv@radiotube.org> -->
+<component type="desktop-application">
+  <id>org.radiotube.ebaner</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+
+  <name>ebaner</name>
+  <summary>Drive trains on the Norwegian railways</summary>
+  <summary xml:lang="nb">Kjør tog på det norske jernbanenettet</summary>
+
+  <developer id="org.radiotube">
+    <name>Jan-Espen Oversand</name>
+  </developer>
+
+  <description>
+    <p>
+      ebaner is a railway simulator. Trains are driven over the line as it actually is,
+      with the terrain, the track and the gradients taken from an export of the national
+      survey data rather than drawn by hand.
+    </p>
+    <p>
+      What the train does on the line is modelled rather than scripted:
+    </p>
+    <ul>
+      <li>A continuous air brake that has to be kept charged, and that feels how long
+          the train is - a 600 m freight is slow to apply and slow to let go</li>
+      <li>Traction worked out from each machine's own transmission, from a torque
+          converter to a generator and traction motors</li>
+      <li>Couplers that part and re-couple, so a locomotive can run round its train</li>
+      <li>Track circuits, signals, interlocked routes and line blocks</li>
+      <li>A driver the computer can take over from, obeying the signals and the limits</li>
+      <li>Every train in the world simulated, not only the one being driven</li>
+    </ul>
+    <p>
+      The terrain export is large and is installed separately; ebaner looks for it in the
+      usual places, and the EBANER_DATA environment variable overrides them.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">ebaner.desktop</launchable>
+  <provides>
+    <binary>ebaner</binary>
+    <binary>ebaner-trackedit</binary>
+  </provides>
+
+  <url type="homepage">https://github.com/leakingmemory/ebaner</url>
+  <url type="bugtracker">https://github.com/leakingmemory/ebaner/issues</url>
+
+  <categories>
+    <category>Game</category>
+    <category>Simulation</category>
+  </categories>
+
+  <keywords>
+    <keyword>train</keyword>
+    <keyword>railway</keyword>
+    <keyword>simulator</keyword>
+    <keyword>signalling</keyword>
+    <keyword>Norway</keyword>
+  </keywords>
+
+  <content_rating type="oars-1.1"/>
+</component>

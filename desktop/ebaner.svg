@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ebaner - a Norwegian railway simulator.
+     Copyright (C) 2026 Jan-Espen Oversand <sigsegv@radiotube.org>
+     Licensed under version 3 of the GNU General Public License.
+
+     Drawn for legibility at 32 px before anything else: four shapes with a clear
+     silhouette - fell, track, signal, lamp - and no detail that turns to mud when the
+     icon is a centimetre across. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1d3350"/>
+      <stop offset="1" stop-color="#3f6286"/>
+    </linearGradient>
+    <linearGradient id="rail" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#f2f6fa"/>
+      <stop offset="1" stop-color="#9fb2c4"/>
+    </linearGradient>
+    <clipPath id="frame">
+      <rect x="4" y="4" width="120" height="120" rx="24"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#frame)">
+    <rect x="4" y="4" width="120" height="120" fill="url(#sky)"/>
+
+    <!-- the fell behind, with snow still on it -->
+    <path d="M -4 80 L 30 38 L 52 62 L 78 28 L 132 80 Z" fill="#22384f"/>
+    <path d="M 78 28 L 90 40 L 83 43 L 75 38 L 70 42 Z" fill="#dfe9f2"/>
+    <path d="M 30 38 L 38 47 L 33 49 L 27 46 L 23 49 Z" fill="#dfe9f2"/>
+
+    <!-- ballast, running away to a vanishing point -->
+    <path d="M 16 124 L 112 124 L 76 62 L 52 62 Z" fill="#3a4a59"/>
+
+    <!-- sleepers, thinning with distance -->
+    <path d="M 24 122 h 80 l -3 -6 h -74 Z" fill="#5d6e7d"/>
+    <path d="M 34 106 h 60 l -3 -5 h -54 Z" fill="#5d6e7d"/>
+    <path d="M 43 92 h 42 l -2 -4 h -38 Z" fill="#5d6e7d"/>
+    <path d="M 50 80 h 28 l -2 -3 h -24 Z" fill="#5d6e7d"/>
+
+    <!-- the rails -->
+    <path d="M 35 124 L 46 124 L 61 62 L 57 62 Z" fill="url(#rail)"/>
+    <path d="M 82 124 L 93 124 L 71 62 L 67 62 Z" fill="url(#rail)"/>
+
+    <!-- a main signal beside the road, off -->
+    <rect x="97" y="64" width="8" height="56" fill="#17212b"/>
+    <rect x="85" y="22" width="32" height="46" rx="11" fill="#17212b"/>
+    <circle cx="101" cy="41" r="12" fill="#2fcb55"/>
+  </g>
+</svg>

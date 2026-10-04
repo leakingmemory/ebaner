@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=ebaner
+GenericName=Railway Simulator
+GenericName[nb]=Jernbanesimulator
+Comment=Drive trains on the Norwegian railways
+Comment[nb]=Kjør tog på det norske jernbanenettet
+Exec=ebaner
+TryExec=ebaner
+Icon=ebaner
+Terminal=false
+Categories=Game;Simulation;
+Keywords=train;railway;rail;simulator;driving;signalling;Norway;Nordlandsbanen;
+Keywords[nb]=tog;jernbane;simulator;kjøring;signal;Norge;Nordlandsbanen;
+StartupNotify=true
+StartupWMClass=ebaner

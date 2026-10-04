@@ -280,6 +280,23 @@ install(TARGETS ebaner ebaner-trackedit ebaner-dumptrack
 install(FILES ${SHADER_SPV} DESTINATION ${CMAKE_INSTALL_DATADIR}/ebaner/shaders)
 install(FILES README.md LICENSE DESTINATION ${CMAKE_INSTALL_DOCDIR})
 
+# Desktop integration, where there is a freedesktop menu to integrate with. The icon is
+# scalable-only on purpose: one SVG in hicolor/scalable/apps is what the icon themes
+# want, and rasterising it to a handful of fixed sizes here would only produce worse
+# versions of what the theme engine already does well.
+#
+# Installing these from CMake rather than from the packaging means the layout is the
+# same however ebaner is installed, and a packager needs no rules of their own beyond
+# refreshing the icon cache and the desktop database.
+if(UNIX AND NOT APPLE)
+    install(FILES desktop/ebaner.desktop desktop/ebaner-trackedit.desktop
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+    install(FILES desktop/ebaner.svg desktop/ebaner-trackedit.svg
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
+    install(FILES desktop/org.radiotube.ebaner.metainfo.xml
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
+endif()
+
 # ---- tests ----------------------------------------------------------------
 # They run against a real terrainmapper export, since everything here is shaped by
 # what the data is actually like; there is no synthetic dataset to check against.

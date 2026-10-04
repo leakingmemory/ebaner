@@ -328,8 +328,20 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    // What the desktop matches a window against: StartupWMClass in ebaner.desktop on X11,
+    // and the app id on Wayland. Left unset, GLFW gives every window it creates the
+    // class "GLFW-Application" with the title as the instance name - shared with every
+    // other GLFW program on the machine, and changing here with the station - so no
+    // taskbar can tie the window to its launcher or show its icon.
+#ifdef GLFW_X11_CLASS_NAME
+    glfwWindowHintString(GLFW_X11_CLASS_NAME, "ebaner");
+    glfwWindowHintString(GLFW_X11_INSTANCE_NAME, "ebaner");
+#endif
+#ifdef GLFW_WAYLAND_APP_ID
+    glfwWindowHintString(GLFW_WAYLAND_APP_ID, "ebaner");
+#endif
     GLFWwindow* window =
-        glfwCreateWindow(1280, 720, "ebaner - Bodo terrain", nullptr, nullptr);
+        glfwCreateWindow(1280, 720, "ebaner", nullptr, nullptr);
     if (!window) {
         std::fprintf(stderr, "window creation failed (is Vulkan/WSI available?)\n");
         glfwTerminate();
