@@ -81,12 +81,19 @@ jobs:
         shell: pwsh
         run: New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE
 
+      # The triplet comes from the workflow environment, so the runner substitutes it
+      # before PowerShell sees the line. An unquoted $env:NAME after an "=" inside a
+      # longer bare argument does NOT expand - it reached vcpkg as the literal text
+      # "$env:VCPKG_TARGET_TRIPLET" and was rejected as a triplet name. The toolchain
+      # path has to stay a PowerShell expansion, because VCPKG_INSTALLATION_ROOT is set
+      # by the runner image and is not in the workflow `env` context; it is quoted, and
+      # quoting is what made that one work.
       - name: Configure
         shell: pwsh
         run: >
           cmake -S . -B build -A x64
           -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
-          -DVCPKG_TARGET_TRIPLET=$env:VCPKG_TARGET_TRIPLET
+          "-DVCPKG_TARGET_TRIPLET=${{ env.VCPKG_TARGET_TRIPLET }}"
           -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
 
       - name: Build
