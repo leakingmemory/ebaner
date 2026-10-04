@@ -277,7 +277,18 @@ bool Consist::roadAhead(float metres, std::vector<Vehicle::RoadStretch>& out) co
     // only place a driver measures from. Left unshifted every mark read half a body
     // length further away than it was, and the train stood that far PAST every signal it
     // was stopping at: twenty metres on a Class 93, and a signal passed at danger.
-    const Vehicle& head = h > 0 ? units_.front() : units_.back();
+    //
+    // Which set that is comes out of the layout, and getting it from the wrong one is a
+    // mistake worth naming: layOut places each set at a POSITIVE pitch from the one
+    // before, so units_.front() is the -body end of the train and units_.back() the
+    // +body end, whichever way the train happens to be facing. The offset below is the
+    // one that leaves the train, so it has to be the outward one for the set it starts
+    // from - back with +, front with -. Paired the other way round the walk sets off
+    // from the REAR and runs forward THROUGH the train's own body, so every mark came
+    // back a whole train length too far and a signal standing beside the fourth carriage
+    // was reported as 23 m ahead. A Di 4 and five ran past a red entry signal that way,
+    // and a single Class 93 never showed it because its two ends are the same set.
+    const Vehicle& head = h > 0 ? units_.back() : units_.front();
     const float halfLen = 0.5f * head.length();
     const bool ok = head.walkRoad(h > 0 ? (halfLen + metres) : -(halfLen + metres), out);
     for (Vehicle::RoadStretch& r : out) r.dist0 -= halfLen;

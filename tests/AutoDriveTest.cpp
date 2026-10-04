@@ -31,6 +31,7 @@
 #include "Vehicle.h"
 
 #include <cmath>
+#include <limits>
 #include <cstdio>
 #include <optional>
 #include <string>
@@ -271,6 +272,69 @@ int main() {
             check(std::abs(road.front().dist0 + half) < 0.01f,
                   "  measured from the nose, not the middle of the first set",
                   road.front().dist0, -half);
+        }
+    }
+    {
+        // ...and measured from the nose of the TRAIN, not of whichever set the walk
+        // happened to start from. A Class 93 cannot show the difference, because its two
+        // ends are the same set; a Di 4 and five carriages is 127 m long and shows it as
+        // a whole train length.
+        //
+        // The property is the one a walk "ahead" has to have: it leaves the train. So no
+        // part of the train may lie on the road it reports - put a mark at each set's
+        // centre and every one of them must read as passed. Paired front-with-+ and
+        // back-with-- the walk set off from the REAR and ran forward through the train's
+        // own body, so the carriages read as marks up to 127 m AHEAD, and a signal
+        // standing beside the fourth one was obeyed as a signal 23 m in front of a nose
+        // that was already 100 m past it.
+        std::vector<TrackPath> paths;
+        std::vector<glm::vec3> pts;
+        for (int i = 0; i <= 2000; ++i)
+            pts.push_back({static_cast<float>(i) * 25.0f, 0.0f, 0.0f});
+        paths.emplace_back(1u, 0u, pts, std::vector<std::uint16_t>(pts.size(), 200));
+        Consist c(&paths, &paths[0], *specNamed("Di 4 + 5 (cafe"), 20000.0f, 0.0f);
+        c.attachNetwork(&paths, nullptr);
+        // How far ahead a mark at (path, s) reads, the way the road scan works it out.
+        auto readsAt = [](const std::vector<Vehicle::RoadStretch>& road, int path,
+                          float s) {
+            for (const Vehicle::RoadStretch& st : road) {
+                if (st.pathIdx != path) continue;
+                if (s < std::min(st.sFrom, st.sTo) || s > std::max(st.sFrom, st.sTo))
+                    continue;
+                return st.dist0 + std::abs(s - st.sFrom);
+            }
+            return std::numeric_limits<float>::quiet_NaN();
+        };
+        for (int cab = 0; cab < 2; ++cab) {
+            c.setReverser(cab, 0);
+            c.setReverser(1 - cab, 0);
+            c.setReverser(cab, 1);
+            std::vector<Vehicle::RoadStretch> road;
+            const bool got = c.roadAhead(500.0f, road) && !road.empty();
+            check(got, "the road ahead reads from a six-set train", double(cab), 0.0);
+            if (!got) continue;
+            // Which end leads is the direction the walk goes, and the set furthest that
+            // way is the one it has to start from.
+            const int dir = road.front().sTo >= road.front().sFrom ? 1 : -1;
+            int leadIdx = 0;
+            for (int u = 1; u < c.unitCount(); ++u)
+                if (dir * c.unit(u).s() > dir * c.unit(leadIdx).s()) leadIdx = u;
+            const Vehicle& leadUnit = c.unit(leadIdx);
+            const float nose =
+                leadUnit.s() + static_cast<float>(dir) * 0.5f * leadUnit.length();
+            std::printf("      cab %d: heading %+d, leads with set %d; a mark at its nose "
+                        "reads %.2f m\n", cab, c.headingSign(), leadIdx,
+                        double(readsAt(road, leadUnit.pathIdx(), nose)));
+            check(std::abs(readsAt(road, leadUnit.pathIdx(), nose)) < 0.05f,
+                  "  a mark at the leading nose is right under it",
+                  readsAt(road, leadUnit.pathIdx(), nose), 0.0);
+            float worst = 0.0f;
+            for (int u = 0; u < c.unitCount(); ++u) {
+                const float d = readsAt(road, c.unit(u).pathIdx(), c.unit(u).s());
+                if (!std::isnan(d)) worst = std::max(worst, d);
+            }
+            check(worst < 0.05f, "  and no part of the train is on the road ahead (m)",
+                  worst, 0.0);
         }
     }
     {
