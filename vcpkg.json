@@ -1,7 +1,7 @@
 {
   "name": "ebaner",
   "version-string": "0.1.0",
-  "description": "A Vulkan viewer for terrainmapper rail/terrain exports",
+  "description": "A Norwegian railway simulator",
   "homepage": "https://github.com/leakingmemory/ebaner",
   "dependencies": [
     "glfw3",

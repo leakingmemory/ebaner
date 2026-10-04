@@ -1,13 +1,25 @@
 # ebaner
 
-A small Vulkan/C++ viewer for the `terrainmapper` game-export data
-(`../norway-rails`). It stitches the elevation tiles around a **chosen station** into
-a continuous 3D surface and draws the railway, roads and buildings on top, with a
-first physics-driven rail vehicle. The ground streams in as you travel. The camera
-starts on the running line at that station — at a terminus like Bodø that is the
-buffer-stop end of track 1, resolved from the track geometry rather than named here.
+A train simulator for the Norwegian railways, in Vulkan and C++.
 
-## What it renders
+Trains are driven over the line as it actually is. The terrain, the track and the
+gradients come from a `terrainmapper` export of the national data, and what the train
+does on them is modelled rather than scripted: a continuous air brake that has to be
+kept charged and that feels how long the train is, traction worked out from each
+machine's own transmission, couplers that can be parted and run round, track circuits,
+signals, interlocked routes and line blocks, and a driver the computer can take over
+from. Every train in the world is simulated, not only the one being driven.
+
+It also draws the world it runs through — the elevation tiles around a **chosen
+station** stitched into a continuous 3D surface, with the railway, roads, buildings
+and platforms on top, streaming in as you travel. The camera starts on the running
+line at that station: at a terminus like Bodø that is the buffer-stop end of track 1,
+resolved from the track geometry rather than named here.
+
+A second program, **`ebaner-trackedit`**, is the authoring side — the track,
+signalling and interlocking editor the dataset's overlay is written with.
+
+## What it does
 
 - **Terrain** — heightmap tiles shaded with hillshade and coloured by **AR50 land
   cover** when the export provides it (forest, agriculture, open land, bog,
@@ -1051,7 +1063,7 @@ cmake --build build -j
 ```
 
 This builds three executables that share the same rendering/loading engine
-(`libebaner_engine`): the **`ebaner`** viewer above, **`ebaner-trackedit`**
+(`libebaner_engine`): the **`ebaner`** simulator above, **`ebaner-trackedit`**
 below, and **`ebaner-dumptrack`**, which answers questions about the network the
 way the sim sees it - after `track-edits.txt` is applied, which is the only form
 worth deriving anything from. `--near` lists what is around a point, a track id
@@ -1377,11 +1389,11 @@ controls (W/A/S/D, Q/E, mouse, Shift, Tab, Esc); a HUD shows the track / geo-poi
 dead-end counts and the camera position.
 
 **Editing model.** Edits **preview immediately** in the editor (applied to the
-in-memory geometry the same way the viewer applies them at load) and are written to a
+in-memory geometry the same way the simulator applies them at load) and are written to a
 **drop-in overlay**, `<dataset>/overlay/track-edits.txt`, only when you press
 **Ctrl+S** — a separate directory the generator never touches, so regenerated base
 tiles can be dropped in without losing manual edits. On the next load, `TerrainData`
-applies the overlay over the generated tiles for **both** the viewer and the editor.
+applies the overlay over the generated tiles for **both** the simulator and the editor.
 (`EBANER_NOOVERLAY=1` ignores the overlay; unsaved edits are discarded on quit — the
 HUD shows the unsaved count.)
 
@@ -1428,7 +1440,7 @@ them (a `rail …` overlay edit). Its ends sit on the two tracks, so the switch
 detection makes a **switch at each end** — a train can then divert across it (main ⇄
 siding). Keep the meeting angle shallow, as a real turnout does; too steep and it is
 treated as a crossing rather than a switch. Live preview; Ctrl+S saves; the switch
-stands appear on reload / in the viewer.
+stands appear on reload / in the simulator.
 
 **Scissors crossover (`C`).** For two roughly-parallel tracks (e.g. the main and a
 loop), select one geo-point on **each** track, opposite each other, and press **C**: it
@@ -1436,7 +1448,7 @@ lays a **double crossover** — two short diagonal rails that cross in the middl
 diamond), a switch on each track at each end — so trains can cross between the two lines
 either way as well as run straight, like a station-throat scissors. Pick a spot where
 both tracks are at grade (it uses the overlay-applied elevations). Live preview; Ctrl+S
-saves; switch stands appear on reload / in the viewer.
+saves; switch stands appear on reload / in the simulator.
 
 **Auto-slip at a diamond (`K`).** For an actual diamond crossing (two tracks crossing at
 a clear angle), select a single geo-point in the **middle of the crossing** and press
@@ -1575,7 +1587,7 @@ flagging anything beyond 4 km as suspect — that is almost certainly not the st
 serves. An explicit station name can be written into the overlay line to overrule the
 nearest-station rule where two stations sit close together.
 
-In the viewer they are worked from the traffic manager (`O`), where **E** opens the
+In the simulator they are worked from the traffic manager (`O`), where **E** opens the
 station being worked: the first line switches the station on or off, then **All red**,
 then its signals. A signal holds whatever it was last given — nothing else resets it, no
 train passing and no timer — which is why the state of each is on the line beside it.
@@ -2030,7 +2042,7 @@ at a position that is not showing, and nothing depends on the manned switch.
 Everything in `overlay/` so far is a *fact*: a crossing is a line in a file, a TXP position
 is a line in a file. Some of what a railway needs is not a fact but a **rule** — a
 timetable, a train that runs itself, when a station is worked — and there was nowhere to
-write a rule down. `<dataset>/overlay/overlay.lua` is that place. The viewer runs it once at
+write a rule down. `<dataset>/overlay/overlay.lua` is that place. The simulator runs it once at
 startup, after the world, the paths, the switches and every other overlay are loaded, so
 that when it is eventually given an API there is already something for it to look at.
 
@@ -2067,7 +2079,7 @@ See `../terrainmapper/doc/game-export-format.md`. In short: 256×256 little-endi
 tiled across four fully-overlapping LOD levels. World coordinates are rendered
 relative to the start point to preserve float precision.
 
-Per tile the viewer also reads, when present:
+Per tile the simulator also reads, when present:
 
 - `landcover.u8` — 256×256 uint8 AR50 `artype` codes; the terrain is textured by
   land type (procedural per-class surfaces in a Vulkan texture array, sampled in
@@ -2097,7 +2109,7 @@ the corresponding sources (national rail register + NVDB roads + OSM enrichment)
 | `EBANER_NOOVERLAY`  | Ignore the `overlay/` track edits (link fixes).               |
 | `EBANER_EDMODE`     | `ebaner-trackedit` only: start in this mode, by its menu name. |
 | `EBANER_VEHICLE`    | Skip the start screen and preselect a vehicle, by its index in `kVehicleSpecs` (`0` = a single Class 93, `1`/`2` = two and three coupled, `3` = Di 4 + 5, `4` = the night train, `5` = the 600 m freight, `6` = a light Di 4, `7` = a CD 312, `14` = a pocket wagon, `15` = a container flat). The table is ordered for the pickers, so these move when a vehicle is added - the start screen numbers the list. |
-| `EBANER_PROFILE`    | Print per-frame timings once a second: whole frame, the sim step, occupancy, crossings, signal aspects, distant walks, the signal mesh, and the vehicle mesh and its upload. With `EBANER_SCREENSHOT=/dev/null EBANER_SHOTFRAME=900` the viewer exits by itself with the reports flushed, which is how a profile gets taken without a file or a keypress. |
+| `EBANER_PROFILE`    | Print per-frame timings once a second: whole frame, the sim step, occupancy, crossings, signal aspects, distant walks, the signal mesh, and the vehicle mesh and its upload. With `EBANER_SCREENSHOT=/dev/null EBANER_SHOTFRAME=900` the simulator exits by itself with the reports flushed, which is how a profile gets taken without a file or a keypress. |
 | `EBANER_RADIUS`     | Half-window of world to load, in metres (default 20000). Two kilometres loads in seconds where the full 40 km square takes minutes, which is what makes a profile or a frame-time measurement affordable at all. Inspection only: drive out of it and the world ends. |
 | `EBANER_ROLL`       | Spawn the train at this speed in m/s with the brake released, so it coasts. A profile of a standing train is a profile of a different program - nothing changes occupancy, so nothing downstream of it runs. |
 | `EBANER_GREEN`      | `"OTR 1"` — clear one simple entry signal by name before the first frame, manning its station. The other half of setting up a crossing without a keyboard: with every signal at danger a train stops at the first one, and nothing that happens inside a station could be watched. |

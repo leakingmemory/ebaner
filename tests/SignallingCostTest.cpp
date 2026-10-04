@@ -1,4 +1,4 @@
-// ebaner - a Vulkan viewer for terrainmapper rail/terrain exports.
+// ebaner - a Norwegian railway simulator.
 // Copyright (C) 2026 Jan-Espen Oversand <sigsegv@radiotube.org>
 //
 // This file is part of ebaner. ebaner is free software: you can redistribute it
@@ -95,7 +95,7 @@ int main(int argc, char** argv) {
                 signalPaths.size(), net.turnouts().size(), polys.size(),
                 circuits.sections.size());
 
-    // The placements, built as the viewer builds them.
+    // The placements, built as the simulator builds them.
     std::vector<SignalPlacement> mains = signalPlacements(exitSignals, polys, SignalKind::Exit);
     {
         const std::vector<SignalPlacement> e =
@@ -104,7 +104,7 @@ int main(int argc, char** argv) {
     }
     std::vector<SignalPlacement> placements =
         mergeSignals(signalPlacements(signalPaths, polys), mains);
-    // The free-standing distants, appended after the merge as the viewer appends them.
+    // The free-standing distants, appended after the merge as the simulator appends them.
     // Without these there is nothing for the walk below to walk, and the measurement would
     // say the distant pass is free when it is the one thing here that cannot be cached.
     const std::vector<DistantSignal> distants = loadDistantSignals(root);
@@ -132,7 +132,7 @@ int main(int argc, char** argv) {
     std::printf("    took %.1f ms, once, at load\n", cacheMs);
 
     // The cache must say exactly what the function it replaced says. It is only valid
-    // because geometry cannot change while the viewer runs - the editor is another matter -
+    // because geometry cannot change while the simulator runs - the editor is another matter -
     // so this is the assertion that stands in for that argument.
     std::puts("\nand it agrees with deriving it live:");
     {

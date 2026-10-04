@@ -1,4 +1,4 @@
-// ebaner - a Vulkan viewer for terrainmapper rail/terrain exports.
+// ebaner - a Norwegian railway simulator.
 // Copyright (C) 2026 Jan-Espen Oversand <sigsegv@radiotube.org>
 //
 // This file is part of ebaner. ebaner is free software: you can redistribute it

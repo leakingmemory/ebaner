@@ -1,4 +1,4 @@
-// ebaner - a Vulkan viewer for terrainmapper rail/terrain exports.
+// ebaner - a Norwegian railway simulator.
 // Copyright (C) 2026 Jan-Espen Oversand <sigsegv@radiotube.org>
 //
 // This file is part of ebaner. ebaner is free software: you can redistribute it
@@ -830,7 +830,7 @@ int main(int argc, char** argv) {
     }
     if (!simpleEntries.empty())
         std::printf("[SimpleEntry] %zu signal(s)\n", simpleEntries.size());
-    // The junction graph is geometry, so it cannot change while the viewer runs: build it
+    // The junction graph is geometry, so it cannot change while the simulator runs: build it
     // once here rather than on every distant-signal read.
     const TrackJunctions junctions = trackJunctions(polys);
     // What every mini path needs of the turnouts and which circuits it runs through, worked

@@ -1,4 +1,4 @@
-// ebaner - a Vulkan viewer for terrainmapper rail/terrain exports.
+// ebaner - a Norwegian railway simulator.
 // Copyright (C) 2026 Jan-Espen Oversand <sigsegv@radiotube.org>
 //
 // This file is part of ebaner. ebaner is free software: you can redistribute it
@@ -504,7 +504,7 @@ void VulkanRenderer::createGraphicsPipeline() {
     ds.depthCompareOp = VK_COMPARE_OP_LESS;
 
     // Alpha blend enabled so the track editor can ghost the terrain via the
-    // scene-alpha push constant; with params.x == 1 (the viewer) it is opaque.
+    // scene-alpha push constant; with params.x == 1 (the simulator) it is opaque.
     VkPipelineColorBlendAttachmentState cba{};
     cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
@@ -695,7 +695,7 @@ void VulkanRenderer::createOverlayPipelines() {
     // Two small pipelines for the editor's raw track-graph overlay: a line list
     // (links) and a round point sprite (geo-points). Both reuse pipelineLayout_ and
     // renderPass_; the vertex is position + colour only. Cheap to create even for
-    // the viewer, which never attaches an overlay (the draws are simply skipped).
+    // the simulator, which never attaches an overlay (the draws are simply skipped).
     auto vertCode = readFile(shaderPath("overlay.vert.spv"));
     auto lineFrag = readFile(shaderPath("overlay_line.frag.spv"));
     auto pointFrag = readFile(shaderPath("overlay_point.frag.spv"));
@@ -1888,7 +1888,7 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageInde
     // (depth-tested against terrain, but not writing depth).
     //
     // Drawn outside the 3-D branch above, so it appears in both views - which the editor
-    // wants, since it draws the network over the world. The viewer does not: it attaches
+    // wants, since it draws the network over the world. The simulator does not: it attaches
     // the network once and hides it while the map is shut. That is what `overlayVisible_`
     // is for, and without it the amber-and-cyan network paints itself across the cab view.
     if (overlayVisible_ && overlayLineVertexCount_ > 0) {

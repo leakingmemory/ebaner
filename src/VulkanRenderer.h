@@ -1,4 +1,4 @@
-// ebaner - a Vulkan viewer for terrainmapper rail/terrain exports.
+// ebaner - a Norwegian railway simulator.
 // Copyright (C) 2026 Jan-Espen Oversand <sigsegv@radiotube.org>
 //
 // This file is part of ebaner. ebaner is free software: you can redistribute it
@@ -122,7 +122,7 @@ public:
     // round point sprites (both `LineVertex`). The network does not change while the
     // program runs, so this is a **once** call - it reallocates and waits for the device,
     // which is only affordable because of that. The editor re-attaches after each edit;
-    // the viewer attaches the network the first time the traffic-manager map is opened.
+    // the simulator attaches the network the first time the traffic-manager map is opened.
     //
     // Anything that changes - occupancy bands, switch positions, a highlight - goes
     // through setMapOverlay instead. Putting it here re-uploaded the whole 4.8 MB network
@@ -135,7 +135,7 @@ public:
     void setMapOverlay(const std::vector<LineVertex>& lines,
                        const std::vector<LineVertex>& points);
     // Whether to draw the attached network at all. The editor wants it over the 3-D scene
-    // and leaves this alone; the viewer attaches the network once and hides it while the
+    // and leaves this alone; the simulator attaches the network once and hides it while the
     // map is shut, because otherwise it paints itself over the cab view.
     void showTrackGraph(bool on) { overlayVisible_ = on; }
 
@@ -166,7 +166,7 @@ private:
     void createDescriptorSetLayout();
     void createGraphicsPipeline();
     void createTrackPipeline();
-    void createOverlayPipelines(); // editor line + point overlay (unused by viewer)
+    void createOverlayPipelines(); // editor line + point overlay (unused by the simulator)
     void createCommandPool();
     void createTextureArray(const LandTextureData& textures);
     void createDescriptorSet();
@@ -378,7 +378,7 @@ private:
     std::array<VkDeviceMemory, kMaxFramesInFlight> mapPointMemories_{};
     std::array<void*, kMaxFramesInFlight> mapPointMapped_{};
     VkDeviceSize mapLineCapacityBytes_ = 0, mapPointCapacityBytes_ = 0;
-    bool overlayVisible_ = true; // the editor's default; the viewer hides it off-map
+    bool overlayVisible_ = true; // the editor's default; the simulator hides it off-map
     std::vector<LineVertex> pendingMapLines_, pendingMapPoints_;
     uint32_t mapLineVertexCount_ = 0, mapPointVertexCount_ = 0;
     void allocateMapOverlayBuffers(VkDeviceSize lineBytes, VkDeviceSize pointBytes);

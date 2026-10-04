@@ -1,4 +1,4 @@
-# ebaner - a Vulkan viewer for terrainmapper rail/terrain exports.
+# ebaner - a Norwegian railway simulator.
 # Copyright (C) 2026 Jan-Espen Oversand <sigsegv@radiotube.org>
 #
 # This file is part of ebaner. ebaner is free software: you can redistribute it
@@ -155,7 +155,7 @@ endforeach()
 add_custom_target(shaders DEPENDS ${SHADER_SPV})
 
 # ---- Shared engine library ------------------------------------------------
-# The rendering/loading engine, shared by the `ebaner` viewer and the
+# The rendering/loading engine, shared by the `ebaner` simulator and the
 # `ebaner-trackedit` editor. App-specific code (vehicle sim, audio, driver cam)
 # lives in the individual executables.
 add_library(ebaner_engine STATIC
@@ -230,7 +230,7 @@ endif()
 target_compile_definitions(ebaner_engine PRIVATE
     EBANER_DATADIR="${CMAKE_INSTALL_FULL_DATADIR}/ebaner")
 
-# ---- ebaner (viewer + vehicle sim) ----------------------------------------
+# ---- ebaner (the simulator) ----------------------------------------
 add_executable(ebaner
     src/main.cpp
     src/VehicleMesh.cpp
@@ -362,7 +362,7 @@ target_include_directories(CrossingSequenceTest PRIVATE src)
 add_test(NAME crossing-sequence
          COMMAND CrossingSequenceTest "${CMAKE_CURRENT_BINARY_DIR}/crossing-test")
 
-# The rolling-noise synth. Audio.cpp builds into the viewer rather than the engine
+# The rolling-noise synth. Audio.cpp builds into the simulator rather than the engine
 # library, so it is compiled in here directly - and deliberately without HAVE_PULSE /
 # HAVE_PORTAUDIO, which leaves it pure DSP that opens no device. What the test measures
 # is the shipped synth, not a copy of it. Needs no export.

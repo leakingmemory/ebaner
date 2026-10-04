@@ -1,4 +1,4 @@
-// ebaner - a Vulkan viewer for terrainmapper rail/terrain exports.
+// ebaner - a Norwegian railway simulator.
 // Copyright (C) 2026 Jan-Espen Oversand <sigsegv@radiotube.org>
 //
 // This file is part of ebaner. ebaner is free software: you can redistribute it
@@ -139,7 +139,7 @@ int main(int argc, char** argv) {
                 Paths::shaderDir().c_str());
 
     // Which station to open at. Authoring is a deliberate act, so this is the argument
-    // and nothing else - unlike the viewer, there is no start screen to choose on.
+    // and nothing else - unlike the simulator, there is no start screen to choose on.
     const std::vector<Station> stations = loadStations(datasetRoot);
     const Station* start = pickStation(stations, (argc > 2) ? argv[2] : "");
     if (!start) return EXIT_FAILURE;
@@ -201,7 +201,7 @@ int main(int argc, char** argv) {
                 start->line.c_str());
     drawLoadingNotice(window, renderer, *start);
 
-    // --- Load terrain data and build the scene meshes (same as the viewer) ---
+    // --- Load terrain data and build the scene meshes (same as the simulator) ---
     TerrainData data;
     TerrainMesh mesh;
     TunnelMesh tunnels;
@@ -246,7 +246,7 @@ int main(int argc, char** argv) {
 
 
     // Platforms draw as solid-lit static geometry identical to buildings; merge
-    // them into the building buffers (offsetting indices), as the viewer does.
+    // them into the building buffers (offsetting indices), as the simulator does.
     std::vector<TrackVertex> structVerts = buildings.vertices();
     std::vector<std::uint32_t> structIndices = buildings.indices();
     {
@@ -527,7 +527,7 @@ int main(int argc, char** argv) {
     // and the section flood-fill. Kept in sync with the graph.
     std::vector<TrackPoly> polys;
     // The junction graph the distant-signal walk follows. Geometry edits can change it, so
-    // unlike the viewer it is rebuilt alongside the polylines.
+    // unlike the simulator it is rebuilt alongside the polylines.
     TrackJunctions junctions;
     auto buildPolys = [&]() {
         polys.clear();
@@ -555,7 +555,7 @@ int main(int argc, char** argv) {
     };
     // A distant stands at a plain point rather than on a route, so it is placed directly and
     // appended after the merge - it must never fold onto a dwarf's pole.
-    // The line block, resolved the way the viewer resolves it, so the editor shows what
+    // The line block, resolved the way the simulator resolves it, so the editor shows what
     // the sim will do rather than what was drawn.
     auto resolveBlocks = [&]() {
         return resolveLineBlocks(blockSignals, signalPaths, polys, tc);
@@ -566,7 +566,7 @@ int main(int argc, char** argv) {
         for (const BlockRoad& br : lb.roads)
             if (br.road >= 0) blockRoad[br.road] = 1;
         std::vector<SignalPlacement> dwarfs = signalPlacements(signalPaths, polys);
-        // As in the viewer: a block signal's road must not also raise a dwarf beside it.
+        // As in the simulator: a block signal's road must not also raise a dwarf beside it.
         dropBlockRoads(dwarfs, blockRoad);
         std::vector<SignalPlacement> out = mergeSignals(dwarfs, mainPlacements());
         for (std::size_t i = 0; i < blockSignals.size(); ++i) {
@@ -589,7 +589,7 @@ int main(int argc, char** argv) {
             sp.world = w;
             sp.forward = trackTangent(polys, d.trackId, d.frac, d.dir);
             sp.at = {d.trackId, d.frac};
-            sp.side = d.side; // the viewer has always drawn this; the editor did not
+            sp.side = d.side; // the simulator has always drawn this; the editor did not
             sp.paths.push_back(static_cast<int>(i));
             out.push_back(std::move(sp));
         }

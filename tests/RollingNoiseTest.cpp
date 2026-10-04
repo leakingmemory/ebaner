@@ -1,4 +1,4 @@
-// ebaner - a Vulkan viewer for terrainmapper rail/terrain exports.
+// ebaner - a Norwegian railway simulator.
 // Copyright (C) 2026 Jan-Espen Oversand <sigsegv@radiotube.org>
 //
 // This file is part of ebaner. ebaner is free software: you can redistribute it
@@ -20,7 +20,7 @@
 // measured on real track; that the brakes are quiet means they add nothing above a
 // kilohertz. So the synth is rendered offline and measured.
 //
-// `Audio.cpp` builds into the viewer rather than the engine library, but without a
+// `Audio.cpp` builds into the simulator rather than the engine library, but without a
 // backend defined it opens no device and is pure DSP, so this links it directly: what is
 // measured here is the shipped code and not a copy of it.
 

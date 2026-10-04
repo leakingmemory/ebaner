@@ -1,4 +1,4 @@
-// ebaner - a Vulkan viewer for terrainmapper rail/terrain exports.
+// ebaner - a Norwegian railway simulator.
 // Copyright (C) 2026 Jan-Espen Oversand <sigsegv@radiotube.org>
 //
 // This file is part of ebaner. ebaner is free software: you can redistribute it
@@ -28,7 +28,7 @@ class SwitchNetwork;
 // are drawn for each switch's current state, so a re-build after a throw animates it.
 //
 // Solid-lit TrackVertex geometry (texLayer < 0), drawn with the track/building
-// pipeline. The viewer keeps it in a dynamic buffer (re-built on a throw); the editor
+// pipeline. The simulator keeps it in a dynamic buffer (re-built on a throw); the editor
 // merges it into the static building buffers.
 class SwitchMesh {
 public:
