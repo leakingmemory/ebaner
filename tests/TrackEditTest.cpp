@@ -253,7 +253,8 @@ int main(int argc, char** argv) {
         if (routes.empty() || net.size() == 0) {
             std::puts("  no routes or no turnouts here - nothing to check");
         } else {
-            // Timed on its own, since checking the answers costs more than deriving them.
+            // Timed on its own, and against the checking loop below rather than against
+            // the clock. See the budget at the end of this block for why.
             const auto t0 = std::chrono::steady_clock::now();
             std::vector<std::vector<PathSwitch>> all;
             all.reserve(routes.size());
@@ -263,6 +264,7 @@ int main(int argc, char** argv) {
                                   std::chrono::steady_clock::now() - t0)
                                   .count();
 
+            const auto tc0 = std::chrono::steady_clock::now();
             std::size_t reqs = 0;
             double worstOff = 0.0;
             for (std::size_t r = 0; r < routes.size(); ++r) {
@@ -283,13 +285,34 @@ int main(int argc, char** argv) {
                     worstOff = std::max(worstOff, best);
                 }
             }
-            std::printf("  %zu route(s), %zu turnout(s), %zu requirement(s)\n",
-                        routes.size(), net.size(), reqs);
+            const double checkMs = std::chrono::duration<double, std::milli>(
+                                       std::chrono::steady_clock::now() - tc0)
+                                       .count();
+            std::printf("  %zu route(s), %zu turnout(s), %zu requirement(s)"
+                        "  [derive %.1f ms, check %.1f ms]\n",
+                        routes.size(), net.size(), reqs, ms, checkMs);
             if (reqs > 0)
                 check(worstOff <= 3.0, "requirement stands at its turnout", worstOff, 0.0);
-            // Generous: it measures a few milliseconds, and the point is to catch a
-            // return to walking the whole network, which is two orders of magnitude away.
-            check(ms < 100.0, "derived for every route (ms)", ms, 0.0);
+            // The point is to catch a return to walking the whole network per route,
+            // which is two orders of magnitude away - not to measure milliseconds. So
+            // it is asked against the loop that has just verified those same answers:
+            // the same data, the same machine, a moment later.
+            //
+            // It used to be `ms < 100.0`, and that failed for reasons having nothing to
+            // do with this code. Two copies of the test running at once measured 107 to
+            // 159 ms; even idle, a first run with cold caches measured 113 ms against
+            // the same ceiling. A ratio does not care, because a machine that is busy
+            // slows the derivation and the check together.
+            //
+            // The factor is measured, not guessed. Sixteen samples with two copies of
+            // the test running at once: the ratio sits at 2 to 4 and reached 9.4 once,
+            // so ten would itself have flaked and thirty is three times clear of the
+            // worst seen. A hundredfold regression puts the ratio near 270, which this
+            // misses by a factor of nine - there is no value between that is in any
+            // danger of being right.
+            check(ms < 30.0 * checkMs,
+                  "deriving every route's turnouts stays in proportion to checking them"
+                  " (ms, vs check)", ms, 30.0 * checkMs);
         }
     }
 
