@@ -523,9 +523,9 @@ int main() {
         check(std::abs(stationStopPoint(ss) - 380.0f) < 0.01f,
               "  unless the TXP stands somewhere inside it", stationStopPoint(ss), 380.0);
         ss.txpAt = 900.0f; // beyond the far switch
-        check(std::abs(stationStopPoint(ss) - 700.0f) < 0.01f,
-              "  and never outside it, however far out the TXP is",
-              stationStopPoint(ss), 700.0);
+        check(std::abs(stationStopPoint(ss) - (700.0f - kSwitchClearM)) < 0.01f,
+              "  and never outside it, nor ON the switch bounding it",
+              stationStopPoint(ss), 700.0 - kSwitchClearM);
         ss.txpAt = 380.0f;
 
         // A passenger train stops at a platform, positioned as near the TXP as the
@@ -542,6 +542,65 @@ int main() {
               "  which is no business of a freight train", stationStopPoint(ss), 380.0);
         ss.passenger = true;
 
+        // --- and how long the train is, which until now it did not ask ------------
+        //
+        // Clearing the 600 m freight into Rognan from the north, the red flag out, it
+        // stood just inside the first switch with most of itself still on the main. The
+        // rule had picked the TXP, which at Rognan is authored 65 m in from that end,
+        // and nothing in the rule knew the train was longer than the station.
+        //
+        // Rognan to the metre: its two switches are 465 m apart and the train is 620 m
+        // over the couplers. Entering from the north means running toward the LOW end
+        // of the road, so the far switch is the low one.
+        {
+            StationStop r;
+            r.haveBand = true;
+            r.bandFrom = 0.0f;
+            r.bandTo = 465.0f;
+            r.haveTxp = true;
+            r.txpAt = 400.0f;    // 65 m in from the north end, which is the high one
+            r.towardHi = false;  // in from the north: running toward the low end
+            r.trainLength = 620.0f;
+            const float at = stationStopPoint(r);
+            std::printf("      620 m train, 465 m between the switches: stands at %.0f "
+                        "(north switch 465, south switch 0)\n", at);
+            check(std::abs(at - kSwitchClearM) < 0.01f,
+                  "too long for the station, it pulls up to the far switch", at,
+                  kSwitchClearM);
+            check(at < r.txpAt - 300.0f,
+                  "  rather than stopping at the TXP it passes on the way in", at,
+                  r.txpAt);
+
+            // The same train the other way: the far switch is now the high one, so it
+            // pulls up to that instead. Which end it hangs out of follows the direction
+            // and nothing else.
+            r.towardHi = true;
+            const float other = stationStopPoint(r);
+            std::printf("      and from the south it stands at %.0f\n", other);
+            check(std::abs(other - (465.0f - kSwitchClearM)) < 0.01f,
+                  "  and from the other end, up to the other switch", other,
+                  465.0 - kSwitchClearM);
+
+            // A train that DOES fit keeps the old behaviour: it stands clear at both
+            // ends, and the TXP is still what it aims at.
+            r.trainLength = 150.0f;
+            const float fits = stationStopPoint(r);
+            check(std::abs(fits - 400.0f) < 0.01f,
+                  "  while one that fits still stands at the TXP", fits, 400.0);
+
+            // ...unless standing there would leave its tail across the switch behind
+            // it. Then it is pushed far enough in to clear, which is the same rule
+            // doing the same thing, not a special case for long trains.
+            // 380 m needs 380 + 25 either end = 430 of the 465 there are, so it fits,
+            // but only with its tail at 405 - past the TXP at 400, which it therefore
+            // cannot have.
+            r.trainLength = 380.0f;
+            const float pushed = stationStopPoint(r);
+            check(std::abs(pushed - (kSwitchClearM + 380.0f)) < 0.01f,
+                  "  and one that only just fits is pushed in until its tail clears",
+                  pushed, kSwitchClearM + 380.0);
+        }
+
         // ...and the crossing area wins where the two disagree. A platform outside the
         // band is ignored rather than clamped to its edge: the edge is the switch, and
         // standing on the switch is the one thing this is all for.
@@ -557,6 +616,55 @@ int main() {
         check(std::abs(stationStopPoint(ss) - 600.0f) < 0.01f,
               "  and one half inside is used for the half that is",
               stationStopPoint(ss), 600.0);
+    }
+
+    std::puts("\nPast the mark it was told to stand at");
+    {
+        // The place a train stands at a station is not fixed for all time: the platform
+        // is not known until the station's ground is loaded, and a train driving itself
+        // across the map may load it late or never. So the mark can move, and it can
+        // move BEHIND a train that is still running. Dropped silently - which is what a
+        // mark that is no longer ahead used to be - the train would carry on through a
+        // station it had been told to stop at, which is the one thing a red flag means.
+        //
+        // So an overrun is raised as a stop at zero: brake with everything the service
+        // brake has, come to a stand wherever that falls, and stay there. Not the
+        // emergency brake - the train is already past the mark and nothing is gained by
+        // dumping the pipe, which takes a minute to recharge before it can move again.
+        Bench b(60.0f / kMsToKmh); // running, and the mark is already behind
+        b.ready();
+        int hardest = 0;
+        bool everEmergency = false;
+        DriverDemand d;
+        float ran = 0.0f;
+        for (int i = 0; i < 120 * 60; ++i) {
+            if (i % 12 == 0) {
+                RoadAhead road = openRoad(100);
+                road.stops.push_back({0.0f, RoadAhead::StopKind::Station, 7});
+                d = planDrive(road, b.train->speed());
+                applyDrive(*b.train, 1, d, 0.2f);
+                hardest = std::max(hardest, b.train->brakeNotch(1));
+            }
+            const float before = b.train->speed();
+            b.train->update(kDt, 0.0f);
+            ran += 0.5f * (before + b.train->speed()) * kDt;
+            everEmergency = everEmergency || b.train->emergencyLine();
+            if (b.train->speed() < 0.02f && i > 60) break;
+        }
+        std::printf("      overran the mark, stopped in a further %.0f m, hardest B%d\n",
+                    ran, hardest);
+        check(b.train->speed() < 0.05f, "it comes to a stand (km/h)",
+              b.train->speed() * kMsToKmh, 0.0);
+        check(d.stopping, "  still stopping, not released to run on");
+        check(arrivedAtStop(d, b.train->speed()),
+              "  and reports itself arrived, so the caller hands back");
+        check(!everEmergency, "  without dumping the pipe");
+        check(hardest >= Vehicle::kFullServiceNotch,
+              "  having used the full service brake", double(hardest),
+              double(Vehicle::kFullServiceNotch));
+        check(hardest <= Vehicle::kFullServiceNotch,
+              "  and never past it into emergency", double(hardest),
+              double(Vehicle::kFullServiceNotch));
     }
 
     std::puts("\nA crawl is not an emergency");

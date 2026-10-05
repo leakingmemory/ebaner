@@ -111,6 +111,19 @@ public:
                (static_cast<std::uint64_t>(static_cast<std::uint32_t>(row) & 0xFFFFF));
     }
     const TileMap& tiles() const { return tiles_; }
+    // Whether any loaded tile covers this world point.
+    //
+    // The distinction this exists for: every other query answers "nothing here" the
+    // same way whether there is nothing there or the ground simply is not in memory,
+    // and those mean opposite things to a caller that is about to remember the answer.
+    // The terrain is a window that streams; the rail network is not.
+    bool groundLoadedAt(double worldX, double worldY) const {
+        for (const auto& [key, t] : tiles_)
+            if (worldX >= t->originX && worldX < t->originX + t->extent &&
+                worldY >= t->originY && worldY < t->originY + t->extent)
+                return true;
+        return false;
+    }
     const Tile* tileAt(int lod, int col, int row) const {
         const auto it = tiles_.find(tileKey(lod, col, row));
         return it == tiles_.end() ? nullptr : it->second.get();

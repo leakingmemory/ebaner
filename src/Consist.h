@@ -239,6 +239,21 @@ public:
     void setAutoDriving(bool on) { autoDrive_ = on; }
     int autoServedStop() const { return autoServed_; }
     void setAutoServedStop(int ref) { autoServed_ = ref; }
+    // What the flag said as the train went past it, and which flag that was.
+    //
+    // Read once, on passing, and then final. A hand signal is an instruction given at a
+    // moment, not a condition to be re-read: a driver who has passed a red flag is
+    // stopping at that station whatever the TXP does with it afterwards, and one waved
+    // through on green is going whatever happens behind him. Polled every tick instead,
+    // the decision flipped under the train mid-approach, which is both wrong and the
+    // kind of wrong nobody can see the cause of from the cab.
+    //
+    // This is the decision to stop or to go, and nothing else. WHERE the train stops is
+    // worked out separately and may still move - the station's platform is not known
+    // until its ground is loaded - which is exactly why the two are kept apart.
+    int autoFlagRead() const { return autoFlagRead_; }
+    bool autoFlagGo() const { return autoFlagGo_; }
+    void setAutoFlagRead(int flag, bool go) { autoFlagRead_ = flag; autoFlagGo_ = go; }
     // Whether anything in this train carries people, which is what decides if a platform
     // is of any interest to it.
     bool carriesPassengers() const;
@@ -334,6 +349,8 @@ private:
     float tractiveEffort_ = 0.0f;    // N, summed over the sets (for the HUD)
     float brakeForce_ = 0.0f;        // N, summed over the sets
     bool autoDrive_ = false; // the computer has this train
+    int autoFlagRead_ = -1;  // flag post whose colour has been read on passing
+    bool autoFlagGo_ = false; // ...and whether it said go
     int autoServed_ = -1;    // the stop it has already answered for
     float autoSince_ = 99.0f; // seconds since a handle was last moved
     bool autoShunt_ = false; // authorised by a dwarf, so limited to shunting speed

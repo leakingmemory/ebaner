@@ -136,8 +136,30 @@ int notchCapAt(float speedMs) {
 
 float stationStopPoint(const StationStop& s) {
     if (!s.haveBand) return s.fallback;
-    const float lo = std::min(s.bandFrom, s.bandTo);
-    const float hi = std::max(s.bandFrom, s.bandTo);
+    const float bLo = std::min(s.bandFrom, s.bandTo);
+    const float bHi = std::max(s.bandFrom, s.bandTo);
+
+    // Where the train may stand is not the band: it is the band less the train. The
+    // nose has to stop clear of the switch it is running at, and the TAIL has to stop
+    // clear of the one behind it - which is the whole length of the train further in.
+    // Leaving that out is what sent a 600 m freight into Rognan and stood it at the TXP
+    // 65 m inside the first switch, with 555 m of train lying across the throat it had
+    // just come through.
+    const float dir = s.towardHi ? 1.0f : -1.0f;
+    const float entry = s.towardHi ? bLo : bHi; // the end it comes in by
+    const float leave = s.towardHi ? bHi : bLo; // the end it is heading for
+    const float noseLimit = leave - dir * kSwitchClearM;
+    const float tailLimit = entry + dir * (kSwitchClearM + s.trainLength);
+
+    // Longer than the station, which at Rognan a 600 m freight simply is. It cannot
+    // stand clear at both ends, so the choice is only which end it fouls - and that is
+    // no choice at all: it pulls right up to the far switch, puts as much of itself
+    // inside the station as will go, and leaves the overhang behind it where it came
+    // from. Stopping anywhere short of that wastes road it has no spare of.
+    if (dir * (noseLimit - tailLimit) < 0.0f) return noseLimit;
+
+    const float lo = std::min(tailLimit, noseLimit);
+    const float hi = std::max(tailLimit, noseLimit);
     if (s.passenger && s.havePlatform) {
         // Only the part of the platform that is inside the band. A platform standing
         // clear of the switches at one end is no use to a train that has to keep clear

@@ -56,6 +56,11 @@ struct RoadAhead {
     // stop like any other rather than as a state of its own, so it is planned for with
     // the same braking curve as a signal.
     bool roadRunsOut = false;
+    // The train is already past the place it was told to stand, and is still moving.
+    // The stop is raised at zero rather than dropped, so the driver puts the brake on
+    // and comes to a stand wherever it can - but the caller wants to know, because an
+    // overrun is the end of the movement and not a stop that was served properly.
+    bool overshotStop = false;
     // Whether this movement is a shunt - a dwarf is what is letting it go, rather than a
     // main signal. Not a property of the road alone, since it depends on what the train
     // has already passed, but it comes out of the same scan and the caller keeps it.
@@ -148,7 +153,19 @@ struct StationStop {
     // all - a dead-end siding, or a stopping place that is not a crossing station.
     float fallback = 0.0f;
     bool passenger = false; // a platform is only of interest to a train carrying people
+    // The two things that are the TRAIN's and not the station's, and without which the
+    // band cannot be used properly: how much road the train occupies, and which way it
+    // is running along it. A 600 m freight at Rognan, whose switches are 465 m apart,
+    // cannot stand clear at both ends however the point is chosen - but it can still
+    // choose to hang out of the end it came in by rather than the end it is going to.
+    float trainLength = 0.0f;
+    bool towardHi = true; // travelling toward the larger coordinate along this road
 };
+
+// How far clear of a switch a train stands. Not a fudge: the band's ends ARE the
+// switches, and a stop computed exactly on one puts the train on the thing the whole
+// rule exists to keep it off.
+inline constexpr float kSwitchClearM = 25.0f;
 
 // The band, and inside it: a platform for a passenger train, positioned as near the TXP
 // as the platform allows; else the TXP itself; else the middle of the band. A platform

@@ -126,11 +126,54 @@ int main() {
                   sp->idleRpm);
             check(c.lead().enginesRunning(), "  and is running");
 
+            check(c.enginesRunning(), "  and so does the train");
+
             c.toggleEngines();
             run(10.0f);
             check(c.lead().engineRpm(0) == 0.0f, "  shut down, it comes back to nothing",
                   c.lead().engineRpm(0), 0.0);
+            check(!c.enginesRunning(), "  and so does the train");
             check(c.lead().engineState(0) == EngineState::Off, "  and reports Off again");
+        }
+    }
+
+    // --- the train's engines, not the locomotive's ---------------------------------
+    std::puts("\nA hauling train knows its own engines are running");
+    {
+        // The light machines above cannot show this, which is why it needs its own
+        // section: they ARE the whole train. A real train is a machine and some
+        // vehicles that are not machines, and a carriage reports its engines as not
+        // running because it has none to run. Answered over every set, that made
+        // "are the train's engines running?" false for a Di 4 and five however
+        // contentedly the Di 4 idled.
+        //
+        // One caller asks: arming the auto-driver, which starts the engines if the
+        // answer is no. toggleEngines() means STOP when anything is on - so pressing P
+        // on a train whose engine was already running shut it down exactly as the
+        // departure began, on the Di 4 and the CD 312 and on nothing else, because
+        // nothing else hauls.
+        for (const char* name : {"NSB Di 4 + 5 (cafe", "CargoNet freight"}) {
+            const VehicleSpec* sp = specNamed(name);
+            if (sp == nullptr) continue;
+            const std::string who(sp->name);
+            World w2;
+            Consist c(&w2.paths, &w2.paths[0], *sp, 10000.0f);
+            c.attachNetwork(&w2.paths, nullptr);
+            check(c.unitCount() > 1, who + ": hauls unpowered vehicles",
+                  double(c.unitCount()), 2.0);
+            check(!c.enginesRunning(), "  shut down, the train is not running");
+
+            c.toggleEngines();
+            for (int i = 0; i < 6 * 60; ++i) c.update(1.0f / 60.0f, 0.0f);
+            check(c.lead().enginesRunning(), "  started, the locomotive is running");
+            check(c.enginesRunning(), "  and so is the TRAIN, carriages notwithstanding");
+
+            // What arming the auto-driver does, in the order main.cpp does it. The
+            // engine has to survive it.
+            if (!c.enginesRunning()) c.toggleEngines();
+            for (int i = 0; i < 2 * 60; ++i) c.update(1.0f / 60.0f, 0.0f);
+            check(c.lead().enginesRunning(),
+                  "  and arming the auto-driver leaves it running");
         }
     }
 

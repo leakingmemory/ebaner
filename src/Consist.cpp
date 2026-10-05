@@ -840,9 +840,24 @@ EngineState Consist::engineState(int i) const {
 }
 
 bool Consist::enginesRunning() const {
-    for (const Vehicle& u : units_)
+    // Every set that HAS an engine - not every set. A carriage answers this question
+    // "no", because Vehicle::enginesRunning reports a set with no engines as not
+    // running, which is the only sensible answer for one set and the wrong one for a
+    // train. Asked of the whole train it meant a Di 4 and five coaches was always
+    // "engines stopped", however contentedly the Di 4 was idling, and the one caller -
+    // arming the auto-driver - answered by calling toggleEngines() to start them. That
+    // command is "stop" when anything is running, so pressing P on a train whose engine
+    // was already on shut it down just as the departure began.
+    //
+    // A train with no engines at all is not running, which is why `any` is required
+    // rather than returning true for a cut of wagons.
+    bool any = false;
+    for (const Vehicle& u : units_) {
+        if (u.engineCount() == 0) continue; // a carriage has nothing to run
+        any = true;
         if (!u.enginesRunning()) return false;
-    return true;
+    }
+    return any;
 }
 
 // --- geometry -------------------------------------------------------------------

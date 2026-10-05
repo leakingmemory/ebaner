@@ -993,6 +993,7 @@ int main(int argc, char** argv) {
         std::string station; // for a flag post and a simple entry: whose it is
     };
     std::vector<RoadMark> roadMarks;
+    std::vector<glm::dvec2> flagMarkWorld; // flag post index -> where it stands
     {
         auto place = [&](std::uint32_t trackId, double frac, const glm::dvec2& fwd,
                          int kind, int ref, const std::string& station) {
@@ -1036,6 +1037,15 @@ int main(int argc, char** argv) {
         for (std::size_t i = 0; i < flagPosts.size(); ++i)
             place(flagPosts[i].trackId, flagPosts[i].frac, glm::dvec2(0.0), 1,
                   static_cast<int>(i), flagPostStation[i].name);
+        // Each post's own position, by index, so that "has the train passed it yet"
+        // is one subtraction rather than a search through every mark on the network.
+        // A post whose track the export no longer carries has none, and the (0,0) it
+        // keeps is never read: the pass test is guarded on being near the station.
+        flagMarkWorld.assign(flagPosts.size(), glm::dvec2(0.0));
+        for (const RoadMark& m : roadMarks)
+            if (m.kind == 1 && m.ref >= 0 &&
+                m.ref < static_cast<int>(flagMarkWorld.size()))
+                flagMarkWorld[m.ref] = glm::dvec2(m.world);
         // The TXP positions, which are authored PER TRACK - "NO OTR TRACK 1" on the main
         // and "NO OTR TRACK 2" on the loop. That makes them the best expression there is
         // of where a train stops to be given its order, and the flag post, which is one
@@ -3277,16 +3287,41 @@ int main(int argc, char** argv) {
     // Lazily, because a platform can only be found in a tile that is loaded, and at load
     // only the tiles around the start are. By the time a station is first asked about,
     // the train is a kilometre or two from it and its ground is in memory.
+    // What a station offers on one of its roads: the switches that bound it, any
+    // platform along it, the TXP's spot. All fixed geometry, worked out once - but NOT
+    // the stopping point, which depends on how long the train is and which way it is
+    // running and so cannot be cached per station at all.
     struct StationRoadStop {
         int pathIdx = -1;
-        float s = 0.0f;
-        bool fromPlatform = false;
+        StationStop geom;
     };
-    std::map<int, std::vector<StationRoadStop>> stationStops; // station index -> its roads
+    // ...and whether the platform half of that was worked out on ground that was
+    // actually in memory. The terrain is a window that streams; a station first asked
+    // about from thirteen kilometres away has no tiles loaded, so the platform sweep
+    // sees nothing and "no platform" gets remembered for the rest of the run. Rognan
+    // answered "platform yes" started from Rognan and "platform no" started from
+    // Rokland, same station, same road.
+    //
+    // Falling back to the band while the ground is away is right - a train driving
+    // itself across the map may never load that terrain at all, and the switches are
+    // the thing that matters. Remembering it afterwards is not.
+    struct StationStops {
+        std::vector<StationRoadStop> roads;
+        bool groundWasLoaded = false;
+    };
+    std::map<int, StationStops> stationStops; // station index -> its roads
     auto stopsForStation = [&](int stIdx) -> const std::vector<StationRoadStop>& {
         auto it = stationStops.find(stIdx);
-        if (it != stationStops.end()) return it->second;
+        if (it != stationStops.end()) {
+            // Keep what is remembered unless it was decided blind and the ground has
+            // since arrived, in which case it is worth asking once more.
+            if (it->second.groundWasLoaded) return it->second.roads;
+            const glm::dvec3& w = stations[stIdx].world;
+            if (!data.groundLoadedAt(w.x, w.y)) return it->second.roads;
+            stationStops.erase(it);
+        }
         std::vector<StationRoadStop> out;
+        bool groundSeen = false;
         // Which roads run through this station, and where its switches sit on each.
         std::map<int, std::vector<float>> onPath;
         for (std::size_t i = 0; i < switchNet.turnouts().size(); ++i) {
@@ -3303,7 +3338,6 @@ int main(int argc, char** argv) {
             ss.haveBand = true;
             ss.bandFrom = lo;
             ss.bandTo = hi;
-            ss.passenger = true; // worked out for both; the train picks which it wants
             // The TXP authored on this very road, which is the best mark there is.
             for (const RoadMark& m : roadMarks)
                 if (m.kind == 2 && m.pathIdx == pathIdx && m.s >= lo && m.s <= hi) {
@@ -3320,6 +3354,10 @@ int main(int argc, char** argv) {
             for (float sm = lo; sm <= hi; sm += 10.0f) {
                 const TrackPose tp = paths[pathIdx].poseAt(sm);
                 const glm::vec2 side(-tp.tangent.y, tp.tangent.x);
+                // Was there any ground here to look at? Without this, "no platform"
+                // and "no terrain loaded" are the same answer.
+                if (data.groundLoadedAt(org.x + tp.pos.x, org.y + tp.pos.y))
+                    groundSeen = true;
                 bool here = false;
                 for (const float off : {-kPlatformReachM, kPlatformReachM})
                     if (platformCovers(data, org.x + tp.pos.x + side.x * off,
@@ -3333,16 +3371,22 @@ int main(int argc, char** argv) {
             }
             StationRoadStop rs;
             rs.pathIdx = pathIdx;
-            rs.s = stationStopPoint(ss);
-            rs.fromPlatform = ss.havePlatform;
+            rs.geom = ss;
             out.push_back(rs);
-            std::printf("[AutoDrive] %s road %d: switches %.0f..%.0f, txp %s, platform %s"
-                        " -> stop at %.0f\n",
+            std::printf("[AutoDrive] %s road %d: switches %.0f..%.0f (%.0f m), txp %s, "
+                        "platform %s\n",
                         stIdx >= 0 ? stations[stIdx].name.c_str() : "?", pathIdx, lo, hi,
-                        ss.haveTxp ? "yes" : "no", ss.havePlatform ? "yes" : "no", rs.s);
+                        hi - lo, ss.haveTxp ? "yes" : "no",
+                        ss.havePlatform ? "yes" : groundSeen ? "no" : "not yet known");
         }
+        if (!groundSeen)
+            std::printf("[AutoDrive]   (its ground is not loaded, so the band is all "
+                        "there is to go on - asked again when it arrives)\n");
         std::fflush(stdout);
-        return stationStops.emplace(stIdx, std::move(out)).first->second;
+        StationStops entry;
+        entry.roads = std::move(out);
+        entry.groundWasLoaded = groundSeen;
+        return stationStops.emplace(stIdx, std::move(entry)).first->second.roads;
     };
 
     auto scanRoad = [&](Consist& t) {
@@ -3484,11 +3528,37 @@ int main(int argc, char** argv) {
         // met it, so a red flag stopped nothing and two trains nearly met head on. What
         // the flag says applies to every road through the station; where the train
         // stands is worked out from the road it is actually on.
+        // Where the nose is and which way it faces, which is how "have we passed that
+        // post yet" is answered. Geometrically, against the post's world position -
+        // not by asking whether the post is on the road ahead, because the post may
+        // stand on a track the train is not using. That is the whole reason the flag
+        // belongs to the station and not to one road.
+        const Vehicle::RoadStretch& firstSt = autoStretches.front();
+        const TrackPose nosePose = paths[firstSt.pathIdx].poseAt(firstSt.sFrom);
+        const int noseDir = firstSt.sTo >= firstSt.sFrom ? 1 : -1;
+        const glm::dvec2 nose2(org.x + nosePose.pos.x, org.y + nosePose.pos.y);
+        const glm::dvec2 noseFwd(static_cast<double>(noseDir) * nosePose.tangent.x,
+                                 static_cast<double>(noseDir) * nosePose.tangent.y);
+
         for (std::size_t fi = 0; fi < flagPosts.size(); ++fi) {
             const std::string& stName = flagPostStation[fi].name;
             if (!stationManned(stName)) continue;
-            if (flagShown[fi] == FlagColour::Green) continue; // waved through
             if (t.autoServedStop() == static_cast<int>(fi)) continue; // already answered
+
+            // Read the flag as the train goes past it, and then stop re-reading it.
+            // Before that moment the live colour governs, so a TXP who clears the
+            // station while the train is still coming in is obeyed; after it, the
+            // decision stands whatever he does.
+            const glm::dvec2 post(flagMarkWorld[fi]);
+            const bool passed = glm::dot(post - nose2, noseFwd) < 0.0 &&
+                                glm::distance(post, nose2) < kStationReachM;
+            if (passed && t.autoFlagRead() != static_cast<int>(fi))
+                t.setAutoFlagRead(static_cast<int>(fi),
+                                  flagShown[fi] == FlagColour::Green);
+            const bool go = t.autoFlagRead() == static_cast<int>(fi)
+                                ? t.autoFlagGo()
+                                : flagShown[fi] == FlagColour::Green;
+            if (go) continue; // waved through, and that is now settled
             int stIdx = -1;
             for (std::size_t k = 0; k < stations.size(); ++k)
                 if (stations[k].name == stName) { stIdx = static_cast<int>(k); break; }
@@ -3496,15 +3566,41 @@ int main(int argc, char** argv) {
             // Where this station's stops are is fixed; all that is asked here is
             // whether one of them is on the road in front of this train, and how far.
             float at = -1.0f;
+            bool behind = false;
             for (const StationRoadStop& rs : stopsForStation(stIdx)) {
                 for (const Vehicle::RoadStretch& st : autoStretches) {
                     if (st.pathIdx != rs.pathIdx) continue;
+                    // The station's half of the answer is fixed; this train's half is
+                    // not. Its length decides whether it can stand clear of both
+                    // switches at all, and the way it is running decides which end it
+                    // pulls up to - so the point is worked out here, per train, from
+                    // geometry that was worked out once.
+                    StationStop ss = rs.geom;
+                    ss.passenger = t.carriesPassengers();
+                    ss.trainLength = t.length();
+                    ss.towardHi = st.sTo >= st.sFrom;
+                    const float sStop = stationStopPoint(ss);
                     const float lo = std::min(st.sFrom, st.sTo), hi = std::max(st.sFrom, st.sTo);
-                    if (rs.s < lo || rs.s > hi) continue;
-                    const float d = st.dist0 + std::abs(rs.s - st.sFrom);
-                    if (d >= 0.0f && (at < 0.0f || d < at)) at = d;
+                    if (sStop < lo || sStop > hi) continue;
+                    const float d = st.dist0 + std::abs(sStop - st.sFrom);
+                    if (d >= 0.0f) {
+                        if (at < 0.0f || d < at) at = d;
+                    } else {
+                        behind = true; // the place to stand is already behind the nose
+                    }
                     break;
                 }
+            }
+            // Past the place it was going to stand, and still moving. This is the
+            // guard that has to exist whatever else is true: the stopping point is
+            // allowed to move - the platform is not known until the station's ground
+            // is loaded - and a mark that moves behind a running train would otherwise
+            // simply vanish and the train carry on through a station it was told to
+            // stop at. Raised at zero, so the driver brakes with everything the
+            // service brake has, comes to a stand, and hands back where it ends up.
+            if (at < 0.0f && behind) {
+                at = 0.0f;
+                road.overshotStop = true;
             }
             if (at >= 0.0f)
                 road.stops.push_back({at, RoadAhead::StopKind::Station, static_cast<int>(fi)});
@@ -4690,17 +4786,23 @@ int main(int argc, char** argv) {
                 // A flag post it has already answered for stops being a stop until the
                 // train is clear of the station, so arming again leaves rather than
                 // standing still against the same mark.
-                if (t.autoServedStop() >= 0) {
+                const int held = t.autoServedStop() >= 0 ? t.autoServedStop()
+                                                         : t.autoFlagRead();
+                if (held >= 0) {
                     const glm::dvec3 org = data.sceneOrigin();
                     const glm::vec3 fp = t.frame().pos;
                     bool clear = true;
                     for (const RoadMark& m : roadMarks)
-                        if (m.kind == 1 && m.ref == t.autoServedStop() &&
+                        if (m.kind == 1 && m.ref == held &&
                             glm::distance(glm::dvec2(org.x + fp.x, org.y + fp.y),
                                           glm::dvec2(m.world)) < kStationSlowM)
                             clear = false;
                     if (clear) {
+                        // Away from the station, so both the answer it gave and the
+                        // reading it took are spent. Kept together because they expire
+                        // together: a flag read on the way in means nothing next time.
                         t.setAutoServedStop(-1);
+                        t.setAutoFlagRead(-1, false);
                     }
                 }
                 if (!autoPlanNow) continue;
@@ -4744,7 +4846,10 @@ int main(int argc, char** argv) {
                     if (station) t.setAutoServedStop(d.stopRef);
                     t.setAutoDriving(false);
                     if (&t == vehicle)
-                        setMapMsg(station
+                        setMapMsg(road.overshotStop
+                                      ? "auto-drive: stopped past the station mark - "
+                                        "the train is yours"
+                                  : station
                                       ? "auto-drive: standing at the station - P to go on"
                                       : "auto-drive: standing at the end of the track",
                                   true);
