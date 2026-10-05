@@ -171,12 +171,19 @@ int main(int argc, char** argv) {
     // What the pass used to cost: deriving every route's requirements from scratch, which
     // is what updateSignalAspects did for each of the paths it looks at.
     std::puts("\nwhat one pass costs:");
+    // Kept, rather than printed and dropped. This is the yardstick everything below is
+    // judged against: the same machine, the same data, doing the work the cache exists
+    // to avoid, measured moments earlier. A budget in milliseconds says as much about
+    // what else the machine was doing as about this code - these two numbers were
+    // failing in CI on a box that was compiling at the same time - and a ratio of two
+    // measurements taken seconds apart does not, because a loaded machine slows both.
+    double beforeMs = 0.0;
     {
         const auto t0 = std::chrono::steady_clock::now();
         std::size_t sink = 0;
         for (const SignalPath& p : signalPaths)
             sink += pathSwitchRequirements(p, net, polys).size();
-        const double beforeMs = msSince(t0);
+        beforeMs = msSince(t0);
         std::printf("    deriving every path's turnouts from scratch: %7.2f ms  (%zu)\n",
                     beforeMs, sink);
     }
@@ -207,8 +214,19 @@ int main(int argc, char** argv) {
     // Generous on purpose. This is not about a millisecond either way - it is about
     // catching a return to deriving the geometry every pass, which was two orders of
     // magnitude worse and put the cost inside the frame the driver was looking at.
-    check(aspectMs < 5.0, "signal aspects within budget (ms)", aspectMs, 5.0);
-    check(distantMs < 25.0, "distant walks within budget (ms)", distantMs, 25.0);
+    //
+    // So it is asked as a ratio against that very thing. If updateSignalAspects ever
+    // goes back to deriving requirements per path, aspectMs becomes beforeMs and the
+    // first of these fails by a factor of a thousand - which is the regression worth
+    // catching, and the only one. The margins are enormous on purpose: measured on an
+    // idle machine the cached pass is ~0.01 ms against ~20 ms derived, two thousand
+    // times, and the distant walks are ~2 ms against the same 20.
+    check(aspectMs * 10.0 < beforeMs,
+          "the cached pass costs a fraction of deriving it (ms, vs from-scratch)",
+          aspectMs, beforeMs / 10.0);
+    check(distantMs < 2.0 * beforeMs,
+          "the distant walks stay in proportion (ms, vs from-scratch)", distantMs,
+          2.0 * beforeMs);
 
     std::printf("\n%s\n", failures == 0 ? "all ok" : "FAILURES");
     return failures == 0 ? 0 : 1;
