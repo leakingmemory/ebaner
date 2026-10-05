@@ -1268,6 +1268,13 @@ first of these that holds a `tiles/` directory wins:
 | 5 | each of `$XDG_DATA_DIRS` + `/ebaner`, by default `/usr/local/share` then `/usr/share` *(Unix)* |
 | 6 | the `datadir` this build was configured with, `$prefix/share/ebaner` |
 
+**Rows 2 to 6 are each tried twice**: the directory itself, and `norway-rails` inside
+it. So `/usr/share/ebaner/norway-rails` is found, which is where a package installs the
+export — `share/ebaner` already holds the program's own `shaders/`, and emptying tens of
+thousands of terrain tiles in beside them is no way to lay out a prefix. An export
+unpacked so that its `tiles/` sit directly in `share/ebaner` is found too; neither
+layout has to know about the other.
+
 Rows 3 and 4 are what a Windows build will have, where there is no XDG and the binary's
 own directory is the only thing to go on. Found nothing, the program lists every place
 it looked and stops.
@@ -1307,8 +1314,8 @@ rest work as expected:
 | `$prefix/share/ebaner/shaders` | the compiled `.spv` files |
 | `$prefix/share/doc/ebaner` | `README.md`, `LICENSE` |
 
-Put the export at `$prefix/share/ebaner` (beside `shaders/`), or anywhere else in the
-list above.
+Put the export at `$prefix/share/ebaner/norway-rails` (beside `shaders/`, not in among
+it), or anywhere else in the list above.
 
 ### Windows
 

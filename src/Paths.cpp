@@ -65,6 +65,24 @@ void add(std::vector<std::string>& out, const std::string& p) {
     out.push_back(p);
 }
 
+// The name a packaged export is installed under, inside the program's data directory.
+//
+// It needs one. share/ebaner already holds the program's own files - the compiled
+// shaders are there - so an export emptied straight into it would mix tens of
+// thousands of terrain tiles in with them. A named subdirectory keeps the two apart,
+// and leaves room for a second export later without either having to move.
+constexpr const char* kExportDirName = "norway-rails";
+
+// One of the program's data directories, and the export inside it. Both, because the
+// two layouts are both in use: an export unpacked so that its tiles/ sit directly in
+// share/ebaner, and one installed as a package puts it, in share/ebaner/norway-rails
+// beside the shaders. Whichever is there is found, and neither has to know about the
+// other.
+void addDataDir(std::vector<std::string>& out, const fs::path& dir) {
+    add(out, dir.string());
+    add(out, (dir / kExportDirName).string());
+}
+
 #ifndef _WIN32
 // Split a PATH-style list on ':'. This is for XDG_DATA_DIRS, which is a Unix idea; the
 // PATH walk below does its own splitting, because it has a separator and an extension
@@ -74,7 +92,7 @@ void addList(std::vector<std::string>& out, const std::string& list, const char*
     while (i <= list.size()) {
         const std::size_t j = list.find(':', i);
         const std::string one = list.substr(i, j == std::string::npos ? j : j - i);
-        add(out, one.empty() ? std::string() : one + suffix);
+        if (!one.empty()) addDataDir(out, fs::path(one + suffix));
         if (j == std::string::npos) break;
         i = j + 1;
     }
@@ -242,24 +260,24 @@ std::string datasetRoot(const char* fromArgv) {
     const std::string home = env("HOME");
     const std::string xdgHome = env("XDG_DATA_HOME");
     if (!xdgHome.empty())
-        add(g_searched, (fs::path(xdgHome) / "ebaner").string());
+        addDataDir(g_searched, fs::path(xdgHome) / "ebaner");
     else if (!home.empty())
-        add(g_searched, (fs::path(home) / ".local" / "share" / "ebaner").string());
+        addDataDir(g_searched, fs::path(home) / ".local" / "share" / "ebaner");
 #endif
     const std::string exe = exeDir();
     if (!exe.empty()) {
         // Beside the binary - the Windows layout, where there is nowhere else to look -
         // and then the relocatable Unix one, bin/../share/ebaner, which finds an install
         // under any prefix without the prefix having been compiled in.
-        add(g_searched, (fs::path(exe) / "data").string());
-        add(g_searched, (fs::path(exe) / ".." / "share" / "ebaner").string());
+        addDataDir(g_searched, fs::path(exe) / "data");
+        addDataDir(g_searched, fs::path(exe) / ".." / "share" / "ebaner");
     }
 #ifndef _WIN32
     const std::string xdgDirs = env("XDG_DATA_DIRS");
     addList(g_searched, xdgDirs.empty() ? "/usr/local/share:/usr/share" : xdgDirs,
             "/ebaner");
 #endif
-    if (*EBANER_DATADIR) add(g_searched, EBANER_DATADIR);
+    if (*EBANER_DATADIR) addDataDir(g_searched, fs::path(EBANER_DATADIR));
 
     for (const std::string& c : g_searched)
         if (looksLikeDataset(c)) return c;
