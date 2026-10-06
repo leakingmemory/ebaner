@@ -41,6 +41,7 @@
 #include "Consist.h"
 #include "Vehicle.h"
 
+#include <limits>
 #include <cmath>
 #include <algorithm>
 #include <chrono>
@@ -452,17 +453,50 @@ int main(int argc, char** argv) {
         // moved the midpoint into a transition curve, where the centre-to-centre
         // distance came up 57 mm short of the coupler spacing against a 50 mm bound -
         // a failure that says nothing at all about couplers.
+        //
+        // Searching for a straight site fixed that case and not the next one: taking
+        // the FIRST window under a 5 km-radius bound still depends on where the path
+        // begins, and 5 km of radius is a curve. Linking the four gaps between Grong
+        // and Harran grew this path again, moved the first qualifying window, and
+        // produced 58 mm against the same 50 mm bound - the same non-failure, a year
+        // later.
+        //
+        // So take the BEST window rather than the first acceptable one. Which site
+        // that is may still move when the network changes, but how straight it is
+        // cannot get worse while anywhere straighter exists, and the quality is what
+        // the check actually depends on.
+        // Scored by how far the track falls short of a straight line over the site,
+        // which is the quantity the check below is about and is not the same thing as
+        // curvature. The first attempt at this scored on curvature and picked a window
+        // reading one part in 85000 - a radius of 85 km, flat by any measure - where
+        // the bodies still came up 99 mm apart, because what shortens a chord is not
+        // only a curve: a kink at a vertex, or a change of gradient, reads as no
+        // curvature at all and shortens it just the same. Arc geometry agrees - at
+        // 13 m between body centres it takes a radius near 40 m to lose 50 mm, and
+        // nothing on this line is remotely that tight.
+        //
+        // So measure the deficit directly, in metres, in three dimensions: walk the
+        // window and sum the chords, against the arc length it claims to be. A window
+        // that loses a millimetre over 300 m cannot lose 50 mm over any 13 m of it.
         const float kSite = 300.0f; // longer than any consist built below
         float startS = 0.5f * run->length();
+        float bestShort = std::numeric_limits<float>::max();
         for (float s = 0.0f; s + kSite < run->length(); s += 10.0f) {
-            bool straight = true;
-            for (float o = 0.0f; o <= kSite && straight; o += 5.0f)
-                straight = std::abs(run->poseAt(s + o).curvature) < 1.0f / 5000.0f;
-            if (straight) {
+            float chord = 0.0f;
+            glm::vec3 prev = run->poseAt(s).pos;
+            for (float o = 5.0f; o <= kSite; o += 5.0f) {
+                const glm::vec3 here = run->poseAt(s + o).pos;
+                chord += glm::length(here - prev);
+                prev = here;
+            }
+            const float shortBy = std::abs(kSite - chord);
+            if (shortBy < bestShort) {
+                bestShort = shortBy;
                 startS = s + 0.5f * kSite;
-                break;
             }
         }
+        std::printf("  site at %.0f m of %.0f, straight to %.1f mm over %.0f m\n", startS,
+                    run->length(), bestShort * 1000.0f, kSite);
         char what[96];
 
         // Every expectation is taken from a single set actually built, not from

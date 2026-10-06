@@ -127,6 +127,12 @@ std::vector<TrackEdit> loadTrackOverlay(const std::string& datasetRoot) {
             while (is >> tok) {
                 if (tok == "tunnel") e.medium = 0x55;
                 else if (tok == "surface") e.medium = 0x20;
+                // A gap between two spans of the same bridge. Needed because the
+                // fallback below reads "not underground" as "surface", and surface is
+                // the one medium the terrain carve digs a trench for - so a bridge gap
+                // left to the default has the ground cut away beneath it, which is the
+                // same fault as a tunnel bore in the open and harder to notice.
+                else if (tok == "bridge") e.medium = 0x42;
             }
             edits.push_back(e);
         } else if (n == 7 && std::string(kind) == "move") {
@@ -281,6 +287,7 @@ void writeEdits(std::ofstream& f, const std::vector<TrackEdit>& edits) {
                 f << ' ' << e.track; // which track's vertex, as an elev names it
             if (e.kind == TrackEdit::Link && e.medium == 0x55) f << " tunnel";
             else if (e.kind == TrackEdit::Link && e.medium == 0x20) f << " surface";
+            else if (e.kind == TrackEdit::Link && e.medium == 0x42) f << " bridge";
             f << '\n';
         }
     }
