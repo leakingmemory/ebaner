@@ -66,7 +66,7 @@ constexpr std::uint32_t kNewTrackIdBase = 0xD0000000;
 //                              `<trackHex>:<frac>` and a derived id would shift under
 //                              them the moment an earlier edit was inserted.
 struct TrackEdit {
-    enum Kind { Link, Elev, Move, Rail, Track } kind = Link;
+    enum Kind { Link, Elev, Move, Rail, Track, Drop } kind = Link;
     // Link/Rail: the two endpoints. Elev: a = {x, y, newZ}. Move: a = old, b = new pos.
     glm::dvec3 a{0.0}, b{0.0};
     // Track: the drawn polyline, two points or more.
@@ -75,7 +75,7 @@ struct TrackEdit {
     std::uint8_t trackType = 1;
     // Elev/Move: restrict the vertex match to this track (0 = any track). Lets
     // coincident points from different sidings be edited independently.
-    // Track: the new track's own id.
+    // Track: the new track's own id. Drop: the track to remove.
     std::uint32_t track = 0;
     // Link: force the connector's medium (0 = take it from the ends it joins).
     std::uint8_t medium = 0;

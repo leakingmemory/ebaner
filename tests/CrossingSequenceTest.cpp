@@ -1037,6 +1037,72 @@ int main(int argc, char** argv) {
         check(coords, "the endpoints are unharmed by the extra token");
     }
 
+    // Dropping a track. The dataset is merged from two exports and carries some
+    // railway twice: at Grong a chain of six short fragments lay on top of track 716,
+    // every vertex within three metres of it, because Nordlandsbanen's export and
+    // Namsosbanen's each described the same ground. Two tracks in one place are two
+    // roads to the signalling and two sets of turnouts to the driver.
+    {
+        std::puts("\nDropping a duplicated track:");
+        std::vector<TrackSegment> base(3);
+        base[0].trackId = 0x716;  base[0].medium = 0x20;
+        base[0].pts = {{0.0, 0.0, 10.0}, {100.0, 0.0, 10.0}};
+        base[1].trackId = 0xd83;  base[1].medium = 0x20;   // the duplicate, 0.5 m off
+        base[1].pts = {{0.0, 0.5, 10.0}, {100.0, 0.5, 10.0}};
+        base[2].trackId = 0x2c86; base[2].medium = 0x20;
+        base[2].pts = {{0.0, 20.0, 10.0}, {100.0, 20.0, 10.0}};
+
+        std::vector<TrackSegment> a = base;
+        std::vector<TrackEdit> drop(1);
+        drop[0].kind = TrackEdit::Drop;
+        drop[0].track = 0xd83;
+        applyTrackOverlay(a, drop);
+        check(a.size() == 2, "the dropped track is gone");
+        bool keptOthers = false;
+        if (a.size() == 2) keptOthers = a[0].trackId == 0x716 && a[1].trackId == 0x2c86;
+        check(keptOthers, "  and only it - the others are untouched");
+
+        // An id that is not there is not an error. The overlay outlives any one export
+        // and a track it names may simply have gone already.
+        std::vector<TrackSegment> b = base;
+        std::vector<TrackEdit> absent(1);
+        absent[0].kind = TrackEdit::Drop;
+        absent[0].track = 0x9999;
+        applyTrackOverlay(b, absent);
+        check(b.size() == 3, "an id that is not present drops nothing");
+
+        // Order matters and is not left to the file. A link is matched to the nearest
+        // loose ENDS, so a link written above a drop would otherwise bind to the track
+        // the drop is about to take away - and the connector would be left joining
+        // something that no longer exists.
+        std::vector<TrackSegment> c = base;
+        std::vector<TrackEdit> both(2);
+        both[0].kind = TrackEdit::Link;         // written FIRST, onto the duplicate
+        both[0].a = {100.0, 0.5, 10.0};
+        both[0].b = {100.0, 20.0, 10.0};
+        both[1].kind = TrackEdit::Drop;
+        both[1].track = 0xd83;
+        applyTrackOverlay(c, both);
+        bool hasDup = false;
+        for (const TrackSegment& t : c) hasDup = hasDup || t.trackId == 0xd83;
+        check(!hasDup, "a drop is applied before a link, whatever the file order");
+
+        // ...and it has to survive a save. The editor rewrites the whole overlay from
+        // the edits it is holding, so a kind the writer does not know is one the next
+        // save silently throws away - and what it throws away here is a deletion, so
+        // the duplicate track would quietly come back.
+        if (argc > 1) {
+            std::vector<TrackEdit> es(1);
+            es[0].kind = TrackEdit::Drop;
+            es[0].track = 0xd83;
+            check(writeTrackOverlay(argv[1], es), "a drop writes");
+            const std::vector<TrackEdit> back = loadTrackOverlay(argv[1]);
+            check(back.size() == 1 && back[0].kind == TrackEdit::Drop &&
+                      back[0].track == 0xd83,
+                  "  and comes back as the same drop, naming the same track");
+        }
+    }
+
     // Two vertices at one spot on one track. The export produces them - a spike is a
     // duplicated point - and until now they could not be told apart: an elev edit matches
     // on position, both are equally near it, and the first found always won. So one of

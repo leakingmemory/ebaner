@@ -1518,6 +1518,28 @@ vertices of one track can sit at one spot, and only the height tells them apart 
 problem `elev` needs its `fromz` for. The optional track id says *which* track's vertex is
 meant where several meet, in decimal, as an `elev` names its track.
 
+**Dropping a duplicated track (`drop`).** A dataset merged from two exports carries some
+railway twice. At Grong, where Nordlandsbanen meets the closed Namsosbanen, 255 m of one
+line existed both as part of track `716` and as a chain of six short fragments lying on
+top of it — every vertex within 3 m of `716`, most within 1 m. Two tracks in the same
+place are two roads to the signalling and two sets of turnouts to the driver, so one has
+to go:
+
+```
+drop 3459
+```
+
+The track id is **decimal**, as `elev` and `move` name theirs. Naming an id that is not
+in the export is not an error — the overlay outlives any one of them. Drops are applied
+**before every other kind**, whatever the order in the file: a `link` is matched to the
+nearest loose *ends* and an `elev` snaps to the nearest vertex, so a track dropped
+afterwards would leave those edits having quietly bound to it.
+
+What this does **not** do is reconnect anything. Whatever switched onto the dropped track
+is left loose, and the fix is ordinary: a turnout forms wherever an end lies within 2 m
+of another track, so a `move` bringing that end onto the surviving track restores it —
+often none is needed, because an end that sat on a duplicate already sits on the original.
+
 `elev` and `move` are applied **in the order they are written**, not in two passes by kind.
 Each line names its vertex by where everything above it left the thing, which is also what
 the editor sees on screen when it writes one — so a regrade after a move finds the moved

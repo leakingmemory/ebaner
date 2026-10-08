@@ -15,11 +15,13 @@
 
 #include "TerrainData.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <unordered_set>
 #include <iomanip>
 #include <sstream>
 #include <string>
@@ -114,6 +116,27 @@ std::vector<TrackEdit> loadTrackOverlay(const std::string& datasetRoot) {
             if (e.pts.size() >= 2) edits.push_back(e);
             continue;
         }
+        // Remove a track from the network. One number, so it is read here rather than
+        // through the six-coordinate sscanf below.
+        //
+        // What it is for: a dataset merged from two exports carries the same railway
+        // twice. At Grong, where Nordlandsbanen meets the closed Namsosbanen, 255 m of
+        // one line existed both as part of track 716 and as a chain of five short
+        // fragments lying on top of it, within a metre. Two tracks in the same place
+        // are two roads to the signalling and two sets of turnouts to the driver.
+        //
+        // Decimal, as elev and move name their tracks: these are the vertex-level
+        // edits and they end up side by side naming the same geometry.
+        if (line.compare(0, 5, "drop ") == 0) {
+            std::istringstream is(line);
+            std::string tok, idTok;
+            is >> tok >> idTok;
+            if (!is) continue;
+            e.kind = TrackEdit::Drop;
+            e.track = static_cast<std::uint32_t>(std::strtoul(idTok.c_str(), nullptr, 10));
+            if (e.track != 0) edits.push_back(e);
+            continue;
+        }
         const int n = std::sscanf(line.c_str(), "%31s %lf %lf %lf %lf %lf %lf", kind,
                                   &e.a.x, &e.a.y, &e.a.z, &e.b.x, &e.b.y, &e.b.z);
         if (n == 7 && std::string(kind) == "link") {
@@ -170,9 +193,26 @@ void applyTrackOverlay(std::vector<TrackSegment>& segs,
                        const std::vector<TrackEdit>& edits) {
     if (edits.empty()) return;
     constexpr double kVertexTol = 2.0; // m; snap an elev override to a real vertex
-    int elev = 0, links = 0, rails = 0, tracks = 0;
+    int elev = 0, links = 0, rails = 0, tracks = 0, drops = 0;
 
     int moves = 0;
+    // Removals first, before anything can be anchored to what is about to go. A link
+    // matches loose ends by position and an elev snaps to the nearest vertex, so a
+    // track dropped afterwards would leave those edits having quietly bound to it.
+    {
+        std::unordered_set<std::uint32_t> gone;
+        for (const TrackEdit& e : edits)
+            if (e.kind == TrackEdit::Drop) gone.insert(e.track);
+        if (!gone.empty()) {
+            const std::size_t before = segs.size();
+            segs.erase(std::remove_if(segs.begin(), segs.end(),
+                                      [&](const TrackSegment& s) {
+                                          return gone.count(s.trackId) != 0;
+                                      }),
+                       segs.end());
+            drops = static_cast<int>(before - segs.size());
+        }
+    }
     // Whole drawn roads. Added before the elev and move edits so those can regrade and
     // nudge their points afterwards, which is how a drawn siding gets its elevation:
     // the mode that draws it lays it out flat at one height on purpose.
@@ -253,10 +293,10 @@ void applyTrackOverlay(std::vector<TrackSegment>& segs,
         segs.push_back(std::move(c));
         ++links;
     }
-    if (elev > 0 || links > 0 || moves > 0 || rails > 0 || tracks > 0)
+    if (elev > 0 || links > 0 || moves > 0 || rails > 0 || tracks > 0 || drops > 0)
         std::printf("[TrackOverlay] applied %d elev + %d move + %d link + %d rail + "
-                    "%d track edit(s)\n",
-                    elev, moves, links, rails, tracks);
+                    "%d track + %d drop edit(s)\n",
+                    elev, moves, links, rails, tracks, drops);
 }
 
 namespace {
@@ -272,6 +312,8 @@ void writeEdits(std::ofstream& f, const std::vector<TrackEdit>& edits) {
             if (e.track != 0 || e.hasFromZ) f << ' ' << e.track; // coincident points
             if (e.hasFromZ) f << ' ' << e.fromZ;                 // ...on the same track
             f << '\n';
+        } else if (e.kind == TrackEdit::Drop) {
+            f << "drop " << e.track << '\n';
         } else if (e.kind == TrackEdit::Track) {
             f << "track " << std::hex << e.track << std::dec << ' '
               << (e.trackType == 2 ? "yard" : "siding");
