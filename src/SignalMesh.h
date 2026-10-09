@@ -43,6 +43,8 @@ inline float blinkClock(double nowSeconds) {
 #include <cstdint>
 #include <vector>
 
+class TunnelMesh;
+
 // Norwegian mini ground signal ("dvergsignal"): a black box on a short (~1 m) pole beside
 // the track with two warm-white lamps. A fixed reference lamp sits at the lower-left; a second lamp lights on a
 // quarter-arc around it - horizontal (lower-right) = Stop, 45 deg = train ahead on an
@@ -53,7 +55,11 @@ inline float blinkClock(double nowSeconds) {
 // static, so it is merged into the static struct buffer like the switch stands.
 class SignalMesh {
 public:
-    void build(const std::vector<SignalPlacement>& signals, glm::dvec3 sceneOrigin);
+    // `bores`, when given, is what tells a signal it is underground: there is no room
+    // for a mast in a tunnel, so one inside a bore is carried on the wall instead. Null
+    // builds every signal the surface way, which is what it was before bores existed.
+    void build(const std::vector<SignalPlacement>& signals, glm::dvec3 sceneOrigin,
+               const TunnelMesh* bores = nullptr);
 
     const std::vector<TrackVertex>& vertices() const { return vertices_; }
     const std::vector<std::uint32_t>& indices() const { return indices_; }

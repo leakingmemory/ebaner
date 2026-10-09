@@ -14,6 +14,7 @@
 #include "SignalMesh.h"
 
 #include "LampGeometry.h"
+#include "TunnelMesh.h"
 
 #include <cmath>
 
@@ -44,9 +45,28 @@ constexpr float kStandoffM = 3.5f;
 // How far a block signal steps back along its own approach, off the border it stands on,
 // so the pair reading opposite ways there are two poles rather than one drawn twice.
 constexpr float kBlockStandoffM = 0.5f;
+// Underground a signal cannot stand on a mast at all. TunnelMesh bores a tube 3.5 m from
+// the centreline to a wall that rises only 2.5 m before the arch turns in, which is
+// exactly where kStandoffM puts a post - so the post lands in the wall and the head, four
+// metres above it, ends up inside solid rock. That is not a near miss to be nudged: no
+// height that reads as a signal fits over a standoff that clears a train.
+//
+// So a signal in a tunnel is hung off the wall, as they are in life: in far enough to
+// clear the arch, and low enough to sit about where the driver's eye is rather than above
+// the roof of their cab. At this standoff the bore gives 4.6 m of headroom, so the head
+// and its backing plate clear it by better than a metre, and the head's inner face still
+// stands 2.5 m from the centreline.
+constexpr float kTunnelStandoffM = 2.8f; // from the centreline to the head's axis
+constexpr float kTunnelHeadZ = 2.6f;     // head centre above the rail
+constexpr float kTunnelWallM = 3.4f;     // where the bracket meets rock: just inside
+                                         // TunnelMesh::kHalfW, because the arch has
+                                         // already begun to turn in by the time it
+                                         // reaches the wall and a bracket taken the
+                                         // whole way would clip its own springing
 } // namespace
 
-void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 origin) {
+void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 origin,
+                       const TunnelMesh* bores) {
     vertices_.clear();
     indices_.clear();
 
@@ -129,7 +149,16 @@ void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 o
         // offset takes the side - R itself stays the right of travel, because it is also
         // the basis vector every head and housing below is built on and mirroring that
         // would turn the signal inside out rather than move it across the line.
-        const float off = kStandoffM * static_cast<float>(s.side < 0 ? -1 : 1);
+        const float sgn = static_cast<float>(s.side < 0 ? -1 : 1);
+        // Tested at the rail rather than at the post: the post is pushed out to within
+        // centimetres of the bore wall, which is exactly where the margin in insideBore
+        // stops being something to lean on.
+        const bool inTunnel =
+            bores != nullptr &&
+            bores->insideBore(glm::vec3(static_cast<float>(s.world.x - origin.x),
+                                        static_cast<float>(s.world.y - origin.y),
+                                        static_cast<float>(s.world.z - origin.z)));
+        const float off = (inTunnel ? kTunnelStandoffM : kStandoffM) * sgn;
         // A block signal steps half a metre back from the border it stands on, onto the
         // approach side. Every other kind is alone at its border, but a block signal has an
         // opposite number reading the other way at the same one, and the two are normally
@@ -149,11 +178,25 @@ void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 o
                           static_cast<float>(s.world.y - origin.y) + R.y * off + ahead.y,
                           static_cast<float>(s.world.z - origin.z));
 
+        // What holds a head up: the post under it, or - underground, where a post would
+        // stand in the bore wall - the bracket that carries it in from that wall. The two
+        // are never both there, so every head below asks for one and says where it sits.
+        auto carry = [&](float mastH, float headZ, float postHalf) {
+            if (!inTunnel) {
+                box(B + UP * (mastH * 0.5f), R, F, UP, postHalf, postHalf, mastH * 0.5f,
+                    kBody);
+                return;
+            }
+            const float arm = (kTunnelWallM - kTunnelStandoffM) * 0.5f;
+            box(B + UP * headZ + R * (sgn * arm), R, F, UP, arm, 0.05f, 0.05f, kBody);
+        };
+
         // A distant signal on its own post out on the line: a short mast under the head.
         if (s.kind == SignalKind::Distant) {
             const float mastH = 3.5f;
-            box(B + UP * (mastH * 0.5f), R, F, UP, 0.06f, 0.06f, mastH * 0.5f, kBody);
-            distantHead(B + UP * (mastH + 0.48f), R, F, s.aspect);
+            const float headZ = inTunnel ? kTunnelHeadZ : mastH + 0.48f;
+            carry(mastH, headZ, 0.06f);
+            distantHead(B + UP * headZ, R, F, s.aspect);
             continue;
         }
 
@@ -162,8 +205,9 @@ void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 o
         // for a flash to distinguish it from. Dark (an unmanned station) lights neither.
         if (s.kind == SignalKind::StationEntry) {
             const float mastH = 4.5f;
-            box(B + UP * (mastH * 0.5f), R, F, UP, 0.07f, 0.07f, mastH * 0.5f, kBody);
-            twoLampHead(B + UP * (mastH + kTwoLampHalfH), R, F, s.aspect, false);
+            const float headZ = inTunnel ? kTunnelHeadZ : mastH + kTwoLampHalfH;
+            carry(mastH, headZ, 0.07f);
+            twoLampHead(B + UP * headZ, R, F, s.aspect, false);
             continue;
         }
 
@@ -181,10 +225,11 @@ void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 o
             // signal in every other way - same mast, same routes, and it may still share a
             // pole with a dwarf or carry a distant - so only the head differs.
             const float mastH = 4.5f;
-            box(B + UP * (mastH * 0.5f), R, F, UP, 0.07f, 0.07f, mastH * 0.5f, kBody);
             const float hd = 0.15f;
             const float hh = s.twoLamp ? kTwoLampHalfH : kThreeLampHalfH;
-            const glm::vec3 C = B + UP * (mastH + hh);
+            const float headZ = inTunnel ? kTunnelHeadZ : mastH + hh;
+            carry(mastH, headZ, 0.07f);
+            const glm::vec3 C = B + UP * headZ;
             // An entry signal and a block signal show their danger as a flashing red; an
             // exit signal's is steady. Only the red flashes - the greens are solid on every
             // head, so what the flash marks is the stop, not the signal.
@@ -231,7 +276,7 @@ void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 o
             // behind the housing and any geometry for it would be inside solid metal.
             if (s.withDistant) {
                 const float hhD = 0.48f, hdD = 0.14f; // the distant head's own half extents
-                const float below = (mastH - 0.1f * hh) - 0.40f - 1.1f * hhD;
+                const float below = (headZ - 1.1f * hh) - 0.40f - 1.1f * hhD;
                 distantHead(B + UP * below - F * (hd + 0.20f - hdD), R, F, s.distantAspect);
             }
         }
@@ -239,7 +284,9 @@ void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 o
         if (drawDwarf) {
             // Dwarf: its own short post when alone; when sharing the exit's mast it just
             // hangs low on that mast, so only the housing is drawn.
-            if (!isExit)
+            // Its own post when alone - and in a tunnel even when shared, because the
+            // mast it would otherwise hang on is not there to hang on.
+            if (!isExit || inTunnel)
                 box(B + UP * (dwarfH * 0.5f), R, F, UP, 0.035f, 0.035f, dwarfH * 0.5f, kBody);
             const float hw = 0.30f, hd = 0.16f, hh = 0.28f; // half extents (across/along/up)
             const glm::vec3 C = B + UP * (dwarfH + hh);

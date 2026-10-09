@@ -1237,7 +1237,7 @@ int main(int argc, char** argv) {
         bool built = false;
         if (parts & PartSignals) {
             const double t = tick();
-            signals.build(sigPlacements, data.sceneOrigin());
+            signals.build(sigPlacements, data.sceneOrigin(), &tunnels);
             mSignals += tick() - t;
             built = true;
         }

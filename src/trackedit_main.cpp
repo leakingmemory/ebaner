@@ -1392,7 +1392,7 @@ int main(int argc, char** argv) {
         merge(speedSignMesh.vertices(), speedSignMesh.indices());
         merge(tunnels.vertices(), tunnels.indices());
         merge(switches.vertices(), switches.indices());
-        signals.build(allPlacements(), data.sceneOrigin());
+        signals.build(allPlacements(), data.sceneOrigin(), &tunnels);
         merge(signals.vertices(), signals.indices());
         renderer.updateTerrain(mesh.vertices(), mesh.indices());
         renderer.updateTracks(tracks.vertices(), tracks.indices(),
@@ -1406,7 +1406,7 @@ int main(int argc, char** argv) {
     // terrain recarve — so a switch-type change or a signal-path edit updates cheaply.
     auto rebuildStructs = [&]() {
         switches.build(switchNet, glm::vec3(0.0f), data.loadedRadius());
-        signals.build(allPlacements(), data.sceneOrigin());
+        signals.build(allPlacements(), data.sceneOrigin(), &tunnels);
         std::vector<TrackVertex> sv = buildings.vertices();
         std::vector<std::uint32_t> si = buildings.indices();
         auto merge = [&](const std::vector<TrackVertex>& v,
