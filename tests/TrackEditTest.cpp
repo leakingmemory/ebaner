@@ -489,14 +489,26 @@ int main(int argc, char** argv) {
                 chord += glm::length(here - prev);
                 prev = here;
             }
+            // ...and level, not merely straight. A constant gradient is perfectly
+            // straight in three dimensions and scores zero deficit, but the body
+            // placement does not sit the same way on a slope: on a 9.6 per mille
+            // site the middle set of three came up 56 mm short between its own two
+            // bodies while the outer sets ran 14 mm long. That is nothing to do with
+            // couplers either, so the site avoids it rather than measuring it.
             const float shortBy = std::abs(kSite - chord);
-            if (shortBy < bestShort) {
-                bestShort = shortBy;
+            const float rise =
+                std::abs(run->poseAt(s + kSite).pos.z - run->poseAt(s).pos.z);
+            const float score = shortBy + 0.01f * rise;
+            if (score < bestShort) {
+                bestShort = score;
                 startS = s + 0.5f * kSite;
             }
         }
-        std::printf("  site at %.0f m of %.0f, straight to %.1f mm over %.0f m\n", startS,
-                    run->length(), bestShort * 1000.0f, kSite);
+        const float siteRise = std::abs(run->poseAt(startS + 0.5f * kSite).pos.z -
+                                        run->poseAt(startS - 0.5f * kSite).pos.z);
+        std::printf("  site at %.0f m of %.0f, straight and level to %.1f mm and "
+                    "%.0f mm over %.0f m\n", startS, run->length(),
+                    bestShort * 1000.0f, siteRise * 1000.0f, kSite);
         char what[96];
 
         // Every expectation is taken from a single set actually built, not from
