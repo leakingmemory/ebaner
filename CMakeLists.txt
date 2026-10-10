@@ -185,6 +185,7 @@ add_library(ebaner_engine STATIC
     src/TxpNetwork.cpp
     src/SignalPaths.cpp
     src/LineBlock.cpp
+    src/RouteQueue.cpp
     src/Occupancy.cpp
     src/SignalMesh.cpp
     src/SpeedLimits.cpp
@@ -400,6 +401,15 @@ add_dependencies(UncoupleTest shaders)
 target_link_libraries(UncoupleTest PRIVATE ebaner_engine)
 target_include_directories(UncoupleTest PRIVATE src)
 add_test(NAME uncouple COMMAND UncoupleTest)
+
+# Arming routes: the order queued routes are handed to the interlocking in. No dataset -
+# it takes circuit ids and a blocked flag per queued route and answers with indices, so a
+# handful of small integers is the whole world it works in.
+add_executable(RouteQueueTest tests/RouteQueueTest.cpp)
+add_dependencies(RouteQueueTest shaders)
+target_link_libraries(RouteQueueTest PRIVATE ebaner_engine)
+target_include_directories(RouteQueueTest PRIVATE src)
+add_test(NAME route-queue COMMAND RouteQueueTest)
 
 # Placing a train: where one fits on the line, and refusing a spot that will not hold it
 # or already has a train standing on it. No dataset - a kilometre of straight TrackPath

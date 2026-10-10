@@ -20,6 +20,7 @@
 #include "Script.h"
 #include "LineBlock.h"
 #include "Occupancy.h"
+#include "RouteQueue.h"
 #include "SignalPaths.h"
 #include <cassert>
 
@@ -1652,6 +1653,21 @@ int main(int argc, char** argv) {
     };
     std::vector<MainRoute> mainRoutes;
 
+    // Routes the operator has armed: blocked now, to be set the moment they can be, and
+    // where two of them want the same road, in the order they were armed.
+    //
+    // Nothing is decided here. The queue says when to try and in what order; whether
+    // anything moves is trySetExitRoute's answer, which is the same call the operator's
+    // own keypress makes. `sections` is cached because a candidate's departure is fixed
+    // for the life of the program and the queue is re-read on every occupancy change.
+    //
+    // Not `routeArm`, which above means something else entirely: the dwarf-route "click a
+    // signal, then click its destination" state on the map. The word the operator sees is
+    // still "armed"; only the identifier is kept apart.
+    struct QueuedRoute { int route = -1; std::vector<int> sections; };
+    std::vector<QueuedRoute> routeQueue;
+    bool routeQueueChanged = false;
+
     struct SecRun { int section; std::vector<glm::vec2> pts; }; // scene-relative xy run
     std::vector<SecRun> secRuns;
     {
@@ -2181,6 +2197,7 @@ int main(int argc, char** argv) {
     bool flagsChanged = false;
     bool prevMapClick = false; // edge-trigger for the map left-click
     bool prevPickUp = false, prevPickDown = false, prevPickEnter = false;
+    bool prevPickArm = false; // Q in the route picker: arm the highlighted route
     const std::vector<std::string> kMenuItems = {"Drive another train",
                                                 "Place a train here",
                                                 "Place a train at a station",
@@ -2905,6 +2922,49 @@ int main(int argc, char** argv) {
         std::printf("[Main] %s cancelled\n", exitRouteName(ri).c_str());
     };
 
+    // Where route `ri` stands in the queue, 1-based as the picker shows it; 0 = not armed.
+    auto armedPos = [&](int ri) {
+        for (std::size_t i = 0; i < routeQueue.size(); ++i)
+            if (routeQueue[i].route == ri) return static_cast<int>(i) + 1;
+        return 0;
+    };
+    // Arm a blocked route, or disarm one already armed.
+    //
+    // Arming is about timing and nothing else, so almost anything may be armed - a route
+    // refused for a reason that will pass is the whole point of the feature. The two it
+    // refuses are the ones that are not a state at all: a route already set has nothing
+    // to wait for, and one with no signal standing at it is a fault in the data that no
+    // amount of waiting will mend.
+    auto toggleArm = [&](int ri) {
+        if (const int at = armedPos(ri); at > 0) {
+            routeQueue.erase(routeQueue.begin() + (at - 1));
+            routeQueueChanged = true;
+            g_mapDirty = true;
+            setMapMsg("Route " + exitRouteName(ri) + " disarmed", true);
+            std::printf("[Main] %s disarmed\n", exitRouteName(ri).c_str());
+            return;
+        }
+        if (mainRouteFor(ri)) {
+            setMapMsg("Route " + exitRouteName(ri) + " is already set");
+            return;
+        }
+        if (mainCandidates[ri].placement < 0) {
+            setMapMsg("Route " + exitRouteName(ri) + ": no signal stands there");
+            return;
+        }
+        QueuedRoute q;
+        q.route = ri;
+        q.sections = pathSections(mainCandidates[ri].departure, circuits);
+        routeQueue.push_back(std::move(q));
+        routeQueueChanged = true;
+        g_mapDirty = true;
+        setMapMsg("Route " + exitRouteName(ri) + " armed (" +
+                      std::to_string(routeQueue.size()) + " in the queue)",
+                  true);
+        std::printf("[Main] %s armed (%zu in the queue)\n", exitRouteName(ri).c_str(),
+                    routeQueue.size());
+    };
+
     // The exit routes on offer: those of the station nearest what the map is looking at,
     // so a dispatcher panning to a place gets that place's routes.
     // `kind`: -1 every route the station has, 0 the ones leaving it, 1 the ones coming in.
@@ -2942,7 +3002,9 @@ int main(int argc, char** argv) {
         std::vector<std::string> items;
         items.reserve(rs.size());
         for (int ri : rs) {
+            const int armed = armedPos(ri);
             std::string tag = mainRouteFor(ri) ? "SET - cancel"
+                              : armed > 0      ? "ARMED " + std::to_string(armed)
                                                : exitRouteBlocked(ri).brief;
             items.push_back(fit(exitRouteName(ri), kName) +
                             (mainCandidates[ri].type == RouteType::C2 ? "  C2  " : "  C1  ") +
@@ -3161,7 +3223,7 @@ int main(int argc, char** argv) {
         // departure. The shorter list is the half that makes it workable.
         appendMenu(tv,
                    std::string(g_routeEntry ? "ROUTES INTO" : "ROUTES OUT OF") +
-                       at + "  (Up/Down, Enter, Esc backs out)",
+                       at + "  (Up/Down, Enter, Q arms, Esc backs out)",
                    routePickItems(rs),
                    rs.empty() ? 0
                               : std::clamp(g_routePickSel, 0,
@@ -3196,6 +3258,27 @@ int main(int argc, char** argv) {
             else
                 std::fprintf(stderr,
                              "[Main] EBANER_ROUTE=%s: this station offers %zu %sroute(s)\n",
+                             one.c_str(), rs.size(),
+                             kind < 0 ? "" : kind ? "entry " : "exit ");
+        }
+    }
+    // Arm routes at startup, written exactly as EBANER_ROUTE is and read straight after
+    // it, so a run can set one route and arm the one it blocks in the same breath. The
+    // order they are written in is the order they are armed in, which is the order two
+    // wanting the same road are taken in.
+    if (const char* pick = std::getenv("EBANER_ARM")) {
+        std::istringstream is{std::string(pick)};
+        std::string one;
+        while (std::getline(is, one, ',')) {
+            if (one.empty()) continue;
+            const char pfx = one[0] == 'e' || one[0] == 'x' ? one[0] : '\0';
+            const int kind = pfx == 'e' ? 1 : pfx == 'x' ? 0 : -1;
+            const std::vector<int> rs = stationRoutes(kind);
+            const int n = std::atoi(one.c_str() + (pfx ? 1 : 0)) - 1;
+            if (n >= 0 && n < static_cast<int>(rs.size())) toggleArm(rs[n]);
+            else
+                std::fprintf(stderr,
+                             "[Main] EBANER_ARM=%s: this station offers %zu %sroute(s)\n",
                              one.c_str(), rs.size(),
                              kind < 0 ? "" : kind ? "entry " : "exit ");
         }
@@ -3920,6 +4003,34 @@ int main(int argc, char** argv) {
             }
             if (blocksChanged) g_mapDirty = true;
         }
+        // Armed routes: offer each to the interlocking, oldest first, every time
+        // something that could have unblocked one moved. The ordering decides which are
+        // worth offering and in what order; trySetExitRoute decides whether any of them
+        // is granted, asking exitRouteBlocked again as it does for a route set by hand.
+        // That second ask is the point and not waste - the queue grants nothing.
+        if (!routeQueue.empty() &&
+            (occupancyChanged || switchesChanged || blocksChanged || routeQueueChanged)) {
+            routeQueueChanged = false;
+            // Set by hand while it stood armed: there is nothing left to wait for.
+            std::erase_if(routeQueue,
+                          [&](const QueuedRoute& q) { return mainRouteFor(q.route); });
+            std::vector<char> blocked;
+            std::vector<std::vector<int>> secs;
+            blocked.reserve(routeQueue.size());
+            secs.reserve(routeQueue.size());
+            for (const QueuedRoute& q : routeQueue) {
+                blocked.push_back(!exitRouteBlocked(q.route).full.empty());
+                secs.push_back(q.sections);
+            }
+            for (const int qi : routeQueueReady(secs, blocked)) {
+                const int ri = routeQueue[qi].route;
+                trySetExitRoute(ri);
+                if (mainRouteFor(ri))
+                    std::printf("[Main] %s set from the queue\n", exitRouteName(ri).c_str());
+            }
+            std::erase_if(routeQueue,
+                          [&](const QueuedRoute& q) { return mainRouteFor(q.route); });
+        }
         if (occupancyChanged || switchesChanged || simpleSignalsChanged || flagsChanged ||
             blocksChanged) {
             switchesChanged = false;
@@ -4141,7 +4252,7 @@ int main(int argc, char** argv) {
         if (g_mapMode && !g_menuOpen && g_routeStep != RoutePickStep::None) {
             auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
             const bool pU = down(GLFW_KEY_UP), pD = down(GLFW_KEY_DOWN),
-                       pE = down(GLFW_KEY_ENTER);
+                       pE = down(GLFW_KEY_ENTER), pQ = down(GLFW_KEY_Q);
             if (g_routeStep == RoutePickStep::PickKind) {
                 if (pU && !prevPickUp) g_routeKindSel = (g_routeKindSel + 1) % 2;
                 if (pD && !prevPickDown) g_routeKindSel = (g_routeKindSel + 1) % 2;
@@ -4162,9 +4273,12 @@ int main(int argc, char** argv) {
                         if (mainRouteFor(ri)) cancelExitRoute(ri);
                         else trySetExitRoute(ri);
                     }
+                    // Q arms the highlighted route, or disarms it if it is already armed.
+                    if (pQ && !prevPickArm) toggleArm(rs[g_routePickSel]);
                 }
             }
             prevPickUp = pU; prevPickDown = pD; prevPickEnter = pE;
+            prevPickArm = pQ;
         } else if (g_mapMode && !g_menuOpen && g_signalPick &&
                    g_dispatchStep != DispatchStep::None) {
             // Choosing a destination, then a train type. Escape backs out a step; it is
@@ -4308,7 +4422,7 @@ int main(int argc, char** argv) {
             }
             prevPickUp = pU; prevPickDown = pD; prevPickEnter = pE;
         } else {
-            prevPickUp = prevPickDown = prevPickEnter = false;
+            prevPickUp = prevPickDown = prevPickEnter = prevPickArm = false;
         }
 
         if (g_menuOpen) {
