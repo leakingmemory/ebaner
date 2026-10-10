@@ -3586,14 +3586,36 @@ int main(int argc, char** argv) {
         // the open line, with no signal within miles, running as the train it is.
         std::sort(autoSignalsAhead.begin(), autoSignalsAhead.end(),
                   [](const SigAhead& a, const SigAhead& b) { return a.d < b.d; });
+        // Under way at all, as against standing. A shunt begins from a stand - it is a
+        // movement someone authorises a vehicle to make from where it is - so a standing
+        // movement takes whatever the nearest signal offers it. One already running was
+        // authorised by something, and that is what it keeps.
+        constexpr float kUnderWayMs = 0.1f;
+        const bool underWay = std::abs(t.speed()) > kUnderWayMs;
         bool shunting = t.autoShunting();
         for (const SigAhead& sa : autoSignalsAhead) {
             const SignalPlacement& sp = sigPlacements[sa.ref];
             if (sp.kind == SignalKind::Distant) continue;
-            if (sp.kind == SignalKind::Dwarf) shunting = true;
+            if (sp.kind == SignalKind::Dwarf) {
+                // A dwarf does not take a running train's road away. A movement a main
+                // signal let out runs as a train until another main signal says
+                // otherwise, which is what signalGivesMainAuthority has always said it
+                // does - but the nearest-signal rule was taking it back at the first
+                // dwarf past the mast. Leaving a station there is always one: the mini
+                // path onto the line beyond the station starts at the outer border and
+                // gets a dwarf of its own, so every departure was demoted to shunting
+                // speed a few hundred metres out and stayed there, no main signal being
+                // near enough to put it right.
+                //
+                // The shunting signals a train passes on its way out are for shunts, not
+                // for it. Skip them and let the next main decide, exactly as the open
+                // line does when there is no signal within miles.
+                if (!shunting && underWay) continue;
+                shunting = true;
+            }
             else if (signalGivesMainAuthority(sp)) shunting = false;
             else if (sp.withDwarf && !signalStopsTrain(sp)) shunting = true;
-            break; // the nearest signal is the one that decides
+            break; // the nearest signal that bears on it is the one that decides
         }
         road.shunting = shunting;
         if (shunting) {
