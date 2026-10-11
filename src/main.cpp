@@ -872,18 +872,28 @@ int main(int argc, char** argv) {
         resolveCrossings(crossings, paths, polys, data.sceneOrigin());
     std::vector<CrossingState> crossingStates(crossings.size());
 
-    // Which crossings a main signal record is tied to: every crossing road whose point lies
-    // on the record's own road, if the record carries `crossing`. The record is the road
-    // beyond the mast - for an entry signal the whole route in, for an exit signal its own
-    // route out - which is where a crossing has anything to do with what the mast shows.
-    // Pure geometry, worked out once: neither the road nor the crossing ever moves.
+    // Which crossing a main signal record is tied to: the first one its own road meets past
+    // the mast, if the record carries `crossing`. The record is the road beyond the mast -
+    // for an entry signal the whole route in, for an exit signal its own route out - which
+    // is where a crossing has anything to do with what the mast shows. Only the nearest: an
+    // exit route runs on to the next station, kilometres away, and a crossing out there is
+    // that station's business, not this mast's. Every road of that crossing the record runs
+    // over is tied. Pure geometry, worked out once: neither the road nor the crossing moves.
+    std::unordered_map<std::uint32_t, double> tieTrackLen;
+    for (const TrackPoly& tp : polys) tieTrackLen[tp.id] = polyLength(tp.pts);
     auto tiesOf = [&](const SignalPath& rec) {
         std::vector<CrossingTie> out;
         if (!rec.crossing) return out;
+        std::vector<double> dist; // per tie in `out`, metres along the record from the mast
         for (std::size_t ci = 0; ci < crossings.size(); ++ci)
             for (std::size_t ti = 0; ti < crossings[ci].tracks.size(); ++ti) {
                 const CrossingTrack& ct = crossings[ci].tracks[ti];
+                double before = 0.0; // length of the record's parts ahead of this one
                 for (const SectionInterval& iv : rec.parts) {
+                    const auto L = tieTrackLen.find(iv.trackId);
+                    const double len = L == tieTrackLen.end() ? 0.0 : L->second;
+                    const double partFrom = before;
+                    before += std::abs(iv.to - iv.from) * len;
                     if (iv.trackId != ct.trackId) continue;
                     if (ct.frac < std::min(iv.from, iv.to) || ct.frac > std::max(iv.from, iv.to))
                         continue;
@@ -902,9 +912,15 @@ int main(int argc, char** argv) {
                         if (along != 0.0) side = along > 0.0 ? 0 : 1;
                     }
                     out.push_back({static_cast<int>(ci), static_cast<int>(ti), side});
+                    dist.push_back(partFrom + std::abs(ct.frac - iv.from) * len);
                     break;
                 }
             }
+        if (out.empty()) return out;
+        const int nearest = out[std::min_element(dist.begin(), dist.end()) - dist.begin()].crossing;
+        out.erase(std::remove_if(out.begin(), out.end(),
+                                 [&](const CrossingTie& t) { return t.crossing != nearest; }),
+                  out.end());
         return out;
     };
     // Said once per record, here, rather than every time a tie is asked for.
