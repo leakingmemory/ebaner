@@ -1362,7 +1362,8 @@ the portable one (`shaders\` and `data\` beside the executable).
 ## Controls
 
 For a walk-through of driving a train from cold, see
-[Driving the Class 93](docs/driving-class-93.md).
+[Driving the Class 93](docs/driving-class-93.md) and
+[Driving the Di 4](docs/driving-di4.md).
 
 The driving keys work the cab you are sitting in (`V`), or the front cab in any other
 view. What `,` and `.` move depends on the machine: the Class 93 has one combined
