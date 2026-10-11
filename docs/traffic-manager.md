@@ -183,7 +183,9 @@ permission to leave at that position. Only one can be shown at a station at a ti
 [Working a TXP station](txp-station.md) walks through a whole station worked this way,
 including crossing two trains, and
 [Working a TXP station without line block](txp-station-without-line-block.md) does the
-same for a station with its own interlocking.
+same for a station with its own interlocking. Remote-controlled stations on a line with
+line block use no train orders at all: see
+[Working a remote-controlled station](remote-controlled-station.md).
 
 Where the line has no fixed signalling between stations, trains run on **train orders**
 agreed between the manned stations at each end of a section. Which stations can deal with

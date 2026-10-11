@@ -1398,7 +1398,9 @@ In the traffic-manager map (`O`), the cab keys are replaced by the map's own. Se
 [Using the traffic manager](docs/traffic-manager.md) for how to work it, and
 [Working a TXP station](docs/txp-station.md) for a station worked by hand, or
 [without line block](docs/txp-station-without-line-block.md) for one with its own
-interlocking but none on the line:
+interlocking but none on the line, and
+[Working a remote-controlled station](docs/remote-controlled-station.md) for a stretch
+with line block:
 
 | Input        | Action                          |
 |--------------|---------------------------------|

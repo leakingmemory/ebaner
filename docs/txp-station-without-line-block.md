@@ -31,7 +31,9 @@ writing that is Bodø, Mo i Rana, and the stations signed `NO SEG`, `BJE`, `DVT`
 
 Where block signals *are* authored (between `LSM`, `NSK`, `MAJ` and `SGD`, and between
 `AGL` and `GRG`), the line block claims the line for one direction and holds following
-trains at the block signals. None of that happens at the stations in this guide.
+trains at the block signals. None of that happens at the stations in this guide. Those
+stretches are remote-controlled, with no TXP and no train orders: see
+[Working a remote-controlled station](remote-controlled-station.md).
 
 ## What the signals do
 
