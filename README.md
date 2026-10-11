@@ -21,78 +21,18 @@ signalling and interlocking editor the dataset's overlay is written with.
 
 ## What it does
 
-- **Terrain** — heightmap tiles shaded with hillshade and coloured by **AR50 land
-  cover** when the export provides it (forest, agriculture, open land, bog,
-  glacier, water, built-up …), falling back to an elevation ramp otherwise. The
-  overlapping LOD quadtree is de-overlapped (finest tile per area) and
-  watertight-stitched so there are no cracks between resolutions
-  (`src/TerrainMesh.cpp`). Where a **surface** railway falls below the terrain, the
-  ground is **cut into a trench** to fit the track and ballast — a flat floor at the
-  ballast base with side walls sloping up at ~20° until they meet the original
-  ground — so the rails sit in a cutting instead of being buried. Tunnels and
-  bridges are left alone, and where a surface track enters a tunnel in a cutting the
-  trench stops at the mouth, leaving a vertical portal wall of terrain. The carve
-  edits the height grid as a world-space function (so LOD seams stay watertight) at
-  load time (`src/TerrainCarve.cpp`; set `EBANER_NOCARVE=1` to disable).
-- **Railway** — a realistic cross-section: a ballast bed, concrete sleepers and
-  two rusty rails (`src/TrackMesh.cpp`). The export splits each line into separate
-  segments at medium transitions (surface / tunnel / bridge); `buildTrackPaths`
-  (`src/TrackPath.cpp`) **joins segments that meet end-to-end** (through degree-2
-  nodes of the same track type) into continuous routes, so the line is unbroken
-  through tunnels and the train can run straight through instead of derailing at a
-  portal. Centrelines are then smoothed through the coarse surveyed points with a
-  **centripetal Catmull-Rom** spline, so curves are continuous. Sleepers are real
-  3-D boxes near the camera and a repeating texture at distance (distance LOD).
-  Track is **superelevated (banked)** on curves from the OSM speed limit + curvature.
-- **Only what is on screen** — the ground, the buildings and the ballast-and-rails run
-  are each cut into pieces with a bounding sphere, and a piece outside the view frustum
-  is not submitted (`Frustum` in `src/VulkanRenderer.cpp`). The world streams for twenty
-  kilometres around the camera and a view holds a wedge of that, so most of it was being
-  sent to the card every frame to be thrown away behind the eye. The pieces come off
-  what the geometry already is — a terrain tile, the run of one map tile's buildings, a
-  200 m length of line — and the bounds are measured from the vertices actually emitted
-  rather than from the footprints they were derived from, since a roof stands several
-  metres above the wall top it was built on. Nothing is reordered to achieve it: which of
-  two roofs at the same height is the one drawn depends on the order they are submitted
-  in, so grouping them by anything other than the order they already arrive in would
-  quietly change the picture. Worth 39-51% of the frame time on the machine it was
-  measured on, and it renders pixel for pixel what it did before.
-- **Roads** — category-coloured asphalt ribbons (`src/RoadMesh.cpp`): the public
-  network (Europavei/Riksvei/Fylkesvei/Kommunal) prominent, private tracks thin
-  and faint.
-- **Buildings** — OSM footprints extruded into lit prisms coloured by type, with
-  **pitched roofs** (flat / gabled / hipped / pyramidal / skillion) from the OSM
-  `roof_shape` tag (`src/BuildingMesh.cpp`).
-- **Station platforms** — OSM `railway=platform` footprints (area platforms and
-  buffered platform edges) extruded into low lit slabs beside the tracks
-  (`src/PlatformMesh.cpp`). The slab top is set a standard 0.76 m above the
-  nearest **rail head** (not the raw DTM), so long platforms sit flat at rail
-  level instead of sinking into rising ground. The surface is styled to the
-  Norwegian standard: an asphalt centre with light **concrete edge slabs** and a
-  painted **yellow safety line** where the slabs begin, on the track-facing
-  long edges.
-- **Switch stands** — a classic Norwegian manual switch stand (sporveksel) at
-  every turnout, i.e. wherever one track's end joins another track's line
-  (`src/SwitchMesh.cpp`, `src/SwitchNetwork.cpp`). Each stand is a weighted lever
-  (a bar ending in a low **cylindrical counterweight**) driving a throw rod to the
-  movable rail, plus a tall post carrying a rotating **indicator target**. The
-  target is one mechanical two-faced plate — an **arrow** on one face, a **filled
-  circle** on the other, and edge-on it reads as a **vertical line**. Set straight
-  it is edge-on to the track so both ends see the line; thrown to diverging it
-  turns 90° so the toe/common approach sees the arrow (a facing train will be
-  diverted to the siding) and the branch approach sees the filled circle (a train
-  may run from the siding onto the main, but not the reverse). A broken switch
-  sits part-turned with the lever centred.
-- **Movable switches** — the switches actually route the train. Aim the centre
-  crosshair at a stand and press **T** to throw it (straight ⇄ diverging); the
-  lever and target animate and a train reaching the turnout is diverted to the
-  set track. Enter a switch **facing** (from the common/toe side) and it takes you
-  to the track it is set for — into a **broken** (neutral) switch it **derails**.
-  Enter it **trailing** (from one of the two branches toward the common track)
-  with the switch set against you and the train forces it through: it continues
-  onto the common track but the switch is left **broken** in the neutral position
-  (throw it again to repair it). Trailing through an already-broken switch just
-  continues onto the common track.
+- **The world** — the terrain from the national elevation data, coloured by land cover
+  and cut for the railway, with the track, roads, buildings and platforms on it,
+  streaming in around the camera. See
+  [The world and its rendering](docs/world-and-rendering.md).
+- **Switches** — a hand switch stand with its indicator target at every turnout. `T`
+  throws one; a train runs the way it is set, forces a trailing switch set against it,
+  and derails at a broken one.
+- **Signalling** — track circuits, interlocked entry and exit routes, line block with
+  block signals, level crossings, and stations worked by a TXP with simple signals,
+  flags and train orders, all worked from the traffic manager (`O`). See
+  [Using the traffic manager](docs/traffic-manager.md) and the station guides under
+  Controls.
 - **Rolling stock** — the NSB Class 93 diesel railcar (single, or two and three sets in
   multiple), the NSB Di 4 and CargoNet CD 312 diesel-electric locomotives, NSB Type 5
   carriages and a WLAB-2 sleeper, and pocket and container wagons, made up into a
@@ -133,150 +73,21 @@ cmake -S . -B build
 cmake --build build -j
 ```
 
-This builds three executables that share the same rendering/loading engine
-(`libebaner_engine`): the **`ebaner`** simulator above, **`ebaner-trackedit`**
-below, and **`ebaner-dumptrack`**, which answers questions about the network the
-way the sim sees it - after `track-edits.txt` is applied, which is the only form
-worth deriving anything from. `--near` lists what is around a point, a track id
-prints its vertices, `--switches` shows the turnouts and which overrides reached
-them, `--route` asks the editor's own search whether a road exists, and `--gaps`
-lists the loose ends: endpoints with nothing inside the 1 m the path builder
-joins at, each with the nearest other loose end, which is what a `link` edit
-would join. A buffer stop is a loose end too, so the distance is the tell - a
-real break is two ends facing each other a few tens of metres apart.
+This builds three executables sharing one engine (`libebaner_engine`): the
+**`ebaner`** simulator, the **`ebaner-trackedit`** editor, and **`ebaner-dumptrack`**,
+which answers questions about the network as the simulator sees it, with the overlay's
+track edits applied:
 
-### Measuring a train that is moving
-
-Every profile before this one was of a train **standing still**, which is a profile of a
-different program: nothing crosses a section boundary, so occupancy never changes, aspects
-are never recomputed, the signal mesh is never rebuilt and no crossing steps a phase. All
-four of those reported **zero calls a second** while a 600 m freight sat at Rognan. Moving
-at 72 km/h past the same crossings the frame was **61–64 ms**, not the 20 that standing
-still had suggested.
-
-`EBANER_ROLL=<m/s>` is what makes that measurable without a keyboard: the train spawns at
-that speed with the brake released and coasts. 1797 t against Davis resistance rolls a long
-way, which is the long window a profile wants.
-
-What the moving profile then said, at Rognan:
-
-| block | mean |
+| | |
 |---|---|
-| **vehicle mesh** | **19–21 ms** |
-| crossings | 4.9 ms |
-| signal mesh rebuild + upload | 3.9 ms |
-| sim step | 3.0 ms |
-| **occupancy — the track circuits** | **1.6–2.2 ms** |
-| `drawFrame` | 1.5 ms |
-| HUD text | 1.0 ms |
+| `--near` | what is around a point |
+| a track id | that track's vertices |
+| `--switches` | the turnouts, and which overrides reached them |
+| `--route` | whether a road exists, by the editor's search |
+| `--gaps` | the loose ends, each with the nearest other loose end: what a `link` edit would join |
 
-Two things follow. The **track circuits are not the cost** — threading them could buy 2 ms
-of 62 and would leave the interlocking acting on a frame-old world. And the frame is
-**CPU-bound**: `drawFrame` is 1.5 ms, and running the same scene in map mode, which skips
-every 3-D mesh, saves only ~6 ms.
-
-### Not building what cannot be seen
-
-The vehicle mesh was the whole top of that list, and measuring *inside* it settled how to
-cut it: of the per-frame cost, the network walks are **4 %** and emitting the 83 388
-vertices is the other 96 %. So the only way to make it cheaper is to emit fewer of them.
-
-`refresh` now takes the view-projection and builds a unit only if its bounding sphere is in
-frustum; the rest have their slice of the buffer filled with **one repeated point**, which
-leaves every triangle in it degenerate. Nothing is rasterised, the vertex count does not
-move, and the index buffer on the GPU stays exactly as valid as it was. The `Frustum` is
-the one the terrain and building draws already use, lifted out of `VulkanRenderer.cpp` into
-`Frustum.h` rather than copied.
-
-| at Rognan, 600 m freight, **moving** | before | after |
-|---|---|---|
-| **cab view** (what you drive from) | 23.4 ms (43 fps) | **18.5 ms (54 fps)** |
-| of which vehicle mesh | 8.4 ms | **2.0 ms** — 1 unit of 23 built |
-| chase view | 23.4 ms | 23.9 ms — nothing to cull, whole train in shot |
-
-Proved rather than eyeballed, because the failure mode is a wagon quietly missing: over
-**192 camera positions** round a curved train, near and far, high and low, every vertex the
-cull dropped was checked against the view volume — **5 496 156 dropped, 0 of them on
-screen**.
-
-One incidental find worth the note: calling `glfwGetFramebufferSize` a second time in the
-frame, to get the aspect for that view-projection, cost **~6 ms a frame** on this machine.
-It asks the window system and can take a round trip. The numbers were already in hand from
-the top of the frame.
-
-### What a crossing asks an axle
-
-A level crossing has to know which of its roads each wheel is on, and it used to find out
-by **searching**: walk the approach in 5 m steps calling `poseAt` at each one, from
-`s - outerM - 200` to `s + outerM + 200`. With approaches of 968–1473 m that is up to
-**670 samples, per axle, per crossing track, per frame**. A cheap straight-line reject
-keeps distant crossings free, which is why it never mattered: a 6-axle railcar costs 4 000
-samples at the crossing it is standing on and nothing anywhere else.
-
-The 600 m freight has **112 axles**, and every one of them is inside the reject radius of
-the crossing it is standing at: **75 000 `poseAt` calls in one frame**, for one crossing.
-That is the whole of "it gets terrible near a level crossing with a long train".
-
-The answer was already known and thrown away. Every axle's position comes from `walkTo`,
-which produces the path index and the arc position along it — exactly what those 670
-samples reconstruct — and `railFrame` kept only the world point. Axles now also come as
-**`AxlePlace { pos, path, s }`**, and a crossing answers by subtraction: same path, and
-within reach along it. The search stays as the **fallback**, because a track can belong to
-more than one `TrackPath` and a train walking a different one over the same rails still has
-to be seen; the fast form says whether its answer is *final*, so the fallback runs only for
-that case.
-
-The same block walked **all 3388 turnouts** for every axle standing on a crossing, to find
-the points between it and the crossing. Turnouts do not move — only their states do — so
-that list is built once per path at load.
-
-Measured at Rognan, which has two crossings, with the 600 m freight:
-
-| | before | after |
-|---|---|---|
-| whole frame | 43.4 ms (23 fps) | **20.6 ms (49 fps)** |
-| of which crossings | dominant | **1.8 ms** |
-| one railcar, for comparison | 8.4 ms | 7.7 ms |
-
-Checked rather than assumed, because a crossing that stops seeing a train does not fail
-loudly — it just fails to close. Running both forms side by side over the real network at
-four stations agreed **1 635 000 times out of 1 635 000**, with no answer more than 5 m
-apart.
-
-### What a long train costs, and what it need not
-
-A 600 m freight is 23 units and **83 388 vertices** — the longest train before it was the
-8-unit night train — and the per-frame path was rebuilding all of it, indices and all, and
-then copying 3 MB twice. On an Intel HD 510 that was **8.4 ms of a 20.5 ms frame**.
-
-Three of those things cannot change between frames and are no longer redone. The **index
-buffer** is fixed from the moment it is attached (that is why changing a train's
-composition has to go through `attachVehicle`), so the 144 000 index pushes were building
-exactly the buffer the GPU already held. The **opaque/glass split** is fixed for the same
-reason, so `sortGlass`'s colour sort over 48 000 triangles was finding the same answer
-every frame; only the `texLayer` stamp has to be put back, and which vertices carry it is
-recorded once. And `updateVehicleVertices` **swaps** rather than copies, since the
-deferral past the frame fence is what it is for, not the copy.
-
-| | before | after |
-|---|---|---|
-| 600 m freight, vehicle mesh | 8.37 ms | **6.30 ms** |
-| 600 m freight, upload | 0.62 ms | **0.00 ms** |
-| 600 m freight, whole frame | 20.51 ms (49 fps) | **17.04 ms (59 fps)** |
-| one railcar, vehicle mesh | 3.01 ms | **2.03 ms** |
-
-`refresh()` is checked against `build()` offline rather than by eye: for every vehicle in
-the table it reproduces the buffer **bit for bit**, vertices, glazing tags and indices
-alike. The failure it guards against is silent — a train drawn from the wrong vertices
-looks like a heap of triangles — so it also warns if a refresh ever emits a different
-vertex count, which is what a composition change without an `attachVehicle` would do.
-
-What is left of the 6.3 ms is the geometry itself, and the way to cut that is to stop
-making geometry nobody can see: the draw has no **culling** at all, so all 23 units are
-submitted whether they are in front of the camera or half a kilometre behind it. The
-machinery is already here — `drawFrame` builds a `Frustum` and the terrain and building
-draws skip chunks with `frustum.sees(centre, radius)` — and the vehicle is the one that
-does not use it.
+How the world is built and drawn, and how to profile it, is in
+[The world and its rendering](docs/world-and-rendering.md).
 
 ## Test
 
@@ -534,27 +345,8 @@ does not run scripts; the host is in the engine library so it can be given them 
 
 ## Data format
 
-See `../terrainmapper/doc/game-export-format.md`. In short: 256×256 little-endian
-`float32` heightmaps (`terrain.hm32`, row 0 = north), EPSG:25833 (UTM 33N) metres,
-tiled across four fully-overlapping LOD levels. World coordinates are rendered
-relative to the start point to preserve float precision.
-
-Per tile the simulator also reads, when present:
-
-- `landcover.u8` — 256×256 uint8 AR50 `artype` codes; the terrain is textured by
-  land type (procedural per-class surfaces in a Vulkan texture array, sampled in
-  world space — `src/Textures.cpp`, `shaders/terrain.frag`). Requires exporting
-  terrainmapper **with an AR50 dataset loaded**.
-- `tracks.bin` — railway polylines (deduped by `trackId`), including a per-vertex
-  OSM **speed limit** used for banking.
-- `roads.bin` — road polylines (deduped by geometry), category + number.
-- `buildings.bin` — OSM building footprints with kind, roof shape, base
-  elevation and height.
-- `platforms.bin` — OSM station-platform footprints with base elevation and slab
-  height.
-
-The track/road/building geometry appears only when the export was produced with
-the corresponding sources (national rail register + NVDB roads + OSM enrichment).
+ebaner reads a `terrainmapper` export, with an overlay of authored edits on top. See
+[Data format](docs/data-format.md).
 
 ## Debug environment variables
 
