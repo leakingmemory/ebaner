@@ -887,7 +887,21 @@ int main(int argc, char** argv) {
                     if (iv.trackId != ct.trackId) continue;
                     if (ct.frac < std::min(iv.from, iv.to) || ct.frac > std::max(iv.from, iv.to))
                         continue;
-                    out.push_back({static_cast<int>(ci), static_cast<int>(ti)});
+                    // Which way its trains run over the crossing, in the path's terms: the
+                    // road runs from..to, and the track's own direction says whether that
+                    // is +s along the path the crossing was resolved on.
+                    int side = -1;
+                    const CrossingSite& site = crossingSites[ci];
+                    if (ti < site.tracks.size() && site.tracks[ti].path >= 0 &&
+                        iv.to != iv.from) {
+                        const glm::dvec2 tt = trackTangent(polys, ct.trackId, ct.frac, +1);
+                        const glm::vec3 pt =
+                            paths[site.tracks[ti].path].poseAt(site.tracks[ti].s).tangent;
+                        const double along = (tt.x * pt.x + tt.y * pt.y) *
+                                             (iv.to > iv.from ? 1.0 : -1.0);
+                        if (along != 0.0) side = along > 0.0 ? 0 : 1;
+                    }
+                    out.push_back({static_cast<int>(ci), static_cast<int>(ti), side});
                     break;
                 }
             }
@@ -909,6 +923,18 @@ int main(int argc, char** argv) {
                 else
                     std::printf("[Crossing] %s waits for \"%s\" before it shows green\n",
                                 rec.name.c_str(), crossings[t.crossing].name.c_str());
+                // And stands in for the crossing's repeat on the approach it governs.
+                CrossingSite& site = crossingSites[t.crossing];
+                if (t.side < 0 || !site.resolved()) continue;
+                site.noRepeat.resize(2 * site.tracks.size(), 0);
+                const std::size_t slot = 2 * static_cast<std::size_t>(t.track) +
+                                         static_cast<std::size_t>(t.side);
+                if (slot >= site.noRepeat.size() || site.noRepeat[slot]) continue;
+                site.noRepeat[slot] = 1;
+                std::printf("[Crossing] \"%s\": no repeat on the %s side of track %d - %s "
+                            "warns of it\n",
+                            crossings[t.crossing].name.c_str(), t.side ? "+s" : "-s",
+                            t.track, rec.name.c_str());
             }
         }
     // The same per mast: the crossings any of its records is tied to.

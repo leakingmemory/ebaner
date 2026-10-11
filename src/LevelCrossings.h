@@ -120,6 +120,11 @@ struct CrossingSite {
     float innerM = 0.0f;
     float outerM = 0.0f;
     float distantM = 0.0f;     // where the repeats stand, each side
+    // Per [2 * track + side], a repeat that is not put up: a main signal tied to the crossing
+    // stands on that approach and does its job. Its green waits for the crossing to show
+    // white, and its distant warns of it, so a violet repeat in the same stretch of line
+    // would be a third signal saying the same thing. Empty where nothing is left out.
+    std::vector<char> noRepeat;
     float lineSpeedKmh = 0.0f; // what the approach distance was derived from
 
     // Whether anything resolved at all - what the single `path < 0` guard used to ask.
@@ -401,6 +406,9 @@ int crossingTrackAhead(const LevelCrossing& x, const std::vector<TrackPoly>& pol
 struct CrossingTie {
     int crossing = -1; // into the crossing list
     int track = 0;     // into that crossing's tracks
+    // Which approach the signal's trains come in on, as crossingReach indexes it: 0 for one
+    // running in +s along that track's path, so arriving from the -s side; -1 if unknown.
+    int side = -1;
 };
 
 // Whether every crossing in `ties` is showing white to the train on the road that matters -

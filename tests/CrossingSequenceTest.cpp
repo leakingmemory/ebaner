@@ -514,6 +514,45 @@ int main(int argc, char** argv) {
               "a crossing with nothing in its approach is untouched");
     }
 
+    // A main signal tied to a crossing stands in for the crossing's repeat on its approach.
+    std::puts("\nA tied main signal takes the place of the repeat:");
+    {
+        std::vector<glm::vec3> pts;
+        for (int i = 0; i <= 20; ++i) pts.push_back({0.0f, static_cast<float>(i) * 50.0f, 0.0f});
+        const std::vector<TrackPath> paths{
+            TrackPath(1, 0, pts, std::vector<std::uint16_t>(pts.size(), 80))};
+        std::vector<LevelCrossing> xs(1);
+        xs[0].id = 1;
+        xs[0].tracks.push_back({1, 0.5});
+        // How much is drawn around each repeat: 300 m either side of the crossing at 500.
+        auto drawn = [&](std::vector<char> noRepeat) {
+            CrossingSite site;
+            site.tracks.push_back({0, 500.0f});
+            site.innerM = 50.0f;
+            site.outerM = 400.0f;
+            site.distantM = 300.0f;
+            site.noRepeat = std::move(noRepeat);
+            CrossingMesh m;
+            m.build(xs, {site}, std::vector<CrossingState>(1), paths, glm::dvec3(0.0));
+            int lo = 0, hi = 0;
+            for (const TrackVertex& v : m.vertices()) {
+                if (std::abs(v.pos.y - 200.0f) < 20.0f) ++lo;
+                if (std::abs(v.pos.y - 800.0f) < 20.0f) ++hi;
+            }
+            return std::pair<int, int>{lo, hi};
+        };
+        const auto both = drawn({});
+        check(both.first > 0 && both.second > 0, "with nothing tied, a repeat on each side");
+        const auto south = drawn({1, 0});
+        check(south.first == 0 && south.second == both.second,
+              "a main on the -s approach leaves out that repeat only");
+        const auto north = drawn({0, 1});
+        check(north.first == both.first && north.second == 0,
+              "and one on the +s approach the other");
+        const auto none = drawn({1, 1});
+        check(none.first == 0 && none.second == 0, "mains on both: no repeats at all");
+    }
+
     // A loop joining a single-track main line between its platforms and a crossing.
     //
     // The crossing is on the main line only, so a train on the loop is on none of its

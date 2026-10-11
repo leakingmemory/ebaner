@@ -213,6 +213,12 @@ void CrossingMesh::build(const std::vector<LevelCrossing>& xs,
                 const float side = sideIdx == 0 ? -1.0f : 1.0f;
                 const float s = on.s + side * site.distantM;
                 if (s < 0.0f || s > p.length()) continue;
+                // A main signal tied to the crossing stands in for this one.
+                auto left = [&](std::size_t track) {
+                    const std::size_t sl = 2 * track + static_cast<std::size_t>(sideIdx);
+                    return sl < site.noRepeat.size() && site.noRepeat[sl] != 0;
+                };
+                if (left(t)) continue;
                 // Two repeats landing at the same spot are one mast: on the single track
                 // both roads' repeats resolve to the same place, and a station does not
                 // grow a second post there.
@@ -222,6 +228,7 @@ void CrossingMesh::build(const std::vector<LevelCrossing>& xs,
                     const CrossingSite::On& other = site.tracks[u];
                     if (other.path < 0 || other.path >= static_cast<int>(paths.size()))
                         continue;
+                    if (left(u)) continue; // not put up, so nothing to be a duplicate of
                     const float os = other.s + side * site.distantM;
                     if (os < 0.0f || os > paths[other.path].length()) continue;
                     dup = glm::distance(paths[other.path].poseAt(os).pos, q.pos) <= 3.0f;
