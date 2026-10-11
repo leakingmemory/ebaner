@@ -1395,7 +1395,8 @@ train brake (`K`/`L`) and locomotive brake (`H`/`J`).
 | Esc          | Open menu (Exit); press again to resume. In a picker, backs out one step |
 
 In the traffic-manager map (`O`), the cab keys are replaced by the map's own. See
-[Using the traffic manager](docs/traffic-manager.md) for how to work it:
+[Using the traffic manager](docs/traffic-manager.md) for how to work it, and
+[Working a TXP station](docs/txp-station.md) for a station worked by hand:
 
 | Input        | Action                          |
 |--------------|---------------------------------|

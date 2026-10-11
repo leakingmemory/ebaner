@@ -180,10 +180,13 @@ permission to leave at that position. Only one can be shown at a station at a ti
 
 ## Train orders between stations
 
+[Working a TXP station](txp-station.md) walks through a whole station worked this way,
+including crossing two trains.
+
 Where the line has no fixed signalling between stations, trains run on **train orders**
 agreed between the manned stations at each end of a section. Which stations can deal with
-each other is worked out from where departure positions have been placed. At the time of
-writing that is Bodø, Oteråga, Fauske and Rognan.
+each other is worked out from where departure positions have been placed
+(`overlay/txp-positions.txt`): each such station deals with the nearest one either side.
 
 **Manning a station puts it on the network.** It connects to the nearest manned station
 on each side and takes over its share of the line. It is refused only if a train order is
