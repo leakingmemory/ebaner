@@ -11,7 +11,8 @@ ebaner comes in two parts that are installed separately:
 
 The program will not start without the dataset, so both steps are needed.
 
-On Gentoo, both are done by one package — see [Gentoo](#gentoo) at the end.
+On Gentoo, an unofficial third-party overlay can do both — see [Gentoo](#gentoo) at the
+end.
 
 ## 1. Dependencies
 
@@ -97,7 +98,7 @@ The export is a tarball **with no top-level directory** — `tiles/`, `manifest.
 the rest sit at its root — so make the directory first and unpack into it. The overlay
 is cloned into `overlay/` inside it.
 
-System-wide, beside the program's shaders (this is the layout the Gentoo package uses):
+System-wide, beside the program's shaders:
 
 ```sh
 sudo mkdir -p /usr/local/share/ebaner/norway-rails
@@ -173,7 +174,8 @@ Without a dataset they report as skipped rather than failing.
 
 ## Gentoo
 
-The `leakingmemory` overlay carries a live ebuild that builds the program from git and
+ebaner is not in the official Gentoo repository. The unofficial, third-party
+`leakingmemory` overlay carries a live ebuild that builds the program from git and
 installs the dataset and its overlay to `/usr/share/ebaner/norway-rails`:
 
 ```sh

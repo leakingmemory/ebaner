@@ -1302,7 +1302,7 @@ file.
 ## Install
 
 Step-by-step instructions for Linux — distribution packages, fetching the dataset and
-its overlay, and the Gentoo ebuild — are in [`INSTALL.md`](INSTALL.md).
+its overlay, and an unofficial Gentoo overlay — are in [`INSTALL.md`](INSTALL.md).
 
 ```sh
 cmake --install build --prefix /usr/local     # or DESTDIR=... for packaging
