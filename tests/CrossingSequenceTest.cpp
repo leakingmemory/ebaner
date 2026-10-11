@@ -2597,6 +2597,101 @@ int main(int argc, char** argv) {
         }
     }
 
+    // --- A main signal tied to a crossing ---------------------------------------------
+    // The signal is cleared by the interlocking as any other; what it may SHOW waits for the
+    // crossing on its road to show the train white. Driven through the real sequence, so
+    // what is checked is the phase the crossing actually reaches, not a hand-set one.
+    std::printf("\nmain signal tied to a crossing:\n");
+    {
+        Rig r;
+        const std::vector<CrossingTie> tie{{0, 0}};
+        auto secured = [&] { return crossingSecuredFor(tie, {r.st}); };
+        check(crossingSecuredFor({}, {r.st}), "no ties -> nothing to wait for");
+        r.set(false, false, false);
+        check(!secured(), "idle crossing -> held (the train head is red)");
+        r.set(true, false, false); // a train enters the approach
+        check(r.phase() == CrossingPhase::Closing && !secured(), "closing -> still held");
+        r.run(kTrainDelayS + 0.5);
+        check(r.phase() == CrossingPhase::Secured && secured(),
+              "secured, train head white -> may show green");
+        r.set(false, true, false); // at the crossing
+        check(secured(), "still white while the train is on it");
+        r.set(false, false, false); // gone past
+        r.run(0.5);
+        check(r.phase() != CrossingPhase::Secured && !secured(),
+              "opening again -> held again (nothing to show green for)");
+        check(!crossingSecuredFor({{3, 0}}, {r.st}), "a tie to no crossing reads as held");
+        check(!crossingSecuredFor({{0, 1}}, {r.st}), "a tie to a road it lacks reads as held");
+    }
+    {
+        // Inside a station a crossing spans both roads; a signal is tied to the one its
+        // route crosses on, and a train on the other road must not clear it.
+        Rig r(2);
+        r.setOn(1, true, false, false);
+        r.run(kTrainDelayS + 0.5);
+        check(crossingSecuredFor({{0, 1}}, {r.st}), "two roads: the armed one is white");
+        check(!crossingSecuredFor({{0, 0}}, {r.st}),
+              "the other road is not, so a signal tied to it stays held");
+        check(!crossingSecuredFor({{0, 0}, {0, 1}}, {r.st}), "two ties need both");
+    }
+    {
+        // What is shown, against what was decided: the logical aspect is never touched.
+        SignalPlacement mast;
+        mast.kind = SignalKind::Exit;
+        mast.aspect = SignalAspect::Clear;
+        mast.withDwarf = true;
+        mast.dwarfAspect = SignalAspect::Clear;
+        mast.withDistant = true;
+        mast.distantAspect = SignalAspect::Clear;
+        mast.held = true;
+        check(shownAspect(mast) == SignalAspect::Stop, "a held mast shows danger");
+        check(shownDwarfAspect(mast) == SignalAspect::Stop,
+              "and so does the dwarf on its pole - no shunting past it");
+        check(shownDistantAspect(mast) == SignalAspect::Dark,
+              "and its own distant goes out, as under any main at danger");
+        check(mast.aspect == SignalAspect::Clear && mast.dwarfAspect == SignalAspect::Clear,
+              "while its logical aspects stay cleared");
+        check(signalGivesAuthority(mast), "so the interlocking still reads it as open");
+        check(signalStopsTrain(shownPlacement(mast)), "and the driver sees a stop");
+        mast.held = false;
+        check(shownAspect(mast) == SignalAspect::Clear && !signalStopsTrain(shownPlacement(mast)),
+              "released, it shows what it was cleared to show");
+
+        SignalPlacement dist;
+        dist.kind = SignalKind::Distant;
+        dist.aspect = SignalAspect::Clear;
+        dist.heldRepeat = true;
+        check(shownAspect(dist) == SignalAspect::Stop,
+              "a distant before a held main warns as for danger");
+        SignalPlacement other = mast; // another mast whose mounted distant repeats a held one
+        other.heldRepeat = true;
+        check(shownAspect(other) == SignalAspect::Clear &&
+                  shownDistantAspect(other) == SignalAspect::Stop,
+              "a mounted distant repeating a held main warns, its own head unaffected");
+    }
+    {
+        // The keyword is a mast flag: it has to survive the file both ways.
+        const std::string root =
+            (std::filesystem::temp_directory_path() / "ebaner-crossing-flag-test").string();
+        std::error_code ec;
+        std::filesystem::create_directories(root + "/overlay", ec);
+        SignalPath e;
+        e.id = 7;
+        e.name = "SNA INFN T1";
+        e.start = {0x504, 0.919456};
+        e.end = {0x504, 0.5};
+        e.parts = {{0x504, 0.919456, 0.5}};
+        e.crossing = true;
+        SignalPath plain = e;
+        plain.id = 8;
+        plain.crossing = false;
+        check(writeEntrySignals(root, {e, plain}), "entry signals with the flag write");
+        const std::vector<SignalPath> back = loadEntrySignals(root);
+        check(back.size() == 2 && back[0].crossing && !back[1].crossing,
+              "and read back: flagged where written, absent where not");
+        std::filesystem::remove_all(root, ec);
+    }
+
     std::printf("\n%s\n", failures ? "FAILED" : "PASSED");
     return failures ? 1 : 0;
 }

@@ -145,6 +145,11 @@ enum class CrossingPhase { Idle, Closing, Secured, Opening };
 // How long the train's red is held before it goes to white, and the same delay again on
 // the way back out.
 constexpr double kTrainDelayS = 5.0;
+// A main signal tied to a crossing shows green only once the crossing is white, and its
+// distant repeats that. So the crossing has to be armed early enough for a driver to
+// find the distant already cleared: the kTrainDelayS the crossing takes to go white, and
+// this long again to see the distant change before reaching it.
+constexpr double kDistantSightS = 5.0;
 // A train can arm an approach circuit and then reverse away without ever arriving. As
 // described the crossing would stay shut for good, so an all-clear this long releases it.
 constexpr double kStuckTimeoutS = 60.0;
@@ -340,6 +345,26 @@ CrossingLights crossingLights(CrossingPhase phase, bool fast);
 int crossingTrackAhead(const LevelCrossing& x, const std::vector<TrackPoly>& polys,
                        const TrackJunctions& junctions, const SwitchNetwork& net,
                        std::uint32_t trackId, double frac, int dir, double maxM);
+
+// --- Signals tied to a crossing ------------------------------------------------
+// One crossing a main signal's road runs over, and which of the crossing's roads it runs
+// over it on: the road whose train head has to show white before the signal may show a
+// proceed aspect. Resolved once at load from the signal's own route.
+struct CrossingTie {
+    int crossing = -1; // into the crossing list
+    int track = 0;     // into that crossing's tracks
+};
+
+// Whether every crossing in `ties` is showing white to the train on the road that matters -
+// which is what a signal tied to them waits for before it shows green. No ties is
+// trivially yes. A tie to a crossing or a road that does not exist reads as not secured:
+// a signal that cannot tell whether its crossing is safe does not show that it is.
+//
+// White and nothing else. Closing and Opening show the train red, and Idle shows it red
+// too, so the only answer that lets the signal clear is the one a driver standing at the
+// crossing would see.
+bool crossingSecuredFor(const std::vector<CrossingTie>& ties,
+                        const std::vector<CrossingState>& states);
 
 // Whether the warning bell is sounding. Silent while idle, and silent again kBellS after
 // the sequence started even though the crossing is still shut and still flashing.

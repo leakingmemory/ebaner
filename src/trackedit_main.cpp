@@ -2060,7 +2060,7 @@ int main(int argc, char** argv) {
          prevG = false, prevS = false, prevUp = false, prevDown = false,
          prevJ = false, prevN = false, prevR = false, prevK = false, prevC = false,
          prevP = false, prevF2 = false, prevMR = false, prevM = false,
-         prevV = false, prevB = false, prevT = false, prevF = false, prev2 = false,
+         prevV = false, prevB = false, prevT = false, prevF = false, prev2 = false, prev3 = false,
          prevY = false;
     bool prevNameEnter = false, prevNameEsc = false, prevNameBs = false;
     bool prevMenuEnter = false, prevMenuUp = false, prevMenuDown = false;
@@ -2789,6 +2789,7 @@ int main(int argc, char** argv) {
         const bool kT = glfwGetKey(window, GLFW_KEY_T) == GLFW_PRESS;
         const bool kF = glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS;
         const bool k2 = glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS;
+        const bool k3 = glfwGetKey(window, GLFW_KEY_3) == GLFW_PRESS;
         const bool kY = glfwGetKey(window, GLFW_KEY_Y) == GLFW_PRESS;
         // Save is Ctrl+S (plain S is the backward-movement key).
         const bool kSave = ctrl && glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS;
@@ -3424,6 +3425,12 @@ int main(int argc, char** argv) {
             // one green, lit for any clearance.
             if (k2 && !prev2 && (exitMode || entryMode))
                 toggleMastFlag(&SignalPath::twoLamp, "two-lamp head", "three-lamp head", "2");
+            // 3: the mast guards a level crossing on its road, and shows a proceed aspect only
+            // once that crossing shows the train white. Nothing about setting its routes
+            // changes - only what the mast is allowed to show, and when.
+            if (k3 && !prev3 && (exitMode || entryMode))
+                toggleMastFlag(&SignalPath::crossing, "waits for its level crossing",
+                               "not tied to a crossing", "3");
             // Shift+B: walk the mast across to the other side of the track. Plain B is
             // taken here - it arms the road leading up to this mast - and that binding is
             // wanted with a mast selected, which is the same state this one needs, so the
@@ -3840,6 +3847,7 @@ int main(int argc, char** argv) {
         prevY = kY;
         prevF2 = kF2; prevM = kM; prevV = kV; prevB = kB; prevT = kT; prevF = kF;
         prev2 = k2;
+        prev3 = k3;
 
         // Click to select (cursor freed only). Ctrl+click toggles for multi-select;
         // plain click selects one; clicking empty space clears.
@@ -5216,7 +5224,8 @@ int main(int argc, char** argv) {
             // and the distant if there is one.
             auto mastBuild = [](const SignalPath& p) {
                 return std::string(p.twoLamp ? "2-lamp" : "3-lamp") +
-                       (p.distant ? " +distant" : "") + (p.side < 0 ? " left" : "");
+                       (p.distant ? " +distant" : "") + (p.crossing ? " +crossing" : "") +
+                       (p.side < 0 ? " left" : "");
             };
             // Exit mode says what the selection *is*, since a signal and a route look alike
             // in a name alone: a signal plus how many routes reach it, or a route plus the
@@ -5308,7 +5317,7 @@ int main(int argc, char** argv) {
                            x, 40.0f + hl * lh, sc, hintCol, fbw, fbh);
                 const char* second =
                     selEntryApproach >= 0 ? "B=another approach  F2=rename  X=delete"
-                    : selEntry >= 0 ? "destination  T=C1/C2  F/2  B=road  ^B=side  F2/X/V"
+                    : selEntry >= 0 ? "destination  T=C1/C2  F/2/3  B=road  ^B=side  F2/X/V"
                                     : "A ROAD UP TO A MAST: right-click it, then B";
                 appendText(tv, second, x, 40.0f + (hl + 1) * lh, sc,
                            selR ? glm::vec3(1.0f, 0.9f, 0.5f) : hintCol, fbw, fbh);

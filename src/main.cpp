@@ -866,9 +866,130 @@ int main(int argc, char** argv) {
     // arc-length ranges either side of the crossing - so nothing has to be authored for
     // one to work, and none of the track-circuit machinery is involved.
     const std::vector<LevelCrossing> crossings = loadLevelCrossings(datasetRoot);
-    const std::vector<CrossingSite> crossingSites =
+    // Not const: a crossing that a main signal waits for gets its approach lengthened below,
+    // once, before anything reads it.
+    std::vector<CrossingSite> crossingSites =
         resolveCrossings(crossings, paths, polys, data.sceneOrigin());
     std::vector<CrossingState> crossingStates(crossings.size());
+
+    // Which crossings a main signal record is tied to: every crossing road whose point lies
+    // on the record's own road, if the record carries `crossing`. The record is the road
+    // beyond the mast - for an entry signal the whole route in, for an exit signal its own
+    // route out - which is where a crossing has anything to do with what the mast shows.
+    // Pure geometry, worked out once: neither the road nor the crossing ever moves.
+    auto tiesOf = [&](const SignalPath& rec) {
+        std::vector<CrossingTie> out;
+        if (!rec.crossing) return out;
+        for (std::size_t ci = 0; ci < crossings.size(); ++ci)
+            for (std::size_t ti = 0; ti < crossings[ci].tracks.size(); ++ti) {
+                const CrossingTrack& ct = crossings[ci].tracks[ti];
+                for (const SectionInterval& iv : rec.parts) {
+                    if (iv.trackId != ct.trackId) continue;
+                    if (ct.frac < std::min(iv.from, iv.to) || ct.frac > std::max(iv.from, iv.to))
+                        continue;
+                    out.push_back({static_cast<int>(ci), static_cast<int>(ti)});
+                    break;
+                }
+            }
+        return out;
+    };
+    // Said once per record, here, rather than every time a tie is asked for.
+    for (const std::vector<SignalPath>* recs : {&entrySignals, &exitSignals})
+        for (const SignalPath& rec : *recs) {
+            if (!rec.crossing) continue;
+            const std::vector<CrossingTie> ties = tiesOf(rec);
+            if (ties.empty())
+                std::fprintf(stderr, "[Crossing] %s is marked crossing but its road crosses "
+                                     "none\n", rec.name.c_str());
+            for (const CrossingTie& t : ties) {
+                if (!crossingSites[t.crossing].resolved())
+                    std::fprintf(stderr, "[Crossing] %s is tied to \"%s\", which is on no "
+                                         "path - it will never show green\n",
+                                 rec.name.c_str(), crossings[t.crossing].name.c_str());
+                else
+                    std::printf("[Crossing] %s waits for \"%s\" before it shows green\n",
+                                rec.name.c_str(), crossings[t.crossing].name.c_str());
+            }
+        }
+    // The same per mast: the crossings any of its records is tied to.
+    auto placementTies = [&](const SignalPlacement& sp) {
+        std::vector<int> out;
+        const std::vector<SignalPath>* recs = sp.kind == SignalKind::Entry ? &entrySignals
+                                              : sp.kind == SignalKind::Exit ? &exitSignals
+                                                                            : nullptr;
+        if (!recs || !sp.crossing) return out;
+        for (int pi : sp.paths) {
+            if (pi < 0 || pi >= static_cast<int>(recs->size())) continue;
+            for (const CrossingTie& t : tiesOf((*recs)[pi]))
+                if (std::find(out.begin(), out.end(), t.crossing) == out.end())
+                    out.push_back(t.crossing);
+        }
+        return out;
+    };
+
+    // A crossing that a main signal waits for has to be armed before the driver reaches
+    // that signal's distant, or the distant warns of a signal that is about to clear. The
+    // approach derived from the line speed knows nothing of where the distant stands, so
+    // here it is lengthened to reach past every distant repeating a tied signal, by the
+    // time the crossing needs to go white and the driver to see the distant change.
+    //
+    // A floor, never a ceiling, and not capped at kOuterMaxM: that cap is for the figure
+    // derived from speed, and capping this one would put the fault straight back. The longer
+    // approach costs nothing on the far side - a signal at danger facing the crossing still
+    // cuts its circuit at itself, so only a train that has a route arms it.
+    {
+        std::unordered_map<std::uint32_t, double> trackLen;
+        for (const TrackPoly& tp : polys) trackLen[tp.id] = polyLength(tp.pts);
+        std::vector<std::vector<int>> tiedTo(sigPlacements.size());
+        bool anyTie = false;
+        for (std::size_t k = 0; k < sigPlacements.size(); ++k) {
+            tiedTo[k] = placementTies(sigPlacements[k]);
+            anyTie = anyTie || !tiedTo[k].empty();
+        }
+        for (std::size_t k = 0; anyTie && k < sigPlacements.size(); ++k) {
+            const SignalPlacement& sp = sigPlacements[k];
+            if (sp.kind != SignalKind::Distant && !sp.withDistant) continue;
+            // Which main this distant repeats: the two steps updateDistantAspects takes.
+            const int dir =
+                glm::dot(sp.forward, trackTangent(polys, sp.at.trackId, sp.at.frac, +1)) >= 0.0
+                    ? +1 : -1;
+            const int main = firstMainSignalAhead(polys, junctions, switchNet, sigPlacements,
+                                                  sp.at.trackId, sp.at.frac, dir,
+                                                  kDistantReach);
+            if (main < 0 || tiedTo[main].empty()) continue;
+            for (const int ci : tiedTo[main]) {
+                CrossingSite& site = crossingSites[ci];
+                if (!site.resolved()) continue;
+                // How far the crossing is from the distant, along the road it reads down.
+                double run = 0.0, found = -1.0;
+                walkAhead(polys, junctions, switchNet, sp.at.trackId, sp.at.frac, dir,
+                          kDistantReach,
+                          [&](std::uint32_t track, double from, double to, int) {
+                              const auto L = trackLen.find(track);
+                              const double len = L == trackLen.end() ? 0.0 : L->second;
+                              for (const CrossingTrack& ct : crossings[ci].tracks) {
+                                  if (ct.trackId != track) continue;
+                                  if (ct.frac < std::min(from, to) - 1e-9 ||
+                                      ct.frac > std::max(from, to) + 1e-9)
+                                      continue;
+                                  found = run + std::abs(ct.frac - from) * len;
+                                  return true;
+                              }
+                              run += std::abs(to - from) * len;
+                              return false;
+                          });
+                if (found < 0.0) continue; // the distant does not read toward this crossing
+                const double margin =
+                    site.lineSpeedKmh / 3.6 * (kTrainDelayS + kDistantSightS);
+                const double need = found + margin;
+                if (need <= site.outerM) continue;
+                std::printf("[Crossing] %s: approach lengthened %.0f -> %.0f m to reach past "
+                            "the distant %.0f m out, before a signal tied to it\n",
+                            crossings[ci].name.c_str(), site.outerM, need, found);
+                site.outerM = static_cast<float>(need);
+            }
+        }
+    }
     for (std::size_t i = 0; i < crossings.size(); ++i) {
         if (!crossingSites[i].resolved()) {
             std::fprintf(stderr, "[Crossing] \"%s\" is not on any path - stale overlay?\n",
@@ -1392,6 +1513,9 @@ int main(int argc, char** argv) {
         glm::vec2 anchor{0.0f};  // its in-station end, which is what groups it by station
         SignalPath departure;    // the whole movement
         std::vector<int> beyond; // circuits past the signal
+        // Level crossings this movement's signal waits for before it SHOWS green. Read only
+        // by the display pass: setting and holding the route ignores it entirely.
+        std::vector<CrossingTie> ties;
     };
     std::vector<MainCandidate> mainCandidates;
     {
@@ -1432,6 +1556,7 @@ int main(int argc, char** argv) {
             // ones past the mast - and a circuit cannot straddle a border, so the sets are
             // disjoint rather than merely different.
             c.beyond = pathSections(exitSignals[e], circuits);
+            c.ties = tiesOf(exitSignals[e]); // the signal's own road out, past the mast
             c.entry = false;
             // Either half may name the station; the signal wins only if the route is silent.
             c.stationName = !exitRoutes[ri].station.empty() ? exitRoutes[ri].station
@@ -1466,6 +1591,7 @@ int main(int argc, char** argv) {
                 c.placement = mastOf(SignalKind::Entry, static_cast<int>(ei));
                 c.departure = entrySignals[ei];
                 c.beyond = pathSections(c.departure, circuits); // all of it is past the mast
+                c.ties = tiesOf(entrySignals[ei]);
                 c.entry = true;
                 c.stationName = entrySignals[ei].station;
                 c.anchor = sceneAt(c.departure.end);            // the platform end
@@ -1483,6 +1609,7 @@ int main(int argc, char** argv) {
                 // Still only what is past the mast: the approach is the run-up, and a train
                 // standing on it is the train being let in rather than one in the way.
                 c.beyond = pathSections(entrySignals[ei], circuits);
+                c.ties = tiesOf(entrySignals[ei]);
                 c.entry = true;
                 c.stationName = !entryApproaches[ai].station.empty()
                                     ? entryApproaches[ai].station
@@ -1816,7 +1943,10 @@ int main(int argc, char** argv) {
         const glm::dvec3 org = switchNet.sceneOrigin();
         // Main signals: a square at the mast, coloured by aspect. Informational - a main
         // route is set from the R list, not by clicking, so these are not pick targets.
-        for (const SignalPlacement& sp : sigPlacements) {
+        // Coloured by what is SHOWN, so the dispatcher sees the red the driver sees while
+        // a mast is held for its crossing.
+        for (const SignalPlacement& logical : sigPlacements) {
+            const SignalPlacement sp = shownPlacement(logical);
             if (sp.kind == SignalKind::Dwarf) continue; // main and distant signals
             const glm::vec2 f(float(sp.forward.x), float(sp.forward.y));
             const glm::vec2 r(f.y, -f.x); // right of travel: the side it stands on
@@ -1940,7 +2070,7 @@ int main(int argc, char** argv) {
         for (std::size_t k = 0; k < sigPlacements.size(); ++k) {
             const SignalPlacement& sp = sigPlacements[k];
             if (!isMini(sp)) continue; // exit signal on its own: not a map object yet
-            const SignalAspect asp = miniAspect(sp);
+            const SignalAspect asp = miniAspect(shownPlacement(sp)); // as shown
             const bool armed = static_cast<int>(k) == routeArm;
             const bool hovered = static_cast<int>(k) == hoverSignal;
             const glm::vec3 col =
@@ -2965,6 +3095,63 @@ int main(int argc, char** argv) {
                     routeQueue.size());
     };
 
+    // --- What the signals SHOW --------------------------------------------------------
+    // A layer of its own over the logical aspects, and the only thing that writes
+    // SignalPlacement::held and ::heldRepeat. It reads what the interlocking has decided and
+    // never writes back into it: the route stays set, the signal stays cleared, and the
+    // crossing's approach - which reads the logical aspect - opens the moment the route is
+    // set, exactly as for any other cleared signal. What waits is only what a person
+    // looking at the signal is shown.
+    //
+    // Run after the logical aspects and the distants have settled, and again whenever a
+    // crossing changes phase, which is the one thing that can change the answer without
+    // anything the interlocking knows about moving. Returns true if anything shown changed.
+    auto updateShownAspects = [&]() {
+        std::vector<char> held(sigPlacements.size(), 0);
+        std::vector<std::string> by(sigPlacements.size()); // the route lighting each mast
+        bool anyHeld = false;
+        for (const MainRoute& mr : mainRoutes) {
+            if (mr.placement >= 0) by[static_cast<std::size_t>(mr.placement)] =
+                exitRouteName(mr.route);
+            if (!mr.signalClear || mr.placement < 0) continue; // at danger anyway
+            const std::vector<CrossingTie>& ties = mainCandidates[mr.route].ties;
+            if (ties.empty() || crossingSecuredFor(ties, crossingStates)) continue;
+            held[static_cast<std::size_t>(mr.placement)] = 1;
+            anyHeld = true;
+        }
+        bool changed = false;
+        for (std::size_t k = 0; k < sigPlacements.size(); ++k) {
+            const bool h = held[k] != 0;
+            if (sigPlacements[k].held != h) {
+                sigPlacements[k].held = h;
+                changed = true;
+                std::printf("[Main] %s: %s\n",
+                            by[k].empty() ? "a signal" : by[k].c_str(),
+                            h ? "cleared but HELD at red until its crossing shows white"
+                              : "no longer held - shows what it was cleared to show");
+            }
+        }
+        // A distant warns for a held main as for one at danger. The main it repeats is
+        // found the way updateDistantAspects finds it; when nothing is held there is
+        // nothing to look for, which is nearly always.
+        for (std::size_t k = 0; k < sigPlacements.size(); ++k) {
+            SignalPlacement& sp = sigPlacements[k];
+            bool want = false;
+            if (anyHeld && (sp.kind == SignalKind::Distant || sp.withDistant)) {
+                const int dir = glm::dot(sp.forward, trackTangent(polys, sp.at.trackId,
+                                                                  sp.at.frac, +1)) >= 0.0
+                                    ? +1 : -1;
+                const int main = firstMainSignalAhead(polys, junctions, switchNet,
+                                                      sigPlacements, sp.at.trackId,
+                                                      sp.at.frac, dir, kDistantReach);
+                want = main >= 0 && sigPlacements[static_cast<std::size_t>(main)].held;
+            }
+            if (sp.heldRepeat != want) { sp.heldRepeat = want; changed = true; }
+        }
+        if (changed) g_mapDirty = true;
+        return changed;
+    };
+
     // The exit routes on offer: those of the station nearest what the map is looking at,
     // so a dispatcher panning to a place gets that place's routes.
     // `kind`: -1 every route the station has, 0 the ones leaving it, 1 the ones coming in.
@@ -3594,7 +3781,10 @@ int main(int argc, char** argv) {
         const bool underWay = std::abs(t.speed()) > kUnderWayMs;
         bool shunting = t.autoShunting();
         for (const SigAhead& sa : autoSignalsAhead) {
-            const SignalPlacement& sp = sigPlacements[sa.ref];
+            // The driver acts on what the signal SHOWS. A mast held for a crossing is
+            // cleared as far as the interlocking is concerned, but what stands in front
+            // of the driver is a red, and that is what is obeyed.
+            const SignalPlacement sp = shownPlacement(sigPlacements[sa.ref]);
             if (sp.kind == SignalKind::Distant) continue;
             if (sp.kind == SignalKind::Dwarf) {
                 // A dwarf does not take a running train's road away. A movement a main
@@ -3623,7 +3813,7 @@ int main(int argc, char** argv) {
             for (RoadAhead::Limit& l : road.limits) l.kmh = std::min(l.kmh, kShuntingKmh);
         }
         for (const SigAhead& sa : autoSignalsAhead)
-            if (signalStopsTrain(sigPlacements[sa.ref]))
+            if (signalStopsTrain(shownPlacement(sigPlacements[sa.ref])))
                 road.stops.push_back({sa.d, RoadAhead::StopKind::Signal, sa.ref});
 
         // --- the station stop -------------------------------------------------------
@@ -3942,8 +4132,12 @@ int main(int argc, char** argv) {
             // pivot and an axis per vertex and the vertex has no room for them - so while
             // a barrier is in motion the geometry is remade.
             if (anyPhaseMoved || anyBarrierMoving) {
+                // A crossing turning white is what releases a signal held for it, so the
+                // display is asked again here - nothing the interlocking knows has moved.
+                unsigned parts = PartCrossings;
+                if (anyPhaseMoved && updateShownAspects()) parts |= PartSignals;
                 const double tM = profile ? now_ms() : 0.0;
-                const bool made = rebuildSignalBuffer(PartCrossings);
+                const bool made = rebuildSignalBuffer(parts);
                 if (profile) pMesh.add(now_ms() - tM);
                 if (made) {
                     const double tU = profile ? now_ms() : 0.0;
@@ -4093,6 +4287,9 @@ int main(int argc, char** argv) {
             // any route having moved.
             if (updateDistantAspects(sigPlacements, polys, junctions, switchNet))
                 aspectsMoved = true;
+            // What is shown, last of all: it reads every logical aspect above and changes
+            // none of them.
+            if (updateShownAspects()) aspectsMoved = true;
             if (profile) pDistants.add(now_ms() - tD);
             if (aspectsMoved || flagsChanged) {
                 // The repeats rather than the crossings: a route being set throws points,

@@ -140,7 +140,11 @@ void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 o
         else disc(face - UP * sp, n, R, UP, r, kGreenOff);
     };
 
-    for (const SignalPlacement& s : signals) {
+    for (const SignalPlacement& logical : signals) {
+        // Drawn as it is SHOWN, which differs from what the interlocking decided only while
+        // the mast is held - for a level crossing not yet white, say. Every head below reads
+        // `s`, so none of them can show a clearance the display has withheld.
+        const SignalPlacement s = shownPlacement(logical);
         const glm::dvec2 f2 = glm::length(s.forward) > 1e-9 ? glm::normalize(s.forward)
                                                             : glm::dvec2(1.0, 0.0);
         const glm::vec3 F(static_cast<float>(f2.x), static_cast<float>(f2.y), 0.0f);

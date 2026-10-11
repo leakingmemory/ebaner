@@ -58,6 +58,14 @@ struct SignalPath {
     // This signal is built with two lamps rather than three - red over green, the head a
     // siding's own signal carries. A fact about the mast in the same way `distant` is.
     bool twoLamp = false;
+    // This signal guards a level crossing on the road beyond it, and may not *show* a
+    // proceed aspect until that crossing is secured and showing white to the train. A fact
+    // about the mast, settled between records sharing a border as `distant` is.
+    //
+    // It changes nothing the interlocking decides. The route locks, the switches move, the
+    // line block is claimed and the signal is cleared exactly as it would be without it;
+    // only what the mast displays waits for the crossing. See SignalPlacement::held.
+    bool crossing = false;
     // --- anything that stands beside a track (mini paths and main signals alike) ---
     // Which side of the track the mast stands on: +1 to the right of the direction the
     // signal is read from, -1 to the left. Right is the Norwegian convention and the
@@ -251,7 +259,36 @@ struct SignalPlacement {
     // whatever the interlocking granted, and a head with one green lights it for any
     // clearance, C1 and C2 alike, because it has no way to tell them apart.
     bool twoLamp = false;
+    // The mast guards a level crossing on its road (SignalPath::crossing).
+    bool crossing = false;
+
+    // --- What is DISPLAYED, as against what the interlocking has decided ---
+    // Everything above is the signal's logical state, and everything that decides anything
+    // reads it: the crossings' approach circuits, the line blocks, the route queue. What
+    // follows is a separate layer over it, written by its own pass after the logical state
+    // has settled and read only by what stands for a person looking at the signal - the
+    // mesh, the driver, the dispatcher's map. Nothing here is ever written back.
+    //
+    // `held`: the interlocking has cleared this mast, but something it does not know about
+    // has to happen before the clearance may be shown - so far, the level crossing on its
+    // road becoming secured. A held mast shows danger on every head it carries, its dwarf
+    // included: a red main with its dwarf off reads as authority to pass as a shunt, which
+    // is exactly the movement being kept off the crossing.
+    bool held = false;
+    // `heldRepeat`: a distant - on its own post, or hanging on this mast - whose main ahead
+    // is held. It warns as it would for that main at danger, which is what the main shows.
+    bool heldRepeat = false;
 };
+
+// What a signal shows, as against what the interlocking has granted it. Read by the mesh,
+// the driver and the map; never by anything that decides.
+SignalAspect shownAspect(const SignalPlacement& sp);         // the head (or a distant's own)
+SignalAspect shownDwarfAspect(const SignalPlacement& sp);    // a dwarf sharing the pole
+SignalAspect shownDistantAspect(const SignalPlacement& sp);  // a distant hanging on the mast
+// The placement as it is displayed: a copy with every aspect replaced by its shown value.
+// What lets the driver's rules - signalStopsTrain and its neighbours, unchanged - be asked
+// about what the driver can actually see.
+SignalPlacement shownPlacement(const SignalPlacement& sp);
 
 // Whether this signal is giving an authority to move: a proceed aspect on its own head, or
 // on the dwarf sharing its pole - either of them clearing is authority to pass.

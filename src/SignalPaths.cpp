@@ -154,6 +154,10 @@ std::vector<SignalPath> loadRoutes(const std::string& file, const char* keyword)
                 p.twoLamp = true;
                 continue;
             }
+            if (tok == "crossing") { // main signals: shown green only once a crossing is secured
+                p.crossing = true;
+                continue;
+            }
             if (tok == "left") { // the mast stands left of the way it is read from
                 p.side = -1;
                 continue;
@@ -203,7 +207,7 @@ bool writeRoutes(const std::string& datasetRoot, const std::string& file,
     f << header << "# " << keyword
       << " <id> \"<name>\" <startTrackHex>:<frac> <endTrackHex>:<frac> "
          "[signal <exitId> type <C1|C2>] "
-      << (withMastFlags ? "[distant] [twolamp] " : "")
+      << (withMastFlags ? "[distant] [twolamp] [crossing] " : "")
       << (withSide ? "[left] " : "")
       << "[station \"<name>\"] [via <trackHex>:<frac>]... "
          "<trackHex>:<from>:<to> ...\n";
@@ -218,6 +222,7 @@ bool writeRoutes(const std::string& datasetRoot, const std::string& file,
         if (withType) f << " type " << (p.type == RouteType::C2 ? "C2" : "C1");
         if (withMastFlags && p.distant) f << " distant";
         if (withMastFlags && p.twoLamp) f << " twolamp";
+        if (withMastFlags && p.crossing) f << " crossing";
         if (withSide && p.side < 0) f << " left";
         if (!p.station.empty()) f << " station " << quoteName(p.station);
         for (const Border& v : p.vias)
@@ -488,6 +493,35 @@ bool signalGivesMainAuthority(const SignalPlacement& sp) {
            proceeds(sp.aspect);
 }
 
+// ------------------------------------------------------------ what is displayed
+// The logical aspects above are what the interlocking has decided. These are what the
+// signal shows, which differs only while something the interlocking does not decide - so
+// far a level crossing - has yet to happen. They never feed back into a decision.
+SignalAspect shownAspect(const SignalPlacement& sp) {
+    if (sp.kind == SignalKind::Distant) return sp.heldRepeat ? SignalAspect::Stop : sp.aspect;
+    return sp.held ? SignalAspect::Stop : sp.aspect;
+}
+
+SignalAspect shownDwarfAspect(const SignalPlacement& sp) {
+    return sp.held ? SignalAspect::Stop : sp.dwarfAspect;
+}
+
+SignalAspect shownDistantAspect(const SignalPlacement& sp) {
+    // Under a main shown at danger a mounted distant goes out, by the same rule
+    // updateDistantAspects applies to a main that is at danger in fact.
+    if (sp.held) return SignalAspect::Dark;
+    return sp.heldRepeat ? SignalAspect::Stop : sp.distantAspect;
+}
+
+SignalPlacement shownPlacement(const SignalPlacement& sp) {
+    SignalPlacement out = sp;
+    out.aspect = shownAspect(sp);
+    out.dwarfAspect = shownDwarfAspect(sp);
+    out.distantAspect = shownDistantAspect(sp);
+    out.held = out.heldRepeat = false; // already applied
+    return out;
+}
+
 bool signalStopsTrain(const SignalPlacement& sp) {
     if (sp.kind == SignalKind::Distant) return false;
     if (sp.aspect == SignalAspect::Dark) return false; // a station switched off
@@ -522,6 +556,7 @@ std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& pat
             // for the signal all of them share.
             if (p.distant) out[it->second].withDistant = true;
             if (p.twoLamp) out[it->second].twoLamp = true;
+            if (p.crossing) out[it->second].crossing = true;
             if (p.side < 0) out[it->second].side = -1;
             continue;
         }
@@ -533,6 +568,7 @@ std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& pat
         sp.at = p.start;
         sp.withDistant = p.distant;
         sp.twoLamp = p.twoLamp;
+        sp.crossing = p.crossing;
         sp.side = p.side;
         sp.paths.push_back(static_cast<int>(pi));
         out.push_back(std::move(sp));

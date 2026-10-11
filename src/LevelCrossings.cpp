@@ -469,6 +469,18 @@ CrossingLights crossingLights(CrossingPhase phase, bool fast) {
     return l;
 }
 
+bool crossingSecuredFor(const std::vector<CrossingTie>& ties,
+                        const std::vector<CrossingState>& states) {
+    for (const CrossingTie& t : ties) {
+        if (t.crossing < 0 || t.crossing >= static_cast<int>(states.size())) return false;
+        const CrossingState& st = states[t.crossing];
+        if (t.track < 0 || t.track >= static_cast<int>(st.tracks.size())) return false;
+        if (!crossingLights(st.phase(static_cast<std::size_t>(t.track)), false).trainWhite)
+            return false;
+    }
+    return true;
+}
+
 bool crossingBell(const CrossingState& st, double now) {
     if (!st.shut()) return false;
     return now - st.activeSince < kBellS;
