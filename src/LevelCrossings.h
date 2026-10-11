@@ -311,7 +311,7 @@ struct CrossingFeeder {
     float sJoin = 0.0f; // where on it it joins what leads to the crossing
     int dirAway = 1;    // +1 if moving in +s along it moves away from the crossing
     float baseM = 0.0f; // track distance from the crossing to the join
-    int turnout = -1;   // the switch that must be Diverging for it to lead there
+    int turnout = -1;   // the switch that must route onto it for it to lead there
     // Signals on it facing the crossing: a placement, and how far out from the join.
     std::vector<std::pair<int, float>> guards;
 };
@@ -327,7 +327,8 @@ std::vector<CrossingFeeder> crossingFeeders(const CrossingSite& site,
 // crossing: -1 for one that leads nowhere just now (its switch is set the other way, or
 // what it leads onto is cut short of the join), otherwise outer reach or the nearest of its
 // own signals at danger. `reach` is crossingReach's answer for the crossing's own roads,
-// `diverging` says per turnout whether it is set to its branch, and `open` is as for
+// `diverging` says per turnout whether it routes onto its sidingPath (SwitchNetwork::
+// routesToSiding), and `open` is as for
 // crossingReach.
 std::vector<float> crossingFeederReach(const CrossingSite& site,
                                        const std::vector<CrossingFeeder>& feeders,

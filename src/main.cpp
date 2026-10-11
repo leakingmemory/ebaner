@@ -4146,7 +4146,7 @@ int main(int argc, char** argv) {
                     switchDiverging.assign(switchNet.size(), 0);
                     for (std::size_t i = 0; i < switchNet.size(); ++i)
                         switchDiverging[i] =
-                            switchNet.state(static_cast<int>(i)) == SwitchState::Diverging;
+                            switchNet.routesToSiding(static_cast<int>(i)) ? 1 : 0;
                 }
                 const std::vector<float> feederLive =
                     feeders.empty() ? std::vector<float>{}

@@ -246,7 +246,11 @@ void SwitchNetwork::build(const TerrainData& data,
         if (!dup) turnouts_.push_back(t);
     }
 
-    // What the overlay says was never a switch.
+    // What the overlay says was never a switch. Where those stood is kept: a turnout left
+    // alone beside one may be the reading the overlay chose over it (see `inverted`).
+    std::vector<glm::dvec3> suppressedAt;
+    for (const Turnout& t : turnouts_)
+        if (switchSuppressed(suppress, t)) suppressedAt.push_back(t.world);
     if (!suppress.empty()) {
         const std::size_t before = turnouts_.size();
         turnouts_.erase(std::remove_if(turnouts_.begin(), turnouts_.end(),
@@ -274,7 +278,7 @@ void SwitchNetwork::build(const TerrainData& data,
     }
 
     // --- Resolve each turnout onto the built paths (main + siding) ---
-    int resolved = 0;
+    int resolved = 0, inverted = 0;
     for (Turnout& t : turnouts_) {
         const glm::dvec2 X(t.world.x - origin_.x, t.world.y - origin_.y);
         int siding = -1, main = -1;
@@ -367,13 +371,63 @@ void SwitchNetwork::build(const TerrainData& data,
         // direction on the main is `thru` toward where the branch heads.
         const glm::dvec2 frog = t.thru * (glm::dot(t.div, t.thru) >= 0 ? 1.0 : -1.0);
         t.facingS = glm::dot(mainTan, frog) >= 0.0 ? 1 : -1;
+        // Which road the branch it is named for actually is. If the named track is the one
+        // the main runs on into beyond the point, and not the path that branches off here,
+        // the paths chained it through: the switch is still that track's, so its
+        // Diverging leg is the main. A few metres past the point is clear of the turnout's
+        // own snapping and well inside any real track.
+        {
+            std::uint32_t beyond = 0, branch = 0;
+            double frac = 0.0;
+            const float probe = std::clamp(sMain + 3.0f * static_cast<float>(t.facingS),
+                                           0.0f, mlen);
+            const float slen = paths[siding].length();
+            const float sProbe = sSiding < 0.5f * slen ? std::min(3.0f, slen)
+                                                       : std::max(0.0f, slen - 3.0f);
+            if (paths[main].trackAt(probe, beyond, frac) &&
+                paths[siding].trackAt(sProbe, branch, frac) && beyond == t.sidingTrack &&
+                branch != t.sidingTrack) {
+                t.inverted = true;
+                ++inverted;
+            }
+        }
         ++resolved;
     }
 
+    // Only where the overlay chose it. Where three ends meet the detector also makes a
+    // turnout named for the third road, routing onto the same branch path the right way
+    // round; next to that twin the inverted reading is a duplicate, and leaving it as it
+    // was keeps every such site working exactly as before. Where the overlay suppressed
+    // the twin and kept this one, reading it by its name is what makes it work - and a
+    // turnout alone at its point with nobody having chosen anything keeps the routing it
+    // has always had.
+    for (std::size_t i = 0; i < turnouts_.size(); ++i) {
+        Turnout& t = turnouts_[i];
+        if (!t.inverted) continue;
+        const bool chosen = std::any_of(
+            suppressedAt.begin(), suppressedAt.end(), [&](const glm::dvec3& w) {
+                return std::hypot(w.x - t.world.x, w.y - t.world.y) < 3.0;
+            });
+        if (!chosen) {
+            t.inverted = false;
+            --inverted;
+            continue;
+        }
+        for (std::size_t j = 0; j < turnouts_.size(); ++j) {
+            const Turnout& u = turnouts_[j];
+            if (j == i || u.inverted || u.mainPath != t.mainPath ||
+                u.sidingPath != t.sidingPath || std::abs(u.sMain - t.sMain) > 3.0f)
+                continue;
+            t.inverted = false;
+            --inverted;
+            break;
+        }
+    }
     state_.assign(turnouts_.size(), SwitchState::Straight);
     type_.assign(turnouts_.size(), SwitchType::Manual);
     lock_.assign(turnouts_.size(), {});
-    std::printf("[SwitchNetwork] %zu turnouts (%d routed)\n", turnouts_.size(), resolved);
+    std::printf("[SwitchNetwork] %zu turnouts (%d routed, %d named for the through road)\n",
+                turnouts_.size(), resolved, inverted);
 }
 
 void SwitchNetwork::toggle(int i) {

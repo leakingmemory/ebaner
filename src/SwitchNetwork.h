@@ -48,6 +48,12 @@ struct Turnout {
     float sSiding    = 0.0f; // 0 or length: which end of sidingPath sits at `world`
     int   facingS    = 1;    // +1 if moving in +s on mainPath is a *facing* approach
     std::uint32_t sidingTrack = 0; // branch track id (dedup keeps one switch per branch)
+    // The branch it is named for runs straight on along mainPath, so its Diverging leg is
+    // the main and its Straight leg is sidingPath. Where three track ends meet, the paths
+    // chain the straightest pair through and the third becomes the path's branch - which
+    // need not be the road the switch is named for. The name is what the signalling and
+    // the lever go by, so the routing follows it: see routesToSiding.
+    bool inverted = false;
 };
 
 // A turnout the detector should not have made, authored in the overlay.
@@ -90,6 +96,15 @@ public:
     glm::dvec3 sceneOrigin() const { return origin_; }
 
     SwitchState state(int i) const { return state_[i]; }
+    // Whether a train meeting switch i from its toe is taken onto sidingPath. The state is
+    // named for the switch's branch track; this is the same state read against the paths
+    // the train runs on, which differ for an inverted turnout. A broken switch leads
+    // nowhere, so false. Everything that follows a path through a switch asks this rather
+    // than comparing the state with Diverging.
+    bool routesToSiding(int i) const {
+        if (state_[i] == SwitchState::Broken) return false;
+        return (state_[i] == SwitchState::Diverging) != turnouts_[i].inverted;
+    }
     void setState(int i, SwitchState s) { state_[i] = s; }
     // Throw the switch: Straight <-> Diverging; a Broken switch is repaired to Straight.
     void toggle(int i);

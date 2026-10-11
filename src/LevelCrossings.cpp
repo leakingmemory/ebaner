@@ -432,7 +432,7 @@ int crossingRoadAtPoints(const CrossingSite& site, const SwitchNetwork& net,
         const float ts = tos[static_cast<std::size_t>(i)].sMain;
         if (dir * (ts - s) <= 0.0f || dir * (sx - ts) <= 0.0f) continue;
         if (tos[static_cast<std::size_t>(i)].facingS != dir) continue;
-        if (net.state(i) != SwitchState::Diverging) continue;
+        if (!net.routesToSiding(i)) continue;
         for (std::size_t t = 0; t < site.tracks.size(); ++t) {
             if (static_cast<int>(t) == on) continue;
             if (site.tracks[t].path != tos[static_cast<std::size_t>(i)].sidingPath) continue;
@@ -464,7 +464,7 @@ int crossingRoadAtPoints(const CrossingSite& site, const SwitchNetwork& net, int
         // Trailing points do not divert anything: a train running into the heel takes the
         // road it is already on (and forces the switch), whichever way they are set.
         if (tos[i].facingS != dir) continue;
-        if (net.state(static_cast<int>(i)) != SwitchState::Diverging) continue;
+        if (!net.routesToSiding(static_cast<int>(i))) continue;
         for (std::size_t t = 0; t < site.tracks.size(); ++t) {
             if (static_cast<int>(t) == on) continue;
             if (site.tracks[t].path != tos[i].sidingPath) continue;

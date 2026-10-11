@@ -397,12 +397,15 @@ bool Vehicle::crossTurnouts(float sBefore) {
 
         if (pathIdx_ == to.mainPath && crossed(to.sMain)) {
             const bool facing = dirS == to.facingS;
+            // Which leg it is set to is asked of the paths, not the state: an inverted
+            // turnout's Straight is its sidingPath (see Turnout::inverted).
+            const bool toSiding = net_->routesToSiding(i);
             if (facing) {
-                if (st == SwitchState::Diverging) { skipTurnout_ = i; swapPath(to.sidingPath, to.sSiding); return false; }
                 if (st == SwitchState::Broken) { derailFreeze(); return true; }
-                // Straight: run straight through on the main.
-            } else { // trailing from the straight branch
-                if (st == SwitchState::Diverging) { // set against us: force + break it
+                if (toSiding) { skipTurnout_ = i; swapPath(to.sidingPath, to.sSiding); return false; }
+                // Set along the main: run straight through on it.
+            } else { // trailing from the main path's far leg
+                if (toSiding) { // set against us: force + break it
                     net_->setState(i, SwitchState::Broken);
                     switchChanged_ = true;
                 }
@@ -415,7 +418,7 @@ bool Vehicle::crossTurnouts(float sBefore) {
             // actually moving toward the branch's end at the turnout.
             const bool towardEnd = (to.sSiding < 1.0f) ? (dirS < 0) : (dirS > 0);
             if (towardEnd) {
-                if (st == SwitchState::Straight) { // set against us: force + break it
+                if (st != SwitchState::Broken && !net_->routesToSiding(i)) { // set against us: force + break it
                     net_->setState(i, SwitchState::Broken);
                     switchChanged_ = true;
                 }
@@ -679,9 +682,8 @@ bool Vehicle::walkTo(float bodyOffset, int& cp, float& cs, int& nose) const {
             if (i == prevCross) continue;
             const Turnout& to = tos[i];
             if (to.mainPath < 0 || to.sidingPath < 0) continue;
-            const SwitchState st = net_->state(i);
-            // main -> siding: walking toe->frog on a diverging switch.
-            if (cp == to.mainPath && st == SwitchState::Diverging && arcDir == to.facingS) {
+            // main -> siding: walking toe->frog on a switch set to the siding path.
+            if (cp == to.mainPath && net_->routesToSiding(i) && arcDir == to.facingS) {
                 const float dj = (to.sMain - cs) * static_cast<float>(arcDir);
                 const float adv = std::max(dj, 0.0f);
                 if (dj > -kTol && adv <= bestDist) {
@@ -781,8 +783,7 @@ bool Vehicle::walkRoad(float bodyOffset, std::vector<RoadStretch>& out) const {
             if (i == prevCross) continue;
             const Turnout& to = tos[i];
             if (to.mainPath < 0 || to.sidingPath < 0) continue;
-            const SwitchState st = net_->state(i);
-            if (cp == to.mainPath && st == SwitchState::Diverging && arcDir == to.facingS) {
+            if (cp == to.mainPath && net_->routesToSiding(i) && arcDir == to.facingS) {
                 const float dj = (to.sMain - cs) * static_cast<float>(arcDir);
                 const float adv = std::max(dj, 0.0f);
                 if (dj > -kTol && adv <= bestDist) {
