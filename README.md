@@ -1394,7 +1394,8 @@ train brake (`K`/`L`) and locomotive brake (`H`/`J`).
 | Tab          | Release/grab cursor             |
 | Esc          | Open menu (Exit); press again to resume. In a picker, backs out one step |
 
-In the traffic-manager map (`O`), the cab keys are replaced by the map's own:
+In the traffic-manager map (`O`), the cab keys are replaced by the map's own. See
+[Using the traffic manager](docs/traffic-manager.md) for how to work it:
 
 | Input        | Action                          |
 |--------------|---------------------------------|
@@ -1406,6 +1407,7 @@ In the traffic-manager map (`O`), the cab keys are replaced by the map's own:
 | E            | Pick an entry signal at the current station |
 | N / B, Right / Left | Next / previous station |
 | Up / Down, Enter | Move and choose in a picker |
+| Q            | In the `R` route list: arm the highlighted route, to set itself once it can |
 
 ## Track editor (`ebaner-trackedit`)
 
