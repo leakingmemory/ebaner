@@ -28,4 +28,4 @@ national rail register, NVDB roads and OSM enrichment).
 Everything authored on top of the export, such as track fixes, signalling and lineside
 equipment, lives in `<dataset>/overlay/`, which the export never touches. The files are
 listed in [The track editor](track-editor.md#saving-the-overlay). An optional
-`overlay/overlay.lua` is run at startup; see [Scripting](../README.md#scripting).
+`overlay/overlay.lua` is run at startup; see [Scripting](scripting.md).

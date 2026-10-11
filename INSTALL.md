@@ -143,7 +143,11 @@ named on the command line, the first of these holding a `tiles/` directory is us
 
 Each of 2–6 is also tried with `norway-rails` appended. Anywhere else, set `EBANER_DATA`
 or pass the path as the first argument. If nothing is found, the program lists every
-place it looked.
+place it looked. A path given on the command line is used as given.
+
+The shaders are found the same way: `$EBANER_SHADERS`, then `<binary dir>/shaders` (as
+in the build tree), then `<binary dir>/../share/ebaner/shaders`, then the configured
+`$prefix/share/ebaner/shaders`. `<binary dir>` is the directory of the running executable.
 
 ## 4. Run
 

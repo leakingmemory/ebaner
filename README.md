@@ -59,11 +59,10 @@ System packages (all found via CMake / pkg-config):
 - GLFW 3
 - GLM
 - `glslc` (shader compiler, from shaderc)
-- PulseAudio (`libpulse-simple`) or PortAudio (**optional** — either enables the
-  synthesized brake sound, PulseAudio preferred; the build is silent without both)
-- Lua 5.4 (**optional** — enables the dataset's `overlay.lua`; see *Scripting* below.
-  Found as `lua5.4` / `lua-5.4` / `lua54` via pkg-config. LuaJIT is deliberately not
-  accepted: it would answer to "some Lua" and quietly give 5.1 semantics)
+- PulseAudio (`libpulse-simple`) or PortAudio (**optional**: without either the
+  simulator is silent)
+- Lua 5.4 (**optional**: runs the dataset's `overlay.lua`, see
+  [Scripting](docs/scripting.md). LuaJIT isn't accepted)
 - CMake ≥ 3.20, a C++20 compiler
 
 ## Build
@@ -95,151 +94,28 @@ How the world is built and drawn, and how to profile it, is in
 ctest --test-dir build --output-on-failure
 ```
 
-The tests run against a real terrainmapper export, since what the code has to cope
-with is decided by what the data is actually like — there is no synthetic dataset to
-check against. They look for one at `../norway-rails`; point them elsewhere with
-`cmake -S . -B build -DEBANER_TEST_DATASET=/path/to/export`. Without an export they
-report as skipped rather than failing, so a build without one is still clean.
-
-- **`track-edit`** — an edit made in the track editor reaches every store that holds
-  track geometry: the windowed tiles the terrain carve reads, and the resident network
-  the paths, junction graph and turnouts are built from. Editing only one of them fails
-  silently — applied to the tiles alone, raising a rail re-cuts the ground and leaves
-  the rail where it was.
+The tests run against a real export, looked for at `../norway-rails`; point them
+elsewhere with `-DEBANER_TEST_DATASET=/path/to/export`. Without one they report as
+skipped.
 
 ## Run
 
 ```sh
 ./build/ebaner ../norway-rails            # pick the station on the start screen
-./build/ebaner ../norway-rails Fauske     # or name it, and skip straight past
+./build/ebaner ../norway-rails Fauske     # or name it
 ./build/ebaner "" Fauske                  # dataset from $EBANER_DATA or an install
 ```
 
-### Where to start
-
-Both binaries take an optional station name after the dataset. The stations come from
-the export itself — every tile's `meta.json` lists the ones inside it, 720 in all — so
-any of them works, not a list kept here. The name is matched ignoring case and the
-Norwegian letters, so `Bodo` finds `Bodø` and `oteraga` finds `Oteråga`; an unknown name
-prints the near misses rather than guessing. Omitted, both ask on screen before loading
-anything (arrows, PgUp/PgDn, Enter; Esc quits).
-
-Starting far afield is free — the scene is built around whichever station you pick.
-Driving a long way from it is a different matter, and is what the floating-origin work
-still outstanding is for.
-
-On startup the console prints the resolved start point (UTM 33N), the look direction,
-tile/triangle counts, and vehicle physics (mass, inertia, tipping limit) — and, first of
-all, two `[Paths]` lines saying which dataset and which shaders it settled on, which is
-the first question to ask of a build that will not start.
-
-### Where the dataset is looked for
-
-The export is **installed separately**. The tiles run to tens of gigabytes, so they are
-in neither this repository nor any package built from it, and nothing here installs
-them; this is the reading side only. Named on the command line it is taken as given —
-a wrong path is reported as the wrong path rather than quietly replaced. Otherwise the
-first of these that holds a `tiles/` directory wins:
-
-| | where |
-|---|---|
-| 1 | `$EBANER_DATA` |
-| 2 | `$XDG_DATA_HOME/ebaner`, or `~/.local/share/ebaner` *(Unix)* |
-| 3 | `<directory of the binary>/data` |
-| 4 | `<directory of the binary>/../share/ebaner` |
-| 5 | each of `$XDG_DATA_DIRS` + `/ebaner`, by default `/usr/local/share` then `/usr/share` *(Unix)* |
-| 6 | the `datadir` this build was configured with, `$prefix/share/ebaner` |
-
-**Rows 2 to 6 are each tried twice**: the directory itself, and `norway-rails` inside
-it. So `/usr/share/ebaner/norway-rails` is found, which is where a package installs the
-export — `share/ebaner` already holds the program's own `shaders/`, and emptying tens of
-thousands of terrain tiles in beside them is no way to lay out a prefix. An export
-unpacked so that its `tiles/` sit directly in `share/ebaner` is found too; neither
-layout has to know about the other.
-
-Rows 3 and 4 are what a Windows build will have, where there is no XDG and the binary's
-own directory is the only thing to go on. Found nothing, the program lists every place
-it looked and stops.
-
-**No development path is searched and none is compiled in.** Working on the program
-means saying where the data is — on the command line, or in `EBANER_DATA`:
-
-```sh
-./build/ebaner ../norway-rails Fauske
-EBANER_DATA=../norway-rails ./build/ebaner "" Fauske
-```
-
-The compiled shaders need no such help and are found the same way: `$EBANER_SHADERS`,
-then `<binary>/shaders`, then `<binary>/../share/ebaner/shaders`, then the configured
-`datadir`. The second of those is the Windows install layout and the build tree both —
-CMake puts the `.spv` files in `build/shaders` beside `build/ebaner` — so nothing has to
-know it is running from a build, and no build path is baked into the binary.
-
-"<binary>" is the directory the running executable is in. It comes from the OS where
-there is a way to ask (`/proc/self/exe`, `GetModuleFileName`); failing that, from
-`argv[0]`, which is used as given when it is a path and looked up on `$PATH` when it is
-a bare name — the same search the shell did, against the same `PATH`, finding the same
-file.
+The dataset is installed separately; where it is looked for is in
+[INSTALL.md](INSTALL.md#where-the-program-looks). Any of the export's 720 stations can be
+named, ignoring case and Norwegian letters (`Bodo` finds `Bodø`). The first console
+lines, `[Paths]`, say which dataset and shaders were found.
 
 ## Install
 
-Step-by-step instructions for Linux — distribution packages, fetching the dataset and
-its overlay, and an unofficial Gentoo overlay — are in [`INSTALL.md`](INSTALL.md).
-
-```sh
-cmake --install build --prefix /usr/local     # or DESTDIR=... for packaging
-```
-
-A plain GNU layout, through `GNUInstallDirs`, so `-DCMAKE_INSTALL_LIBDIR=...` and the
-rest work as expected:
-
-| | |
-|---|---|
-| `$prefix/bin` | `ebaner`, `ebaner-trackedit`, `ebaner-dumptrack` |
-| `$prefix/share/ebaner/shaders` | the compiled `.spv` files |
-| `$prefix/share/doc/ebaner` | `README.md`, `LICENSE` |
-
-Put the export at `$prefix/share/ebaner/norway-rails` (beside `shaders/`, not in among
-it), or anywhere else in the list above.
-
-### Windows
-
-`.github/workflows/windows.yml` builds x64 executables with MSVC and vcpkg. It is
-**dispatched by hand, and runs on a pushed `v*` tag** — nothing else. A Windows runner
-bills at twice the Linux rate, and the project is developed and tested here.
-
-It installs the Vulkan SDK from LunarG (headers, `vulkan-1.lib`, and `glslc`), takes
-glfw3, glm, lua and portaudio from `vcpkg.json`, builds against the
-**`x64-windows-static`** triplet, runs `ctest`, and packs `cmake --install` output into
-`ebaner-windows-x64.zip` — the same `bin/` and `share/ebaner/shaders/` layout as above,
-which the path search finds with no help. On a tag the zip is attached to the release.
-
-Static on purpose: the zip needs no DLLs beside it and no MSVC redistributable. The one
-thing loaded at run time is `vulkan-1.dll`, which comes with the graphics driver and is
-not ours to ship. The dataset is still installed separately — put it in `data\` beside
-the executables, or point `EBANER_DATA` at it.
-
-Of the 18 tests, 11 run on the runner and 7 report skipped, having found no export.
-
-`vcpkg.json` is inert for a Linux build: manifest mode engages only when the vcpkg
-toolchain file is passed, which it never is here.
-
-**Before spending a run on it**, the whole tree can be compiled for Windows locally with
-the mingw-w64 cross compiler. It is not MSVC and will not find everything MSVC objects
-to, but it catches anything POSIX that has crept in, and it costs nothing:
-
-```sh
-mkdir -p /tmp/wininc && ln -sfn /usr/include/{vulkan,vk_video,GLFW,glm} /tmp/wininc/
-for f in src/*.cpp tools/*.cpp tests/*.cpp; do
-    x86_64-w64-mingw32-g++ -std=c++20 -fsyntax-only -I src -I /tmp/wininc \
-        -DEBANER_DATADIR='"C:/x"' "$f" || echo "FAILED: $f"
-done
-```
-
-All 70 translation units pass it today. `src/Paths.cpp` goes further than that and has
-been run: cross-compiled and executed under wine, it resolves its own directory through
-`GetModuleFileNameW` and finds both the installed layout (`bin\..\share\ebaner`) and
-the portable one (`shaders\` and `data\` beside the executable).
+See [INSTALL.md](INSTALL.md) for Linux: dependencies, building and installing, the
+dataset, and an unofficial Gentoo overlay. A Windows build is made by CI; see
+[Windows](docs/windows.md).
 
 ## Controls
 
@@ -310,68 +186,19 @@ level crossings, flag posts and TXP positions. Everything is saved to the datase
 
 ## Scripting
 
-Everything in `overlay/` so far is a *fact*: a crossing is a line in a file, a TXP position
-is a line in a file. Some of what a railway needs is not a fact but a **rule** — a
-timetable, a train that runs itself, when a station is worked — and there was nowhere to
-write a rule down. `<dataset>/overlay/overlay.lua` is that place. The simulator runs it once at
-startup, after the world, the paths, the switches and every other overlay are loaded, so
-that when it is eventually given an API there is already something for it to look at.
-
-```lua
-print("God dag frå Nordlandsbanen!")
-```
-
-| | |
-|---|---|
-| no file | nothing said, like every other overlay |
-| ran | `[Script] ran overlay.lua` |
-| it failed | `[Script] overlay.lua: <the Lua message>`, and the simulator carries on |
-| file present, built without Lua | `script: overlay.lua present but built without Lua; not run` |
-
-A bad script does not stop the simulator: it is authored content, and authored content that
-does not resolve is reported and stepped over. But a script that is *never run* is told
-about — that is the one place this differs from the optional audio, where silence is a fair
-thing to leave unsaid.
-
-The interpreter **stays open** after the chunk returns, so what a script defines is still
-defined afterwards. That is what makes hooks possible later without a rewrite. The full
-standard library is loaded, `io` and `os` included: the script is in the reader's own
-dataset and written by them, so a sandbox would keep nobody out and would rule out the file
-work a scripted authoring task wants to do.
-
-Nothing of the simulator is exposed yet — no trains, no signals, no stations, no TXP
-network, and no `init`/`tick`. Those want designing against a real first script. The editor
-does not run scripts; the host is in the engine library so it can be given them later.
+An optional `overlay/overlay.lua` in the dataset is run at startup. Nothing of the
+simulator is exposed to it yet. See [Scripting](docs/scripting.md).
 
 ## Data format
 
 ebaner reads a `terrainmapper` export, with an overlay of authored edits on top. See
 [Data format](docs/data-format.md).
 
-## Debug environment variables
+## Environment variables
 
-| Variable            | Effect                                                        |
-|---------------------|--------------------------------------------------------------|
-| `EBANER_DATA`       | The terrainmapper export to use, ahead of every other place searched (a path given on the command line still wins). |
-| `EBANER_SHADERS`    | The directory holding the compiled `.spv` files, ahead of every other place searched. |
-| `EBANER_SCREENSHOT` | Render ~20 frames, write that frame to the given PPM, exit.   |
-| `EBANER_CAM`        | Scripted camera `"x,y,z,yawDeg,pitchDeg"` (scene-relative m). |
-| `EBANER_NOSTITCH`   | Skip the seam-stitching pass (to inspect raw tile seams).     |
-| `EBANER_NOCARVE`    | Skip carving railway cuttings into the terrain.               |
-| `EBANER_NOOVERLAY`  | Ignore the `overlay/` track edits (link fixes).               |
-| `EBANER_EDMODE`     | `ebaner-trackedit` only: start in this mode, by its menu name. |
-| `EBANER_VEHICLE`    | Skip the start screen and preselect a vehicle, by its index in `kVehicleSpecs` (`0` = a single Class 93, `1`/`2` = two and three coupled, `3` = Di 4 + 5, `4` = the night train, `5` = the 600 m freight, `6` = a light Di 4, `7` = a CD 312, `14` = a pocket wagon, `15` = a container flat). The table is ordered for the pickers, so these move when a vehicle is added - the start screen numbers the list. |
-| `EBANER_PROFILE`    | Print per-frame timings once a second: whole frame, the sim step, occupancy, crossings, signal aspects, distant walks, the signal mesh, and the vehicle mesh and its upload. With `EBANER_SCREENSHOT=/dev/null EBANER_SHOTFRAME=900` the simulator exits by itself with the reports flushed, which is how a profile gets taken without a file or a keypress. |
-| `EBANER_RADIUS`     | Half-window of world to load, in metres (default 20000). Two kilometres loads in seconds where the full 40 km square takes minutes, which is what makes a profile or a frame-time measurement affordable at all. Inspection only: drive out of it and the world ends. |
-| `EBANER_ROLL`       | Spawn the train at this speed in m/s with the brake released, so it coasts. A profile of a standing train is a profile of a different program - nothing changes occupancy, so nothing downstream of it runs. |
-| `EBANER_GREEN`      | `"OTR 1"` — clear one simple entry signal by name before the first frame, manning its station. The other half of setting up a crossing without a keyboard: with every signal at danger a train stops at the first one, and nothing that happens inside a station could be watched. |
-| `EBANER_THROW`      | `"x,y;x,y"` — throw the turnout nearest each world point to diverging before the first frame. A crossing move is a train taking the loop rather than the main, and until this there was no way to set one up without a keyboard, so every bug in what the driver makes of a loop had to be found by hand. |
-| `EBANER_AUTO`       | Hand the train to the auto-driver at startup and log what it is doing once a second. A train that drives a real line with no keyboard, which is what makes the signalling and the crossings testable without a driver sitting in the cab. |
-| `EBANER_CHASE`      | `1` rides the vehicle from the start (the chase camera is otherwise only reachable by pressing C, so the one view that shows the machine could not be screenshotted). |
-| `EBANER_AUDIO_DUMP` | Render a scripted brake sequence to the given WAV and exit.   |
-| `EBANER_AUDIO_DUMP_ENGINE` | Render an engine start/idle/stop to the given WAV, exit. |
-| `EBANER_AUDIO_DUMP_CROSSING` | Render a crossing bell activating/falling silent, exit. |
-| `EBANER_AUDIO_DUMP_ROLLING` | Render rolling noise sweeping speed, weight, curve and brake, exit. |
+`EBANER_DATA` and `EBANER_SHADERS` set where the dataset and shaders are. The rest set up
+scenarios, screenshots and profiling without a keyboard; see
+[Environment variables](docs/debug-variables.md).
 
 ## Not yet implemented
 
