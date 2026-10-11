@@ -153,8 +153,10 @@ constexpr double kTrainDelayS = 5.0;
 // A main signal tied to a crossing shows green only once the crossing is white, and its
 // distant repeats that. So the crossing has to be armed early enough for a driver to
 // find the distant already cleared: the kTrainDelayS the crossing takes to go white, and
-// this long again to see the distant change before reaching it.
-constexpr double kDistantSightS = 5.0;
+// this long again to see the distant change well before reaching it. Run at the line speed
+// out at the distant, not the crossing's own: a crossing in a station has the station's
+// limit, and the train reading the distant is still at the line's.
+constexpr double kDistantSightS = 15.0;
 // A train can arm an approach circuit and then reverse away without ever arriving. As
 // described the crossing would stay shut for good, so an all-clear this long releases it.
 constexpr double kStuckTimeoutS = 60.0;
@@ -347,11 +349,23 @@ int crossingFeederUnder(const std::vector<CrossingFeeder>& feeders,
                         const std::vector<float>& live, int axlePath, float axleS,
                         float& dist);
 
+// Per approach, how far out the nearest signal facing the crossing stands on the way in:
+// [2 * track + side] for the crossing's own roads, then one per feeder, as track distance
+// from the crossing; infinity where there is none. A feeder counts a signal on what it
+// leads onto only if that signal is between its join and the crossing. Worked out once:
+// signals and switches do not move, only their states do.
+std::vector<float> crossingNearestGuards(const CrossingSite& site,
+                                         const std::vector<CrossingGuard>& guards,
+                                         const std::vector<CrossingFeeder>& feeders);
+
 // What the three circuits see this instant.
 struct CrossingOccupancy {
     bool outerA = false; // approach on the -s side
     bool inner = false;
     bool outerB = false; // approach on the +s side
+    // Part of the approach that is a train standing beyond a signal facing the crossing
+    // which is giving it an authority: a train with a route toward the crossing.
+    bool behindA = false, behindB = false;
 };
 
 // Advance one crossing. `now` is a monotonic clock in seconds.
@@ -361,7 +375,13 @@ struct CrossingOccupancy {
 //    from Idle, which is what stops a departing train re-arming the crossing from the far
 //    approach circuit as it leaves;
 //  - the inner circuit arms it whenever it is occupied, no edge and no gate, because it is
-//    the fallback for an approach circuit that has failed.
+//    the fallback for an approach circuit that has failed;
+//  - a train behind a cleared signal facing the crossing arms it from Idle whenever it is
+//    there, no edge. That train has a route toward the crossing, so it is coming, however
+//    long the circuit has been occupied: by a train that passed and stopped in the station,
+//    say, while a signal cleared for another standing beside it. A departing train never
+//    stands behind such a signal - an opposing route cannot be set - and the signal goes to
+//    danger as a train passes it, cutting the circuit at the mast.
 //
 // Takes the crossing itself as well as its state because the barriers are authored, not
 // runtime: whether there are booms to move belongs to the record, and copying it into the

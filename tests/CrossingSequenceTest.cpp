@@ -2793,6 +2793,69 @@ int main(int argc, char** argv) {
         std::filesystem::remove_all(root, ec);
     }
 
+    // A train that passed the crossing and stopped in the station keeps the approach
+    // circuit occupied; a signal then clearing for another train standing beside it never
+    // gives the circuit an edge. Behind a cleared signal is a train with a route here, so
+    // it arms the crossing on its own, edge or not.
+    std::puts("\nA train behind a signal that clears for it:");
+    {
+        Rig r;
+        r.set(false, true, false); // train A over the crossing
+        r.run(6.0);
+        r.set(true, false, false); // and off it into the station: approach occupied
+        expectPhase(r, CrossingPhase::Opening, "train A clearing the crossing releases it");
+        r.run(6.0);
+        expectPhase(r, CrossingPhase::Idle, "and it goes idle");
+        r.run(10.0);
+        expectPhase(r, CrossingPhase::Idle,
+                    "an approach occupied all along, with no edge, does not arm it");
+        r.occ[0].behindA = true; // B's signal clears; the circuit reaches B through it
+        r.now += 0.01;
+        stepCrossing(r.x, r.st, r.occ, r.now);
+        expectPhase(r, CrossingPhase::Closing, "a train behind the cleared signal arms it");
+        r.run(6.0);
+        expectPhase(r, CrossingPhase::Secured, "and it goes white for that train");
+
+        Rig o; // behind it while the crossing is still releasing for the first train
+        o.set(false, true, false);
+        o.run(6.0);
+        o.occ[0] = {true, false, false};
+        o.occ[0].behindA = true;
+        o.now += 0.01;
+        stepCrossing(o.x, o.st, o.occ, o.now);
+        expectPhase(o, CrossingPhase::Opening, "while still releasing, it finishes that first");
+        o.run(5.5);
+        check(o.phase() == CrossingPhase::Closing || o.phase() == CrossingPhase::Secured,
+              "then arms again at once, without the circuit going clear");
+    }
+
+    std::puts("\nThe first signal on each way in:");
+    {
+        CrossingSite site;
+        site.tracks.push_back({0, 1000.0f});
+        site.innerM = 50.0f;
+        site.outerM = 800.0f;
+        const std::vector<CrossingGuard> guards{{0, 3, -300.0f}, {0, 4, -120.0f},
+                                                {0, 5, 400.0f}};
+        std::vector<CrossingFeeder> fs(3);
+        fs[0].track = 0; fs[0].side = 0; fs[0].baseM = 200.0f; // off the -s road, own guard
+        fs[0].guards = {{6, 50.0f}};
+        fs[1].track = 0; fs[1].side = 1; fs[1].baseM = 300.0f; // off the +s road, short of its guard
+        fs[2].track = 0; fs[2].side = 0; fs[2].parent = 0; fs[2].baseM = 500.0f; // off fs[0]
+        const std::vector<float> near = crossingNearestGuards(site, guards, fs);
+        check(near.size() == 5, "one per approach, then one per feeder");
+        if (near.size() == 5) {
+            check(std::abs(near[0] - 120.0f) < 0.01f && std::abs(near[1] - 400.0f) < 0.01f,
+                  "the nearest on each side of the crossing's own road");
+            check(std::abs(near[2] - 120.0f) < 0.01f,
+                  "a feeder joining beyond the road's signal is behind that one");
+            check(std::isinf(near[3]),
+                  "a feeder joining short of the road's signal has none on its way in");
+            check(std::abs(near[4] - 120.0f) < 0.01f,
+                  "and a feeder off a feeder inherits the nearest on its way in");
+        }
+    }
+
     std::printf("\n%s\n", failures ? "FAILED" : "PASSED");
     return failures ? 1 : 0;
 }

@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <sstream>
 
 namespace fs = std::filesystem;
@@ -387,6 +388,36 @@ std::vector<float> crossingFeederReach(const CrossingSite& site,
     return live;
 }
 
+std::vector<float> crossingNearestGuards(const CrossingSite& site,
+                                         const std::vector<CrossingGuard>& guards,
+                                         const std::vector<CrossingFeeder>& feeders) {
+    const float none = std::numeric_limits<float>::infinity();
+    const std::size_t slots = 2 * site.tracks.size();
+    std::vector<float> near(slots + feeders.size(), none);
+    for (const CrossingGuard& g : guards) {
+        if (g.track < 0) continue;
+        const std::size_t slot =
+            2 * static_cast<std::size_t>(g.track) + (g.atM < 0.0f ? 0u : 1u);
+        if (slot < slots) near[slot] = std::min(near[slot], std::abs(g.atM));
+    }
+    // Breadth first, as crossingFeeders made them: a parent is always settled first.
+    for (std::size_t i = 0; i < feeders.size(); ++i) {
+        const CrossingFeeder& f = feeders[i];
+        float onto = none;
+        if (f.parent < 0) {
+            const std::size_t slot = 2 * static_cast<std::size_t>(f.track) +
+                                     static_cast<std::size_t>(f.side);
+            if (slot < slots) onto = near[slot];
+        } else if (f.parent < static_cast<int>(i)) {
+            onto = near[slots + static_cast<std::size_t>(f.parent)];
+        }
+        float r = onto < f.baseM ? onto : none; // only if it is between the join and here
+        for (const auto& g : f.guards) r = std::min(r, f.baseM + g.second);
+        near[slots + i] = r;
+    }
+    return near;
+}
+
 int crossingFeederUnder(const std::vector<CrossingFeeder>& feeders,
                         const std::vector<float>& live, int axlePath, float axleS,
                         float& dist) {
@@ -503,7 +534,9 @@ void stepTrack(CrossingTrackState& st, const CrossingOccupancy& occ, double now)
             // inner one is not edge-gated on purpose: it is the fallback for an approach
             // circuit that has failed, and a fallback that needs a clean edge is no
             // fallback at all.
-            if (outerEdge || occ.inner) enter(CrossingPhase::Closing);
+            // And a train behind a cleared signal, edge or not: it has a route here.
+            if (outerEdge || occ.inner || occ.behindA || occ.behindB)
+                enter(CrossingPhase::Closing);
             break;
 
         case CrossingPhase::Closing:

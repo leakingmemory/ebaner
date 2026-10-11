@@ -1021,13 +1021,29 @@ int main(int argc, char** argv) {
                               return false;
                           });
                 if (found < 0.0) continue; // the distant does not read toward this crossing
-                const double margin =
-                    site.lineSpeedKmh / 3.6 * (kTrainDelayS + kDistantSightS);
+                // The speed a train passes the distant at: the line's there, or the
+                // crossing's if that is higher.
+                double kmh = site.lineSpeedKmh;
+                for (std::size_t p = 0; p < paths.size(); ++p) {
+                    bool covers = false;
+                    for (const TrackPath::TrackRun& r : paths[p].trackRuns()) {
+                        if (r.trackId != sp.at.trackId) continue;
+                        if (sp.at.frac >= std::min(r.frac0, r.frac1) - 1e-4 &&
+                            sp.at.frac <= std::max(r.frac0, r.frac1) + 1e-4) {
+                            covers = true;
+                            break;
+                        }
+                    }
+                    float s = 0.0f;
+                    if (covers && paths[p].fracToS(sp.at.trackId, sp.at.frac, s))
+                        kmh = std::max(kmh, static_cast<double>(paths[p].speedLimitAt(s)));
+                }
+                const double margin = kmh / 3.6 * (kTrainDelayS + kDistantSightS);
                 const double need = found + margin;
                 if (need <= site.outerM) continue;
                 std::printf("[Crossing] %s: approach lengthened %.0f -> %.0f m to reach past "
-                            "the distant %.0f m out, before a signal tied to it\n",
-                            crossings[ci].name.c_str(), site.outerM, need, found);
+                            "the distant %.0f m out, at %.0f km/h, before a signal tied to it\n",
+                            crossings[ci].name.c_str(), site.outerM, need, found, kmh);
                 site.outerM = static_cast<float>(need);
             }
         }
@@ -1140,6 +1156,14 @@ int main(int argc, char** argv) {
                     "signal(s) on them\n",
                     crossings[ci].name.c_str(), feeders.size(), guarded);
     }
+    // How far out the first signal facing each crossing stands on every way in: a train
+    // further out than that, inside the reach, is standing behind a signal that has cleared
+    // for it, and arms the crossing whatever the approach circuit read before.
+    std::vector<std::vector<float>> crossingGuardNear(crossings.size());
+    for (std::size_t ci = 0; ci < crossings.size(); ++ci)
+        if (crossingSites[ci].resolved())
+            crossingGuardNear[ci] = crossingNearestGuards(crossingSites[ci], crossingGuards[ci],
+                                                          crossingFeedersOf[ci]);
 
     // Flag posts: the hand signal the station's TXP hangs out.
     const std::vector<FlagPost> flagPosts = loadFlagPosts(datasetRoot);
@@ -4195,6 +4219,7 @@ int main(int argc, char** argv) {
                                     : crossingFeederReach(site, feeders, reach,
                                                           switchDiverging, signalOpen);
                 occ.assign(site.tracks.size(), CrossingOccupancy{});
+                const std::vector<float>& near = crossingGuardNear[ci];
                 for (const AxlePlace& ax : axles) {
                     float onS = 0.0f;
                     // By path and arc position first, which is a comparison. Only if that
@@ -4214,6 +4239,9 @@ int main(int argc, char** argv) {
                         if (f < 0) continue; // not on this crossing at all
                         CrossingOccupancy& o = occ[feeders[f].track];
                         (feeders[f].side == 0 ? o.outerA : o.outerB) = true;
+                        const std::size_t nf = 2 * site.tracks.size() + f;
+                        if (nf < near.size() && dist > near[nf])
+                            (feeders[f].side == 0 ? o.behindA : o.behindB) = true;
                         continue;
                     }
                     const float rel = onS - site.tracks[under].s;
@@ -4230,6 +4258,10 @@ int main(int argc, char** argv) {
                     if (std::abs(rel) <= site.innerM) occ[on].inner = true;
                     else if (rel < 0.0f && rel >= -far) occ[on].outerA = true;
                     else if (rel > 0.0f && rel <= far) occ[on].outerB = true;
+                    else continue;
+                    if (std::abs(rel) > site.innerM && lim < near.size() &&
+                        std::abs(rel) > near[lim])
+                        (rel < 0.0f ? occ[on].behindA : occ[on].behindB) = true;
                 }
                 was.clear();
                 for (const CrossingTrackState& ts : crossingStates[ci].tracks)
