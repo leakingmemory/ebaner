@@ -1361,6 +1361,9 @@ the portable one (`shaders\` and `data\` beside the executable).
 
 ## Controls
 
+For a walk-through of driving a train from cold, see
+[Driving the Class 93](docs/driving-class-93.md).
+
 | Input        | Action                          |
 |--------------|---------------------------------|
 | W / A / S / D| Move horizontally               |
