@@ -66,7 +66,8 @@ post, its decision stands, and changing the flag does nothing for that train.
 
 A train that has **stopped** at the station waits there. It leaves when its driver
 decides to go, which should be when you show it the departure signal. The auto-driver
-stops at the station and hands the train back. Pressing `P` again sends it on.
+doesn't read the departure signal: it stops at the station and hands the train back. To
+send it on, go to its cab and press `P`.
 
 **Nothing in the simulator enforces train orders.** A train will leave whether or not
 an order has been agreed. The orders are the bookkeeping that keeps two trains from
@@ -114,9 +115,10 @@ and press Enter to report it. That releases the section behind it.
 3. **Show the departure signal.** Enter on the `Depart: …` line for the track the train
    is standing on. The TXP figure appears beside the track. Only one position shows at a
    time, so showing one takes down any other.
-4. When the train has left, Enter on **Train on track: -> …** to report it to the far
+4. **Take it down** once the train staff have acknowledged it: Enter on its line again.
+   For an auto-driven train, go to its cab and press `P` to send it.
+5. When the train has left, Enter on **Train on track: -> …** to report it to the far
    end. Until it has left, you may **Withdraw order** instead.
-5. Take the departure signal down: Enter on its line again.
 
 The far station reports **Train arrived** when the train gets there. Only then is the
 section free for another train.

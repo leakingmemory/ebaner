@@ -75,13 +75,12 @@ Do these in this order. **The order is the safety.**
    `switch held` and so on). Clear that first. You can also **arm** it with `Q`, so that
    it sets itself once it can, but **only arm an exit after you have the train order**:
    an armed route doesn't ask about train orders either.
-3. **Show the departure signal**, if you want the TXP figure out for a passenger train:
-   Enter on the `Depart: …` line for that track. It is only what the driver sees; the
-   exit signal is what lets the train go.
+3. **Show the departure signal** to a train that has stopped: Enter on the `Depart: …`
+   line for that track. **Take it down** once the train staff have acknowledged it. An
+   auto-driven train doesn't read it: go to its cab and press `P` to send it.
 4. **When the train has left**, report it: Enter on **Train on track: -> …**. Until it
    has left you may **Withdraw order** instead. Cancel the exit route too if the train
    isn't going after all, because a route never gives back road no train used.
-5. **Take the departure signal down** again.
 
 The section stays booked until the far station reports the train arrived. Until then,
 neither end can get another order for it, and that is what keeps a second train off the

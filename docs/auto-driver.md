@@ -27,6 +27,9 @@ The nearest signal ahead decides which.
 clears. Every other stop ends the mode: at a station, at the end of the rails, or by the
 driver taking the controls, the train is left stopped and handed back.
 
+It doesn't read the TXP's departure signal. To send a train on from a station, go to its
+cab and press `P`.
+
 ## Where it stops at a station
 
 A train crossing another must stand **clear of the switches at both ends**, so the stop is
