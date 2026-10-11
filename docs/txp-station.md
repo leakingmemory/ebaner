@@ -18,7 +18,9 @@ station each way.
 This guide walks through working such a station: manning it, letting trains in, stopping
 or passing them, crossing two trains, and sending them on. Everything is done from the
 traffic manager (**`O`**, then **`E`** for the station panel). See
-[Using the traffic manager](traffic-manager.md) for the map itself.
+[Using the traffic manager](traffic-manager.md) for the map itself, and
+[Working a TXP station without line block](txp-station-without-line-block.md) for a
+station with its own interlocking.
 
 ## Which stations
 

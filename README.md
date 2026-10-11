@@ -1396,7 +1396,9 @@ train brake (`K`/`L`) and locomotive brake (`H`/`J`).
 
 In the traffic-manager map (`O`), the cab keys are replaced by the map's own. See
 [Using the traffic manager](docs/traffic-manager.md) for how to work it, and
-[Working a TXP station](docs/txp-station.md) for a station worked by hand:
+[Working a TXP station](docs/txp-station.md) for a station worked by hand, or
+[without line block](docs/txp-station-without-line-block.md) for one with its own
+interlocking but none on the line:
 
 | Input        | Action                          |
 |--------------|---------------------------------|
