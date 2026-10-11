@@ -1049,6 +1049,55 @@ int main(int argc, char** argv) {
             std::printf("[Crossing] %-16s %zu signal(s) can break its approach\n",
                         crossings[ci].name.c_str(), crossingGuards[ci].size());
     }
+    // The roads that lead onto each crossing's approaches through a switch without being
+    // its own - a loop joining the main line between the platforms and the crossing - and
+    // the signals on them facing it, which break those approaches as the ones above do.
+    std::vector<std::vector<CrossingFeeder>> crossingFeedersOf(crossings.size());
+    for (std::size_t ci = 0; ci < crossings.size(); ++ci) {
+        const CrossingSite& site = crossingSites[ci];
+        if (!site.resolved()) continue;
+        std::vector<CrossingFeeder>& feeders = crossingFeedersOf[ci];
+        feeders = crossingFeeders(site, switchNet.turnouts(), paths);
+        if (feeders.empty()) continue;
+        const glm::dvec3 org = data.sceneOrigin();
+        std::size_t guarded = 0;
+        for (std::size_t k = 0; k < sigPlacements.size(); ++k) {
+            const SignalPlacement& sp = sigPlacements[k];
+            if (sp.kind != SignalKind::Dwarf && sp.kind != SignalKind::Entry &&
+                sp.kind != SignalKind::Exit && sp.kind != SignalKind::Block)
+                continue;
+            const glm::vec2 at(static_cast<float>(sp.world.x - org.x),
+                               static_cast<float>(sp.world.y - org.y));
+            for (CrossingFeeder& f : feeders) {
+                const TrackPath& p = paths[f.path];
+                if (!p.nearXY(at, 4.0f)) continue;
+                // Nearest point on the feeder, out from its join.
+                float bestS = f.sJoin;
+                double bestD = 4.0;
+                bool hit = false;
+                // Only as far out as the approach reaches: a feeder can be a long road.
+                const float far = f.sJoin + f.dirAway * (site.outerM - f.baseM);
+                const float lo = std::max(0.0f, std::min(f.sJoin, far));
+                const float hi = std::min(p.length(), std::max(f.sJoin, far));
+                for (float u = lo; u <= hi; u += 0.5f) {
+                    const glm::vec3 q = p.poseAt(u).pos;
+                    const double d = std::hypot(q.x - at.x, q.y - at.y);
+                    if (d < bestD) { bestD = d; bestS = u; hit = true; }
+                }
+                if (!hit) continue;
+                const float out = (bestS - f.sJoin) * static_cast<float>(f.dirAway);
+                if (out <= 0.0f) continue;
+                // Facing the crossing: a train passing it is moving back toward the join.
+                const glm::vec3 t = p.poseAt(bestS).tangent;
+                if ((sp.forward.x * t.x + sp.forward.y * t.y) * -f.dirAway <= 0.0) continue;
+                f.guards.push_back({static_cast<int>(k), out});
+                ++guarded;
+            }
+        }
+        std::printf("[Crossing] %-16s %zu road(s) lead onto it through switches, %zu "
+                    "signal(s) on them\n",
+                    crossings[ci].name.c_str(), feeders.size(), guarded);
+    }
 
     // Flag posts: the hand signal the station's TXP hangs out.
     const std::vector<FlagPost> flagPosts = loadFlagPosts(datasetRoot);
@@ -1851,6 +1900,7 @@ int main(int argc, char** argv) {
         buildTurnoutsByPath(switchNet, paths.size());
     std::vector<AxlePlace> axles;
     std::vector<char> signalOpen;
+    std::vector<char> switchDiverging;
     std::vector<CrossingOccupancy> occ;
     std::vector<CrossingPhase> was;
     bool warnedOffTrack = false; // said once, not sixty times a second
@@ -4068,6 +4118,7 @@ int main(int argc, char** argv) {
             // settle further down the loop - and one frame is nothing against a sequence
             // measured in seconds.
             signalOpen.assign(sigPlacements.size(), 0);
+            switchDiverging.clear(); // filled on first need, once per frame
             for (std::size_t k = 0; k < sigPlacements.size(); ++k)
                 signalOpen[k] = signalGivesAuthority(sigPlacements[k]) ? 1 : 0;
             for (std::size_t ci = 0; ci < crossings.size(); ++ci) {
@@ -4088,6 +4139,19 @@ int main(int argc, char** argv) {
                 // can reach the crossing without first passing it.
                 const std::vector<float> reach =
                     crossingReach(site, crossingGuards[ci], signalOpen);
+                // And the roads leading onto it through switches, live only while the
+                // points are set to them.
+                const std::vector<CrossingFeeder>& feeders = crossingFeedersOf[ci];
+                if (!feeders.empty() && switchDiverging.empty()) {
+                    switchDiverging.assign(switchNet.size(), 0);
+                    for (std::size_t i = 0; i < switchNet.size(); ++i)
+                        switchDiverging[i] =
+                            switchNet.state(static_cast<int>(i)) == SwitchState::Diverging;
+                }
+                const std::vector<float> feederLive =
+                    feeders.empty() ? std::vector<float>{}
+                                    : crossingFeederReach(site, feeders, reach,
+                                                          switchDiverging, signalOpen);
                 occ.assign(site.tracks.size(), CrossingOccupancy{});
                 for (const AxlePlace& ax : axles) {
                     float onS = 0.0f;
@@ -4099,7 +4163,17 @@ int main(int argc, char** argv) {
                     int under = crossingTrackUnder(site, ax.path, ax.s, onS, decided);
                     if (under < 0 && !decided)
                         under = crossingTrackUnder(site, paths, glm::vec2(ax.pos), onS);
-                    if (under < 0) continue; // not on this crossing at all
+                    if (under < 0) {
+                        // Not on the crossing's own roads; perhaps on one the points are
+                        // leading onto them.
+                        float dist = 0.0f;
+                        const int f =
+                            crossingFeederUnder(feeders, feederLive, ax.path, ax.s, dist);
+                        if (f < 0) continue; // not on this crossing at all
+                        CrossingOccupancy& o = occ[feeders[f].track];
+                        (feeders[f].side == 0 ? o.outerA : o.outerB) = true;
+                        continue;
+                    }
                     const float rel = onS - site.tracks[under].s;
                     // Where it is, and then where the points are taking it - out on the
                     // approach the roads have not divided and only the second can answer.

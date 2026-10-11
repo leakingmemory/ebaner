@@ -514,6 +514,68 @@ int main(int argc, char** argv) {
               "a crossing with nothing in its approach is untouched");
     }
 
+    // A loop joining a single-track main line between its platforms and a crossing.
+    //
+    // The crossing is on the main line only, so a train on the loop is on none of its
+    // roads; it is the north switch that decides whether it is coming, and only while that
+    // switch is set to the loop does it count.
+    std::puts("\nA loop leading onto the crossing through a switch:");
+    {
+        std::vector<glm::vec3> mainPts, loopPts;
+        for (int i = 0; i <= 80; ++i) mainPts.push_back({0.0f, i * 25.0f, 0.0f});
+        for (int i = 0; i <= 24; ++i) loopPts.push_back({5.0f, 200.0f + i * 25.0f, 0.0f});
+        const std::vector<TrackPath> paths{
+            TrackPath(1, 0, mainPts, std::vector<std::uint16_t>(mainPts.size(), 80)),
+            TrackPath(2, 0, loopPts, std::vector<std::uint16_t>(loopPts.size(), 40))};
+        std::vector<Turnout> tos(2);
+        tos[0].mainPath = 0; tos[0].sMain = 200.0f; tos[0].sidingPath = 1;
+        tos[0].sSiding = 0.0f; tos[0].facingS = +1; // south: facing going north
+        tos[1].mainPath = 0; tos[1].sMain = 800.0f; tos[1].sidingPath = 1;
+        tos[1].sSiding = paths[1].length(); tos[1].facingS = -1; // north: facing going south
+
+        CrossingSite site;
+        site.tracks.push_back({0, 1000.0f}); // 200 m north of the north switch
+        site.innerM = 50.0f;
+        site.outerM = 800.0f;
+
+        std::vector<CrossingFeeder> feeders = crossingFeeders(site, tos, paths);
+        check(feeders.size() == 1, "the loop is the one road leading onto it");
+        if (feeders.size() == 1) {
+            const CrossingFeeder& f = feeders[0];
+            check(f.track == 0 && f.side == 0 && f.turnout == 1,
+                  "onto its south approach, through the north switch");
+            check(std::abs(f.baseM - 200.0f) < 0.01f && f.dirAway == -1,
+                  "joining 200 m out, and running away from it southward");
+
+            const std::vector<float> full{800.0f, 800.0f};
+            auto seen = [&](const std::vector<CrossingFeeder>& fs, const std::vector<char>& dv,
+                            const std::vector<float>& reach, const std::vector<char>& open,
+                            float s) {
+                const std::vector<float> live =
+                    crossingFeederReach(site, fs, reach, dv, open);
+                float dist = 0.0f;
+                return crossingFeederUnder(fs, live, 1, s, dist) >= 0 ? dist : -1.0f;
+            };
+            check(seen(feeders, {0, 0}, full, {}, 500.0f) < 0.0f,
+                  "switch set to the main line: a train on the loop is not seen");
+            check(std::abs(seen(feeders, {0, 1}, full, {}, 500.0f) - 300.0f) < 0.01f,
+                  "set to the loop: it is, 300 m out by the track");
+            check(seen(feeders, {1, 0}, full, {}, 500.0f) < 0.0f,
+                  "the south switch has no say in it");
+            check(seen(feeders, {0, 1}, {150.0f, 800.0f}, {}, 500.0f) < 0.0f,
+                  "nor when the main line is cut short of the switch");
+
+            // The loop's own exit signal, 150 m out from the switch, facing the crossing.
+            feeders[0].guards.push_back({0, 150.0f});
+            check(seen(feeders, {0, 1}, full, {0}, 500.0f) > 0.0f,
+                  "its signal at danger leaves a train between it and the switch seen");
+            check(seen(feeders, {0, 1}, full, {0}, 400.0f) < 0.0f,
+                  "and breaks the approach for one standing behind it");
+            check(seen(feeders, {0, 1}, full, {1}, 400.0f) > 0.0f,
+                  "until it clears");
+        }
+    }
+
     std::puts("\nWhat counts as a signal giving authority:");
     {
         auto mk = [](SignalKind k, SignalAspect a) {

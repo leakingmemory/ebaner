@@ -278,6 +278,132 @@ std::vector<float> crossingReach(const CrossingSite& site,
     return reach;
 }
 
+std::vector<CrossingFeeder> crossingFeeders(const CrossingSite& site,
+                                            const std::vector<Turnout>& turnouts,
+                                            const std::vector<TrackPath>& paths) {
+    std::vector<CrossingFeeder> out;
+    auto own = [&](int path) {
+        for (const CrossingSite::On& o : site.tracks)
+            if (o.path == path) return true;
+        return false;
+    };
+    // Something to walk out along: a road, where on it to start, which way is away from
+    // the crossing, how far that start is from it, and the feeder it belongs to.
+    struct Walk {
+        int track, side, path;
+        float s;
+        int dir;
+        float base;
+        int feeder;
+    };
+    std::vector<Walk> todo;
+    for (std::size_t t = 0; t < site.tracks.size(); ++t) {
+        const CrossingSite::On& o = site.tracks[t];
+        if (o.path < 0 || o.path >= static_cast<int>(paths.size())) continue;
+        todo.push_back({static_cast<int>(t), 0, o.path, o.s, -1, 0.0f, -1});
+        todo.push_back({static_cast<int>(t), 1, o.path, o.s, +1, 0.0f, -1});
+    }
+    std::vector<std::pair<int, int>> seen; // (track, turnout): each branch once per road
+    auto add = [&](const Walk& w, int turnout, int path, float sJoin, int dirAway,
+                   float base) {
+        if (base > site.outerM || own(path)) return;
+        if (path < 0 || path >= static_cast<int>(paths.size())) return;
+        const std::pair<int, int> key{w.track, turnout};
+        if (std::find(seen.begin(), seen.end(), key) != seen.end()) return;
+        seen.push_back(key);
+        CrossingFeeder f;
+        f.track = w.track;
+        f.side = w.side;
+        f.parent = w.feeder;
+        f.path = path;
+        f.sJoin = sJoin;
+        f.dirAway = dirAway;
+        f.baseM = base;
+        f.turnout = turnout;
+        out.push_back(f);
+        todo.push_back({w.track, w.side, path, sJoin, dirAway, base,
+                        static_cast<int>(out.size()) - 1});
+    };
+    // Breadth first, so a feeder always comes after the one it leads off - which is the
+    // order crossingFeederReach needs them in.
+    for (std::size_t q = 0; q < todo.size(); ++q) {
+        const Walk w = todo[q];
+        const float len = paths[w.path].length();
+        for (std::size_t i = 0; i < turnouts.size(); ++i) {
+            const Turnout& to = turnouts[i];
+            // A branch joining this road further out: a train on it runs onto this road
+            // through the heel of the switch and on toward the crossing - trailing for
+            // it, so facing for a move away from the crossing.
+            if (to.mainPath == w.path && to.facingS == w.dir) {
+                const float d = (to.sMain - w.s) * w.dir;
+                if (d > 1e-3f)
+                    add(w, static_cast<int>(i), to.sidingPath, to.sSiding, to.sSiding < 0.5f ? +1 : -1,
+                        w.base + d);
+            }
+            // This road ending as the branch of a switch on another: a train on that one
+            // takes the branch, facing, and comes onto this road.
+            if (to.sidingPath == w.path && to.mainPath >= 0 && to.mainPath != w.path) {
+                const float end = w.dir > 0 ? len : 0.0f;
+                if (std::abs(to.sSiding - end) < 1.0f)
+                    add(w, static_cast<int>(i), to.mainPath, to.sMain, -to.facingS,
+                        w.base + std::abs(end - w.s));
+            }
+        }
+    }
+    return out;
+}
+
+std::vector<float> crossingFeederReach(const CrossingSite& site,
+                                       const std::vector<CrossingFeeder>& feeders,
+                                       const std::vector<float>& reach,
+                                       const std::vector<char>& diverging,
+                                       const std::vector<char>& open) {
+    std::vector<float> live(feeders.size(), -1.0f);
+    for (std::size_t i = 0; i < feeders.size(); ++i) {
+        const CrossingFeeder& f = feeders[i];
+        if (f.turnout < 0 || f.turnout >= static_cast<int>(diverging.size()) ||
+            !diverging[f.turnout])
+            continue; // the points are set away from it: nothing on it is coming here
+        // What it leads onto has to reach as far as the join: a signal at danger on that
+        // road between here and the crossing holds anything off this one too.
+        float onto = 0.0f;
+        if (f.parent < 0) {
+            const std::size_t slot = 2 * static_cast<std::size_t>(f.track) +
+                                     static_cast<std::size_t>(f.side);
+            onto = slot < reach.size() ? reach[slot] : site.outerM;
+        } else {
+            onto = f.parent < static_cast<int>(i) ? live[f.parent] : -1.0f;
+        }
+        if (onto < f.baseM) continue;
+        float r = site.outerM;
+        for (const auto& [placement, atM] : f.guards) {
+            if (placement >= 0 && placement < static_cast<int>(open.size()) &&
+                open[placement])
+                continue;
+            r = std::min(r, f.baseM + atM);
+        }
+        live[i] = r;
+    }
+    return live;
+}
+
+int crossingFeederUnder(const std::vector<CrossingFeeder>& feeders,
+                        const std::vector<float>& live, int axlePath, float axleS,
+                        float& dist) {
+    if (axlePath < 0) return -1;
+    int on = -1;
+    for (std::size_t i = 0; i < feeders.size() && i < live.size(); ++i) {
+        const CrossingFeeder& f = feeders[i];
+        if (f.path != axlePath || live[i] < 0.0f) continue;
+        const float d = (axleS - f.sJoin) * static_cast<float>(f.dirAway);
+        if (d < -0.5f) continue; // the far side of the join: not on the way here
+        const float total = f.baseM + std::max(d, 0.0f);
+        if (total > live[i]) continue;
+        if (on < 0 || total < dist) { on = static_cast<int>(i); dist = total; }
+    }
+    return on;
+}
+
 std::vector<std::vector<int>> buildTurnoutsByPath(const SwitchNetwork& net,
                                                   std::size_t pathCount) {
     std::vector<std::vector<int>> out(pathCount);

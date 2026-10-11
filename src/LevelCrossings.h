@@ -294,6 +294,53 @@ std::vector<float> crossingReach(const CrossingSite& site,
                                  const std::vector<CrossingGuard>& guards,
                                  const std::vector<char>& open);
 
+// A road that leads onto one of a crossing's approaches through a switch, without itself
+// being one of the crossing's roads - a station's loop joining the main line between the
+// platforms and a crossing that is on the main line alone.
+//
+// A train on that road is on no road the crossing knows, so without this it is never seen:
+// it stands at its signal, gets its route, and the crossing does not ring for it. Whether it
+// is coming is the points' to say, so each feeder names the one switch that has to be set
+// to it, and counts only while it is. A feeder is a whole path from where it joins, walking
+// away from the crossing; one may lead off another, to the depth a station needs.
+struct CrossingFeeder {
+    int track = 0;      // the crossing road it leads onto
+    int side = 0;       // which approach: 0 the -s side, 1 the +s side, as reach is indexed
+    int parent = -1;    // the feeder it leads off, -1 if straight off the crossing's road
+    int path = -1;      // the road itself
+    float sJoin = 0.0f; // where on it it joins what leads to the crossing
+    int dirAway = 1;    // +1 if moving in +s along it moves away from the crossing
+    float baseM = 0.0f; // track distance from the crossing to the join
+    int turnout = -1;   // the switch that must be Diverging for it to lead there
+    // Signals on it facing the crossing: a placement, and how far out from the join.
+    std::vector<std::pair<int, float>> guards;
+};
+
+// Every road that can lead onto `site`'s approaches within its outer reach, found by
+// walking out from the crossing along its roads and through the switches facing it. Paths
+// that are the crossing's own roads are left out: those are seen directly.
+std::vector<CrossingFeeder> crossingFeeders(const CrossingSite& site,
+                                            const std::vector<Turnout>& turnouts,
+                                            const std::vector<TrackPath>& paths);
+
+// How far along each feeder a train is seen this instant, as track distance from the
+// crossing: -1 for one that leads nowhere just now (its switch is set the other way, or
+// what it leads onto is cut short of the join), otherwise outer reach or the nearest of its
+// own signals at danger. `reach` is crossingReach's answer for the crossing's own roads,
+// `diverging` says per turnout whether it is set to its branch, and `open` is as for
+// crossingReach.
+std::vector<float> crossingFeederReach(const CrossingSite& site,
+                                       const std::vector<CrossingFeeder>& feeders,
+                                       const std::vector<float>& reach,
+                                       const std::vector<char>& diverging,
+                                       const std::vector<char>& open);
+
+// Which live feeder an axle walking `axlePath` at `axleS` is on, -1 for none; `dist` comes
+// back as its track distance from the crossing.
+int crossingFeederUnder(const std::vector<CrossingFeeder>& feeders,
+                        const std::vector<float>& live, int axlePath, float axleS,
+                        float& dist);
+
 // What the three circuits see this instant.
 struct CrossingOccupancy {
     bool outerA = false; // approach on the -s side
