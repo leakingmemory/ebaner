@@ -1364,6 +1364,11 @@ the portable one (`shaders\` and `data\` beside the executable).
 For a walk-through of driving a train from cold, see
 [Driving the Class 93](docs/driving-class-93.md).
 
+The driving keys work the cab you are sitting in (`V`), or the front cab in any other
+view. What `,` and `.` move depends on the machine: the Class 93 has one combined
+power/brake lever, while the Di 4 and CD 312 have a power controller with a separate
+train brake (`K`/`L`) and locomotive brake (`H`/`J`).
+
 | Input        | Action                          |
 |--------------|---------------------------------|
 | W / A / S / D| Move horizontally               |
@@ -1372,16 +1377,33 @@ For a walk-through of driving a train from cold, see
 | Left Shift   | Move faster (×8)                |
 | C            | Toggle chase camera (the vehicle) |
 | V            | Driver's-seat view; press again to switch cab, again to exit |
-| I            | Start / stop the diesel engines (both together) |
+| I            | Start / stop the diesel engines (all of the set's engines together) |
 | Up / Down    | Hand-push the vehicle fwd / back |
-| , / .        | Combined lever: step toward power / toward brake (the viewed cab) |
+| , / .        | Class 93: combined lever toward power / toward brake (N → P1–P5, N → B1–B4 → EMERG). Di 4, CD 312: power controller up / down (P1–P5 above N, the electric brake E1–E5 below it) |
+| K / L        | Train brake: release / apply a notch (Di 4, CD 312) |
+| H / J        | Locomotive (independent) brake: release / apply (Di 4, CD 312) |
 | Space        | Emergency brake                 |
-| F / N / R    | Reverser: Forward / Neutral / Reverse (the viewed cab) |
+| F / N / R    | Reverser: Forward / Neutral / Reverse. Putting a cab in gear centres every other cab |
 | T            | Throw the switch under the crosshair (straight ⇄ diverging) |
+| U            | Uncouple the coupler nearest the camera (within 30 m, train stopped): press once to select it, again within 5 s to part it |
 | P            | Hand the train to the **auto-driver**, or take it back |
+| O            | Open / close the traffic-manager map |
 | M            | Mute / unmute sound             |
 | Tab          | Release/grab cursor             |
-| Esc          | Open menu (Exit); press again to resume |
+| Esc          | Open menu (Exit); press again to resume. In a picker, backs out one step |
+
+In the traffic-manager map (`O`), the cab keys are replaced by the map's own:
+
+| Input        | Action                          |
+|--------------|---------------------------------|
+| W / A / S / D| Pan                             |
+| Mouse wheel, Z / X | Zoom in / out             |
+| Left click on a switch | Throw it (motor switches only, and only when its locking allows) |
+| Left click on a signal | Arm it, then click a ringed destination to set the route. Click a signal with a route set to cancel it |
+| R            | Pick an exit route at the current station |
+| E            | Pick an entry signal at the current station |
+| N / B, Right / Left | Next / previous station |
+| Up / Down, Enter | Move and choose in a picker |
 
 ## Track editor (`ebaner-trackedit`)
 
