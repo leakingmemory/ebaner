@@ -24,8 +24,7 @@ itself is covered in [Using the traffic manager](traffic-manager.md).
 ## Which stations
 
 These are stations with a TXP and their own interlocking, with entry and exit routes,
-on lines with no line block either side. At the time of writing that is Bodø, Mo i Rana,
-and the stations signed `NO SEG`, `BJE`, `DVT` and `MOS`.
+on lines with no line block either side, such as Bodø and Mo i Rana.
 
 A line block is train detection and interlocking out on the line between two stations,
 monitored by the signalling system: the exit, entry and any block signals all depend on

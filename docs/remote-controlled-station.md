@@ -34,13 +34,8 @@ See [Using the traffic manager](traffic-manager.md) for the map itself.
 
 ## Where
 
-At the time of writing, the remote-controlled stretches are:
-
-- `LSM` – `NSK` – `MAJ` – `SGD`, the longest gap being Majavatn to Svenningdal (31 km)
-- `AGL` – `GRG`
-
-Their lines each have one block signal each way, at a track-circuit border in the
-middle, so each line is two sections and up to two trains can follow each other along it.
+On Nordlandsbanen, the line south of **Eiterstraum** is remote-controlled, and
+Eiterstraum is the border station.
 
 ## Nothing to man
 

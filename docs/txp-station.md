@@ -25,9 +25,9 @@ station with its own interlocking.
 ## Which stations
 
 A TXP station is a station with a TXP. The ones worked as described here have simple
-entry signals and a flag post. At the time of writing, there are seven of them. Their signals are named with the
-station's short name, for example `OTR 1` and `OTR 2` at Oteråga, and `NO FSK 1` and
-`NO FSK 2` at Fauske. The map's title names the station you are working.
+entry signals and a flag post. Their signals are named with the station's short name,
+for example `OTR 1` and `OTR 2` at Oteråga, and `NO FSK 1` and `NO FSK 2` at Fauske. The
+map's title names the station you are working.
 
 ## The station panel
 
