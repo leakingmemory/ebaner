@@ -28,7 +28,7 @@ signalling and interlocking editor the dataset's overlay is written with.
 - **Switches** — a hand switch stand with its indicator target at every turnout. `T`
   throws one; a train runs the way it is set, forces a trailing switch set against it,
   and derails at a broken one.
-- **Signalling** — track circuits, interlocked entry and exit routes, line block with
+- **Signalling** — track circuits, interlocked entry and exit routes, line block and
   block signals, level crossings, and stations worked by a TXP with simple signals,
   flags and train orders, all worked from the traffic manager (`O`). See
   [Using the traffic manager](docs/traffic-manager.md) and the station guides under

@@ -27,12 +27,11 @@ These are stations with a TXP and their own interlocking, with entry and exit ro
 on lines with no line block either side. At the time of writing that is Bodø, Mo i Rana,
 and the stations signed `NO SEG`, `BJE`, `DVT` and `MOS`.
 
-A line block is train detection and interlocking out on the line: the exit, entry and
-any block signals all depend on it, and it sets the line for one direction at a time.
-The simulator currently recognises a line block only where block signals are authored
-on it (`overlay/block-signals.txt`), which is between `LSM`, `NSK`, `MAJ` and `SGD`, and
-between `AGL` and `GRG`. Those stretches are remote-controlled, with no TXP and no train
-orders: see [Working a remote-controlled station](remote-controlled-station.md).
+A line block is train detection and interlocking out on the line between two stations,
+monitored by the signalling system: the exit, entry and any block signals all depend on
+it, and it sets the line for one direction at a time. A line with a line block is worked
+by the signalling alone, with no TXP and no train orders: see
+[Working a remote-controlled station](remote-controlled-station.md).
 
 ## What the signals do
 

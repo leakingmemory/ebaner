@@ -34,17 +34,13 @@ See [Using the traffic manager](traffic-manager.md) for the map itself.
 
 ## Where
 
-**In the simulator today, a line block is only recognised on a line that has block
-signals.** The simulator works out where a line block starts and ends from the block
-signals authored on it (`overlay/block-signals.txt`); it can't yet represent a line
-block with no block signals. At the time of writing that is:
+At the time of writing, the remote-controlled stretches are:
 
 - `LSM` – `NSK` – `MAJ` – `SGD`, the longest gap being Majavatn to Svenningdal (31 km)
 - `AGL` – `GRG`
 
-Each of these lines has one block signal each way, at a track-circuit border in the
-middle. So each line is two block sections, and up to two trains can follow each other
-along it.
+Their lines each have one block signal each way, at a track-circuit border in the
+middle, so each line is two sections and up to two trains can follow each other along it.
 
 ## Nothing to man
 
