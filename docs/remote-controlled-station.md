@@ -23,10 +23,11 @@ stretch. The dispatcher works every station from the traffic manager by setting 
 and the signalling decides whether each route is safe to give. If the line block says no,
 the route is refused.
 
-The one exception is the **border station**: the last station of the remote-controlled
-area, where it meets a line with no line block. On its line-block side it works exactly
-like the others. On its other side there is nothing to protect the line, so that side is
-worked by a TXP with train orders, as in
+The one exception is the **border station**: a station with a line block on one side,
+and on the other a line with no interlocking between the stations, worked by train
+orders. A border station is **manned by a TXP**. On its line-block side the signalling
+protects the line, exactly as for the other stations here. On its other side nothing
+does, so the TXP works that line with train orders, as in
 [Working a TXP station without line block](txp-station-without-line-block.md).
 
 See [Using the traffic manager](traffic-manager.md) for the map itself.
@@ -44,11 +45,6 @@ block with no block signals. At the time of writing that is:
 Each of these lines has one block signal each way, at a track-circuit border in the
 middle. So each line is two block sections, and up to two trains can follow each other
 along it.
-
-The stations at the ends of these stretches are the border stations. **At the time of
-writing, no border station has departure positions authored**, so it can't yet join
-the train-order network. Its line-block side works as described here. Its other side is
-not yet workable by train order in the simulator.
 
 ## Nothing to man
 

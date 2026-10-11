@@ -24,10 +24,8 @@ station with its own interlocking.
 
 ## Which stations
 
-A station is a TXP station if the overlay places departure positions there
-(`overlay/txp-positions.txt`). The ones worked as described here also have simple entry
-signals (`overlay/simple-entry-signals.txt`) and a flag post (`overlay/flag-posts.txt`).
-At the time of writing, seven stations have all three. Their signals are named with the
+A TXP station is a station with a TXP. The ones worked as described here have simple
+entry signals and a flag post. At the time of writing, there are seven of them. Their signals are named with the
 station's short name, for example `OTR 1` and `OTR 2` at Oteråga, and `NO FSK 1` and
 `NO FSK 2` at Fauske. The map's title names the station you are working.
 

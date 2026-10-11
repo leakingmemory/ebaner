@@ -188,9 +188,8 @@ line block use no train orders at all: see
 [Working a remote-controlled station](remote-controlled-station.md).
 
 Where the line has no fixed signalling between stations, trains run on **train orders**
-agreed between the manned stations at each end of a section. Which stations can deal with
-each other is worked out from where departure positions have been placed
-(`overlay/txp-positions.txt`): each such station deals with the nearest one either side.
+agreed between the TXPs at each end of a section. Each station with a TXP deals with the
+nearest manned one on either side.
 
 **Manning a station puts it on the network.** It connects to the nearest manned station
 on each side and takes over its share of the line. It is refused only if a train order is
