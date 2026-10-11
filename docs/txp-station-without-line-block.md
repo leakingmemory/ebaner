@@ -24,16 +24,16 @@ itself is covered in [Using the traffic manager](traffic-manager.md).
 ## Which stations
 
 These are stations with entry and exit routes (`overlay/entry-signals.txt`,
-`overlay/exit-signals.txt`) and departure positions (`overlay/txp-positions.txt`), but no
-block signals on the lines either side (`overlay/block-signals.txt`). At the time of
-writing that is Bodø, Mo i Rana, and the stations signed `NO SEG`, `BJE`, `DVT` and
-`MOS`.
+`overlay/exit-signals.txt`) and departure positions (`overlay/txp-positions.txt`), on
+lines with no line block either side. At the time of writing that is Bodø, Mo i Rana,
+and the stations signed `NO SEG`, `BJE`, `DVT` and `MOS`.
 
-Where block signals *are* authored (between `LSM`, `NSK`, `MAJ` and `SGD`, and between
-`AGL` and `GRG`), the line block claims the line for one direction and holds following
-trains at the block signals. None of that happens at the stations in this guide. Those
-stretches are remote-controlled, with no TXP and no train orders: see
-[Working a remote-controlled station](remote-controlled-station.md).
+A line block is train detection and interlocking out on the line: the exit, entry and
+any block signals all depend on it, and it sets the line for one direction at a time.
+The simulator currently recognises a line block only where block signals are authored
+on it (`overlay/block-signals.txt`), which is between `LSM`, `NSK`, `MAJ` and `SGD`, and
+between `AGL` and `GRG`. Those stretches are remote-controlled, with no TXP and no train
+orders: see [Working a remote-controlled station](remote-controlled-station.md).
 
 ## What the signals do
 
@@ -132,8 +132,8 @@ Two trains meeting at your station from opposite directions, one to wait for the
 
 ## Things the interlocking will not catch
 
-- **A train out on the line.** With no line block, there are no track circuits or block
-  signals telling you a train is between the stations. The only record is the train order.
+- **A train out on the line.** With no line block, nothing in the signalling detects a
+  train between the stations. The only record is the train order.
   Never clear an exit signal without *line clear* from the far end.
 - **A following train.** Nothing holds a second train behind the first out on the line.
   One order covers one train; wait for the arrival before asking again.
