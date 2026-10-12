@@ -1349,10 +1349,13 @@ int main(int argc, char** argv) {
             }
         }
     };
-    // Siding <-> yard on a road already drawn. Nothing about it moves.
+    // Siding <-> yard on a road already drawn. Nothing about it moves. A rebuilt main
+    // line stays one: it is written by hand, and turning it into a siding would cut it
+    // off from the line it rejoins.
     auto retypeDrawnTrack = [&](std::uint32_t id) {
         for (TrackEdit* e : newTrackRecords()) {
             if (e->track != id) continue;
+            if (e->trackType == 0) return;
             e->trackType = e->trackType == 2 ? 1 : 2;
             relayDrawnTrack(*e);
             pathMsg = e->trackType == 2 ? "yard track" : "siding";
@@ -4598,7 +4601,7 @@ int main(int argc, char** argv) {
                 const glm::dvec3& p = sel->pts[movPt];
                 std::snprintf(buf, sizeof(buf),
                               "%#x %s   point %d of %zu%s   %.1f %.1f  z=%.2f",
-                              sel->track, sel->trackType == 2 ? "yard" : "siding",
+                              sel->track, sel->trackType == 2 ? "yard" : sel->trackType == 0 ? "main" : "siding",
                               movPt + 1, sel->pts.size(),
                               (movPt == 0 || movPt + 1 == static_cast<int>(sel->pts.size()))
                                   ? " (end)" : "",
@@ -4735,7 +4738,7 @@ int main(int argc, char** argv) {
             for (const TrackEdit* e : roads)
                 if (e->track == selNewTrack)
                     std::snprintf(selbuf, sizeof(selbuf), "   sel %#x %s  %.0f m",
-                                  e->track, e->trackType == 2 ? "yard" : "siding",
+                                  e->track, e->trackType == 2 ? "yard" : e->trackType == 0 ? "main" : "siding",
                                   polyLength(e->pts));
             std::snprintf(buf, sizeof(buf), "ROADS DRAWN %zu%s", roads.size(), selbuf);
             appendText(tv, buf, x, 40.0f + 4 * lh, sc,

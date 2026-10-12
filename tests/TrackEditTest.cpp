@@ -906,6 +906,50 @@ int main(int argc, char** argv) {
         }
     }
 
+    // A drawn main line: a stretch of line the export lost, rebuilt by hand. It has to
+    // come back off the file as main line - a siding would not chain onto the main
+    // either side of it - and carry the line speed the survey would have given it.
+    {
+        std::puts("\n  A drawn main line:");
+        TrackEdit rec;
+        rec.kind = TrackEdit::Track;
+        rec.track = kNewTrackIdBase + 901;
+        rec.trackType = 0;
+        rec.kmh = 90;
+        rec.pts = {{1000.0, 2000.0, 30.0}, {1020.0, 2005.0, 30.2}, {1040.0, 2010.0, 30.4}};
+        const std::string scratch =
+            (std::filesystem::temp_directory_path() / "ebaner-main-test").string();
+        std::error_code ec;
+        std::filesystem::create_directories(scratch + "/overlay", ec);
+        if (writeTrackOverlay(scratch, {rec})) {
+            const std::vector<TrackEdit> back = loadTrackOverlay(scratch);
+            const bool one = back.size() == 1 && back[0].pts.size() == rec.pts.size();
+            check(one, "the road comes back whole", one ? 1.0 : 0.0, 1.0);
+            if (one) {
+                check(back[0].trackType == 0, "as main line", back[0].trackType, 0.0);
+                check(back[0].kmh == 90, "with its line speed (km/h)", back[0].kmh, 90.0);
+                std::vector<TrackSegment> segs;
+                applyTrackOverlay(segs, back);
+                const bool every = segs.size() == 1 &&
+                                   segs[0].speed.size() == segs[0].pts.size() &&
+                                   std::all_of(segs[0].speed.begin(), segs[0].speed.end(),
+                                               [](std::uint16_t v) { return v == 90; });
+                check(every && segs[0].trackType == 0,
+                      "and every point of the rebuilt track runs at it", every ? 1.0 : 0.0,
+                      1.0);
+            }
+            // Without a speed the line reads as before: no kmh token, no speed.
+            rec.kmh = 0;
+            rec.trackType = 1;
+            writeTrackOverlay(scratch, {rec});
+            const std::vector<TrackEdit> plain = loadTrackOverlay(scratch);
+            check(plain.size() == 1 && plain[0].trackType == 1 && plain[0].kmh == 0 &&
+                      plain[0].pts.size() == rec.pts.size(),
+                  "a siding with no speed still reads as one", double(plain.size()), 1.0);
+        }
+        std::filesystem::remove_all(scratch, ec);
+    }
+
     // Moving a vertex of the export's own track.
     //
     // A drawn siding is its own record, so moving one of its points rewrites the record

@@ -59,20 +59,25 @@ constexpr std::uint32_t kNewTrackIdBase = 0xD0000000;
 //   rail ax ay az bx by bz   - add a new connecting rail (a-b); its ends land on the
 //                              tracks there, so a switch forms at each (build a
 //                              crossover/slip the export omitted)
-//   track <idhex> <siding|yard> x1 y1 z1 x2 y2 z2 ...
+//   track <idhex> <siding|yard|main> [kmh=<n>] x1 y1 z1 x2 y2 z2 ...
 //                            - a whole new road the export does not carry, drawn point
 //                              by point in the editor. Unlike `rail` it keeps its own
 //                              id, because the other overlay files anchor to a track by
 //                              `<trackHex>:<frac>` and a derived id would shift under
-//                              them the moment an earlier edit was inserted.
+//                              them the moment an earlier edit was inserted. `main`
+//                              rebuilds a stretch of line the export lost: it chains only
+//                              onto main-line ends, and kmh gives it the line speed the
+//                              survey would have carried.
 struct TrackEdit {
     enum Kind { Link, Elev, Move, Rail, Track, Drop } kind = Link;
     // Link/Rail: the two endpoints. Elev: a = {x, y, newZ}. Move: a = old, b = new pos.
     glm::dvec3 a{0.0}, b{0.0};
     // Track: the drawn polyline, two points or more.
     std::vector<glm::dvec3> pts;
-    // Track: 1 = siding, 2 = yard.
+    // Track: 0 = main line, 1 = siding, 2 = yard.
     std::uint8_t trackType = 1;
+    // Track: line speed for every point, km/h (0 = unknown).
+    std::uint16_t kmh = 0;
     // Elev/Move: restrict the vertex match to this track (0 = any track). Lets
     // coincident points from different sidings be edited independently.
     // Track: the new track's own id. Drop: the track to remove.

@@ -110,7 +110,14 @@ std::vector<TrackEdit> loadTrackOverlay(const std::string& datasetRoot) {
             e.kind = TrackEdit::Track;
             e.track = static_cast<std::uint32_t>(
                 std::strtoul(idTok.c_str(), nullptr, 16)); // strtoul: a bad id is 0, not a throw
-            e.trackType = typeTok == "yard" ? 2 : 1;
+            e.trackType = typeTok == "yard" ? 2 : typeTok == "main" ? 0 : 1;
+            is >> std::ws;
+            if (is.peek() == 'k') {
+                std::string kmhTok;
+                is >> kmhTok;
+                if (kmhTok.compare(0, 4, "kmh=") == 0)
+                    e.kmh = static_cast<std::uint16_t>(std::strtoul(kmhTok.c_str() + 4, nullptr, 10));
+            }
             glm::dvec3 p(0.0);
             while (is >> p.x >> p.y >> p.z) e.pts.push_back(p);
             if (e.pts.size() >= 2) edits.push_back(e);
@@ -223,6 +230,7 @@ void applyTrackOverlay(std::vector<TrackSegment>& segs,
         t.trackType = e.trackType;
         t.medium = 0x20; // surface
         t.pts = e.pts;
+        if (e.kmh != 0) t.speed.assign(t.pts.size(), e.kmh);
         segs.push_back(std::move(t));
         ++tracks;
     }
@@ -316,7 +324,8 @@ void writeEdits(std::ofstream& f, const std::vector<TrackEdit>& edits) {
             f << "drop " << e.track << '\n';
         } else if (e.kind == TrackEdit::Track) {
             f << "track " << std::hex << e.track << std::dec << ' '
-              << (e.trackType == 2 ? "yard" : "siding");
+              << (e.trackType == 2 ? "yard" : e.trackType == 0 ? "main" : "siding");
+            if (e.kmh != 0) f << " kmh=" << e.kmh;
             for (const glm::dvec3& p : e.pts)
                 f << ' ' << p.x << ' ' << p.y << ' ' << p.z;
             f << '\n';
