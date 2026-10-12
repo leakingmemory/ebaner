@@ -85,8 +85,3 @@ const Station* runStationPicker(GLFWwindow* window, VulkanRenderer& renderer,
     }
     return nullptr; // closed
 }
-
-void drawLoadingNotice(GLFWwindow* window, VulkanRenderer& renderer,
-                       const Station& station) {
-    drawPanel(window, renderer, "LOADING", {station.name, station.line}, -1);
-}

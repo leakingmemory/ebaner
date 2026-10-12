@@ -15,6 +15,7 @@
 
 #include <glm/glm.hpp>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -84,6 +85,17 @@ struct Tile {
     std::vector<PlatformSegment> platforms; // platforms intersecting this tile
 };
 
+// How far TerrainData::load has got: which step, and the fraction of it done (0..1).
+// Called on the loading thread, between pieces of work, so a caller can draw.
+using LoadProgress = std::function<void(const char* step, double frac)>;
+// The steps it reports, by these exact pointers, so a loading screen can list them.
+namespace load_step {
+inline constexpr const char* kNetwork = "Reading the track network";
+inline constexpr const char* kEdits = "Applying the track edits";
+inline constexpr const char* kTiles = "Reading the terrain";
+inline constexpr const char* kCarve = "Cutting the line into the ground";
+} // namespace load_step
+
 // Loads terrainmapper export tiles around a start location and resolves the
 // camera start point from the railway track geometry.
 class TerrainData {
@@ -96,8 +108,9 @@ public:
     // anywhere in the dataset costs nothing; it is only travelling far from it that
     // wants more than float32 can carry.
     // Throws std::runtime_error on fatal problems (missing dataset root).
+    // `progress`, when given, hears each step of it as it goes (see load_step).
     void load(const std::string& datasetRoot, const glm::dvec3& startSeed,
-              double halfWindowMetres = 20000.0);
+              double halfWindowMetres = 20000.0, const LoadProgress& progress = {});
     // Bodo, for callers that do not care where they start.
     void load(const std::string& datasetRoot, double halfWindowMetres = 20000.0);
 

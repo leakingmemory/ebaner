@@ -337,3 +337,58 @@ void appendMenu(std::vector<TextVertex>& out, const std::string& title,
         y += lh;
     }
 }
+
+void appendLoadingPanel(std::vector<TextVertex>& out, const std::string& title,
+                        const std::vector<std::string>& stages, int current, float frac,
+                        int fbW, int fbH) {
+    if (fbW <= 0 || fbH <= 0) return;
+    const MenuMetrics m = menuMetrics(fbH);
+    const float sc = m.sc, charW = 8.0f * sc, lh = m.lh, pad = m.pad;
+
+    std::size_t maxChars = textChars(title);
+    for (const std::string& s : stages) maxChars = std::max(maxChars, textChars(s) + 2);
+    // title + gap, the stages, a gap, then the bar's own row
+    const float contentW = static_cast<float>(maxChars) * charW;
+    const float contentH = 1.5f * lh + static_cast<float>(stages.size()) * lh + 0.5f * lh + lh;
+    const float pw = contentW + 2.0f * pad;
+    const float ph = contentH + 2.0f * pad;
+    const float px0 = 0.5f * static_cast<float>(fbW) - 0.5f * pw;
+    const float py0 = 0.5f * static_cast<float>(fbH) - 0.5f * ph;
+
+    auto ndc = [&](float px, float py) {
+        return glm::vec2(px / static_cast<float>(fbW) * 2.0f - 1.0f,
+                         py / static_cast<float>(fbH) * 2.0f - 1.0f);
+    };
+    auto quad = [&](float x0, float y0, float x1, float y1, const glm::vec3& c) {
+        const glm::vec2 a = ndc(x0, y0), b = ndc(x1, y0), cc = ndc(x1, y1), d = ndc(x0, y1);
+        out.push_back({a, c}); out.push_back({b, c}); out.push_back({cc, c});
+        out.push_back({a, c}); out.push_back({cc, c}); out.push_back({d, c});
+    };
+    quad(px0, py0, px0 + pw, py0 + ph, glm::vec3(0.04f, 0.05f, 0.09f)); // dark panel
+
+    const float tx = px0 + pad;
+    appendText(out, title, tx, py0 + pad, sc, glm::vec3(1.0f, 0.95f, 0.5f), fbW, fbH);
+    float y = py0 + pad + 1.5f * lh;
+    for (int i = 0; i < static_cast<int>(stages.size()); ++i) {
+        const bool hi = i == current;
+        appendText(out, (hi ? "> " : "  ") + stages[i], tx, y, sc,
+                   hi ? glm::vec3(1.0f) : i < current ? glm::vec3(0.45f, 0.75f, 0.45f)
+                                                      : glm::vec3(0.6f, 0.6f, 0.65f),
+                   fbW, fbH);
+        y += lh;
+    }
+
+    // The bar: an outline, its dark inside, and the fill. Glyphs are 8 cells of a 12-cell
+    // line, so the bar takes the same 8 and lines up with the text above it.
+    y += 0.5f * lh;
+    const std::string pct = std::to_string(static_cast<int>(std::clamp(frac, 0.0f, 1.0f) * 100.0f + 0.5f)) + " %";
+    const float pctW = 6.0f * charW; // room for "100 %" and a space, whatever is shown
+    const float bx0 = tx, bx1 = px0 + pw - pad - pctW, by0 = y, by1 = y + 8.0f * sc;
+    const float edge = sc;
+    quad(bx0, by0, bx1, by1, glm::vec3(0.6f, 0.6f, 0.65f));
+    quad(bx0 + edge, by0 + edge, bx1 - edge, by1 - edge, glm::vec3(0.02f, 0.02f, 0.04f));
+    const float fill = (bx1 - bx0 - 2.0f * edge) * std::clamp(frac, 0.0f, 1.0f);
+    if (fill > 0.0f)
+        quad(bx0 + edge, by0 + edge, bx0 + edge + fill, by1 - edge, glm::vec3(1.0f, 0.95f, 0.5f));
+    appendText(out, pct, bx1 + charW, y, sc, glm::vec3(1.0f), fbW, fbH);
+}

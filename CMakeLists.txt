@@ -172,6 +172,7 @@ add_library(ebaner_engine STATIC
     src/Streaming.cpp
     src/Stations.cpp
     src/StationPicker.cpp
+    src/LoadingScreen.cpp
     src/SimpleEntrySignals.cpp
     src/LevelCrossings.cpp
     src/CrossingMesh.cpp

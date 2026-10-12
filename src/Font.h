@@ -63,3 +63,11 @@ MenuWindow menuWindow(int itemCount, int selected, int fbH);
 // count of what is out of sight at each end, so it stays workable however long it gets.
 void appendMenu(std::vector<TextVertex>& out, const std::string& title,
                 const std::vector<std::string>& items, int selected, int fbW, int fbH);
+
+// Append a centred loading panel in the same style: `title`, the `stages` in order with
+// those before `current` green and `current` marked, and under them a bar filled to
+// `frac` (0..1) with the percentage beside it. The panel is sized by every stage, not by
+// the one being shown, so it holds still while the stages go by.
+void appendLoadingPanel(std::vector<TextVertex>& out, const std::string& title,
+                        const std::vector<std::string>& stages, int current, float frac,
+                        int fbW, int fbH);

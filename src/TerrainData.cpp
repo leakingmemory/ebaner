@@ -216,7 +216,10 @@ void TerrainData::load(const std::string& datasetRoot, double halfWindow) {
 }
 
 void TerrainData::load(const std::string& datasetRoot, const glm::dvec3& startSeed,
-                       double halfWindow) {
+                       double halfWindow, const LoadProgress& progress) {
+    auto report = [&](const char* step, double frac) {
+        if (progress) progress(step, frac);
+    };
     if (!fs::exists(datasetRoot)) {
         throw std::runtime_error("dataset root not found: " + datasetRoot);
     }
@@ -225,11 +228,13 @@ void TerrainData::load(const std::string& datasetRoot, const glm::dvec3& startSe
     // The network first: it is read in world coordinates and so does not need an origin,
     // and resolving the start point onto the rails needs all of it rather than whichever
     // tile the station happens to sit in.
+    report(load_step::kNetwork, 0.0);
     loadNetworkTracks(datasetRoot);
     // Apply the manual track-edit overlay before anything reads the geometry: the start
     // point below, then the carve and the path building. The start has to see it too,
     // since a station can stand on track that only the overlay draws - Stod's main line
     // was missing from the export for 9 km.
+    report(load_step::kEdits, 0.0);
     if (std::getenv("EBANER_NOOVERLAY") == nullptr)
         applyTrackEdits(loadTrackOverlay(datasetRoot));
     resolveStartPoint(startSeed);
@@ -244,6 +249,19 @@ void TerrainData::load(const std::string& datasetRoot, const glm::dvec3& startSe
     // Because LOD tiles don't overlap in coverage, loading every existing tile
     // whose footprint falls inside the window yields a continuous surface.
     std::size_t totalSamples = 0;
+    // How many tiles the window could hold, for the progress report: the same bounds as
+    // the loop below, counted before it. Most are not on disk, so the fraction runs ahead
+    // over the gaps rather than stalling on them.
+    double candidates = 0.0, visited = 0.0;
+    for (int lod = 0; lod < 4; ++lod) {
+        const double extent = PIXELS * kLodResolution[lod];
+        const double cols = std::floor((cx + halfWindow) / extent) -
+                            std::floor((cx - halfWindow) / extent) + 1.0;
+        const double rows = std::floor((cy + halfWindow) / extent) -
+                            std::floor((cy - halfWindow) / extent) + 1.0;
+        candidates += cols * rows;
+    }
+    report(load_step::kTiles, 0.0);
     for (int lod = 0; lod < 4; ++lod) {
         const double res = kLodResolution[lod];
         const double extent = PIXELS * res;
@@ -255,8 +273,11 @@ void TerrainData::load(const std::string& datasetRoot, const glm::dvec3& startSe
 
         for (int col = colMin; col <= colMax; ++col) {
             for (int row = rowMin; row <= rowMax; ++row) {
-                if (loadTile(lod, col, row))
+                if (loadTile(lod, col, row)) {
                     totalSamples += tiles_[tileKey(lod, col, row)]->heights.size();
+                    report(load_step::kTiles, visited / candidates);
+                }
+                visited += 1.0;
             }
         }
     }
@@ -265,6 +286,7 @@ void TerrainData::load(const std::string& datasetRoot, const glm::dvec3& startSe
     // rails/ballast sit in a cutting instead of being buried. Re-derive the
     // elevation range afterwards from the carved heights. Guarded for comparison.
     if (std::getenv("EBANER_NOCARVE") == nullptr) {
+        report(load_step::kCarve, 0.0);
         std::vector<Tile*> list = tileList();
         carveTrackCuttings(list, networkTracks_, sceneOrigin_);
         for (const Tile* t : list)

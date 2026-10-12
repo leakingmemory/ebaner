@@ -32,8 +32,3 @@ class VulkanRenderer;
 // EBANER_SCREENSHOT is set: scripted runs must not stop for a menu.
 const Station* runStationPicker(GLFWwindow* window, VulkanRenderer& renderer,
                                 const std::vector<Station>& all, const Station* initial);
-
-// The one-frame "loading" notice, drawn before the caller blocks for the several seconds
-// it takes to read and build a world. An unpainted window looks like a hang.
-void drawLoadingNotice(GLFWwindow* window, VulkanRenderer& renderer,
-                       const Station& station);

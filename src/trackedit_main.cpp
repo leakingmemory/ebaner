@@ -25,6 +25,7 @@
 #include "PlatformMesh.h"
 #include "RoadMesh.h"
 #include "StationPicker.h"
+#include "LoadingScreen.h"
 #include "Paths.h"
 #include "Stations.h"
 #include "SwitchMesh.h"
@@ -211,7 +212,22 @@ int main(int argc, char** argv) {
     glfwSetWindowTitle(window, ("ebaner-trackedit - " + start->name).c_str());
     std::printf("[trackedit] opening at %s (%s)\n", start->name.c_str(),
                 start->line.c_str());
-    drawLoadingNotice(window, renderer, *start);
+    // What the loading screen lists, in the order it happens. The weights are seconds on
+    // the slow machine this was measured on; only their proportions matter.
+    static constexpr const char* kStagePaths = "Building the track paths";
+    static constexpr const char* kStageGround = "Building the ground";
+    static constexpr const char* kStageMeshes = "Building the track, roads and buildings";
+    static constexpr const char* kStageTurnouts = "Finding the turnouts";
+    static constexpr const char* kStageUpload = "Handing it to the graphics card";
+    static constexpr const char* kStageSignalling = "Reading the signalling";
+    static constexpr const char* kStageSignals = "Drawing the network and signals";
+    LoadingScreen loading(window, renderer, *start,
+                          {{load_step::kNetwork, 0.6f}, {load_step::kEdits, 0.6f},
+                           {load_step::kTiles, 0.6f}, {load_step::kCarve, 3.5f},
+                           {kStagePaths, 0.5f}, {kStageGround, 2.7f},
+                           {kStageMeshes, 2.3f}, {kStageTurnouts, 2.1f},
+                           {kStageUpload, 1.9f}, {kStageSignalling, 0.4f},
+                           {kStageSignals, 3.0f}});
 
     // --- Load terrain data and build the scene meshes (same as the simulator) ---
     TerrainData data;
@@ -233,16 +249,21 @@ int main(int argc, char** argv) {
     // reason for the absence of).
     std::vector<SwitchSuppression> switchSuppress = loadSwitchSuppressions(datasetRoot);
     try {
-        data.load(datasetRoot, start->world);
+        data.load(datasetRoot, start->world, 20000.0,
+                  [&](const char* step, double frac) { loading.report(step, frac); });
+        loading.stage(kStagePaths);
         paths = buildTrackPaths(data);
         // The bores first: the terrain needs them to know which of its triangles stand in
         // a tunnel mouth. A geometry edit can move a portal, so both are rebuilt together.
+        loading.stage(kStageGround);
         tunnels.build(data);
         mesh.build(data, &tunnels);
+        loading.stage(kStageMeshes);
         tracks.build(paths, glm::vec3(0.0f), data.loadedRadius());
         roads.build(data);
         buildings.build(data);
         platforms.build(data, paths);
+        loading.stage(kStageTurnouts);
         // turnout detection + routing, minus whatever the overlay says is not a switch
         switchNet.build(data, paths, switchSuppress);
         applySwitchTypes(switchNet, loadSwitchTypes(datasetRoot)); // manual/motor overrides
@@ -280,6 +301,7 @@ int main(int argc, char** argv) {
     }
 
     // Hand the built world over - what renderer.init used to carry in.
+    loading.stage(kStageUpload);
     renderer.updateTerrain(mesh.vertices(), mesh.indices());
     renderer.updateTracks(tracks.vertices(), tracks.indices(),
                           tracks.alwaysIndexCount(), tracks.sleeperChunks());
@@ -365,6 +387,7 @@ int main(int argc, char** argv) {
     int selTurnout = -1;             // selected turnout (index into switchNet.turnouts())
     bool switchTypesDirty = false;   // unsaved switch-type changes
     // Mini signal paths (own overlay): directional routes between two circuit borders.
+    loading.stage(kStageSignalling);
     std::vector<SignalPath> signalPaths = loadSignalPaths(datasetRoot);
     bool pathsDirty = false;         // unsaved signal-path changes
     int pathStart = -1;              // in-progress path's start border (index into tc.borders)
@@ -2032,6 +2055,7 @@ int main(int argc, char** argv) {
                         "track (skipped %d)\n", skipped);
         }
     };
+    loading.stage(kStageSignals);
     rebuildOverlay();
     rebuildStructs(); // bake the ground signals (at loaded signal-path starts) into view
     std::printf("\nControls: WASD move, Q/E down/up, mouse look, Shift boost, "
@@ -2118,6 +2142,7 @@ int main(int argc, char** argv) {
     bool prevLeft = false, prevRight = false;
     double lastTime = glfwGetTime();
 
+    loading.finish();
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
         const double now = glfwGetTime();

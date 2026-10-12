@@ -49,6 +49,7 @@
 #include "SpeedLimits.h"
 #include "SpeedSignMesh.h"
 #include "StationPicker.h"
+#include "LoadingScreen.h"
 #include "Paths.h"
 #include "Stations.h"
 #include "Streaming.h"
@@ -406,7 +407,25 @@ int main(int argc, char** argv) {
     glfwSetWindowTitle(window, ("ebaner - " + start->name).c_str());
     std::printf("[main] starting at %s (%s)\n", start->name.c_str(),
                 start->line.c_str());
-    drawLoadingNotice(window, renderer, *start);
+    // What the loading screen lists, in the order it happens. The weights are seconds on
+    // the slow machine this was measured on; only their proportions matter.
+    static constexpr const char* kStagePaths = "Building the track paths";
+    static constexpr const char* kStageMeshes = "Building the track, roads and buildings";
+    static constexpr const char* kStageTurnouts = "Finding the turnouts";
+    static constexpr const char* kStageGround = "Building the ground";
+    static constexpr const char* kStageUpload = "Handing it to the graphics card";
+    static constexpr const char* kStageSignals = "Setting up the signals";
+    static constexpr const char* kStageCrossings = "Level crossings";
+    static constexpr const char* kStageTxp = "Flag posts and TXPs";
+    static constexpr const char* kStageCircuits = "Track circuits";
+    LoadingScreen loading(window, renderer, *start,
+                          {{load_step::kNetwork, 0.6f}, {load_step::kEdits, 0.6f},
+                           {load_step::kTiles, 0.6f}, {load_step::kCarve, 2.8f},
+                           {kStagePaths, 0.5f}, {kStageMeshes, 2.2f},
+                           {kStageTurnouts, 2.3f}, {kStageGround, 3.0f},
+                           {kStageUpload, 0.8f}, {kStageSignals, 0.3f},
+                           {kStageCrossings, 2.0f}, {kStageTxp, 1.4f},
+                           {kStageCircuits, 0.2f}});
 
     try {
         // EBANER_RADIUS shrinks the world that is loaded, in metres. The default 20 km
@@ -416,10 +435,11 @@ int main(int argc, char** argv) {
         // train in. For inspection only: drive out of it and the world ends.
         double half = 20000.0;
         if (const char* r = std::getenv("EBANER_RADIUS")) half = std::max(200.0, std::atof(r));
-        data.load(datasetRoot, start->world, half);
-       
+        data.load(datasetRoot, start->world, half,
+                  [&](const char* step, double frac) { loading.report(step, frac); });
+        loading.stage(kStagePaths);
         paths = buildTrackPaths(data);
-       
+        loading.stage(kStageMeshes);
         // The bores first: the terrain needs them to know which of its triangles are
         // standing in a tunnel mouth.
         tunnels.build(data);
@@ -429,6 +449,7 @@ int main(int argc, char** argv) {
         roads.build(data);
         buildings.build(data);
         platforms.build(data, paths);
+        loading.stage(kStageTurnouts);
         // turnout detection + routing, minus whatever the overlay says is not a switch
         switchNet.build(data, paths, loadSwitchSuppressions(datasetRoot));
         applySwitchTypes(switchNet, loadSwitchTypes(datasetRoot)); // manual/motor overrides
@@ -554,16 +575,19 @@ int main(int argc, char** argv) {
     // What renderer.init used to do, now that it comes up empty and the world arrives
     // afterwards. The ground goes in per tile, exactly as the streamer will replace it.
     {
+        loading.stage(kStageGround);
         TerrainMesh chunk;
-        std::size_t verts = 0;
+        std::size_t verts = 0, built = 0;
         for (const auto& [key, t] : data.tiles()) {
             chunk.buildTile(data, *t, &tunnels);
             renderer.setTerrainChunk(key, chunk.vertices(), chunk.indices());
             verts += chunk.vertices().size();
+            loading.within(static_cast<double>(++built), static_cast<double>(data.tiles().size()));
         }
         std::printf("[TerrainMesh] %zu chunk(s), %zu vertices\n",
                     renderer.terrainChunkCount(), verts);
     }
+    loading.stage(kStageUpload);
     renderer.updateTracks(tracks.vertices(), tracks.indices(),
                           tracks.alwaysIndexCount(), tracks.sleeperChunks(),
                           tracks.alwaysChunks());
@@ -596,6 +620,7 @@ int main(int argc, char** argv) {
         "F/N/R reverser, T throw aimed switch, U uncouple, M mute, "
         "Tab release cursor, Esc menu (drive another train, place one)\n\n");
 
+    loading.stage(kStageSignals);
     // Directional sun (scene space): from the south-west, fairly high.
     const glm::vec3 sunDir = glm::normalize(glm::vec3(0.4f, -0.5f, 0.75f));
 
@@ -865,6 +890,7 @@ int main(int argc, char** argv) {
     // Level crossings, secured by lights alone. Their detection circuits are their own -
     // arc-length ranges either side of the crossing - so nothing has to be authored for
     // one to work, and none of the track-circuit machinery is involved.
+    loading.stage(kStageCrossings);
     const std::vector<LevelCrossing> crossings = loadLevelCrossings(datasetRoot);
     // Not const: a crossing that a main signal waits for gets its approach lengthened below,
     // once, before anything reads it.
@@ -1166,6 +1192,7 @@ int main(int argc, char** argv) {
                                                           crossingFeedersOf[ci]);
 
     // Flag posts: the hand signal the station's TXP hangs out.
+    loading.stage(kStageTxp);
     const std::vector<FlagPost> flagPosts = loadFlagPosts(datasetRoot);
     const std::vector<SignalStation> flagPostStation =
         attachStations(flagPosts, stations, polys);
@@ -1929,6 +1956,7 @@ int main(int argc, char** argv) {
     // Where every section lies in the coordinates a train runs in, resolved once. This is
     // what makes occupancy a question about the same road rather than about how near two
     // things look - see Occupancy.h.
+    loading.stage(kStageCircuits);
     const SectionSpans sectionSpans = resolveSectionSpans(circuits, paths);
     for (const std::string& n : sectionSpans.notes) std::printf("[Circuit] %s\n", n.c_str());
     std::printf("[Circuit] %zu section(s), %zu placed on the roads%s\n",
@@ -4080,6 +4108,7 @@ int main(int argc, char** argv) {
     if (autoLog) g_toggleAuto = true; // armed through the same path the P key uses
     double autoLogAt = 0.0;
 
+    loading.finish();
     while (!glfwWindowShouldClose(window)) {
         const double frameT0 = profile ? now_ms() : 0.0;
         glfwPollEvents();
