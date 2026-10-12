@@ -13,6 +13,8 @@
 
 #include "Stations.h"
 
+#include "TrackCircuits.h" // readName
+
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -20,6 +22,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <unordered_set>
 
 namespace fs = std::filesystem;
@@ -166,11 +169,44 @@ std::vector<Station> loadStations(const std::string& datasetRoot) {
         }
     }
 
+    applyStationOverrides(datasetRoot, out);
     std::sort(out.begin(), out.end(), [](const Station& a, const Station& b) {
         if (a.line != b.line) return a.line < b.line;
         return a.name < b.name;
     });
     return out;
+}
+
+void applyStationOverrides(const std::string& datasetRoot, std::vector<Station>& all) {
+    std::ifstream f(datasetRoot + "/overlay/stations.txt");
+    if (!f) return;
+    int moved = 0;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        std::istringstream is(line);
+        std::string kind, name;
+        is >> kind;
+        if (kind != "station" || !readName(is, name)) continue;
+        glm::dvec3 at(0.0);
+        if (!(is >> at.x >> at.y >> at.z)) {
+            std::fprintf(stderr, "[Stations] overlay: \"%s\" needs x y z\n", name.c_str());
+            continue;
+        }
+        // By the name exactly as the data spells it. Folding would let "Os" find "Ås",
+        // and moving the wrong station is worse than moving none.
+        bool found = false;
+        for (Station& s : all)
+            if (s.name == name) {
+                s.world = at;
+                found = true;
+                ++moved;
+            }
+        if (!found)
+            std::fprintf(stderr, "[Stations] overlay: no station called \"%s\"\n",
+                         name.c_str());
+    }
+    if (moved > 0) std::printf("[Stations] overlay moved %d station(s)\n", moved);
 }
 
 const Station* findStation(const std::vector<Station>& all, const std::string& name) {

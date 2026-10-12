@@ -226,6 +226,12 @@ void TerrainData::load(const std::string& datasetRoot, const glm::dvec3& startSe
     // and resolving the start point onto the rails needs all of it rather than whichever
     // tile the station happens to sit in.
     loadNetworkTracks(datasetRoot);
+    // Apply the manual track-edit overlay before anything reads the geometry: the start
+    // point below, then the carve and the path building. The start has to see it too,
+    // since a station can stand on track that only the overlay draws - Stod's main line
+    // was missing from the export for 9 km.
+    if (std::getenv("EBANER_NOOVERLAY") == nullptr)
+        applyTrackEdits(loadTrackOverlay(datasetRoot));
     resolveStartPoint(startSeed);
     halfWindow_ = halfWindow;
     sceneOrigin_ = startWorld_;
@@ -254,11 +260,6 @@ void TerrainData::load(const std::string& datasetRoot, const glm::dvec3& startSe
             }
         }
     }
-
-    // Apply the manual track-edit overlay (drop-in link fixes) before anything
-    // downstream reads the geometry (carve, path building).
-    if (std::getenv("EBANER_NOOVERLAY") == nullptr)
-        applyTrackEdits(loadTrackOverlay(datasetRoot));
 
     // Carve trenches into the terrain where surface track falls below it, so the
     // rails/ballast sit in a cutting instead of being buried. Re-derive the

@@ -21,8 +21,8 @@
 // A place on the railway you can start at.
 //
 // The export already knows them: every tile's meta.json carries the stations inside it,
-// with the name, the node position and what kind of place it is. Nothing here is
-// authored by us.
+// with the name, the node position and what kind of place it is. Only the position can
+// be overruled, by the overlay (applyStationOverrides).
 struct Station {
     std::string name;    // UTF-8, as the data spells it ("Bodø", "Oteråga")
     glm::dvec3 world{0}; // EPSG:25833, the station node
@@ -36,6 +36,16 @@ struct Station {
 // boundary is written into both tiles. Reads every tile's meta.json, which sounds worse
 // than it is - the whole sweep is well under a second.
 std::vector<Station> loadStations(const std::string& datasetRoot);
+
+// Move stations to where the overlay says they are. The export's node is sometimes not
+// at the station: Stod's sits 3.5 km up the line from its passing loop. Where a run
+// starts and which station a flag post, a TXP or a simple entry signal belongs to all
+// follow the position, so it is corrected here, once, as the stations are loaded. Lines in `<datasetRoot>/overlay/stations.txt`:
+//   station "<name>" <x> <y> <z>
+// in world coordinates (EPSG:25833), z the rail height there. World coordinates rather
+// than `<trackHex>:<frac>` as the other overlay files anchor things, because the
+// stations are loaded before the track. Called by loadStations.
+void applyStationOverrides(const std::string& datasetRoot, std::vector<Station>& all);
 
 // Look one up by name, ignoring case and the difference between the Norwegian letters
 // and their ASCII shapes, so "fauske", "Bodo" and "Bodø" all work from a shell that may

@@ -33,6 +33,7 @@
 #include "TrackGraph.h"
 #include "TrackOverlay.h"
 #include "SignalPaths.h"
+#include "Stations.h"
 #include "SwitchNetwork.h"
 #include "SwitchTypes.h"
 #include "TrackPath.h"
@@ -47,6 +48,7 @@
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -946,6 +948,47 @@ int main(int argc, char** argv) {
             check(plain.size() == 1 && plain[0].trackType == 1 && plain[0].kmh == 0 &&
                       plain[0].pts.size() == rec.pts.size(),
                   "a siding with no speed still reads as one", double(plain.size()), 1.0);
+        }
+        std::filesystem::remove_all(scratch, ec);
+    }
+
+    // A station the overlay moves. The export's node can sit well away from the station
+    // it names - Stod's was 3.5 km up the line - and the overlay puts it back. Built on a
+    // dataset of one tile written here, so the check knows both positions exactly.
+    {
+        std::puts("\n  A station the overlay moves:");
+        const std::string scratch =
+            (std::filesystem::temp_directory_path() / "ebaner-station-test").string();
+        std::error_code ec;
+        std::filesystem::remove_all(scratch, ec);
+        std::filesystem::create_directories(scratch + "/tiles/0/1_1", ec);
+        std::filesystem::create_directories(scratch + "/overlay", ec);
+        {
+            std::ofstream m(scratch + "/tiles/0/1_1/meta.json");
+            m << "{\"lod\": 0, \"stations\": ["
+                 "{\"name\": \"Stod\", \"x\": 344875.1875, \"y\": 7115612.0, \"z\": 39.5, "
+                 "\"type\": \"S\", \"line\": \"Nordlandsbanen\"}, "
+                 "{\"name\": \"Snåsa\", \"x\": 372900.0, \"y\": 7127000.0, \"z\": 25.0, "
+                 "\"type\": \"S\", \"line\": \"Nordlandsbanen\"}]}\n";
+            std::ofstream o(scratch + "/overlay/stations.txt");
+            o << "# test\n"
+                 "station \"Stod\" 341175.491 7114511.980 36.401\n"
+                 "station \"Nowhere\" 1 2 3\n"
+                 "station \"Snasa\" 1 2 3\n";
+        }
+        const std::vector<Station> st = loadStations(scratch);
+        const Station* stod = findStation(st, "Stod");
+        const Station* snasa = findStation(st, "Snåsa");
+        check(st.size() == 2, "both stations load", double(st.size()), 2.0);
+        if (stod && snasa) {
+            check(glm::length(stod->world - glm::dvec3(341175.491, 7114511.980, 36.401)) < 1e-6,
+                  "Stod stands where the overlay put it (m off)",
+                  glm::length(stod->world - glm::dvec3(341175.491, 7114511.980, 36.401)), 0.0);
+            // "Snasa" is how a shell types it, not how the data spells it: an override
+            // names a station exactly, so this one must not move.
+            check(glm::length(snasa->world - glm::dvec3(372900.0, 7127000.0, 25.0)) < 1e-6,
+                  "a name that is not spelled as the data spells it moves nothing (m)",
+                  glm::length(snasa->world - glm::dvec3(372900.0, 7127000.0, 25.0)), 0.0);
         }
         std::filesystem::remove_all(scratch, ec);
     }
