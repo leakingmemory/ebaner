@@ -56,8 +56,12 @@ void usage() {
         "  <trackIdHex> ...      print every vertex of those tracks, in order, as\n"
         "                        \"PT <x> <y> <z>\"\n"
         "  --switches x y radius list the turnouts the sim builds around a point, with\n"
-        "                        the branch track each is keyed on and whether an\n"
-        "                        authored `switch ... motor` override reaches it\n"
+        "                        the branch track each is keyed on, the track Diverging\n"
+        "                        really sends a train onto (* = read by its name), and\n"
+        "                        whether an authored `switch ... motor` override\n"
+        "                        reaches it. Where several track ends meet, a turnout\n"
+        "                        whose branch and `diverges` differ is a twin of\n"
+        "                        another; `noswitch` is how the overlay drops it\n"
         "  --gaps x y radius     list the loose ends around a point: segment endpoints\n"
         "                        with no other endpoint within the 1 m the path builder\n"
         "                        joins at, nearest first, each with the nearest other\n"
@@ -257,8 +261,8 @@ int main(int argc, char** argv) {
         const std::vector<SwitchTypeOverride> ovr = loadSwitchTypes(root);
         applySwitchTypes(net, ovr);
         const std::vector<Turnout>& tos = net.turnouts();
-        std::printf("%11s %11s %9s %6s %8s  %s\n",
-                    "x", "y", "branch", "main", "type", "override");
+        std::printf("%11s %11s %9s %6s %8s %9s  %s\n",
+                    "x", "y", "branch", "main", "type", "diverges", "override");
         for (std::size_t i = 0; i < tos.size(); ++i) {
             const double d = std::hypot(tos[i].world.x - sx, tos[i].world.y - sy);
             if (d > sr) continue;
@@ -282,11 +286,34 @@ int main(int argc, char** argv) {
                               tos[i].sidingTrack);
                 why = buf;
             }
-            std::printf("%11.2f %11.2f %9x %6d %8s  %s\n",
+            // Where Diverging actually sends a train: the track a few metres into the branch
+            // path, or the main for a turnout read by its name (`inverted`). Where track
+            // ends meet at one point this need not be the branch the turnout is named for,
+            // and a route that sets it by its name then goes somewhere else.
+            char onto[16] = "-";
+            const Turnout& t = tos[i];
+            if (t.sidingPath >= 0 && t.mainPath >= 0) {
+                std::uint32_t id = 0;
+                double frac = 0.0;
+                bool ok = false;
+                if (t.inverted) {
+                    const float L = paths[t.mainPath].length();
+                    ok = paths[t.mainPath].trackAt(
+                        std::clamp(t.sMain + 3.0f * static_cast<float>(t.facingS), 0.0f, L), id,
+                        frac);
+                } else {
+                    const float L = paths[t.sidingPath].length();
+                    ok = paths[t.sidingPath].trackAt(
+                        t.sSiding < 0.5f * L ? std::min(3.0f, L) : std::max(0.0f, L - 3.0f), id,
+                        frac);
+                }
+                if (ok) std::snprintf(onto, sizeof(onto), "%x%s", id, t.inverted ? "*" : "");
+            }
+            std::printf("%11.2f %11.2f %9x %6d %8s %9s  %s\n",
                         tos[i].world.x, tos[i].world.y, tos[i].sidingTrack,
                         tos[i].mainPath,
                         net.type(static_cast<int>(i)) == SwitchType::Motor ? "MOTOR" : "manual",
-                        why);
+                        onto, why);
         }
     }
 

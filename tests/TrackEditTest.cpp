@@ -1019,6 +1019,80 @@ int main(int argc, char** argv) {
         std::filesystem::remove_all(scratch, ec);
     }
 
+    // Four track ends on one node: a road running straight through, and a branch off it
+    // each way - the north throat at Steinkjer, where a ladder crosses track 2. Both
+    // branches leave the main at the same point, so a train passing it has two turnouts
+    // to read there, and it used to read only whichever came first in the list.
+    {
+        std::puts("\n  Two branches off one point:");
+        auto road = [](std::uint32_t id, std::uint8_t type,
+                       std::vector<glm::dvec3> pts) {
+            TrackEdit e;
+            e.kind = TrackEdit::Track;
+            e.track = id;
+            e.trackType = type;
+            e.pts = std::move(pts);
+            return e;
+        };
+        // The through road in two halves (south, north), then the branches: south-east
+        // first, so its turnout is the one listed first at the point.
+        const std::uint32_t kS = kNewTrackIdBase + 911, kN = kS + 1, kNW = kS + 2, kSE = kS + 3;
+        TerrainData net;
+        net.applyTrackEdits(
+            {road(kS, 0, {{0, -300, 10}, {0, -150, 10}, {0, 0, 10}}),
+             road(kN, 0, {{0, 0, 10}, {0, 150, 10}, {0, 300, 10}}),
+             road(kSE, 1, {{0, 0, 10}, {2, -50, 10}, {9, -150, 10}}),
+             road(kNW, 1, {{0, 0, 10}, {-5, 50, 10}, {-14, 150, 10}})});
+        const std::vector<TrackPath> tp = buildTrackPaths(net);
+        // Where the detector reads each through half as a branch too, the overlay says it
+        // is not (`noswitch`), as at Steinkjer.
+        std::vector<SwitchSuppression> sup(2);
+        sup[0].sidingTrack = kS;
+        sup[1].sidingTrack = kN;
+        SwitchNetwork sw;
+        sw.build(net, tp, sup);
+        int iNW = -1, iSE = -1;
+        for (int i = 0; i < static_cast<int>(sw.size()); ++i) {
+            if (sw.turnouts()[i].sidingTrack == kNW) iNW = i;
+            if (sw.turnouts()[i].sidingTrack == kSE) iSE = i;
+        }
+        const bool both = sw.size() == 2 && iNW >= 0 && iSE >= 0 &&
+                          sw.turnouts()[iNW].mainPath >= 0 && sw.turnouts()[iSE].mainPath >= 0;
+        check(both, "a turnout for each branch, both on the through road",
+              static_cast<double>(sw.size()), 2.0);
+        const VehicleSpec* one = nullptr;
+        for (const VehicleSpec& v : kVehicleSpecs)
+            if (v.units == 1 && v.hauls == nullptr) { one = &v; break; }
+        if (both && one != nullptr) {
+            // Run north up the through road with the north-west branch set: the train
+            // passes the south-east turnout trailing, then must take the other.
+            sw.setState(iNW, SwitchState::Diverging);
+            const int mainIdx = sw.turnouts()[iNW].mainPath;
+            const TrackPath& m = tp[mainIdx];
+            const bool northAtEnd = m.poseAt(m.length()).pos.y > m.poseAt(0.0f).pos.y;
+            float sStart = 0.0f;
+            for (float s = 0.0f; s <= m.length(); s += 1.0f)
+                if (std::abs(m.poseAt(s).pos.y + 150.0f) < 0.6f) sStart = s;
+            const float dir = northAtEnd ? 1.0f : -1.0f;
+            Consist t(&tp, &m, *one, sStart, 15.0f * dir);
+            t.attachNetwork(&tp, &sw);
+            t.toggleEngines();
+            t.setReverser(0, northAtEnd ? 1 : -1);
+            for (int i = 0; i < 12; ++i) t.moveBrake(0, -1);
+            for (int i = 0; i < 60 * 120; ++i) {
+                t.update(1.0f / 60.0f, 0.0f);
+                const Vehicle& v = t.lead();
+                if (v.path()->poseAt(v.s()).pos.y > 100.0f) break;
+            }
+            const Vehicle& v = t.lead();
+            const glm::vec3 at = v.path()->poseAt(v.s()).pos;
+            check(at.y > 60.0f && at.x < -3.0f, "a train passing both takes the one set (m west)",
+                  -at.x, 10.0);
+            check(sw.state(iSE) != SwitchState::Broken, "and leaves the other unharmed",
+                  sw.state(iSE) == SwitchState::Broken ? 0.0 : 1.0, 1.0);
+        }
+    }
+
     // A station the overlay moves. The export's node can sit well away from the station
     // it names - Stod's was 3.5 km up the line - and the overlay puts it back. Built on a
     // dataset of one tile written here, so the check knows both positions exactly.

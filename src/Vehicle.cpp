@@ -411,7 +411,13 @@ bool Vehicle::crossTurnouts(float sBefore) {
                 }
                 // Straight / Broken: continue onto the common track.
             }
-            return false;
+            // Nothing diverted us, so look on: another turnout may stand at this very
+            // point. Where several track ends meet on one node, two branches leave the
+            // main there - one each way - and stopping at the first meant a train only
+            // ever read whichever came first in the list. Past it in the other direction
+            // the second was never asked, and the train ran on along the main however
+            // the route had set it.
+            continue;
         }
         if (pathIdx_ == to.sidingPath && crossed(to.sSiding)) {
             // Trailing merge from the diverging branch onto the main — only when
