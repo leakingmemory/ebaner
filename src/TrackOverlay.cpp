@@ -47,13 +47,14 @@ bool nearestEndpoint(const std::vector<TrackSegment>& segs, const glm::dvec3& q,
     bool found = false;
     for (const TrackSegment& s : segs) {
         if (s.pts.size() < 2) continue;
-        for (const glm::dvec3& e : {s.pts.front(), s.pts.back()}) {
+        for (const bool back : {false, true}) {
+            const glm::dvec3& e = back ? s.pts.back() : s.pts.front();
             const double d = std::hypot(e.x - q.x, e.y - q.y);
             if (d < best) {
                 best = d;
                 out = e;
                 trackType = s.trackType;
-                medium = s.medium;
+                medium = spanMediumOf(s, back ? s.pts.size() - 2 : 0); // the span at that end
                 found = true;
             }
         }
@@ -144,6 +145,19 @@ std::vector<TrackEdit> loadTrackOverlay(const std::string& datasetRoot) {
             if (e.track != 0) edits.push_back(e);
             continue;
         }
+        // What a stretch of a track runs in: an id, a keyword and two positions.
+        if (line.compare(0, 7, "medium ") == 0) {
+            std::istringstream is(line);
+            std::string tok, idTok, what;
+            is >> tok >> idTok >> what >> e.a.x >> e.a.y >> e.b.x >> e.b.y;
+            if (!is) continue;
+            e.kind = TrackEdit::Medium;
+            e.track = static_cast<std::uint32_t>(std::strtoul(idTok.c_str(), nullptr, 10));
+            e.medium = what == "tunnel" ? 0x55 : what == "surface" ? 0x20
+                     : what == "bridge" ? 0x42 : 0;
+            if (e.track != 0 && e.medium != 0) edits.push_back(e);
+            continue;
+        }
         const int n = std::sscanf(line.c_str(), "%31s %lf %lf %lf %lf %lf %lf", kind,
                                   &e.a.x, &e.a.y, &e.a.z, &e.b.x, &e.b.y, &e.b.z);
         if (n == 7 && std::string(kind) == "link") {
@@ -200,7 +214,7 @@ void applyTrackOverlay(std::vector<TrackSegment>& segs,
                        const std::vector<TrackEdit>& edits) {
     if (edits.empty()) return;
     constexpr double kVertexTol = 2.0; // m; snap an elev override to a real vertex
-    int elev = 0, links = 0, rails = 0, tracks = 0, drops = 0;
+    int elev = 0, links = 0, rails = 0, tracks = 0, drops = 0, media = 0;
 
     int moves = 0;
     // Removals first, before anything can be anchored to what is about to go. A link
@@ -272,6 +286,19 @@ void applyTrackOverlay(std::vector<TrackSegment>& segs,
                 segs[si].pts[vi] = e.b;
                 ++moves;
             }
+        } else if (e.kind == TrackEdit::Medium) {
+            // In the same pass, so its two positions are looked up where the edits above
+            // it have left the vertices - which is where the editor saw them.
+            int sb = 0, vb = 0;
+            if (!nearestVertex(segs, e.a.x, e.a.y, kVertexTol, si, vi, e.track) ||
+                !nearestVertex(segs, e.b.x, e.b.y, kVertexTol, sb, vb, e.track) ||
+                sb != si || vb == vi)
+                continue;
+            TrackSegment& s = segs[si];
+            if (s.spanMedium.empty()) s.spanMedium.assign(s.pts.size() - 1, s.medium);
+            for (int k = std::min(vi, vb); k < std::max(vi, vb); ++k)
+                s.spanMedium[static_cast<std::size_t>(k)] = e.medium;
+            ++media;
         }
     }
 
@@ -301,10 +328,11 @@ void applyTrackOverlay(std::vector<TrackSegment>& segs,
         segs.push_back(std::move(c));
         ++links;
     }
-    if (elev > 0 || links > 0 || moves > 0 || rails > 0 || tracks > 0 || drops > 0)
+    if (elev > 0 || links > 0 || moves > 0 || rails > 0 || tracks > 0 || drops > 0 ||
+        media > 0)
         std::printf("[TrackOverlay] applied %d elev + %d move + %d link + %d rail + "
-                    "%d track + %d drop edit(s)\n",
-                    elev, moves, links, rails, tracks, drops);
+                    "%d track + %d drop + %d medium edit(s)\n",
+                    elev, moves, links, rails, tracks, drops, media);
 }
 
 namespace {
@@ -322,6 +350,10 @@ void writeEdits(std::ofstream& f, const std::vector<TrackEdit>& edits) {
             f << '\n';
         } else if (e.kind == TrackEdit::Drop) {
             f << "drop " << e.track << '\n';
+        } else if (e.kind == TrackEdit::Medium) {
+            f << "medium " << e.track << ' '
+              << (e.medium == 0x55 ? "tunnel" : e.medium == 0x42 ? "bridge" : "surface") << ' '
+              << e.a.x << ' ' << e.a.y << ' ' << e.b.x << ' ' << e.b.y << '\n';
         } else if (e.kind == TrackEdit::Track) {
             f << "track " << std::hex << e.track << std::dec << ' '
               << (e.trackType == 2 ? "yard" : e.trackType == 0 ? "main" : "siding");

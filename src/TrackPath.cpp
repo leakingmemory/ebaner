@@ -476,8 +476,14 @@ std::vector<TrackPath> buildTrackPaths(const TerrainData& data) {
                     s.speed.push_back(k < seg.speed.size() ? seg.speed[k] : 0);
                     // One medium for the whole segment: the exporter splits a line
                     // wherever it changes, which is what makes this per point once the
-                    // segments are chained back into a path.
-                    s.medium.push_back(seg.medium);
+                    // segments are chained back into a path. A drawn track can change
+                    // along its length (spanMedium); a point there takes the span ahead
+                    // of it, and a portal counts as underground, as the end point of an
+                    // exported tunnel segment does.
+                    std::uint8_t m = spanMediumOf(seg, std::min(k, seg.pts.size() - 2));
+                    if (k > 0 && isUndergroundMedium(spanMediumOf(seg, k - 1)))
+                        m = spanMediumOf(seg, k - 1);
+                    s.medium.push_back(m);
                 }
             }
             if (s.pts.size() < 2) continue;

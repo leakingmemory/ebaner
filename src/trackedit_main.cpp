@@ -1603,6 +1603,69 @@ int main(int argc, char** argv) {
                     "(preview; Ctrl+S to save)\n", es.size(), grade, dtot);
         applyEditsLive(es, /*keepSelection=*/true);
     };
+    // U: put the selected stretch of one track in a tunnel - or, where all of it is in
+    // one already, back on the surface. Written as a `medium` edit naming the two end
+    // points, so it holds on a track the editor drew, which is one track from end to
+    // end however many hills it goes through. What it changes is what the ground and
+    // the bore do there, so it shows once P re-renders; the map darkens it at once.
+    auto doTunnel = [&]() {
+        auto say = [&](const std::string& m) {
+            std::printf("[trackedit] %s\n", m.c_str());
+            pathMsg = m;
+            pathMsgUntil = glfwGetTime() + 4.0;
+        };
+        if (selected.size() < 2) { say("tunnel: select the stretch first (2+ points)"); return; }
+        const int lo = *selected.begin(), hi = *selected.rbegin();
+        const std::uint32_t tid = graph.pointTrack[lo];
+        for (int i : selected)
+            if (graph.pointTrack[i] != tid) { say("tunnel: select points on ONE track"); return; }
+        const glm::dvec3 a = graph.pointWorld[lo], b = graph.pointWorld[hi];
+        // Underground already? The medium lives on the network, not on the map.
+        bool allUnder = false;
+        for (const TrackSegment& s : data.networkTracks()) {
+            if (s.trackId != tid || s.pts.size() < 2) continue;
+            auto nearest = [&](const glm::dvec3& q) {
+                std::size_t best = 0;
+                double bd = 1e30;
+                for (std::size_t k = 0; k < s.pts.size(); ++k) {
+                    const double d = std::hypot(s.pts[k].x - q.x, s.pts[k].y - q.y);
+                    if (d < bd) { bd = d; best = k; }
+                }
+                return best;
+            };
+            const std::size_t ka = nearest(a), kb = nearest(b);
+            allUnder = ka != kb;
+            for (std::size_t k = std::min(ka, kb); k < std::max(ka, kb); ++k)
+                if (!isUndergroundMedium(spanMediumOf(s, k))) allUnder = false;
+            break;
+        }
+        TrackEdit e;
+        e.kind = TrackEdit::Medium;
+        e.track = tid;
+        e.medium = allUnder ? 0x20 : 0x55;
+        e.a = a;
+        e.b = b;
+        // Turning the same stretch back again leaves one line, not two that cancel.
+        auto same = [](const glm::dvec3& p, const glm::dvec3& q) {
+            return std::hypot(p.x - q.x, p.y - q.y) < 0.5;
+        };
+        pending.erase(std::remove_if(pending.begin(), pending.end(),
+                                     [&](const TrackEdit& p) {
+                                         return p.kind == TrackEdit::Medium && p.track == tid &&
+                                                ((same(p.a, a) && same(p.b, b)) ||
+                                                 (same(p.a, b) && same(p.b, a)));
+                                     }),
+                      pending.end());
+        double len = 0.0;
+        for (int i = lo + 1; i <= hi; ++i)
+            len += std::hypot(graph.pointWorld[i].x - graph.pointWorld[i - 1].x,
+                              graph.pointWorld[i].y - graph.pointWorld[i - 1].y);
+        applyEditsLive({e}, /*keepSelection=*/true);
+        char m[128];
+        std::snprintf(m, sizeof(m), "%s over %.0f m of %#x (P to render, Ctrl+S to save)",
+                      allUnder ? "surface" : "tunnel", len, tid);
+        say(m);
+    };
     // Raise (+) / lower (-) every selected point's elevation by `delta` metres.
     // --- Growing a selection along the line ----------------------------------
     // The points of one track are a contiguous run of indices in route order, so
@@ -2066,7 +2129,9 @@ int main(int argc, char** argv) {
                 "selection; N cycle the selection through coincident points (shared "
                 "nodes); R add a connecting rail between 2 selected points on different "
                 "tracks (builds a switch at each end); C build a scissors (double) "
-                "crossover between 2 selected points on two parallel tracks; K auto-build "
+                "crossover between 2 selected points on two parallel tracks; U put the "
+                "selected stretch of one track in a tunnel (again: back on the surface); "
+                "K auto-build "
                 "a slip switch at the crossing under the selected point; J "
                 "join a selected dead-end onto the track it crosses; Enter/Enter+L link "
                 "two red dead ends. P re-renders the actual track + terrain + switch "
@@ -2088,7 +2153,7 @@ int main(int argc, char** argv) {
          prevJ = false, prevN = false, prevR = false, prevK = false, prevC = false,
          prevP = false, prevF2 = false, prevMR = false, prevM = false,
          prevV = false, prevB = false, prevT = false, prevF = false, prev2 = false, prev3 = false,
-         prevY = false;
+         prevY = false, prevU = false;
     bool prevNameEnter = false, prevNameEsc = false, prevNameBs = false;
     bool prevMenuEnter = false, prevMenuUp = false, prevMenuDown = false;
     const std::vector<std::string> kMenuItems = {"Geometry edit", "New sidings",
@@ -2819,6 +2884,7 @@ int main(int argc, char** argv) {
         const bool k2 = glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS;
         const bool k3 = glfwGetKey(window, GLFW_KEY_3) == GLFW_PRESS;
         const bool kY = glfwGetKey(window, GLFW_KEY_Y) == GLFW_PRESS;
+        const bool kU = glfwGetKey(window, GLFW_KEY_U) == GLFW_PRESS;
         // Save is Ctrl+S (plain S is the backward-movement key).
         const bool kSave = ctrl && glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS;
         const bool kLeft = glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS;
@@ -2868,6 +2934,8 @@ int main(int argc, char** argv) {
             if (kK && !prevK) doAutoDiamond();
             // C: build a scissors (double) crossover between 2 selected tracks' points.
             if (kC && !prevC) doScissors();
+            // U: tunnel (or surface again) over the selected stretch of one track.
+            if (kU && !prevU) doTunnel();
         } else if (mode == EdMode::NewSidings) { // --- New sidings mode ---
             // Enter finishes the road where it stands, leaving a buffer stop. (A click on
             // another track finishes it there instead, with a switch at that end too.)
@@ -3872,7 +3940,7 @@ int main(int argc, char** argv) {
         prevLeft = kLeft; prevRight = kRight;
         prevEnter = kEnter; prevL = kL; prevX = kX; prevG = kG; prevS = kSave;
         prevJ = kJ; prevN = kN; prevR = kR; prevK = kK; prevC = kC; prevP = kP;
-        prevY = kY;
+        prevY = kY; prevU = kU;
         prevF2 = kF2; prevM = kM; prevV = kV; prevB = kB; prevT = kT; prevF = kF;
         prev2 = k2;
         prev3 = k3;
@@ -4574,7 +4642,7 @@ int main(int argc, char** argv) {
                 glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
                 glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
             std::snprintf(buf, sizeof(buf),
-                          "SELECTED %zu%s   keys: G N J R K C   P render",
+                          "SELECTED %zu%s   keys: G N J R K C U   P render",
                           selected.size(), selz);
             appendText(tv, buf, x, 40.0f + 4 * lh, sc,
                        selected.empty() ? glm::vec3(0.7f, 0.85f, 0.7f)
@@ -4601,11 +4669,15 @@ int main(int argc, char** argv) {
                        (ctrlHud || shiftHud) ? glm::vec3(1.0f, 0.9f, 0.3f)
                                              : glm::vec3(0.7f, 0.85f, 0.7f),
                        fbw, fbh);
-            appendText(tv,
-                       g_mouseCaptured ? "SELECT: press Tab to free the cursor"
-                                       : "SELECT: click point, Ctrl+click multi, "
-                                         "click empty to clear",
-                       x, 40.0f + 7 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
+            if (glfwGetTime() < pathMsgUntil && !pathMsg.empty())
+                appendText(tv, pathMsg, x, 40.0f + 7 * lh, sc, glm::vec3(1.0f, 0.8f, 0.4f),
+                           fbw, fbh);
+            else
+                appendText(tv,
+                           g_mouseCaptured ? "SELECT: press Tab to free the cursor"
+                                           : "SELECT: click point, Ctrl+click multi, "
+                                             "click empty to clear",
+                           x, 40.0f + 7 * lh, sc, glm::vec3(0.85f, 0.85f, 0.7f), fbw, fbh);
           } else if (mode == EdMode::MovePoints) { // --- Move track points HUD ---
             appendText(tv, "MODE: MOVE TRACK POINTS (Esc menu to switch)", x,
                        40.0f + 3 * lh, sc, glm::vec3(0.4f, 1.0f, 0.9f), fbw, fbh);

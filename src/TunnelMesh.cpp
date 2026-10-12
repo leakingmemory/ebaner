@@ -106,7 +106,9 @@ void TunnelMesh::build(const TerrainData& data) {
     // face reads sampleGround - so only build the ones standing on terrain that is
     // actually loaded. The network reaches the whole dataset; the ground does not.
     std::vector<std::vector<glm::vec3>> lines;
-    for (const TrackSegment& seg : data.networkTracks()) {
+    // Cut where the medium changes along a track: a tunnel the overlay marks on part of
+    // a drawn track is a bore of its own, with a portal at each end of the stretch.
+    for (const TrackSegment& seg : splitByMedium(data.networkTracks())) {
         if (seg.medium != 0x55 && seg.medium != 0x54) continue; // not underground
         if (seg.pts.size() < 2) continue;
         const glm::dvec3& mid = seg.pts[seg.pts.size() / 2];

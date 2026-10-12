@@ -952,6 +952,73 @@ int main(int argc, char** argv) {
         std::filesystem::remove_all(scratch, ec);
     }
 
+    // A tunnel on a drawn track. The track stays one track - the overlays anchor to it by
+    // id and fraction - so the tunnel is a stretch of its spans, and everything that wants
+    // a segment of one medium gets the track cut at the portals instead.
+    {
+        std::puts("\n  A tunnel on a drawn track:");
+        TrackEdit rec;
+        rec.kind = TrackEdit::Track;
+        rec.track = kNewTrackIdBase + 902;
+        rec.trackType = 0;
+        for (int i = 0; i <= 10; ++i) rec.pts.push_back({1000.0 + 20.0 * i, 2000.0, 30.0});
+        TrackEdit tun;
+        tun.kind = TrackEdit::Medium;
+        tun.track = rec.track;
+        tun.medium = 0x55;
+        tun.a = rec.pts[3];
+        tun.b = rec.pts[7];
+        const std::string scratch =
+            (std::filesystem::temp_directory_path() / "ebaner-tunnel-test").string();
+        std::error_code ec;
+        std::filesystem::create_directories(scratch + "/overlay", ec);
+        if (writeTrackOverlay(scratch, {rec, tun})) {
+            const std::vector<TrackEdit> back = loadTrackOverlay(scratch);
+            const bool two = back.size() == 2 && back[1].kind == TrackEdit::Medium &&
+                             back[1].medium == 0x55 && back[1].track == rec.track;
+            check(two, "the tunnel comes back off the file", two ? 1.0 : 0.0, 1.0);
+            std::vector<TrackSegment> segs;
+            applyTrackOverlay(segs, back);
+            int under = 0;
+            bool right = segs.size() == 1 && segs[0].spanMedium.size() == 10;
+            if (right)
+                for (std::size_t k = 0; k < 10; ++k) {
+                    const bool u = isUndergroundMedium(spanMediumOf(segs[0], k));
+                    under += u;
+                    right = right && u == (k >= 3 && k < 7);
+                }
+            check(right, "the four spans between its ends are underground", under, 4.0);
+            const std::vector<TrackSegment> pieces = splitByMedium(segs);
+            const bool three = pieces.size() == 3 && pieces[1].medium == 0x55 &&
+                               pieces[0].medium == 0x20 && pieces[2].medium == 0x20 &&
+                               pieces[0].pts.back() == pieces[1].pts.front() &&
+                               pieces[1].pts.back() == pieces[2].pts.front() &&
+                               pieces[1].pts.front() == rec.pts[3] &&
+                               pieces[1].pts.back() == rec.pts[7];
+            check(three, "cut at the portals for the carve and the bore",
+                  double(pieces.size()), 3.0);
+            TerrainData net;
+            net.applyTrackEdits(back);
+            const std::vector<TrackPath> tp = buildTrackPaths(net);
+            const bool path = tp.size() == 1 && tp[0].undergroundAt(100.0f) &&
+                              !tp[0].undergroundAt(20.0f) && !tp[0].undergroundAt(180.0f);
+            check(path, "and a train on it knows where it is in the tunnel", path ? 1.0 : 0.0,
+                  1.0);
+            // Back on the surface for part of it, as pressing U again does.
+            TrackEdit sur = tun;
+            sur.medium = 0x20;
+            sur.a = rec.pts[4];
+            sur.b = rec.pts[5];
+            std::vector<TrackEdit> again = back;
+            again.push_back(sur);
+            std::vector<TrackSegment> segs2;
+            applyTrackOverlay(segs2, again);
+            check(splitByMedium(segs2).size() == 5, "a later edit puts a stretch back",
+                  double(splitByMedium(segs2).size()), 5.0);
+        }
+        std::filesystem::remove_all(scratch, ec);
+    }
+
     // A station the overlay moves. The export's node can sit well away from the station
     // it names - Stod's was 3.5 km up the line - and the overlay puts it back. Built on a
     // dataset of one tile written here, so the check knows both positions exactly.

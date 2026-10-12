@@ -62,15 +62,19 @@ TrackGraph buildTrackGraph(const TerrainData& data) {
             // Keep each kept point's world coord for selection / future edits.
             std::vector<glm::vec3> pts;
             std::vector<glm::dvec3> ptsW;
+            std::vector<std::size_t> ptsK; // each kept point's index in seg.pts
             pts.reserve(seg.pts.size());
             ptsW.reserve(seg.pts.size());
-            for (const glm::dvec3& w : seg.pts) {
+            ptsK.reserve(seg.pts.size());
+            for (std::size_t k = 0; k < seg.pts.size(); ++k) {
+                const glm::dvec3& w = seg.pts[k];
                 const glm::vec3 p(static_cast<float>(w.x - origin.x),
                                   static_cast<float>(w.y - origin.y),
                                   static_cast<float>(w.z - origin.z) + kLift);
                 if (pts.empty() || glm::distance(pts.back(), p) > 1e-3f) {
                     pts.push_back(p);
                     ptsW.push_back(w);
+                    ptsK.push_back(k);
                 }
             }
             if (pts.size() < 2) continue;
@@ -84,8 +88,12 @@ TrackGraph buildTrackGraph(const TerrainData& data) {
                 g.pointTrack.push_back(seg.trackId);
             }
             for (std::size_t k = 0; k + 1 < pts.size(); ++k) {
-                g.lines.push_back({pts[k], lc});
-                g.lines.push_back({pts[k + 1], lc});
+                // Underground in a darker shade of the same colour, so a tunnel reads
+                // as one on the map without hiding what kind of track it is.
+                const bool under = isUndergroundMedium(spanMediumOf(seg, ptsK[k + 1] - 1));
+                const glm::vec3 c = under ? lc * 0.45f : lc;
+                g.lines.push_back({pts[k], c});
+                g.lines.push_back({pts[k + 1], c});
                 edges.push_back({glm::vec2(pts[k]), glm::vec2(pts[k + 1]), seg.trackId});
             }
             ends.push_back({pts.front(), seg.pts.front(), seg.trackId});

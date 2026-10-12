@@ -68,9 +68,16 @@ constexpr std::uint32_t kNewTrackIdBase = 0xD0000000;
 //                              rebuilds a stretch of line the export lost: it chains only
 //                              onto main-line ends, and kmh gives it the line speed the
 //                              survey would have carried.
+//   medium <trackid> <tunnel|surface|bridge> ax ay bx by
+//                            - what the track between two of its own vertices runs in,
+//                              the vertices named by position (the nearest within 2 m).
+//                              A tunnel through a hill on a track drawn here, which
+//                              otherwise has to be surface from end to end. The id is
+//                              decimal, as the other vertex edits name theirs.
 struct TrackEdit {
-    enum Kind { Link, Elev, Move, Rail, Track, Drop } kind = Link;
+    enum Kind { Link, Elev, Move, Rail, Track, Drop, Medium } kind = Link;
     // Link/Rail: the two endpoints. Elev: a = {x, y, newZ}. Move: a = old, b = new pos.
+    // Medium: the two vertices the stretch runs between (z unused).
     glm::dvec3 a{0.0}, b{0.0};
     // Track: the drawn polyline, two points or more.
     std::vector<glm::dvec3> pts;
@@ -83,6 +90,7 @@ struct TrackEdit {
     // Track: the new track's own id. Drop: the track to remove.
     std::uint32_t track = 0;
     // Link: force the connector's medium (0 = take it from the ends it joins).
+    // Medium: the medium the stretch is given.
     std::uint8_t medium = 0;
     // Elev: which of several vertices at one spot on one track is meant, by the height
     // it has before the edit. Without it the first found wins and the others can never

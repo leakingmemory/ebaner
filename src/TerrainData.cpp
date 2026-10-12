@@ -50,6 +50,37 @@ double TerrainData::lodResolution(int lod) {
     return kLodResolution[std::clamp(lod, 0, 3)];
 }
 
+std::vector<TrackSegment> splitByMedium(const std::vector<TrackSegment>& segs) {
+    std::vector<TrackSegment> out;
+    out.reserve(segs.size());
+    for (const TrackSegment& s : segs) {
+        if (s.spanMedium.empty() || s.pts.size() < 2) {
+            out.push_back(s);
+            out.back().spanMedium.clear();
+            continue;
+        }
+        const std::size_t spans = s.pts.size() - 1;
+        for (std::size_t k0 = 0; k0 < spans;) {
+            const std::uint8_t m = spanMediumOf(s, k0);
+            std::size_t k1 = k0 + 1;
+            while (k1 < spans && spanMediumOf(s, k1) == m) ++k1;
+            TrackSegment piece;
+            piece.trackId = s.trackId;
+            piece.trackType = s.trackType;
+            piece.medium = m;
+            // Both ends: the vertex where the medium changes is the portal, and belongs
+            // to the piece either side of it.
+            piece.pts.assign(s.pts.begin() + k0, s.pts.begin() + k1 + 1);
+            if (!s.speed.empty())
+                piece.speed.assign(s.speed.begin() + std::min(k0, s.speed.size()),
+                                   s.speed.begin() + std::min(k1 + 1, s.speed.size()));
+            out.push_back(std::move(piece));
+            k0 = k1;
+        }
+    }
+    return out;
+}
+
 void TerrainData::applyTrackEdits(const std::vector<TrackEdit>& edits) {
     applyTrackOverlay(networkTracks_, edits);
 }

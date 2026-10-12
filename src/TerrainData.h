@@ -32,7 +32,26 @@ struct TrackSegment {
     std::uint8_t medium = 0x20; // 0x20 surface, 0x55 tunnel, 0x54 tube, 0x4C/0x42 bridge
     std::vector<glm::dvec3> pts;
     std::vector<std::uint16_t> speed; // per-vertex OSM speed km/h (0=unknown)
+    // The medium of each span, pts[k] -> pts[k+1], where it changes along the track.
+    // Empty means all of it is `medium`, which is every exported track: the export cuts
+    // a line wherever its medium changes. A `medium` overlay edit is what fills this in,
+    // on a track the editor drew - splitting it instead would give the pieces new ids,
+    // and everything anchored to it by `<trackHex>:<frac>` would lose its place.
+    std::vector<std::uint8_t> spanMedium;
 };
+
+// The medium of span k of `s` (pts[k] -> pts[k+1]).
+inline std::uint8_t spanMediumOf(const TrackSegment& s, std::size_t k) {
+    return k < s.spanMedium.size() ? s.spanMedium[k] : s.medium;
+}
+inline bool isUndergroundMedium(std::uint8_t m) { return m == 0x55 || m == 0x54; }
+
+// `segs` with every track whose medium changes along it cut into pieces of one medium
+// each, laid end to end with the same id - the shape the export gives such a line. For
+// the code that thinks in whole segments of one medium: the terrain carve, which digs
+// for surface track and stops at a portal, and the bores, which are built per tunnel.
+// Not for anything that anchors by id and fraction; the pieces share an id.
+std::vector<TrackSegment> splitByMedium(const std::vector<TrackSegment>& segs);
 
 // One road segment: a polyline in world coords (EPSG:25833, metres). Roads carry
 // no unique id, so a segment crossing tile boundaries (included in full in every

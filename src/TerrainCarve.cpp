@@ -72,9 +72,12 @@ void carveTrackCuttings(std::vector<Tile*>& tiles,
     std::unordered_set<std::string> seenSeg;
     std::vector<const TrackSegment*> surface;
     std::unordered_map<int, int> mediumHist;
+    // Cut where the medium changes along a track, so a tunnel drawn into the middle of
+    // one has portals here like any exported tunnel. `surface` points into this.
+    const std::vector<TrackSegment> pieces = splitByMedium(tracks);
 
     {
-        for (const TrackSegment& s : tracks) {
+        for (const TrackSegment& s : pieces) {
             mediumHist[s.medium]++;
             if (s.pts.size() < 2) continue;
             if (isUnderground(s.medium)) {
