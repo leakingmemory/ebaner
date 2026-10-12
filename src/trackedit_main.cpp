@@ -68,6 +68,7 @@
 #include <exception>
 #include <set>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -561,6 +562,10 @@ int main(int argc, char** argv) {
     // Per-track world polylines (rebuilt from graph), for border projection/rendering
     // and the section flood-fill. Kept in sync with the graph.
     std::vector<TrackPoly> polys;
+    // The track ends nothing continues from - buffer stops - as positions on their tracks.
+    // A route may finish at one: a shunting move into a stub, or a train into a dead-end
+    // platform road, runs to the end of the track, and there is no joint there to click.
+    std::vector<Border> trackEnds;
     // The junction graph the distant-signal walk follows. Geometry edits can change it, so
     // unlike the simulator it is rebuilt alongside the polylines.
     TrackJunctions junctions;
@@ -572,6 +577,20 @@ int main(int argc, char** argv) {
             polys.back().pts.push_back(graph.pointWorld[i]);
         }
         junctions = trackJunctions(polys);
+        // The graph has already found the dead ends; this only says which end of which
+        // track each is. Both hold the export's own coordinates, so they match exactly.
+        auto key = [](const glm::dvec3& w) {
+            return (static_cast<std::uint64_t>(std::llround(w.x * 100.0)) << 32) ^
+                   static_cast<std::uint64_t>(std::llround(w.y * 100.0));
+        };
+        std::unordered_set<std::uint64_t> dead;
+        for (const glm::dvec3& w : graph.deadEndWorld) dead.insert(key(w));
+        trackEnds.clear();
+        for (const TrackPoly& p : polys) {
+            if (p.pts.size() < 2) continue;
+            if (dead.count(key(p.pts.front()))) trackEnds.push_back({p.id, 0.0});
+            if (dead.count(key(p.pts.back()))) trackEnds.push_back({p.id, 1.0});
+        }
     };
     buildPolys();
     for (const Section& s : tc.sections) nextSectionId = std::max(nextSectionId, s.id + 1);
@@ -2504,6 +2523,7 @@ int main(int argc, char** argv) {
         glm::dvec3 circWorld(0.0);
         glm::vec2 circPx(0.0f);
         int borderHover = -1;
+        int endHover = -1; // a track end under the cursor, as a route destination
         int sectionHover = -1; // section whose interval is under the cursor
         // Circuits mode authors borders/sections; Switches mode reuses the same section
         // pick to add/remove a circuit from the selected switch's locking set (L). Every
@@ -2587,6 +2607,26 @@ int main(int argc, char** argv) {
                 if (proj(w, px)) {
                     const float d = glm::length(px - cur);
                     if (d < bb) { bb = d; borderHover = static_cast<int>(bi); }
+                }
+            }
+            // A route's destination may also be the end of a track, once its start is
+            // set: only there, because a signal cannot stand at a buffer stop. A border
+            // nearby still wins, being what the click is far more likely to mean.
+            const bool routeEditing = mode == EdMode::SignalPaths ||
+                                      mode == EdMode::ExitSignals ||
+                                      mode == EdMode::EntrySignals;
+            if (routeEditing && pathStart >= 0 && borderHover < 0 && armedExit < 0 &&
+                armedEntry < 0) {
+                float be = 14.0f;
+                for (std::size_t ei = 0; ei < trackEnds.size(); ++ei) {
+                    const glm::dvec3 w = fracToWorld(polys, trackEnds[ei].trackId,
+                                                     trackEnds[ei].frac);
+                    if (w.x == 0.0 && w.y == 0.0) continue;
+                    glm::vec2 px;
+                    if (proj(w, px)) {
+                        const float d = glm::length(px - cur);
+                        if (d < be) { be = d; endHover = static_cast<int>(ei); }
+                    }
                 }
             }
             // Which section is under the cursor (its interval contains the pick)?
@@ -4313,8 +4353,11 @@ int main(int argc, char** argv) {
             rebuildOverlay();
         } else if (!g_mouseCaptured && mL && !prevML && routeMode) {
             // Click a border to set the start (for an exit signal, where it stands); click
-            // a second border to build the route (commit if unique, refuse otherwise).
-            if (borderHover >= 0) {
+            // a second border - or the end of a track - to build the route (commit if
+            // unique, refuse otherwise).
+            if (borderHover >= 0 || endHover >= 0) {
+                const Border dest = borderHover >= 0 ? tc.borders[borderHover]
+                                                     : trackEnds[endHover];
                 if (pathStart < 0) {
                     pathStart = borderHover;
                 } else if (borderHover == pathStart) {
@@ -4322,8 +4365,7 @@ int main(int argc, char** argv) {
                     pathStart = -1; pendingVias.clear();
                 } else {
                     std::vector<SectionInterval> route;
-                    const int n = findSignalRoute(polys, tc.borders[pathStart],
-                                                  tc.borders[borderHover], route,
+                    const int n = findSignalRoute(polys, tc.borders[pathStart], dest, route,
                                                   pendingVias);
                     if (n == 1) {
                         SignalPath p;
@@ -4331,7 +4373,7 @@ int main(int argc, char** argv) {
                         p.name = std::string(exitMode ? "E" : entryMode ? "N" : "P") +
                                  std::to_string(p.id);
                         p.start = tc.borders[pathStart];
-                        p.end = tc.borders[borderHover];
+                        p.end = dest;
                         p.vias = pendingVias;
                         p.parts = std::move(route);
                         // An entry signal's record is the whole movement, so its authority
@@ -5396,7 +5438,7 @@ int main(int argc, char** argv) {
                                ": click the start border",
                            x, 40.0f + fl * lh, sc, glm::vec3(1.0f, 0.9f, 0.5f), fbw, fbh);
             else if (pathStart >= 0)
-                appendText(tv, "start set - click the destination border", x,
+                appendText(tv, "start set - click the destination border or track end", x,
                            40.0f + fl * lh, sc, glm::vec3(1.0f, 0.9f, 0.5f), fbw, fbh);
             // Two short hint lines rather than one long one: only ~56 characters fit in
             // the panel, so a single line silently lost its tail - which is where the keys
@@ -5527,6 +5569,27 @@ int main(int argc, char** argv) {
                     std::snprintf(lbl, sizeof(lbl), "%s", motor ? "motor" : "manual");
                 appendText(tv, lbl, turnoutHoverPx.x + 14.0f,
                            turnoutHoverPx.y - 4.0f, sc * 0.7f, hc, fbw, fbh);
+            }
+            // A track end as the destination: the same ring, saying what it is.
+            if (routeMode && endHover >= 0 &&
+                endHover < static_cast<int>(trackEnds.size())) {
+                const glm::dvec3 o = data.sceneOrigin();
+                const glm::dvec3 w = fracToWorld(polys, trackEnds[endHover].trackId,
+                                                 trackEnds[endHover].frac);
+                const glm::vec4 clip = viewProj * glm::vec4(float(w.x - o.x), float(w.y - o.y),
+                                                            float(w.z - o.z), 1.0f);
+                if (clip.w > 0.0f) {
+                    const glm::vec2 bpx((clip.x / clip.w * 0.5f + 0.5f) * fbw,
+                                        (clip.y / clip.w * 0.5f + 0.5f) * fbh);
+                    const glm::vec3 hc(1.0f, 1.0f, 0.3f);
+                    const float R = 10.0f, T = 2.0f;
+                    quad(bpx.x, bpx.y - R, R, T, hc);
+                    quad(bpx.x, bpx.y + R, R, T, hc);
+                    quad(bpx.x - R, bpx.y, T, R, hc);
+                    quad(bpx.x + R, bpx.y, T, R, hc);
+                    appendText(tv, "end (end of track)", bpx.x + 13.0f, bpx.y - 4.0f,
+                               sc * 0.7f, hc, fbw, fbh);
+                }
             }
             // Signal paths: ring the border under the cursor (the click target).
             if (routeMode && borderHover >= 0 &&
