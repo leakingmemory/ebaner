@@ -28,6 +28,7 @@
 //
 // Usage: SignalRouteTest <datasetRoot>   (exit 77 = skipped, no dataset)
 
+#include "SignalPaths.h"
 #include "TerrainData.h"
 #include "TrackCircuits.h"
 #include "TrackGraph.h"
@@ -64,6 +65,28 @@ const Border* findBorder(const TrackCircuits& tc, std::uint32_t track, double fr
 } // namespace
 
 int main(int argc, char** argv) {
+    // Exit signals in series: an exit whose own road ends at another exit's mast, facing the
+    // same way, is what a departure runs on through (Steinkjer's inner and outer groups).
+    // On a made-up straight track, so it needs no dataset.
+    {
+        std::puts("\nexit signals in series:");
+        const std::vector<TrackPoly> line{{1, {{0, 0, 0}, {0, 500, 0}, {0, 1000, 0}}}};
+        auto rec = [](double from, double to) {
+            SignalPath p;
+            p.start = {1, from};
+            p.end = {1, to};
+            p.parts = {{1, from, to}};
+            return p;
+        };
+        // An inner exit running up to 0.5, one at 0.5 facing back the way it came, and the
+        // outer one at 0.5 carrying on.
+        const std::vector<SignalPath> exits{rec(0.2, 0.5), rec(0.5, 0.1), rec(0.5, 0.9)};
+        const int inner = routeTargetSignal(exits[0], exits, line);
+        const int outer = routeTargetSignal(exits[2], exits, line);
+        check(inner == 2, "the inner runs on to the outer, not back", inner, 2);
+        check(outer == -1, "and the outer runs on to nothing", outer, -1);
+    }
+
     const std::string root = argc > 1 ? argv[1] : "../norway-rails";
     if (!std::filesystem::exists(root)) {
         std::printf("no dataset at %s - skipping\n", root.c_str());

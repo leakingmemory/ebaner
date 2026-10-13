@@ -1654,10 +1654,23 @@ int main(int argc, char** argv) {
         std::string stationName;
         glm::vec2 anchor{0.0f};  // its in-station end, which is what groups it by station
         SignalPath departure;    // the whole movement
-        std::vector<int> beyond; // circuits past the signal
+        std::vector<int> beyond; // circuits past the signal - past the first, if chained
         // Level crossings this movement's signal waits for before it SHOWS green. Read only
         // by the display pass: setting and holding the route ignores it entirely.
         std::vector<CrossingTie> ties;
+        // Exit signals in series. Where an exit's own road ends at another exit mast facing
+        // the same way - an inner and an outer group, as at Steinkjer southbound - the
+        // departure runs on through it and lights it too, with the same C1/C2. Each such mast
+        // goes back to danger only once a train is past *it*, so `ownBeyond` is the first
+        // mast's own circuits and `beyond` above is the whole road past it, which is what the
+        // occupancy and conflict tests have to see. Unchained, the two are the same.
+        struct Chained {
+            int placement = -1;
+            std::vector<int> beyond;
+            std::vector<CrossingTie> ties;
+        };
+        std::vector<Chained> chained;
+        std::vector<int> ownBeyond;
     };
     std::vector<MainCandidate> mainCandidates;
     {
@@ -1698,7 +1711,31 @@ int main(int argc, char** argv) {
             // ones past the mast - and a circuit cannot straddle a border, so the sets are
             // disjoint rather than merely different.
             c.beyond = pathSections(exitSignals[e], circuits);
+            c.ownBeyond = c.beyond;
             c.ties = tiesOf(exitSignals[e]); // the signal's own road out, past the mast
+            // On through any exit the signal's road ends at, facing the same way: the same
+            // question that ties an exit route to its mast, asked of the signal's own road.
+            {
+                std::vector<int> seen{e};
+                for (int at = e;;) {
+                    const int nx = routeTargetSignal(exitSignals[at], exitSignals, polys);
+                    if (nx < 0 || std::find(seen.begin(), seen.end(), nx) != seen.end())
+                        break;
+                    seen.push_back(nx);
+                    c.departure = departureRoute(c.departure, exitSignals[nx]);
+                    MainCandidate::Chained ch;
+                    ch.placement = mastOf(SignalKind::Exit, nx);
+                    ch.beyond = pathSections(exitSignals[nx], circuits);
+                    ch.ties = tiesOf(exitSignals[nx]);
+                    for (const int id : ch.beyond)
+                        if (std::find(c.beyond.begin(), c.beyond.end(), id) == c.beyond.end())
+                            c.beyond.push_back(id);
+                    c.chained.push_back(std::move(ch));
+                    std::printf("[Route] %s runs on through exit \"%s\"\n", c.name.c_str(),
+                                named(exitSignals[nx], "X").c_str());
+                    at = nx;
+                }
+            }
             c.entry = false;
             // Either half may name the station; the signal wins only if the route is silent.
             c.stationName = !exitRoutes[ri].station.empty() ? exitRoutes[ri].station
@@ -1761,6 +1798,10 @@ int main(int argc, char** argv) {
             }
         }
     }
+    // Unchained - every entry, and every exit not in series with another - the first mast's
+    // own circuits are simply all of them past it.
+    for (MainCandidate& c : mainCandidates)
+        if (c.chained.empty()) c.ownBeyond = c.beyond;
     // Stations: routes whose in-station ends lie within kStationSpan of one another work one
     // place, so the traffic manager can offer just that place's routes. Anchoring on the
     // platform end rather than on the mast matters - an entry signal can stand a kilometre
@@ -1882,6 +1923,8 @@ int main(int argc, char** argv) {
                 std::printf("[Route] %2zu \"%s\" %s mast=%d station=%d anchor=%.1f,%.1f",
                             ri, c.name.c_str(), c.type == RouteType::C2 ? "C2" : "C1",
                             c.placement, c.station, c.anchor.x, c.anchor.y);
+                for (const MainCandidate::Chained& ch : c.chained)
+                    std::printf(" +mast=%d", ch.placement);
                 for (const SectionInterval& iv : c.departure.parts)
                     std::printf(" %x:%.6f:%.6f", iv.trackId, iv.from, iv.to);
                 std::printf(" beyond");
@@ -1919,6 +1962,11 @@ int main(int argc, char** argv) {
         std::vector<int> locked; // section ids still held (approach and beyond alike)
         std::vector<int> beyond; // of those, the ones past the signal
         bool signalClear = true; // false once a circuit beyond the signal was entered
+        std::vector<int> ownBeyond; // the first mast's own circuits (= beyond unless chained)
+        // Further masts the departure runs on through (MainCandidate::chained), each put back
+        // to danger by its own circuits only.
+        struct Chained { int placement = -1; std::vector<int> beyond; bool clear = true; };
+        std::vector<Chained> chained;
     };
     std::vector<MainRoute> mainRoutes;
 
@@ -3162,6 +3210,9 @@ int main(int argc, char** argv) {
         mr.departure = dep;
         mr.locked = pathSections(dep, circuits);
         mr.beyond = mainCandidates[ri].beyond;
+        mr.ownBeyond = mainCandidates[ri].ownBeyond;
+        for (const MainCandidate::Chained& ch : mainCandidates[ri].chained)
+            mr.chained.push_back({ch.placement, ch.beyond, true});
         mainRoutes.push_back(std::move(mr));
         // Whichever line blocks this departure runs onto are now set its way, and stay so
         // until the line is genuinely clear - not until this route ends.
@@ -3255,6 +3306,18 @@ int main(int argc, char** argv) {
         std::vector<std::string> by(sigPlacements.size()); // the route lighting each mast
         bool anyHeld = false;
         for (const MainRoute& mr : mainRoutes) {
+            // A chained mast waits for its own crossings, as the first waits for its own.
+            const std::vector<MainCandidate::Chained>& chs = mainCandidates[mr.route].chained;
+            for (std::size_t k = 0; k < mr.chained.size() && k < chs.size(); ++k) {
+                const int pl = mr.chained[k].placement;
+                if (pl < 0) continue;
+                by[static_cast<std::size_t>(pl)] = exitRouteName(mr.route);
+                if (!mr.chained[k].clear || chs[k].ties.empty() ||
+                    crossingSecuredFor(chs[k].ties, crossingStates))
+                    continue;
+                held[static_cast<std::size_t>(pl)] = 1;
+                anyHeld = true;
+            }
             if (mr.placement >= 0) by[static_cast<std::size_t>(mr.placement)] =
                 exitRouteName(mr.route);
             if (!mr.signalClear || mr.placement < 0) continue; // at danger anyway
@@ -4337,8 +4400,21 @@ int main(int argc, char** argv) {
                 std::vector<int> still;
                 for (int id : mr.locked) {
                     if (secOccupiedById(id)) {
-                        if (std::find(mr.beyond.begin(), mr.beyond.end(), id) != mr.beyond.end())
+                        // Past the first mast is what drops it - not the whole road beyond,
+                        // which for a chained departure runs on past a second mast that
+                        // has to stay clear for the train now approaching it.
+                        if (std::find(mr.ownBeyond.begin(), mr.ownBeyond.end(), id) !=
+                            mr.ownBeyond.end())
                             passedSignal = true;
+                        for (MainRoute::Chained& ch : mr.chained)
+                            if (ch.clear &&
+                                std::find(ch.beyond.begin(), ch.beyond.end(), id) !=
+                                    ch.beyond.end()) {
+                                ch.clear = false;
+                                std::printf("[Main] %s: its next mast -> DANGER (a circuit "
+                                            "beyond it entered)\n",
+                                            exitRouteName(mr.route).c_str());
+                            }
                         std::printf("[Main] %s released %s (train entered)\n",
                                     exitRouteName(mr.route).c_str(), secName(id).c_str());
                     } else {
@@ -4432,10 +4508,15 @@ int main(int argc, char** argv) {
             // not yet been entered, then C1 (two greens) or C2 (one green) per its type.
             std::vector<SignalAspect> exitAspects(sigPlacements.size(), SignalAspect::Stop);
             for (const MainRoute& mr : mainRoutes) {
+                const SignalAspect go = mainCandidates[mr.route].type == RouteType::C2
+                                            ? SignalAspect::ClearReduced
+                                            : SignalAspect::Clear;
+                // Each mast of a chained departure on its own say: the first may be back at
+                // danger behind the train while the next still shows it the road.
+                for (const MainRoute::Chained& ch : mr.chained)
+                    if (ch.clear && ch.placement >= 0) exitAspects[ch.placement] = go;
                 if (!mr.signalClear || mr.placement < 0) continue;
-                exitAspects[mr.placement] = mainCandidates[mr.route].type == RouteType::C2
-                                                ? SignalAspect::ClearReduced
-                                                : SignalAspect::Clear;
+                exitAspects[mr.placement] = go;
             }
             // Dark where the station is unmanned; otherwise red, bar the one cleared.
             for (std::size_t i = 0; i < simpleEntries.size(); ++i) {
