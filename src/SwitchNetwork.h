@@ -108,6 +108,10 @@ public:
     void setState(int i, SwitchState s) { state_[i] = s; }
     // Throw the switch: Straight <-> Diverging; a Broken switch is repaired to Straight.
     void toggle(int i);
+    // Put a broken switch right again, motor or manual: someone has walked out to it, so
+    // what works it does not matter. It comes back Straight, the normal position - broken
+    // remembers no other. False, and nothing changed, if it was not broken.
+    bool repair(int i);
 
     // Manual (hand-thrown) vs Motor (point machine). Defaults to Manual on build();
     // applySwitchTypes() (SwitchTypes.h) sets the authored overrides after build().

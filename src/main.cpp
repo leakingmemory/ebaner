@@ -617,7 +617,7 @@ int main(int argc, char** argv) {
         "machine with two handles - back past neutral is its electric brake - whose "
         "train brake is K release / L apply and whose independent loco brake is "
         "H release / J apply), Space emergency, "
-        "F/N/R reverser, T throw aimed switch, U uncouple, M mute, "
+        "F/N/R reverser, T throw (or repair) aimed switch, U uncouple, M mute, "
         "Tab release cursor, Esc menu (drive another train, place one)\n\n");
 
     loading.stage(kStageSignals);
@@ -5589,9 +5589,18 @@ int main(int argc, char** argv) {
             }
             if (g_throwSwitch) {
                 g_throwSwitch = false;
+                // A broken switch is repaired by the same walk out and the same key, whatever
+                // works it: the panel cannot touch one, so this is the only way back.
+                if (!g_mapMode && aimedSwitch >= 0 && switchNet.repair(aimedSwitch)) {
+                    switches.build(switchNet, worldCentre, data.loadedRadius());
+                    renderer.updateSwitches(switches.vertices(), switches.indices());
+                    switchesChanged = true;
+                    g_mapDirty = true;
+                    std::printf("[Switch] %d repaired -> straight\n", aimedSwitch);
+                }
                 // Motor (point-machine) switches can't be hand-thrown - they're worked
-                // remotely (a later feature). Only manual switches respond to T.
-                if (!g_mapMode && aimedSwitch >= 0 &&
+                // remotely from the panel. Only manual switches respond to T.
+                else if (!g_mapMode && aimedSwitch >= 0 &&
                     switchNet.type(aimedSwitch) != SwitchType::Motor) {
                     switchNet.toggle(aimedSwitch);
                     switches.build(switchNet, worldCentre, data.loadedRadius());
@@ -5808,14 +5817,16 @@ int main(int argc, char** argv) {
                                                                      : "BROKEN";
                     const bool broken = ss == SwitchState::Broken;
                     const bool motor = switchNet.type(aimedSwitch) == SwitchType::Motor;
-                    if (motor)
+                    if (broken)
+                        std::snprintf(buf, sizeof(buf), "SWITCH %s   T to repair", sn);
+                    else if (motor)
                         std::snprintf(buf, sizeof(buf), "SWITCH %s   MOTOR - no hand throw", sn);
                     else
                         std::snprintf(buf, sizeof(buf), "SWITCH %s   T to throw", sn);
-                    const glm::vec3 col = motor    ? glm::vec3(0.6f, 0.7f, 1.0f)
-                                          : broken ? glm::vec3(1.0f, 0.5f, 0.3f)
-                                                   : glm::vec3(0.6f, 1.0f, 0.8f);
-                    appendText(tv, buf, fbw * 0.5f - (motor ? 92.0f : 66.0f) * sc,
+                    const glm::vec3 col = broken  ? glm::vec3(1.0f, 0.5f, 0.3f)
+                                          : motor ? glm::vec3(0.6f, 0.7f, 1.0f)
+                                                  : glm::vec3(0.6f, 1.0f, 0.8f);
+                    appendText(tv, buf, fbw * 0.5f - (motor && !broken ? 92.0f : 66.0f) * sc,
                                fbh * 0.5f + 14.0f * sc, sc, col, fbw, fbh);
                 }
                 renderer.setOverlayText(tv);

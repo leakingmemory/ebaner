@@ -430,6 +430,13 @@ void SwitchNetwork::build(const TerrainData& data,
                 turnouts_.size(), resolved, inverted);
 }
 
+bool SwitchNetwork::repair(int i) {
+    if (i < 0 || i >= static_cast<int>(state_.size())) return false;
+    if (state_[i] != SwitchState::Broken) return false;
+    state_[i] = SwitchState::Straight;
+    return true;
+}
+
 void SwitchNetwork::toggle(int i) {
     if (i < 0 || i >= static_cast<int>(state_.size())) return;
     state_[i] = state_[i] == SwitchState::Straight ? SwitchState::Diverging

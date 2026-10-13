@@ -1091,6 +1091,18 @@ int main(int argc, char** argv) {
             check(sw.state(iSE) != SwitchState::Broken, "and leaves the other unharmed",
                   sw.state(iSE) == SwitchState::Broken ? 0.0 : 1.0, 1.0);
         }
+        // A broken switch is put right by hand, whatever works it, and comes back in its
+        // normal position; one that is not broken is left alone.
+        if (both) {
+            sw.setState(iSE, SwitchState::Broken);
+            const bool fixed = sw.repair(iSE);
+            check(fixed && sw.state(iSE) == SwitchState::Straight,
+                  "a broken switch is repaired, to straight", fixed ? 1.0 : 0.0, 1.0);
+            sw.setState(iNW, SwitchState::Diverging);
+            const bool again = sw.repair(iNW);
+            check(!again && sw.state(iNW) == SwitchState::Diverging,
+                  "one that is not broken is left as it was", again ? 0.0 : 1.0, 1.0);
+        }
     }
 
     // A station the overlay moves. The export's node can sit well away from the station
