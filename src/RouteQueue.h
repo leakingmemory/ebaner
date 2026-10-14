@@ -28,20 +28,28 @@
 // queue that granted anything would be a second interlocking, and two of those disagreeing
 // is exactly the fault worth never having.
 
+#include <functional>
 #include <vector>
 
 // Which armed routes to try this step, as indices into the queue, in arm order.
 //
-// A route is tried unless something armed ahead of it, and still waiting, wants a circuit
-// it wants too. Sharing a circuit is the whole test, and it is deliberately coarser than
-// the conflict rule the interlocking itself applies: two routes set end to end through a
-// station share the platform road without conflicting, and this holds the second of them
-// back for a step anyway. That costs nothing - it is tried again as soon as the first is
-// set - and it buys the property actually wanted, which is that two moves over the same
-// rails are taken in the order they were armed whatever the reason the first is waiting.
+// A route is tried unless something armed ahead of it, and still waiting, contends with it
+// for the same road - by the interlocking's own rule when `beyond` and `opposed` are given:
+// a circuit lying beyond both their signals, or any circuit shared by two that run toward
+// each other. Two routes set end to end through a station share the platform road without
+// contending - an entry finishing on the road a departure from it begins on - and those are
+// not held one behind the other.
 //
-// Being coarse is safe in one direction only, and this is that direction: the test can
-// delay a route, never permit one.
+// They used to be, on the reasoning that holding the second back cost a step at most. It
+// cost a deadlock: an entry into a platform armed first, and the departure off it armed
+// after. The entry waits for the platform to clear, the platform is the train waiting to
+// depart, and the departure waited behind the entry. Bergsgrav stalled that way. Without
+// `beyond` the test is still the old coarse one, any circuit shared, which is the only
+// thing a caller with nothing else to go on can safely use.
+//
+// Holding a route back is safe in one direction only, and this is that direction: the
+// test can delay a route, never permit one - whatever it answers, the interlocking still
+// decides.
 //
 // Every route in the queue holds its circuits against those armed after it, whether it is
 // going this step, refused by the interlocking, or held back here by one in front - a
@@ -49,5 +57,9 @@
 // route it is meant to go before. `sections` and `blocked` are parallel to the queue;
 // `sections[i]` is the track-circuit ids route i runs through and `blocked[i]` whether the
 // interlocking refuses it as things stand.
+// `beyond[i]` is the circuits past route i's signal; `opposed(a, b)` whether queued routes a
+// and b run toward each other over what they share.
 std::vector<int> routeQueueReady(const std::vector<std::vector<int>>& sections,
-                                 const std::vector<char>& blocked);
+                                 const std::vector<char>& blocked,
+                                 const std::vector<std::vector<int>>& beyond = {},
+                                 const std::function<bool(int, int)>& opposed = {});

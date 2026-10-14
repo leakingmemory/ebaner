@@ -4530,21 +4530,38 @@ int main(int argc, char** argv) {
             std::erase_if(routeQueue,
                           [&](const QueuedRoute& q) { return mainRouteFor(q.route); });
             std::vector<char> blocked;
-            std::vector<std::vector<int>> secs;
+            std::vector<std::vector<int>> secs, beyond;
             blocked.reserve(routeQueue.size());
             secs.reserve(routeQueue.size());
+            beyond.reserve(routeQueue.size());
             for (const QueuedRoute& q : routeQueue) {
                 blocked.push_back(!exitRouteBlocked(q.route).full.empty());
                 secs.push_back(q.sections);
+                beyond.push_back(mainCandidates[q.route].beyond);
             }
-            for (const int qi : routeQueueReady(secs, blocked)) {
+            // The interlocking's own rule for two routes contending, so the queue holds back
+            // exactly the routes that could never both be set - and no others: an entry and
+            // the departure off the same platform used to wait on each other for good.
+            const auto opposed = [&](int a, int b) {
+                return routesOppose(mainCandidates[routeQueue[a].route].departure,
+                                    mainCandidates[routeQueue[b].route].departure);
+            };
+            bool anySet = false;
+            for (const int qi : routeQueueReady(secs, blocked, beyond, opposed)) {
                 const int ri = routeQueue[qi].route;
                 trySetExitRoute(ri);
-                if (mainRouteFor(ri))
+                if (mainRouteFor(ri)) {
+                    anySet = true;
                     std::printf("[Main] %s set from the queue\n", exitRouteName(ri).c_str());
+                }
             }
             std::erase_if(routeQueue,
                           [&](const QueuedRoute& q) { return mainRouteFor(q.route); });
+            // A route going is itself a change the rest of the queue has to be asked about
+            // again: one held behind it here is free now. Nothing else would ask - the
+            // switches it threw are spent by the aspect pass this same frame - so without
+            // this the next route in line waited for some unrelated train to move.
+            if (anySet && !routeQueue.empty()) routeQueueChanged = true;
         }
         if (occupancyChanged || switchesChanged || simpleSignalsChanged || flagsChanged ||
             blocksChanged) {

@@ -109,6 +109,32 @@ int main() {
              "a repeated circuit id is still just that circuit");
     }
 
+    // By the interlocking's own rule: an entry into a platform and the departure off it
+    // share the platform road and are set end to end, and must not wait on each other -
+    // the entry waits for the platform to clear, the platform is the train waiting to go,
+    // and Bergsgrav stalled exactly so when the queue held the departure behind the entry.
+    std::printf("\nby the interlocking's rule (what lies past each signal):\n");
+    {
+        // 0: an entry into platform 7 from the north (7 lies past its signal).
+        // 1: the departure off platform 7 southward, on to 8 (7 is its run-up).
+        const std::vector<std::vector<int>> secs = {{5, 6, 7}, {7, 8}};
+        const std::vector<std::vector<int>> past = {{5, 6, 7}, {8}};
+        const auto sameWay = [](int, int) { return false; };
+        same(routeQueueReady(secs, {1, 0}, past, sameWay), {1},
+             "an entry blocked by the waiting train does not hold its departure");
+        same(routeQueueReady(secs, {1, 0}), {},
+             "(the old coarse test held it there for good)");
+        const auto facing = [](int, int) { return true; };
+        same(routeQueueReady(secs, {1, 0}, past, facing), {},
+             "but two moves facing each other over the platform keep arm order");
+        // Two entries into the same platform both have it past their signals.
+        const std::vector<std::vector<int>> two = {{5, 7}, {9, 7}};
+        same(routeQueueReady(two, {1, 0}, two, sameWay), {},
+             "two moves onto the same road past both signals keep arm order");
+        same(routeQueueReady(two, {0, 0}, two, sameWay), {0},
+             "and the first goes, the second waits its turn");
+    }
+
     std::printf("\n%s\n", failures ? "FAILURES" : "all ok");
     return failures ? 1 : 0;
 }
