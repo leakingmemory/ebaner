@@ -40,8 +40,9 @@ struct RoadAhead {
         int kmh = 0;
     };
     // Something to stop at: a signal that is not offering a road, a manned station that
-    // is not waving the train through, or the end of the rails.
-    enum class StopKind { Signal, Station, EndOfTrack };
+    // is not waving the train through, the end of the rails, or a level crossing whose
+    // train head is not showing white.
+    enum class StopKind { Signal, Station, EndOfTrack, Crossing };
     struct Stop {
         float d = 0.0f;
         StopKind kind = StopKind::Signal;

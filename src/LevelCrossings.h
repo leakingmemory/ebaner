@@ -376,12 +376,14 @@ struct CrossingOccupancy {
 //    approach circuit as it leaves;
 //  - the inner circuit arms it whenever it is occupied, no edge and no gate, because it is
 //    the fallback for an approach circuit that has failed;
-//  - a train behind a cleared signal facing the crossing arms it from Idle whenever it is
-//    there, no edge. That train has a route toward the crossing, so it is coming, however
-//    long the circuit has been occupied: by a train that passed and stopped in the station,
-//    say, while a signal cleared for another standing beside it. A departing train never
-//    stands behind such a signal - an opposing route cannot be set - and the signal goes to
-//    danger as a train passes it, cutting the circuit at the mast.
+//  - a train behind a cleared signal facing the crossing always triggers it, no edge: from
+//    Idle it arms it, from Opening it shuts it again, and when a train clears the inner
+//    circuit it keeps the crossing secured for its own passage instead of letting it open.
+//    That train has a route toward the crossing, so it is coming, however long the circuit
+//    has been occupied: by a train that passed and stopped in the station, say, while a
+//    signal cleared for another standing beside it. A departing train never stands behind
+//    such a signal - an opposing route cannot be set - and the signal goes to danger as a
+//    train passes it, cutting the circuit at the mast.
 //
 // Takes the crossing itself as well as its state because the barriers are authored, not
 // runtime: whether there are booms to move belongs to the record, and copying it into the

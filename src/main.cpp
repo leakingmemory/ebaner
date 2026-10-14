@@ -1099,6 +1099,20 @@ int main(int argc, char** argv) {
     // signal has no circuits behind it and goes dark when its station is unmanned, when
     // trains run past it without reference to it at all; reading one as a barrier would
     // break a crossing's detection every time a station was switched off.
+    // Whether the signal stands on the track `p` runs along at `u`: a signal belongs to the
+    // track its border is on. Nearness alone is not enough - where a loop closes on the main
+    // the two run a few metres apart, and a mast on one is within reach of the other. Read
+    // a few metres either side, since a border near the end of a track is on its neighbour
+    // a step along.
+    auto standsOn = [&](const SignalPlacement& sp, const TrackPath& p, float u) {
+        for (const float du : {0.0f, -5.0f, 5.0f}) {
+            std::uint32_t id = 0;
+            double fr = 0.0;
+            if (p.trackAt(std::clamp(u + du, 0.0f, p.length()), id, fr) && id == sp.at.trackId)
+                return true;
+        }
+        return false;
+    };
     std::vector<std::vector<CrossingGuard>> crossingGuards(crossings.size());
     for (std::size_t ci = 0; ci < crossings.size(); ++ci) {
         const CrossingSite& site = crossingSites[ci];
@@ -1119,6 +1133,7 @@ int main(int argc, char** argv) {
                           static_cast<float>(sp.world.y - org.y)),
                 s);
             if (road < 0) continue; // not standing on any of this crossing's roads
+            if (!standsOn(sp, paths[site.tracks[road].path], s)) continue; // beside it
             const float rel = s - site.tracks[road].s;
             if (std::abs(rel) <= site.innerM || std::abs(rel) > site.outerM) continue;
             // Facing the crossing: a train passing it carries on toward the crossing rather
@@ -1169,6 +1184,10 @@ int main(int argc, char** argv) {
                     if (d < bestD) { bestD = d; bestS = u; hit = true; }
                 }
                 if (!hit) continue;
+                // On this road, and not on the one beside it: a mast on the main line a few
+                // metres off the loop broke the loop's approach at itself, and a train
+                // standing behind the loop's own cleared exit was never seen.
+                if (!standsOn(sp, p, bestS)) continue;
                 const float out = (bestS - f.sJoin) * static_cast<float>(f.dirAway);
                 if (out <= 0.0f) continue;
                 // Facing the crossing: a train passing it is moving back toward the join.
@@ -4023,6 +4042,33 @@ int main(int argc, char** argv) {
             if (signalStopsTrain(shownPlacement(sigPlacements[sa.ref])))
                 road.stops.push_back({sa.d, RoadAhead::StopKind::Signal, sa.ref});
 
+        // A level crossing whose train head is not white is not to be passed. The stop is
+        // placed so the train comes to rest inside the crossing's inner circuit, about
+        // 40 m short: that circuit arms the crossing whenever it is occupied, so a train
+        // the approach circuits missed - or one that started from a stand inside them -
+        // still sets it going by standing there, and the head goes white and the train goes
+        // on. One already white when the train gets near asks nothing of it.
+        for (std::size_t ci = 0; ci < crossings.size(); ++ci) {
+            const CrossingSite& site = crossingSites[ci];
+            if (!site.resolved()) continue;
+            for (std::size_t tk = 0; tk < site.tracks.size(); ++tk) {
+                if (site.tracks[tk].path < 0) continue;
+                if (crossingStates[ci].phase(tk) == CrossingPhase::Secured) continue;
+                const float xs = site.tracks[tk].s;
+                for (const Vehicle::RoadStretch& st : autoStretches) {
+                    if (st.pathIdx != site.tracks[tk].path) continue;
+                    if (xs < std::min(st.sFrom, st.sTo) || xs > std::max(st.sFrom, st.sTo))
+                        continue;
+                    const float d = st.dist0 + std::abs(xs - st.sFrom);
+                    const float at = std::max(
+                        0.0f, d - static_cast<float>(site.innerM) + kStopShortM + 10.0f);
+                    road.stops.push_back(
+                        {at, RoadAhead::StopKind::Crossing, static_cast<int>(ci)});
+                    break;
+                }
+            }
+        }
+
         // --- the station stop -------------------------------------------------------
         //
         // The flag is the STATION's, not the post's. It is authored as a point on one
@@ -5417,6 +5463,8 @@ int main(int argc, char** argv) {
                                            ? "the station"
                                        : d.stopKind == RoadAhead::StopKind::EndOfTrack
                                            ? "the end of the track"
+                                       : d.stopKind == RoadAhead::StopKind::Crossing
+                                           ? "the crossing"
                                            : signalKindName(sigPlacements[d.stopRef].kind))
                                     : "");
                     std::fflush(stdout);
@@ -5428,11 +5476,13 @@ int main(int argc, char** argv) {
                 // that will not happen.
                 //
                 // A signal is the exception and stays armed, because a signal clears of
-                // its own accord and the train should then go. Every other way this mode
+                // its own accord and the train should then go - and so is a crossing,
+                // which goes white of its own accord once the train is standing at it. Every other way this mode
                 // ends, it ends the same way: stopped, and handed back. A scenario that
                 // starts it can rely on that, which is the point of making them alike.
                 if (arrivedAtStop(d, t.speed()) &&
-                    d.stopKind != RoadAhead::StopKind::Signal) {
+                    d.stopKind != RoadAhead::StopKind::Signal &&
+                    d.stopKind != RoadAhead::StopKind::Crossing) {
                     const bool station = d.stopKind == RoadAhead::StopKind::Station;
                     if (station) t.setAutoServedStop(d.stopRef);
                     t.setAutoDriving(false);
@@ -5880,7 +5930,9 @@ int main(int argc, char** argv) {
                                       g_autoDemand.stopKind == RoadAhead::StopKind::Station
                                           ? "STATION"
                                       : g_autoDemand.stopKind == RoadAhead::StopKind::EndOfTrack
-                                          ? "END OF TRACK" : "SIGNAL",
+                                          ? "END OF TRACK"
+                                      : g_autoDemand.stopKind == RoadAhead::StopKind::Crossing
+                                          ? "CROSSING" : "SIGNAL",
                                       g_autoDemand.stopIn);
                     else
                         std::snprintf(buf, sizeof(buf), "AUTO %3.0f km/h   P to take over",

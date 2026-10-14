@@ -527,6 +527,9 @@ void stepTrack(CrossingTrackState& st, const CrossingOccupancy& occ, double now)
         st.phase = p;
         st.phaseSince = now;
     };
+    // A train behind a cleared signal facing the crossing has a route here, and that is
+    // never something to open in front of - whatever has just gone over.
+    const bool routedHere = occ.behindA || occ.behindB;
 
     switch (st.phase) {
         case CrossingPhase::Idle:
@@ -535,8 +538,7 @@ void stepTrack(CrossingTrackState& st, const CrossingOccupancy& occ, double now)
             // circuit that has failed, and a fallback that needs a clean edge is no
             // fallback at all.
             // And a train behind a cleared signal, edge or not: it has a route here.
-            if (outerEdge || occ.inner || occ.behindA || occ.behindB)
-                enter(CrossingPhase::Closing);
+            if (outerEdge || occ.inner || routedHere) enter(CrossingPhase::Closing);
             break;
 
         case CrossingPhase::Closing:
@@ -544,10 +546,18 @@ void stepTrack(CrossingTrackState& st, const CrossingOccupancy& occ, double now)
             break;
 
         case CrossingPhase::Secured:
-            if (st.innerSeen && !occ.inner) {
+            if (st.innerSeen && !occ.inner && routedHere) {
+                // Off it again, but another train is already routed here: one standing
+                // behind a cleared signal, often on the very approach the first just left
+                // into - which is why the circuit alone cannot say. Stay shut, and wait for
+                // that train's own passage. A train's own "behind" never overlaps its own
+                // passage: its signal goes to danger as it enters the circuit past the
+                // mast, and no signal stands within the inner circuit.
+                st.innerSeen = false;
+            } else if (st.innerSeen && !occ.inner) {
                 // The train has been over the crossing and is off it again. Released by
-                // that and by nothing else - what the approach circuits read at this
-                // moment is unknown and beside the point.
+                // that - what the approach circuits read at this moment is unknown and
+                // beside the point, bar a train with a route here (above).
                 enter(CrossingPhase::Opening);
             } else if (!st.innerSeen && st.allClearSince > 0.0 &&
                        now - st.allClearSince >= kStuckTimeoutS) {
@@ -558,7 +568,12 @@ void stepTrack(CrossingTrackState& st, const CrossingOccupancy& occ, double now)
             break;
 
         case CrossingPhase::Opening:
-            if (now - st.phaseSince >= kTrainDelayS) {
+            if (routedHere) {
+                // A route set toward the crossing while it was coming open: shut it again
+                // at once rather than finish opening and then arm it from Idle.
+                st.innerSeen = false;
+                enter(CrossingPhase::Closing);
+            } else if (now - st.phaseSince >= kTrainDelayS) {
                 st.innerSeen = false; // the cycle is over
                 enter(CrossingPhase::Idle);
             }

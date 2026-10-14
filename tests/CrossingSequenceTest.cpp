@@ -2816,17 +2816,72 @@ int main(int argc, char** argv) {
         r.run(6.0);
         expectPhase(r, CrossingPhase::Secured, "and it goes white for that train");
 
-        Rig o; // behind it while the crossing is still releasing for the first train
+        Rig o; // behind it at the very step the first train clears the crossing
         o.set(false, true, false);
         o.run(6.0);
         o.occ[0] = {true, false, false};
         o.occ[0].behindA = true;
         o.now += 0.01;
         stepCrossing(o.x, o.st, o.occ, o.now);
-        expectPhase(o, CrossingPhase::Opening, "while still releasing, it finishes that first");
-        o.run(5.5);
-        check(o.phase() == CrossingPhase::Closing || o.phase() == CrossingPhase::Secured,
-              "then arms again at once, without the circuit going clear");
+        expectPhase(o, CrossingPhase::Secured, "routed as the first clears it, it never opens");
+
+        Rig p; // behind it once the crossing has begun to open
+        p.set(false, true, false);
+        p.run(6.0);
+        p.set(true, false, false);
+        expectPhase(p, CrossingPhase::Opening, "the first train clearing it releases it");
+        p.occ[0].behindA = true;
+        p.run(0.5);
+        expectPhase(p, CrossingPhase::Closing, "a route set while it opens shuts it again at once");
+        p.run(6.0);
+        expectPhase(p, CrossingPhase::Secured, "and it goes white for that train");
+    }
+
+    // The same rule while the first train is still on the crossing: a train behind a
+    // cleared signal always triggers it, even on the approach the first one is leaving
+    // into - which is why the circuit alone could never tell the two apart. Verdal N: a
+    // train in from the north over the crossing, another waiting on the loop behind its
+    // cleared exit.
+    std::puts("\nA second train routed here while the first is over the crossing:");
+    {
+        Rig r;
+        r.set(false, true, false); // the first train over the crossing
+        r.run(6.0);
+        expectPhase(r, CrossingPhase::Secured, "secured for the first train");
+        r.occ[0] = {true, true, false};
+        r.occ[0].behindA = true; // the second's signal clears while the first is still on it
+        r.run(1.0);
+        r.occ[0] = {true, false, false};
+        r.occ[0].behindA = true; // the first is off it, into the approach the second is on
+        r.run(10.0);
+        expectPhase(r, CrossingPhase::Secured, "it stays shut for the train still to come");
+        r.occ[0] = {true, false, false}; // the second past its signal, on its way in
+        r.run(10.0);
+        expectPhase(r, CrossingPhase::Secured, "and stays shut while that train comes on");
+        r.set(false, true, false);
+        r.run(1.0);
+        r.set(false, false, true); // over it and away
+        expectPhase(r, CrossingPhase::Opening, "it opens once the second has gone over");
+
+        Rig q; // the same, but the second train's route is given up and it goes away
+        q.set(false, true, false);
+        q.run(6.0);
+        q.occ[0] = {true, false, false};
+        q.occ[0].behindA = true;
+        q.run(1.0);
+        expectPhase(q, CrossingPhase::Secured, "held for a routed train");
+        q.set(false, false, false);
+        q.run(65.0);
+        check(q.phase() == CrossingPhase::Opening || q.phase() == CrossingPhase::Idle,
+              "one that never comes is let go by the stuck timeout");
+
+        Rig one; // and a train alone opens it exactly as before
+        one.set(true, false, false);
+        one.run(6.0);
+        one.set(false, true, false);
+        one.run(1.0);
+        one.set(false, false, true);
+        expectPhase(one, CrossingPhase::Opening, "a single train still opens it on clearing");
     }
 
     std::puts("\nThe first signal on each way in:");
