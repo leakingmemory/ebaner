@@ -261,9 +261,12 @@ int main(int argc, char** argv) {
         r.run(6.0);
         expectPhase(r, CrossingPhase::Idle, "first train done");
         // A fresh edge on the same circuit has to arm it again - the gate is on the
-        // edge, not on the circuit having never been used.
+        // edge, not on the circuit having never been used. Not at once, though: the road
+        // has only just opened, and it stands open its hold first.
         r.set(true, false, false);
-        expectPhase(r, CrossingPhase::Closing, "a fresh approach edge arms it again");
+        expectPhase(r, CrossingPhase::Idle, "a fresh approach edge waits out the hold");
+        r.run(kReopenHoldS);
+        expectPhase(r, CrossingPhase::Closing, "and then arms it again");
     }
 
     // A crossing spanning both roads of a station. One road shut and one bell, but a set of
@@ -873,6 +876,8 @@ int main(int argc, char** argv) {
             stepCrossing(x, st, occ, now);
         }
         check(st.phase(0) == CrossingPhase::Idle, "the crossing opens again");
+        now += kReopenHoldS; // and has stood open its hold, so the next train may close it
+        stepCrossing(x, st, occ, now);
         occ[0].outerB = true;
         stepCrossing(x, st, occ, now);
         check(crossingBell(st, now), "and the next train rings the bell afresh");
@@ -924,10 +929,10 @@ int main(int argc, char** argv) {
 
     // The booms keep their own 8 s whatever the phases do around them.
     //
-    // A second train can arm the crossing while they are still coming up - Opening runs
-    // only 5 s of their 8 - and they must go on rising to the top rather than being
-    // yanked by the new sequence. They are moved at a rate toward where they ought to be,
-    // never placed from a timestamp, so this needs no special case and cannot jump.
+    // A second train can come onto the approach while they are still coming up - Opening
+    // runs only 5 s of their 8. People start across as they rise, so the crossing does not
+    // close for it: the booms go on to the top, the road stands open its hold, and only then
+    // does the waiting train arm it.
     {
         std::puts("\nA second train while the booms are still coming up:");
         Rig r;
@@ -945,14 +950,14 @@ int main(int argc, char** argv) {
 
         r.set(false, false, false); // clear, so the next arrival is a fresh edge
         r.set(true, false, false);
-        check(r.phase() == CrossingPhase::Closing, "the next train arms it again");
-        check(r.st.barrier > 0.0f && r.st.barrier <= caught,
-              "the booms are still where they were, not snapped anywhere");
-
+        check(r.phase() == CrossingPhase::Idle,
+              "the next train waits: the road has only just opened");
         r.run(3.0); // the rest of their own 8 s
-        check(r.st.barrier == 0.0f, "they finish coming up on their own clock");
-        r.run(kBarrierDelayS - 3.0 + 1.0);
-        check(r.st.barrier > 0.0f, "and only then start down for the new train");
+        check(r.st.barrier == 0.0f, "the booms finish coming up, people may cross");
+        r.run(kReopenHoldS);
+        check(r.phase() == CrossingPhase::Closing, "the hold over, the waiting train arms it");
+        r.run(kBarrierDelayS + 1.0);
+        check(r.st.barrier > 0.0f, "and only then do they start down for the new train");
         r.run(kBarrierTravelS);
         check(r.st.barrier == 1.0f, "reaching fully down 8 s after that");
     }
@@ -2832,9 +2837,48 @@ int main(int argc, char** argv) {
         expectPhase(p, CrossingPhase::Opening, "the first train clearing it releases it");
         p.occ[0].behindA = true;
         p.run(0.5);
-        expectPhase(p, CrossingPhase::Closing, "a route set while it opens shuts it again at once");
-        p.run(6.0);
-        expectPhase(p, CrossingPhase::Secured, "and it goes white for that train");
+        expectPhase(p, CrossingPhase::Opening, "a route set while it opens lets it finish");
+        p.run(5.0);
+        expectPhase(p, CrossingPhase::Idle, "it opens");
+        p.run(kReopenHoldS - 1.0);
+        expectPhase(p, CrossingPhase::Idle, "and stands open its hold");
+        p.run(1.5);
+        expectPhase(p, CrossingPhase::Closing, "then closes for the routed train");
+    }
+
+    // Once it has begun to open, only a train at the crossing itself closes it again before
+    // it has opened and stood open kReopenHoldS: people start across as the booms rise.
+    std::puts("\nA crossing that has begun to open:");
+    {
+        Rig r;
+        r.set(false, true, false);
+        r.run(6.0);
+        r.set(false, false, true); // the train off it
+        expectPhase(r, CrossingPhase::Opening, "it opens behind the train");
+        r.set(false, true, false); // another train is at the crossing itself
+        expectPhase(r, CrossingPhase::Closing, "a train at the crossing shuts it at once");
+
+        Rig h; // the same, during the hold after it has opened
+        h.set(false, true, false);
+        h.run(6.0);
+        h.set(false, false, false);
+        h.run(6.0);
+        expectPhase(h, CrossingPhase::Idle, "open again");
+        h.set(true, false, false);
+        expectPhase(h, CrossingPhase::Idle, "an approach during the hold does not close it");
+        h.set(false, true, false);
+        expectPhase(h, CrossingPhase::Closing, "a train at the crossing during it does");
+
+        Rig two(2); // one road opening while a train arrives on the other
+        two.setOn(0, false, true, false);
+        two.run(6.0);
+        two.setOn(0, false, false, false);
+        expectPhaseOn(two, 0, CrossingPhase::Opening, "the first road opens");
+        two.setOn(1, true, false, false);
+        expectPhaseOn(two, 1, CrossingPhase::Idle,
+                      "a train on the other road's approach does not shut the crossing");
+        two.run(5.5 + kReopenHoldS);
+        expectPhaseOn(two, 1, CrossingPhase::Closing, "it closes for it once open and held");
     }
 
     // The same rule while the first train is still on the crossing: a train behind a

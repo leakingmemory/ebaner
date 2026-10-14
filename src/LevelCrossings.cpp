@@ -511,7 +511,10 @@ namespace {
 // own timers, its own phase. Whether the road is shut, when the bell started and where the
 // booms are belong to the crossing and are settled by the caller once all the tracks have
 // been stepped.
-void stepTrack(CrossingTrackState& st, const CrossingOccupancy& occ, double now) {
+// `settling`: the crossing is opening, or opened less than kReopenHoldS ago - only the inner
+// circuit may close it now (see stepCrossing).
+void stepTrack(CrossingTrackState& st, const CrossingOccupancy& occ, double now,
+               bool settling) {
     const bool allClear = !occ.outerA && !occ.inner && !occ.outerB;
     st.allClearSince = allClear ? (st.allClearSince == 0.0 ? now : st.allClearSince) : 0.0;
     if (occ.inner) st.innerSeen = true;
@@ -538,7 +541,15 @@ void stepTrack(CrossingTrackState& st, const CrossingOccupancy& occ, double now)
             // circuit that has failed, and a fallback that needs a clean edge is no
             // fallback at all.
             // And a train behind a cleared signal, edge or not: it has a route here.
-            if (outerEdge || occ.inner || routedHere) enter(CrossingPhase::Closing);
+            if (occ.inner) {
+                st.pendingArm = false;
+                enter(CrossingPhase::Closing);
+            } else if (settling) {
+                if (outerEdge) st.pendingArm = true; // kept for when the hold is over
+            } else if (outerEdge || st.pendingArm || routedHere) {
+                st.pendingArm = false;
+                enter(CrossingPhase::Closing);
+            }
             break;
 
         case CrossingPhase::Closing:
@@ -568,11 +579,13 @@ void stepTrack(CrossingTrackState& st, const CrossingOccupancy& occ, double now)
             break;
 
         case CrossingPhase::Opening:
-            if (routedHere) {
-                // A route set toward the crossing while it was coming open: shut it again
-                // at once rather than finish opening and then arm it from Idle.
-                st.innerSeen = false;
+            if (occ.inner) {
+                // A train at the crossing itself: the one thing an opening is not finished
+                // for. Anything out on the approaches waits until it has opened and held.
+                st.innerSeen = true;
                 enter(CrossingPhase::Closing);
+            } else if (outerEdge) {
+                st.pendingArm = true;
             } else if (now - st.phaseSince >= kTrainDelayS) {
                 st.innerSeen = false; // the cycle is over
                 enter(CrossingPhase::Idle);
@@ -587,13 +600,20 @@ void stepCrossing(const LevelCrossing& x, CrossingState& st,
                   const std::vector<CrossingOccupancy>& occ, double now) {
     st.tracks.resize(std::max<std::size_t>(x.tracks.size(), 1));
     const bool wasShut = st.shut();
+    // Settling: any track opening, or the road opened less than kReopenHoldS ago. One rule
+    // for the whole crossing - a train arriving on the other road of a station must not send
+    // the booms back down on people already stepping onto it either.
+    bool settling = !wasShut && st.openedAt > 0.0 && now - st.openedAt < kReopenHoldS;
+    for (const CrossingTrackState& t : st.tracks)
+        settling |= t.phase == CrossingPhase::Opening;
     for (std::size_t t = 0; t < st.tracks.size(); ++t)
-        stepTrack(st.tracks[t], t < occ.size() ? occ[t] : CrossingOccupancy{}, now);
+        stepTrack(st.tracks[t], t < occ.size() ? occ[t] : CrossingOccupancy{}, now, settling);
 
     // The crossing activating is the *first* of its tracks leaving Idle, and the bell is
     // timed from that. The second track arming ten seconds later does not restart it: one
     // crossing, one bell, however many roads it carries.
     if (!wasShut && st.shut()) st.activeSince = now;
+    if (wasShut && !st.shut()) st.openedAt = now;
 
     // --- The barriers -----------------------------------------------------------
     // Moved at a rate toward where they ought to be, rather than computed from a

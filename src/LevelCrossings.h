@@ -150,6 +150,12 @@ enum class CrossingPhase { Idle, Closing, Secured, Opening };
 // How long the train's red is held before it goes to white, and the same delay again on
 // the way back out.
 constexpr double kTrainDelayS = 5.0;
+// How long a crossing that has just opened stays open before it may close again. Once the
+// booms start to rise, people start across - on foot, by car - and a crossing that drops
+// them again mid-rise, or a few seconds after they are up, catches somebody on it. So an
+// opening is always finished, and then held this long, unless a train is at the crossing
+// itself (the inner circuit), which nothing can be held against.
+constexpr double kReopenHoldS = 10.0;
 // A main signal tied to a crossing shows green only once the crossing is white, and its
 // distant repeats that. So the crossing has to be armed early enough for a driver to
 // find the distant already cleared: the kTrainDelayS the crossing takes to go white, and
@@ -191,6 +197,10 @@ struct CrossingTrackState {
     // train is still out on the approach, so an unoccupied inner circuit at that moment
     // means "not here yet", not "gone past".
     bool innerSeen = false;
+    // An approach edge that arrived while the crossing was settling (opening, or within
+    // kReopenHoldS of having opened). Edges arm only once, so without this a train that
+    // came onto the approach meanwhile would not be seen until it reached the crossing.
+    bool pendingArm = false;
 };
 
 struct CrossingState {
@@ -201,6 +211,9 @@ struct CrossingState {
     // Secured without being retriggered halfway by the change between them - and, now,
     // without being restarted by the second track arming. One crossing, one bell.
     double activeSince = 0.0;
+    // When the road last opened again - every track back at Idle - and so when it may next
+    // close for anything short of a train at the crossing (kReopenHoldS). 0 = never.
+    double openedAt = 0.0;
     // Where the booms are: 0 fully up, 1 fully down. Continuous state of its own rather
     // than something read off the phase, because it outlives the phases at both ends -
     // it is still up for the first 2 s of Secured, and still coming up for 3 s after
@@ -377,8 +390,13 @@ struct CrossingOccupancy {
 //  - the inner circuit arms it whenever it is occupied, no edge and no gate, because it is
 //    the fallback for an approach circuit that has failed;
 //  - a train behind a cleared signal facing the crossing always triggers it, no edge: from
-//    Idle it arms it, from Opening it shuts it again, and when a train clears the inner
-//    circuit it keeps the crossing secured for its own passage instead of letting it open.
+//    Idle it arms it, and when a train clears the inner circuit it keeps the crossing
+//    secured for its own passage instead of letting it open;
+//  - but once the crossing has begun to open it finishes opening, and stays open
+//    kReopenHoldS, whatever an approach circuit says - only a train at the crossing (the
+//    inner circuit) closes it sooner. People start across as the booms rise. Across all its
+//    tracks, since it is the road that is open or shut. An approach edge meanwhile is kept
+//    and arms the crossing when the hold is over.
 //    That train has a route toward the crossing, so it is coming, however long the circuit
 //    has been occupied: by a train that passed and stopped in the station, say, while a
 //    signal cleared for another standing beside it. A departing train never stands behind
