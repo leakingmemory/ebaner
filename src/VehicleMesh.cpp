@@ -454,7 +454,33 @@ constexpr float kGangGap = 0.30f;    // each car's end inset from the joint, for
 constexpr float kDoorW = 1.78f;      // door with its surround
 constexpr float kSurround = 0.10f;   // the orange frame
 constexpr float kCabFloor = 1.40f;   // the cab's raised floor
-const glm::vec3 kDesk(0.13f, 0.14f, 0.15f);    // the driver's desk
+// The cab's side window, measured off the BMb diagram: low, and beside the driver rather
+// than forward in the nose - which is why the view to the side from a Type 76 is limited.
+constexpr float kCabWinFrom = 2.06f, kCabWinTo = 2.60f; // back from the nose tip
+constexpr float kCabWinLow = 1.99f, kCabWinHigh = 2.90f; // over the railhead
+constexpr float kDriverD = 2.35f;    // the driver's eye, back from the tip, beside the window
+const glm::vec3 kCabWall(0.40f, 0.44f, 0.49f);   // blue-grey cab lining
+const glm::vec3 kCabCeiling(0.30f, 0.32f, 0.35f);
+const glm::vec3 kCabFloorCol(0.18f, 0.18f, 0.19f);
+const glm::vec3 kCabDoor(0.46f, 0.50f, 0.55f);
+const glm::vec3 kRail(0.06f, 0.06f, 0.07f);      // padded rail, armrest, knobs
+const glm::vec3 kSlot(0.75f, 0.76f, 0.78f);      // the lever's gate
+const glm::vec3 kMetalCab(0.62f, 0.63f, 0.66f);
+const glm::vec3 kDial(0.08f, 0.09f, 0.10f);      // black dial faces
+const glm::vec3 kDialRim(0.20f, 0.21f, 0.23f);
+const glm::vec3 kNeedle(0.92f, 0.92f, 0.90f);
+const glm::vec3 kNeedleRed(0.90f, 0.15f, 0.12f);
+const glm::vec3 kGauge(0.88f, 0.88f, 0.86f);     // bar-gauge faces
+const glm::vec3 kBarFill(0.25f, 0.70f, 0.30f);
+const glm::vec3 kLcd(0.35f, 0.85f, 0.30f);       // the green clock
+const glm::vec3 kSwitches(0.80f, 0.81f, 0.82f);
+const glm::vec3 kRedButton(0.85f, 0.12f, 0.10f);
+const glm::vec3 kKey(0.70f, 0.72f, 0.75f);
+const glm::vec3 kBezel(0.05f, 0.05f, 0.06f);
+const glm::vec3 kDisplay(0.78f, 0.84f, 0.92f);   // the lit display
+const glm::vec3 kDisplayDial(0.12f, 0.16f, 0.30f);
+const glm::vec3 kDriverSeat(0.30f, 0.17f, 0.26f);
+const glm::vec3 kDesk(0.25f, 0.28f, 0.32f);    // the driver's desk, Stadler's blue-grey
 const glm::vec3 kScreen(0.13f, 0.22f, 0.30f);  // its displays
 const glm::vec3 kWall(0.62f, 0.62f, 0.60f);    // the cab's back wall, inside
 
@@ -2974,11 +3000,14 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
         // crown, and back down the other side; so facet 1 is the +x window band, 13 the -x
         // one, 0/14 the lower sides, 2/12 the upper sides and 3..11 the roof.
         const int arcN = 4;
-        auto ring = [&](float y, float wS, float roofZ, float zb) {
+        // The band's levels are the saloon windows' unless told otherwise: the cab's side
+        // window is lower and shorter, and the nose is drawn with its levels instead.
+        auto ring = [&](float y, float wS, float roofZ, float zb, float bandLo = -1.0f,
+                        float bandHi = -1.0f) {
             const float w = hw * wS, rw = rhw * wS;
             const float zC = std::min(zr(t76::kCant), roofZ - 0.05f);
-            const float zH = std::min(zr(t76::kWinHigh), zC - 0.02f);
-            const float zL = std::min(zr(t76::kWinLow), zH - 0.02f);
+            const float zH = std::min(bandHi > 0.0f ? bandHi : zr(t76::kWinHigh), zC - 0.02f);
+            const float zL = std::min(bandLo > 0.0f ? bandLo : zr(t76::kWinLow), zH - 0.02f);
             const float zB = std::min(zb, zL - 0.02f);
             const float wb = w * t76::kTumble;
             std::vector<glm::vec3> p;
@@ -3261,19 +3290,36 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
             const float tip = C.cab == -1 ? yLo : yHi;
             const float ts = tip < base ? -1.0f : 1.0f;
             const glm::vec3 fdir = Y * ts;
-            const int N = 12;
-            auto station = [&](int i) {
-                const float u = static_cast<float>(i) / N;
-                const float y = base + (tip - base) * u;
-                const float wS = 1.0f - 0.16f * u * u;
-                const float roofZ = zRoof - (zRoof - zr(t76::kNoseTipZ + 0.35f)) *
-                                                std::pow(u, 1.7f);
-                return ring(y, wS, roofZ, sillAt(y));
+            // The nose's shape at `d` metres back from the tip: drawing in, and the roof
+            // coming down to the windscreen. The cab inside follows it too.
+            auto noseU = [&](float d) {
+                return std::clamp(1.0f - d / t76::kNoseLen, 0.0f, 1.0f);
             };
-            std::vector<glm::vec3> prev = station(0);
-            for (int i = 1; i <= N; ++i) {
-                const std::vector<glm::vec3> cur = station(i);
-                const float u = (static_cast<float>(i) - 0.5f) / N;
+            auto noseW = [&](float d) {
+                const float u = noseU(d);
+                return 1.0f - 0.16f * u * u;
+            };
+            auto noseRoof = [&](float d) {
+                return zRoof - (zRoof - zr(t76::kNoseTipZ + 0.35f)) * std::pow(noseU(d), 1.7f);
+            };
+            const float sideLo = zr(t76::kCabWinLow), sideHi = zr(t76::kCabWinHigh);
+            auto station = [&](float d) {
+                return ring(tip - ts * d, noseW(d), noseRoof(d), sillAt(tip - ts * d), sideLo,
+                            sideHi);
+            };
+            // Stations from the nose base to the tip, with two exactly at the side window's
+            // ends so it is glazed between them and nowhere else.
+            std::vector<float> ds;
+            for (int i = 0; i <= 12; ++i) ds.push_back(t76::kNoseLen * (1.0f - i / 12.0f));
+            ds.push_back(t76::kCabWinFrom);
+            ds.push_back(t76::kCabWinTo);
+            std::sort(ds.begin(), ds.end(), std::greater<float>());
+            std::vector<glm::vec3> prev = station(ds[0]);
+            for (std::size_t i = 1; i < ds.size(); ++i) {
+                if (ds[i - 1] - ds[i] < 0.01f) continue;
+                const std::vector<glm::vec3> cur = station(ds[i]);
+                const float dMid = 0.5f * (ds[i - 1] + ds[i]);
+                const bool sideWin = dMid > t76::kCabWinFrom && dMid < t76::kCabWinTo;
                 for (std::size_t k = 0; k + 1 < cur.size(); ++k) {
                     const glm::vec3 a = prev[k], b = prev[k + 1], c = cur[k + 1], d = cur[k];
                     glm::vec3 nn = glm::cross(b - a, d - a);
@@ -3285,8 +3331,8 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                     glm::vec3 col = t76::kBody;
                     if (glm::dot(nn, fdir) > 0.35f && locZ > zr(1.55f))
                         col = t76::kGlass; // windscreen
-                    else if ((k == 1 || k == 13) && u > 0.66f - 0.5f / N && u < 0.84f)
-                        col = t76::kGlass; // the cab side window
+                    else if ((k == 1 || k == 13) && sideWin)
+                        col = t76::kGlass; // the cab side window, beside the driver
                     else if (k >= 3 && k <= 11 && glm::dot(nn, fdir) < 0.35f)
                         col = t76::kRoof;
                     else if (k == 0 || k == 14)
@@ -3306,35 +3352,165 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                     quadN(a, b, c, c, za > zr(1.6f) ? t76::kGlass : t76::kBody, in);
                 }
             }
-            // The cab inside: its raised floor over the motor bogie, the desk across under the
-            // windscreen, and the back wall that shuts it off from the saloon. drivercam's eye
-            // sits between the desk and the wall.
+            // ---- The cab inside, after the Stadler FLIRT cabs in the photographs (NSB 75551
+            // among them): the driver sits in the middle at a wraparound desk, the combined
+            // lever under his left hand with an armrest, the brake valve, buttons and the
+            // emergency stop on the right, a writing surface between, and a sloping panel
+            // over it all - gauges on the left, the big display on the right. Distances are
+            // metres back from the nose tip, heights over the railhead. ----
             {
-                const float back = tip - ts * (t76::kNoseLen + 0.80f);
-                const float yFl0 = std::min(tip, back), yFl1 = std::max(tip, back);
-                emitBox(X, Y, Z, P(0.0f, 0.5f * (yFl0 + yFl1), zr(t76::kCabFloor) - 0.03f),
-                        hw * 0.90f, 0.5f * (yFl1 - yFl0), 0.03f, t76::kSkirt);
-                emitBox(X, Y, Z, P(0.0f, tip - ts * (t76::kNoseLen - 0.75f), zr(2.02f)),
-                        hw * 0.86f, 0.42f, 0.16f, t76::kDesk);
-                emitBox(X, Y, Z, P(0.0f, tip - ts * (t76::kNoseLen - 1.05f), zr(1.62f)),
-                        hw * 0.86f, 0.30f, 0.26f, t76::kDesk);
-                emitBox(X, Y, Z, P(-ts * 0.35f, tip - ts * (t76::kNoseLen - 0.60f), zr(2.20f)),
-                        0.30f, 0.10f, 0.10f, t76::kScreen); // the driver's displays
-                cap(ring(back, 0.97f, zRoof - 0.06f, zr(t76::kCabFloor)), t76::kWall);
+                // The frame's X is to the LEFT of its tangent, so the driver's right is -X
+                // looking toward +y and +X looking toward -y.
+                auto D = [&](float d, float right, float z) {
+                    return P(-ts * right, tip - ts * d, zr(z));
+                };
+                const glm::vec3 R = -X * ts; // to the driver's right
+                const glm::vec3 F = Y * ts;  // forward, toward the tip
+                const float zFl = t76::kCabFloor, zDesk = 2.05f;
+                const float back = t76::kNoseLen + 0.80f;  // the back wall
+                const glm::vec3 seatTo = D(2.4f, 0.0f, 2.3f);
+                auto boxD = [&](float d0, float d1, float r0, float r1, float z0, float z1,
+                                const glm::vec3& col) {
+                    emitBox(X, Y, Z, D(0.5f * (d0 + d1), 0.5f * (r0 + r1), 0.5f * (z0 + z1)),
+                            0.5f * std::abs(r1 - r0), 0.5f * std::abs(d1 - d0),
+                            0.5f * (z1 - z0), col);
+                };
+                // Floor.
+                boxD(0.2f, back, -1.35f, 1.35f, zFl - 0.06f, zFl, t76::kCabFloorCol);
+                // The desk: the console across the front, the two wings, and the writing
+                // surface set lower between them over the driver's knees.
+                boxD(1.05f, 1.42f, -1.22f, 1.22f, zFl, zDesk, t76::kDesk);
+                boxD(1.42f, 1.98f, -1.22f, -0.42f, zFl, zDesk, t76::kDesk);
+                boxD(1.42f, 1.98f, 0.42f, 1.22f, zFl, zDesk, t76::kDesk);
+                boxD(1.42f, 1.72f, -0.42f, 0.42f, zDesk - 0.08f, zDesk - 0.05f, t76::kDesk);
+                boxD(1.42f, 1.75f, -0.42f, 0.42f, zFl + 0.06f, zFl + 0.10f, t76::kCabFloorCol);
+                // The padded rail along its top edge.
+                boxD(1.00f, 1.08f, -1.22f, 1.22f, 2.35f, 2.41f, t76::kRail);
+
+                // The sloping panel, back edge at the desk and front edge under the rail.
+                const glm::vec3 pBack = D(1.42f, 0.0f, zDesk), pFront = D(1.06f, 0.0f, 2.36f);
+                const glm::vec3 pc = 0.5f * (pBack + pFront);
+                const glm::vec3 v = glm::normalize(pFront - pBack);
+                const glm::vec3 u = R;
+                const glm::vec3 vu = glm::cross(v, u);
+                const glm::vec3 n =
+                    glm::normalize(vu) * (glm::dot(vu, seatTo - pc) > 0.0f ? 1.0f : -1.0f);
+                const float hv = 0.5f * glm::length(pFront - pBack);
+                rectFace(pc, u, v, n, 0.0f, 0.0f, 1.20f, hv, 0.0f, t76::kDesk);
+                // Live readings.
+                const float spd = vehicle.speed();
+                const float bpP = vehicle.bpPressure();
+                const float bcP = vehicle.bcPressure();
+                // Left: two bar gauges, the speedometer, the clock, two air gauges, and the
+                // strip of switches over them with the red buttons under.
+                for (int i = 0; i < 2; ++i) {
+                    const float gx = -1.00f + 0.10f * i;
+                    const float frac = std::clamp((i == 0 ? bpP : bcP) / 10.0f, 0.0f, 1.0f);
+                    rectFace(pc, u, v, n, gx, 0.0f, 0.035f, 0.10f, 0.008f, t76::kGauge);
+                    rectFace(pc, u, v, n, gx, -0.09f + 0.09f * frac, 0.012f,
+                             0.09f * frac + 0.002f, 0.012f, t76::kBarFill);
+                }
+                discFace(pc, u, v, n, -0.66f, 0.0f, 0.105f, 0.006f, t76::kDialRim);
+                discFace(pc, u, v, n, -0.66f, 0.0f, 0.090f, 0.010f, t76::kDial);
+                needle(pc, u, v, n, -0.66f, 0.0f, 0.078f, spd / (200.0f / 3.6f), t76::kNeedle);
+                rectFace(pc, u, v, n, -0.42f, 0.06f, 0.06f, 0.035f, 0.010f, t76::kLcd);
+                for (const auto& [gy, val, col] : {std::tuple{0.09f, bpP, t76::kNeedleRed},
+                                                   std::tuple{-0.06f, bcP, t76::kNeedle}}) {
+                    discFace(pc, u, v, n, -0.24f, gy, 0.050f, 0.008f, t76::kDial);
+                    needle(pc, u, v, n, -0.24f, gy, 0.042f, val / 10.0f, col);
+                }
+                rectFace(pc, u, v, n, -0.62f, 0.19f, 0.40f, 0.025f, 0.008f, t76::kSwitches);
+                for (int i = 0; i < 6; ++i)
+                    rectFace(pc, u, v, n, -0.92f + 0.12f * i, -0.17f, 0.025f, 0.018f, 0.010f,
+                             t76::kRedButton);
+                // Right: the big display, a speed dial lit on it, and its keys.
+                rectFace(pc, u, v, n, 0.42f, 0.02f, 0.25f, 0.19f, 0.008f, t76::kBezel);
+                rectFace(pc, u, v, n, 0.42f, 0.02f, 0.22f, 0.16f, 0.012f, t76::kDisplay);
+                discFace(pc, u, v, n, 0.30f, 0.02f, 0.09f, 0.015f, t76::kDisplayDial);
+                needle(pc, u, v, n, 0.30f, 0.02f, 0.08f, spd / (200.0f / 3.6f),
+                       t76::kNeedleRed);
+                for (int i = 0; i < 5; ++i)
+                    rectFace(pc, u, v, n, 0.80f, 0.13f - 0.065f * i, 0.035f, 0.022f, 0.010f,
+                             t76::kKey);
+                for (int i = 0; i < 3; ++i)
+                    rectFace(pc, u, v, n, 0.95f, 0.10f - 0.08f * i, 0.025f, 0.025f, 0.010f,
+                             t76::kKey);
+
+                // Left wing: the combined power/brake lever in its gate, swinging forward for
+                // power and back toward the driver for the brake, and the armrest beside it.
+                {
+                    const int cab = C.cab == -1 ? 0 : 1;
+                    const int handle = vehicle.handlePosition(cab); // +brake / 0 / -power
+                    boxD(1.58f, 1.92f, -0.66f, -0.58f, zDesk, zDesk + 0.01f, t76::kSlot);
+                    boxD(1.62f, 1.96f, -1.02f, -0.76f, zDesk, zDesk + 0.035f, t76::kRail);
+                    const float a = handle >= 0
+                                        ? 0.45f * static_cast<float>(handle) /
+                                              static_cast<float>(Vehicle::kEmergencyNotch)
+                                        : -0.40f * static_cast<float>(-handle) /
+                                              static_cast<float>(Vehicle::kMaxPowerNotch);
+                    const glm::vec3 dir = glm::normalize(Z * std::cos(a) - F * std::sin(a));
+                    const glm::vec3 side = glm::normalize(glm::cross(dir, X));
+                    const glm::vec3 pivot = D(1.75f, -0.62f, zDesk + 0.01f);
+                    emitBox(X, side, dir, pivot + dir * 0.10f, 0.012f, 0.012f, 0.10f,
+                            t76::kMetalCab);
+                    emitBox(X, side, dir, pivot + dir * 0.21f, 0.026f, 0.026f, 0.030f,
+                            t76::kRail);
+                }
+                // Right wing: the brake valve's T-handle, the button strip, the emergency stop.
+                boxD(1.62f, 1.66f, 0.60f, 0.64f, zDesk, zDesk + 0.13f, t76::kMetalCab);
+                boxD(1.61f, 1.67f, 0.55f, 0.69f, zDesk + 0.13f, zDesk + 0.16f, t76::kRail);
+                for (int i = 0; i < 6; ++i)
+                    boxD(1.47f, 1.52f, 0.48f + 0.07f * i, 0.53f + 0.07f * i, zDesk,
+                         zDesk + 0.015f, i == 3 ? t76::kRedButton : t76::kKey);
+                boxD(1.76f, 1.88f, 0.92f, 1.04f, zDesk, zDesk + 0.012f, t76::kStepEdge);
+                boxD(1.79f, 1.85f, 0.95f, 1.01f, zDesk + 0.012f, zDesk + 0.06f,
+                     t76::kRedButton);
+                // Far left: the radio's screen and the handset.
+                boxD(1.15f, 1.30f, -1.30f, -1.12f, 2.08f, 2.30f, t76::kBezel);
+                boxD(1.14f, 1.16f, -1.28f, -1.14f, 2.12f, 2.26f, t76::kDisplay);
+                boxD(1.55f, 1.75f, -1.16f, -1.08f, zDesk, zDesk + 0.05f, t76::kRail);
+
+                // The driver's seat, in the middle, purple as the photographs have it.
+                boxD(2.22f, 2.66f, -0.25f, 0.25f, zFl + 0.46f, zFl + 0.55f, t76::kDriverSeat);
+                boxD(2.66f, 2.76f, -0.25f, 0.25f, zFl + 0.55f, zFl + 1.20f, t76::kDriverSeat);
+                boxD(2.68f, 2.76f, -0.15f, 0.15f, zFl + 1.22f, zFl + 1.40f, t76::kDriverSeat);
+                boxD(2.38f, 2.52f, -0.08f, 0.08f, zFl, zFl + 0.46f, t76::kMetalCab);
+                for (const float r : {-0.29f, 0.29f})
+                    boxD(2.35f, 2.65f, r - 0.03f, r + 0.03f, zFl + 0.72f, zFl + 0.76f,
+                         t76::kRail);
+
+                // The lining round the driver, following the nose: blue-grey walls, a darker
+                // ceiling, and the small side windows glazed, low beside the seat.
+                auto lining = [&](float d) {
+                    return ring(tip - ts * d, noseW(d) * 0.955f, noseRoof(d) - 0.08f, zr(zFl),
+                                sideLo, sideHi);
+                };
+                const float lds[] = {1.98f, t76::kCabWinFrom, t76::kCabWinTo, t76::kNoseLen,
+                                     back};
+                for (int i = 0; i + 1 < 5; ++i) {
+                    const std::vector<glm::vec3> A = lining(lds[i]), B = lining(lds[i + 1]);
+                    const float dMid = 0.5f * (lds[i] + lds[i + 1]);
+                    const bool glazed = dMid > t76::kCabWinFrom && dMid < t76::kCabWinTo;
+                    for (std::size_t k = 0; k + 1 < A.size(); ++k) {
+                        const glm::vec3& col = (k == 1 || k == 13)
+                                                   ? (glazed ? t76::kGlass : t76::kCabWall)
+                                               : (k >= 3 && k <= 11) ? t76::kCabCeiling
+                                                                     : t76::kCabWall;
+                        const glm::vec3 cen = 0.25f * (A[k] + A[k + 1] + B[k + 1] + B[k]);
+                        const glm::vec3 to = D(dMid, 0.0f, 2.3f);
+                        quadN(A[k], A[k + 1], B[k + 1], B[k], col, 2.0f * cen - to);
+                    }
+                }
+                // The back wall, with its door to the saloon.
+                cap(lining(back), t76::kCabWall);
+                boxD(back - 0.02f, back - 0.01f, -0.40f, 0.40f, zFl, zFl + 1.95f,
+                     t76::kCabDoor);
             }
-            // Lamps: two low in the front, one high over the screen.
+            // Lamps: two low in the front. A FLIRT's third sits over the windscreen, and this
+            // nose is glazed up to its roof, so from the cab it would hang in the view.
             const float yl = tip - ts * 0.30f;
             for (const float xh : {hw * 0.55f, -hw * 0.55f})
                 emitBox(X, Y, Z, P(xh, yl, zr(1.25f)), 0.15f, 0.08f, 0.06f, t76::kLight);
-            {
-                // On the skin, where the nose's roof line has come down to at that point,
-                // and not under it: from the cab it would be a lamp hanging in the screen.
-                const float u = 1.0f - 0.62f / t76::kNoseLen;
-                const float zSkin = zRoof - (zRoof - zr(t76::kNoseTipZ + 0.35f)) *
-                                                std::pow(u, 1.7f);
-                emitBox(X, Y, Z, P(0.0f, tip - ts * 0.62f, zSkin + 0.05f), 0.12f, 0.06f,
-                        0.05f, t76::kLight);
-            }
             // Coupler and the skirt round it, and the obstacle deflector.
             emitBox(X, Y, Z, P(0.0f, tip - ts * 0.35f, zr(0.78f)), hw * 0.80f, 0.40f, 0.28f,
                     t76::kSkirt);
@@ -3755,16 +3931,17 @@ bool eyePose(const Consist& c, int position, glm::vec3& eye, glm::vec3& forward)
 
     if (v.bodyStyle() == BodyType76 && sections.size() == 6) {
         // Cab 0 is BMb's, at the -y end of the first car; cab 1 is BMa's, at the +y end of
-        // the last. The seat is a little behind the windscreen's foot, on the raised cab
-        // floor over the motor bogie, as emitType76 places the nose.
+        // the last.
         const std::vector<float> half = v.bodySectionHalfLens();
         const int car = position == 0 ? 0 : 5;
         const VehicleFrame& f = sections[static_cast<std::size_t>(car)];
         const float so = position == 0 ? -1.0f : 1.0f;
         const float tip = so * half[static_cast<std::size_t>(car)];
-        const float sy = tip - so * (t76::kNoseLen + 0.15f);
-        eye = f.pos + f.tangent * sy + f.right * (-so * 0.35f) +
-              f.up * (wheelset::kRailTopZ + 2.65f);
+        // In the middle of the cab, beside the small side windows, seated on the raised
+        // cab floor - where emitType76 puts the driver's seat.
+        const float sy = tip - so * t76::kDriverD;
+        eye = f.pos + f.tangent * sy +
+              f.up * (wheelset::kRailTopZ + t76::kCabFloor + 1.22f);
         forward = f.tangent * so;
         return true;
     }
