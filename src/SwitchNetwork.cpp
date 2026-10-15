@@ -266,6 +266,9 @@ void SwitchNetwork::build(const TerrainData& data,
     // Coarse index of the built paths (scene coords), so resolving a turnout looks only
     // at the paths that actually run past it.
     constexpr double kPathSampleM = 25.0;
+    // The shortest loop a path may make back onto itself and still be a turnout: far
+    // more than any one road found twice at a point, far less than any real balloon.
+    constexpr float kLoopMinM = 100.0f;
     std::unordered_map<std::int64_t, std::vector<std::pair<int, float>>> pathGrid;
     for (int pi = 0; pi < static_cast<int>(paths.size()); ++pi) {
         const TrackPath& p = paths[pi];
@@ -286,6 +289,8 @@ void SwitchNetwork::build(const TerrainData& data,
         float sMain = 0.0f, sSiding = 0.0f;
         glm::dvec2 mainTan(1, 0);
         std::vector<std::pair<int, float>> cands; // (path, arc-length near X)
+        struct MainCand { int path; float s; double m; glm::dvec2 tan; };
+        std::vector<MainCand> mainCands;
         grid::forCellsNear(X.x, X.y, grid::kCell, [&](std::int64_t cell) {
             const auto it = pathGrid.find(cell);
             if (it != pathGrid.end())
@@ -302,12 +307,15 @@ void SwitchNetwork::build(const TerrainData& data,
                           s0 + static_cast<float>(kPathSampleM));
             if (d > 2.5) continue; // not at this turnout
 
-            // Siding: a branch whose *end* is at X, leaving along `div`.
+            // Siding: a branch whose *end* is at X, leaving along `div`. Only if the end
+            // is what was found here, not merely one that happens to lie at X too: a
+            // reversing loop is one path that passes through the point and then, round
+            // the loop, ends on it, and its run through the point is its main.
             const float len = p.length();
-            const bool nearFront = std::hypot(p.poseAt(0.0f).pos.x - X.x,
-                                              p.poseAt(0.0f).pos.y - X.y) < 2.5;
-            const bool nearBack = std::hypot(p.poseAt(len).pos.x - X.x,
-                                             p.poseAt(len).pos.y - X.y) < 2.5;
+            const bool nearFront = s < 5.0f && std::hypot(p.poseAt(0.0f).pos.x - X.x,
+                                                          p.poseAt(0.0f).pos.y - X.y) < 2.5;
+            const bool nearBack = len - s < 5.0f && std::hypot(p.poseAt(len).pos.x - X.x,
+                                                               p.poseAt(len).pos.y - X.y) < 2.5;
             if (nearFront || nearBack) {
                 // Leaving direction into the path from whichever end is at X.
                 const float es = nearFront ? 0.0f : len;
@@ -341,15 +349,26 @@ void SwitchNetwork::build(const TerrainData& data,
             // within 2.5 m of its own end, and the through-check below wants 5 m of track
             // either side, so it was thrown out a few lines later regardless.
             const double m = std::abs(glm::dot(tan, t.thru));
-            if (!(nearFront || nearBack) && m > bestMain) {
-                bestMain = m;
-                main = pi;
-                sMain = s;
-                mainTan = tan;
-            }
+            if (!(nearFront || nearBack) && m > 0.7) mainCands.push_back({pi, s, m, tan});
         }
-        // Main and siding must differ; if the same path won both, drop it as main.
-        if (main == siding) main = -1;
+        // The straightest road through the point - but another path before the branch's
+        // own: where a loop's run through the point lies alongside a separate through
+        // track, that track is the main, as it always was. The loop is its own main only
+        // where nothing else passes through.
+        for (const bool other : {true, false}) {
+            for (const MainCand& c : mainCands)
+                if ((!other || c.path != siding) && c.m > bestMain) {
+                    bestMain = c.m;
+                    main = c.path;
+                    sMain = c.s;
+                    mainTan = c.tan;
+                }
+            if (main >= 0) break;
+        }
+        // Main and siding must differ, unless they are one path at two places far apart
+        // along it - a reversing loop, whose end comes back onto its own beginning. The
+        // same path at the same place is one road found twice, and drops as main.
+        if (main == siding && std::abs(sMain - sSiding) < kLoopMinM) main = -1;
         if (main < 0 || siding < 0) continue;
         // The main must genuinely pass *through* the point (a toe side and a frog
         // side). If it merely ends here (a stub-to-stub yard junction), there is no
