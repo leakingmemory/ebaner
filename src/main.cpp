@@ -5470,10 +5470,11 @@ int main(int argc, char** argv) {
                 if (autoLog && &t == vehicle && now >= autoLogAt) {
                     autoLogAt = now + 1.0;
                     std::printf("[AutoDrive] %5.1f km/h  target %5.1f  P%d B%d  bp %.2f "
-                                "bc %.2f  emerg %d  %s%s\n",
+                                "bc %.2f  eb %3.0f kN  batt %3.0f%%  emerg %d  %s%s\n",
                                 t.speed() * 3.6f, d.targetMs * 3.6f, t.powerNotch(acab),
                                 t.brakeNotch(acab), t.bpPressure(acab), t.bcPressure(acab),
-                                int(t.emergencyLine()),
+                                t.dynamicBrakeForce() / 1000.0f,
+                                t.lead().batteryFrac() * 100.0f, int(t.emergencyLine()),
                                 d.stopping ? "stopping for " : "running",
                                 d.stopping
                                     ? (d.stopKind == RoadAhead::StopKind::Station
@@ -5933,6 +5934,15 @@ int main(int argc, char** argv) {
                             std::snprintf(buf, sizeof(buf), "ENG %s  %.0f rpm", sn,
                                           vehicle->engineRpm(0));
                     }
+                    appendText(tv, buf, x, y, sc, glm::vec3(0.7f, 0.85f, 0.7f), fbw, fbh);
+                    y += lh;
+                }
+                // The traction battery, where there is one: how much is in it, and whether
+                // the motors are braking into it.
+                if (vehicle->lead().hasBattery()) {
+                    std::snprintf(buf, sizeof(buf), "BATT %3.0f%%   e-brake %3.0f kN",
+                                  vehicle->lead().batteryFrac() * 100.0f,
+                                  vehicle->dynamicBrakeForce() / 1000.0f);
                     appendText(tv, buf, x, y, sc, glm::vec3(0.7f, 0.85f, 0.7f), fbw, fbh);
                     y += lh;
                 }

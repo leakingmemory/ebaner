@@ -18,6 +18,7 @@
 
 #include <glm/glm.hpp>
 
+#include <algorithm>
 #include <iterator>
 #include <vector>
 
@@ -40,6 +41,7 @@ enum VehicleBodyStyle {
     BodyCD312 = 8,      // CargoNet CD 312 (Vossloh/Stadler EURO 4000) freight locomotive
     BodyPocket = 9,     // Sdggmrss T3000e articulated double pocket wagon, loaded
     BodyFlat = 10,      // Sgnss 60' container flat, loaded with two 20 ft boxes
+    BodyType76 = 11,    // SJ Norge Type 76 (Stadler FLIRT), six cars of six kinds
 };
 
 // What turns the wheels. Two machines that could hardly be less alike: one puts its engine
@@ -73,7 +75,8 @@ enum DriveKind {
 // decides whether a platform is of any interest.
 constexpr bool bodyCarriesPassengers(int body) {
     return body == BodyClass93 || body == BodyType5 || body == BodyType5Fr ||
-           body == BodyType5B || body == BodyType5A || body == BodyWlab2;
+           body == BodyType5B || body == BodyType5A || body == BodyWlab2 ||
+           body == BodyType76;
 }
 
 // A selectable rail vehicle type. The running gear is described by a bogie count
@@ -100,6 +103,29 @@ constexpr const char* categoryName(int c) {
            : c == CatWagon    ? "FREIGHT WAGONS"
                               : "DEBUGGING";
 }
+
+// Running gear that is not two or three evenly spaced bogies under one evenly divided body:
+// a multiple unit whose cars are of different lengths, some sharing a bogie at the joint and
+// some standing on bogies of their own. Positions are body offsets from the vehicle's centre
+// toward its +s end, in metres.
+struct GearBogie {
+    float centre;    // pivot
+    float wheelbase; // outer axle to outer axle
+    bool powered;    // a motor bogie, for the drawing: adhesion is still `drivenFrac`
+};
+// One car body. It spans `from`..`to` and is oriented by the two points it rests on, which
+// for an articulated car are the bogies at its ends - shared with its neighbours - and for a
+// short car on two axles of its own are those axles.
+struct GearSection {
+    float from, to;
+    float supportA, supportB;
+};
+struct RunningGear {
+    const GearBogie* bogies;
+    int bogieCount;
+    const GearSection* sections;
+    int sectionCount;
+};
 
 struct VehicleSpec {
     const char* name;
@@ -193,6 +219,13 @@ struct VehicleSpec {
     // Which part of the list this belongs in. kVehicleSpecs MUST stay sorted by it - the
     // pickers put a heading in wherever it changes and would otherwise repeat one.
     int category = CatDebug;
+    // Running gear laid out bogie by bogie and car by car, where the evenly spaced shapes
+    // `bogieCount` describes cannot say it. Null for every vehicle that they can.
+    const RunningGear* gear = nullptr;
+    // A traction battery, and how much it adds to the prime mover's power while it has
+    // charge to give. Zero for everything without one.
+    float batteryJ = 0.0f;      // J, capacity
+    float batteryBoostW = 0.0f; // W, on top of powerW
 };
 
 // A formation: the same machine, with something coupled behind it. Written as a copy so
@@ -238,6 +271,37 @@ inline constexpr VehicleSpec kDi4Spec = {
     16, true, 0.92f, 2.7f, 0.075f, ControlSeparate, 2, false, nullptr, nullptr,
     180000.0f, 1400000.0f, true};
 
+// SJ Norge Type 76: Stadler FLIRT, 2020-22, fourteen built. Six cars - BMb, BPb, XDe, BC,
+// BPa, BMa - on Bo'2'2'2'2' + 2'2'Bo', which is eight two-axle bogies and sixteen axles,
+// four of them driven in the motor bogies under the two cabs. Four of the bogies are shared
+// at a joint; BPb and BC each end on a bogie of their own beside the short XDe, the diesel
+// power car, which stands on two axles of its own between them.
+//
+// Every position here is MEASURED from the Norske Tog car diagrams, scaled to the sourced
+// 112.70 m: the six car lengths and the eight bogie centres. Offsets from the middle of the
+// set, toward the BMa end. The wheelbases are not: the diagrams draw the wheels and their
+// spacing larger than life, so the bogie's 2.70 m is the FLIRT's, an ESTIMATE, and the
+// 3.26 m between XDe's axles is as drawn.
+inline constexpr GearBogie kT76Bogies[] = {
+    {-51.374f, 2.70f, true},  // BMb motor bogie
+    {-34.130f, 2.70f, false}, // BMb / BPb
+    {-15.693f, 2.70f, false}, // BPb's own, beside XDe
+    {-9.004f, 3.26f, false},  // XDe's two axles
+    {-1.810f, 2.70f, false},  // BC's own, beside XDe
+    {16.309f, 2.70f, false},  // BC / BPa
+    {34.583f, 2.70f, false},  // BPa / BMa
+    {51.374f, 2.70f, true},   // BMa motor bogie
+};
+inline constexpr GearSection kT76Sections[] = {
+    {-56.350f, -33.863f, -51.374f, -34.130f}, // BMb
+    {-33.863f, -12.474f, -34.130f, -15.693f}, // BPb
+    {-12.474f, -5.103f, -10.635f, -7.373f},   // XDe, on its own axles
+    {-5.103f, 16.524f, -1.810f, 16.309f},     // BC
+    {16.524f, 34.857f, 16.309f, 34.583f},     // BPa
+    {34.857f, 56.350f, 34.583f, 51.374f},     // BMa
+};
+inline constexpr RunningGear kT76Gear = {kT76Bogies, 8, kT76Sections, 6};
+
 // The vehicles offered on the start screen.
 inline constexpr VehicleSpec kVehicleSpecs[] = {
     // Ordered by category, and it MUST stay that way: the pickers put a heading in
@@ -255,6 +319,54 @@ inline constexpr VehicleSpec kVehicleSpecs[] = {
      2, 2, DriveMechanical, 612000.0f, 0.42f, 0.67f, 0.0f}, CatTrain),
     inCat({"NSB Class 93 x3 (Talent)", 70000.0f, 41.5f, 2.75f, 3.80f, 2.50f, 30.00f, 3, BodyClass93, 3,
      2, 2, DriveMechanical, 612000.0f, 0.42f, 0.67f, 0.0f}, CatTrain),
+    // SJ Norge Type 76, as a diesel: the line has no wire in the simulator, so it runs on
+    // its power pack and battery, which is what it does north of Steinkjer in service.
+    // Sourced (Norske Tog): 112.7 x 3.2 x 4.38 m, 252 t empty and 298 t full, 21 t a
+    // driven axle at most, 160 kN starting, 160 km/h on diesel; 1550 kW on diesel and 1800
+    // with the 112 kWh battery helping, so the battery is worth 250 kW. Four Deutz V8s of
+    // 16 litres and 480 kW each in XDe (Railvolution), a four-stroke eight.
+    //
+    // ESTIMATES: 270 t, an empty set with an ordinary load aboard; the driven share, four
+    // axles near the 21 t limit; the engines' idle and governed speeds and the spool, which
+    // are a 16-litre rail V8's; and the electric brake. In service it regenerates into the
+    // wire, and on diesel into the battery and the roof resistors - 150 kN and 1.5 MW is
+    // what a FLIRT of this power is credited with, not a published figure.
+    //
+    // Four engines are drawn and sounded as two pairs: a set carries the revs of two.
+    {.name = "SJ Norge Type 76 (FLIRT)",
+     .mass = 270000.0f,
+     .length = 112.70f,
+     .width = 3.20f,
+     .height = 4.38f,
+     .wheelbase = 2.70f,
+     .bogieSpacing = 102.748f, // outer bogie to outer bogie; the layout is kT76Gear
+     .bogieCount = 8,
+     .body = BodyType76,
+     .units = 1,
+     .axlesPerBogie = 2,
+     .engines = 4,
+     .drive = DriveElectric,
+     .powerW = 1550000.0f,
+     .wheelRadius = 0.46f, // 920 mm
+     .drivenFrac = 0.30f,  // four axles of sixteen, at about 20 t each
+     .startTE = 160000.0f,
+     .idleRpm = 650.0f,
+     .governedRpm = 1800.0f,
+     .spoolTime = 2.5f,
+     .cylinders = 8,
+     .twoStroke = false,
+     .engineVolume = 0.8f,
+     .engineRumble = 0.10f,
+     .engineBright = 0.10f,
+     .controls = ControlCombined,
+     .cabs = 2,
+     .epBrake = true,
+     .dynBrakeN = 150000.0f,
+     .dynBrakeW = 1500000.0f,
+     .category = CatTrain,
+     .gear = &kT76Gear,
+     .batteryJ = 112.0f * 3.6e6f, // 112 kWh
+     .batteryBoostW = 250000.0f},
     // The standard rake, as it is marshalled: cafe second, 2nd class third and fourth,
     // and 1st class on the tail.
     hauling(kDi4Spec, "NSB Di 4 + 5 (cafe 2nd)", "BC5-3,FR5-1,B5-3,B5-5,A5-1"),
@@ -705,6 +817,11 @@ public:
     // 2 for a 3-bogie module), each oriented by its bogie pair so an articulated
     // module flexes at the middle bogie.
     std::vector<VehicleFrame> bodySectionFrames() const;
+    // Half the length of each of those sections, in the same order. Equal for a vehicle
+    // whose body is divided evenly; a multiple unit's cars are not all one length.
+    std::vector<float> bodySectionHalfLens() const;
+    // The wheelbase of bogie `i`, which on a multiple unit need not be every bogie's.
+    float bogieWheelbase(int i) const;
     VehicleState state() const { return state_; }
     // Put this set on the ground where it stands, carrying the speed it had into the
     // slide. What running off the end of the track already does to itself, exposed so
@@ -800,6 +917,11 @@ public:
     bool hasEngineBrake() const { return drive_ == DriveMechanical && engineCount_ > 0; }
     float engineBrakeForce() const { return engBrake_; }
     float dynamicBrakeForce() const { return dynBrake_; } // N this step, >= 0
+    // The traction battery, as a fraction of its capacity; 0 for a vehicle without one.
+    float batteryFrac() const { return batteryCapJ_ > 0.0f ? batteryJ_ / batteryCapJ_ : 0.0f; }
+    bool hasBattery() const { return batteryCapJ_ > 0.0f; }
+    // Set the charge, 0..1. For the tests; a set is put on the road charged.
+    void setBatteryFrac(float f) { batteryJ_ = std::clamp(f, 0.0f, 1.0f) * batteryCapJ_; }
     // How hard the grids are working, 0..1. What the blower is fed from.
     float dynamicBrakeFrac() const {
         if (dynBrakeN_ <= 0.0f) return 0.0f;
@@ -961,6 +1083,7 @@ private:
     void updateElectricDrive(float demandSigned, float demand, bool powering,
                              bool reverse, float dt);
     void updateDynamicBrake(float demand, bool inGear, float dt);
+    void chargeBattery(float dt);
     // Arc-length offsets of each bogie centre from the body centre (s_).
     std::vector<float> bogieCentres() const;
     // Half the span between the body's two support points (the two end bogies for
@@ -1006,6 +1129,7 @@ private:
     float mass_;
     float length_, width_, height_, wheelbase_, bogieSpacing_;
     int bogieCount_;
+    const RunningGear* runningGear_ = nullptr;
     // What the machine is, taken from its spec rather than from a shared constant.
     float idleRpm_ = 700.0f, governedRpm_ = kMaxRpm, spoolTime_ = 0.9f;
     int cylinders_ = 6;
@@ -1018,6 +1142,8 @@ private:
     int indNotch_[2] = {0, 0}; // per-cab independent brake handle
     float indDemand_ = 0.0f;   // what the link is asking of this vehicle's own cylinders
     float dynBrakeN_ = 0.0f, dynBrakeW_ = 0.0f;
+    float batteryCapJ_ = 0.0f, batteryBoostW_ = 0.0f;
+    float batteryJ_ = 0.0f; // what is in it now
     float dynBrake_ = 0.0f; // what the electric brake is making this step, N
     bool valveHere_ = true;  // the driver's brake valve is on this vehicle
     bool emergVent_ = false; // the accelerator: this distributor is dumping its own pipe

@@ -452,6 +452,12 @@ target_link_libraries(DrivingTest PRIVATE ebaner_engine)
 target_include_directories(DrivingTest PRIVATE src)
 add_test(NAME driving COMMAND DrivingTest)
 
+add_executable(RunningGearTest tests/RunningGearTest.cpp src/Vehicle.cpp src/Consist.cpp)
+add_dependencies(RunningGearTest shaders)
+target_link_libraries(RunningGearTest PRIVATE ebaner_engine)
+target_include_directories(RunningGearTest PRIVATE src)
+add_test(NAME running-gear COMMAND RunningGearTest)
+
 add_executable(AirBrakeTest tests/AirBrakeTest.cpp src/Vehicle.cpp src/Consist.cpp)
 add_dependencies(AirBrakeTest shaders)
 target_link_libraries(AirBrakeTest PRIVATE ebaner_engine)

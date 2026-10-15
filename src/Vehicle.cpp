@@ -173,6 +173,13 @@ constexpr float kEta = 0.9f;             // driveline efficiency
 // Alternator, rectifier and six traction motors between the crankshaft and the rail.
 // Lower than a mechanical driveline's, which is the price of having no gearbox.
 constexpr float kElectricEta = 0.85f;
+// The traction battery's floor and its top-up. The floor is what is kept back for the
+// auxiliaries and for getting away again, so the boost stops there rather than at empty;
+// the top-up is what a running diesel spares it off the brake and off the power. Both are
+// ESTIMATES - no source gives either for the Type 76 - chosen so a battery drawn down on a
+// long climb comes back over the following half hour of ordinary running.
+constexpr float kBatteryFloor = 0.20f;    // of capacity
+constexpr float kBatteryTrickleW = 60000.0f; // W
 constexpr float kRevSpeedCap = 11.0f;    // m/s (~40 km/h) reverse power cut
 // Where the electric brake fades away. Below the lower figure there is nothing at all, and
 // it comes fully in by the upper one - about 5 km/h, by which speed the machines are
@@ -235,7 +242,8 @@ Vehicle::Vehicle(const TrackPath* path, const VehicleSpec& spec, float s,
       height_(spec.height),
       wheelbase_(spec.wheelbase),
       bogieSpacing_(spec.bogieSpacing),
-      bogieCount_(spec.bogieCount),
+      bogieCount_(spec.gear != nullptr ? spec.gear->bogieCount : spec.bogieCount),
+      runningGear_(spec.gear),
       axlesPerBogie_(std::max(1, spec.axlesPerBogie)),
       drive_(spec.drive),
       powerW_(spec.powerW),
@@ -256,6 +264,9 @@ Vehicle::Vehicle(const TrackPath* path, const VehicleSpec& spec, float s,
       independent_(spec.independentBrake),
       dynBrakeN_(spec.dynBrakeN),
       dynBrakeW_(spec.dynBrakeW),
+      batteryCapJ_(spec.batteryJ),
+      batteryBoostW_(spec.batteryBoostW),
+      batteryJ_(spec.batteryJ), // charged
       bodyStyle_(spec.body),
       name_(spec.name),
       physV_(initialSpeed),
@@ -622,12 +633,21 @@ float Vehicle::speed() const {
 }
 
 float Vehicle::supportHalf() const {
+    if (runningGear_ != nullptr && runningGear_->bogieCount >= 2)
+        return 0.5f * (runningGear_->bogies[runningGear_->bogieCount - 1].centre -
+                       runningGear_->bogies[0].centre);
     if (bogieCount_ >= 2) return 0.5f * bogieSpacing_; // chord the two end bogies
     if (bogieCount_ == 1) return 0.5f * wheelbase_;    // chord the bogie's axles
     return 0.0f;                                       // single axle
 }
 
 std::vector<float> Vehicle::bogieCentres() const {
+    if (runningGear_ != nullptr) {
+        std::vector<float> out;
+        for (int i = 0; i < runningGear_->bogieCount; ++i)
+            out.push_back(runningGear_->bogies[i].centre);
+        return out;
+    }
     const float bc = 0.5f * bogieSpacing_;
     switch (bogieCount_) {
         case 1: return {0.0f};
@@ -645,17 +665,26 @@ std::vector<float> Vehicle::axleOffsets() const {
     // weight by them, the circuits measure the train by them, and the sound counts them
     // over the frogs.
     const int n = std::max(1, axlesPerBogie_);
-    const float wb = 0.5f * wheelbase_;
+    const std::vector<float> centres = bogieCentres();
     std::vector<float> out;
-    out.reserve(static_cast<std::size_t>(n) * bogieCentres().size());
-    for (const float c : bogieCentres())
+    out.reserve(static_cast<std::size_t>(n) * centres.size());
+    for (std::size_t b = 0; b < centres.size(); ++b) {
+        const float c = centres[b];
+        const float wb = 0.5f * bogieWheelbase(static_cast<int>(b));
         for (int i = 0; i < n; ++i) {
             const float t = n == 1 ? 0.0f
                                    : -1.0f + 2.0f * static_cast<float>(i) /
                                                  static_cast<float>(n - 1);
             out.push_back(c + t * wb);
         }
+    }
     return out;
+}
+
+float Vehicle::bogieWheelbase(int i) const {
+    if (runningGear_ != nullptr && i >= 0 && i < runningGear_->bogieCount)
+        return runningGear_->bogies[i].wheelbase;
+    return wheelbase_;
 }
 
 bool Vehicle::walkTo(float bodyOffset, int& cp, float& cs, int& nose) const {
@@ -919,9 +948,11 @@ VehicleFrame Vehicle::bodyFrame() const {
 }
 
 std::vector<VehicleFrame> Vehicle::bogieFrames() const {
-    const float wb = 0.5f * wheelbase_;
     std::vector<VehicleFrame> out;
-    for (float c : bogieCentres()) {
+    const std::vector<float> centres = bogieCentres();
+    for (std::size_t b = 0; b < centres.size(); ++b) {
+        const float c = centres[b];
+        const float wb = 0.5f * bogieWheelbase(static_cast<int>(b));
         if (state_ == VehicleState::OnRail)
             out.push_back(railFrame(c, wb));
         else // derailed: bogie pivots offset along the frozen body tangent
@@ -931,8 +962,26 @@ std::vector<VehicleFrame> Vehicle::bogieFrames() const {
 }
 
 std::vector<VehicleFrame> Vehicle::bodySectionFrames() const {
-    const std::vector<float> centres = bogieCentres();
     std::vector<VehicleFrame> out;
+    if (runningGear_ != nullptr) {
+        // Each car oriented by what it rests on and placed at the middle of its own body,
+        // which for an end car is not half way between its bogies: the nose overhangs.
+        for (int i = 0; i < runningGear_->sectionCount; ++i) {
+            const GearSection& g = runningGear_->sections[i];
+            const float mid = 0.5f * (g.from + g.to);
+            if (state_ == VehicleState::OnRail) {
+                const TrackPose pm = walkPose(mid);
+                VehicleFrame f =
+                    chordFrame(walkPose(g.supportA), walkPose(g.supportB), pm.tangent);
+                f.pos = pm.pos;
+                out.push_back(f);
+            } else {
+                out.push_back({pos_ + fTangent_ * mid, fRight_, fTangent_, fUp_});
+            }
+        }
+        return out;
+    }
+    const std::vector<float> centres = bogieCentres();
     if (centres.size() < 2) return out; // <2 bogies carry no underframe body
     const int n = static_cast<int>(centres.size()) - 1; // sections between bogies
     for (int i = 0; i < n; ++i) {
@@ -952,6 +1001,19 @@ std::vector<VehicleFrame> Vehicle::bodySectionFrames() const {
         }
     }
     return out;
+}
+
+std::vector<float> Vehicle::bodySectionHalfLens() const {
+    if (runningGear_ != nullptr) {
+        std::vector<float> out;
+        for (int i = 0; i < runningGear_->sectionCount; ++i)
+            out.push_back(0.5f *
+                          (runningGear_->sections[i].to - runningGear_->sections[i].from));
+        return out;
+    }
+    const std::size_t n = bogieCentres().size();
+    if (n < 2) return {};
+    return std::vector<float>(n - 1, 0.5f * length_ / static_cast<float>(n - 1));
 }
 
 std::vector<AxlePlace> Vehicle::axlePlaces() const {
@@ -1041,7 +1103,11 @@ void Vehicle::updateElectricDrive(float demandSigned, float demand, bool powerin
     load_ = std::clamp(load_ + std::clamp(made - load_, -rate * dt, rate * dt), 0.0f, 1.0f);
 
     const float sp = std::abs(physV_);
-    const float pRail = load_ * powerW_ * kElectricEta;
+    // The battery adds to the diesel while it has charge to give, and stops at a floor
+    // kept back for the auxiliaries and for starting off again.
+    const bool boosting = batteryBoostW_ > 0.0f && batteryJ_ > kBatteryFloor * batteryCapJ_;
+    const float pAvail = powerW_ + (boosting ? batteryBoostW_ : 0.0f);
+    const float pRail = load_ * pAvail * kElectricEta;
     // Three limits, and which one binds is the whole character of the machine.
     //
     // The flat one is a CURRENT limit. Tractive effort is what amperes buy, and there is
@@ -1064,6 +1130,13 @@ void Vehicle::updateElectricDrive(float demandSigned, float demand, bool powerin
     if (reverse && sp > kRevSpeedCap) TE = 0.0f;
     tractiveEffort_ = dir * TE;
     railPower_ = TE * sp;
+    // What came out of the battery: whatever the drive used beyond what the diesel makes.
+    // At low speed the current limit binds well under the diesel's power and nothing does.
+    if (boosting) {
+        const float drawn = std::clamp(railPower_ / kElectricEta - load_ * powerW_, 0.0f,
+                                       batteryBoostW_);
+        batteryJ_ = std::max(0.0f, batteryJ_ - drawn * dt);
+    }
 }
 
 // The rheostatic brake: the same machines turned round. They are driven as generators and
@@ -1097,6 +1170,19 @@ void Vehicle::updateDynamicBrake(float demand, bool inGear, float dt) {
     // Through the driven wheels, so the same adhesion cap the pull answers to.
     const float beAdh = kTractionMu * drivenFrac_ * mass_ * kG;
     dynBrake_ = fade * std::min(std::min(beFlat, bePower), beAdh);
+}
+
+// Charging. Braking on the motors makes current, and with a battery aboard as much of it as
+// the battery will take goes in rather than up in heat; the rest still goes to the grids.
+// Off the brake, a running diesel tops it up slowly. Called every step from update().
+void Vehicle::chargeBattery(float dt) {
+    if (batteryCapJ_ <= 0.0f || batteryJ_ >= batteryCapJ_) return;
+    float inW = 0.0f;
+    if (dynBrake_ > 0.0f)
+        inW = std::min(dynBrake_ * std::abs(physV_) * kElectricEta, batteryBoostW_);
+    else if (engineOn_ && enginesRunning() && railPower_ <= 0.0f)
+        inW = kBatteryTrickleW;
+    batteryJ_ = std::min(batteryCapJ_, batteryJ_ + inW * dt);
 }
 
 // Motor current as a fraction of what the drive will pass. Effort is what current buys,
@@ -1241,7 +1327,23 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
     // whether or not the vehicle is powering - the two are opposite ends of one handle and
     // cannot both be commanded - but dropped entirely by an emergency, which wants the
     // friction brake and all of it.
-    updateDynamicBrake(cmd.emergency ? 0.0f : cmd.dynamic, cmd.demand != 0.0f || cmd.dynamic > 0.0f,
+    // On a combined lever there is no range below neutral: the brake side of the one handle
+    // is the electric brake as well, blended. It is asked for as much of the notch's
+    // deceleration as it can make, and the shoes are asked only for what it falls short
+    // by - which is how a modern unit brakes, on its motors first.
+    // The demand is a fraction of what the machines can make at this speed - the flat limit
+    // below the corner and the grids' power above it - so the notch's force is asked of
+    // that, and not of the flat figure alone, which above the corner would ask for less
+    // than the motors could give.
+    float dynDemand = cmd.dynamic;
+    if (controls_ == ControlCombined && dynBrakeN_ > 0.0f && cmdNotch_ > 0 &&
+        cmdNotch_ <= kFullServiceNotch) {
+        const float sp = std::max(std::abs(physV_), 0.05f);
+        const float canN =
+            dynBrakeW_ > 0.0f ? std::min(dynBrakeN_, dynBrakeW_ / sp) : dynBrakeN_;
+        dynDemand = std::max(dynDemand, std::min(1.0f, serviceDecel(cmdNotch_) * mass_ / canN));
+    }
+    updateDynamicBrake(cmd.emergency ? 0.0f : dynDemand, cmd.demand != 0.0f || dynDemand > 0.0f,
                        dt);
 
     if (state_ != VehicleState::OnRail) return {};
@@ -1249,6 +1351,7 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
     // Traction: a torque converter feeding a 5-speed automatic gearbox. The effort is
     // left in tractiveEffort_ rather than applied - the train moves as one.
     updateTraction(demandSigned, demand, powering, cmd.reverse, dt);
+    chargeBattery(dt);
 
     // Low main-reservoir safety: if the reservoir falls below the trip pressure this
     // set calls for emergency regardless of the handle, latched until the reservoir
@@ -1383,7 +1486,12 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
         // braking is arranged so it does not happen. The cylinders are genuinely
         // released, not merely discounted afterwards, so the gauge tells the truth.
         // An emergency, a safety trip or a burst pipe all override it.
-        if (dynBrake_ > 0.0f && !trainEmerg_ && !safetyBrake_ && !pipeCut_) autoWant = 0.0f;
+        //
+        // A combined lever blends instead, below: there the electric brake is part of the
+        // notch, not a second brake beside it, and the shoes make up what it cannot.
+        const bool blended = controls_ == ControlCombined;
+        if (dynBrake_ > 0.0f && !blended && !trainEmerg_ && !safetyBrake_ && !pipeCut_)
+            autoWant = 0.0f;
         // Blended braking. The notch asks for a deceleration; the engine brake supplies
         // what it can of it, and only the shortfall is asked of the shoes. So the first
         // notch on a Class 93 at a fair speed is the engine brake and nothing else, and
@@ -1394,9 +1502,10 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
         // low-reservoir trip therefore still apply everything, and so does emergency -
         // all three are excluded here as well, twice over, because the engine brake is
         // already cancelled in those cases.
-        if (engBrake_ > 0.0f && !trainEmerg_ && !safetyBrake_ && !pipeCut_) {
+        const float electric = engBrake_ + (blended ? dynBrake_ : 0.0f);
+        if (electric > 0.0f && !trainEmerg_ && !safetyBrake_ && !pipeCut_) {
             const float wantN = serviceDecel(effNotch) * mass_;
-            const float shortfall = std::max(0.0f, wantN - engBrake_);
+            const float shortfall = std::max(0.0f, wantN - electric);
             autoWant = std::min(autoWant, kBCMax * shortfall / (kFullServiceDecel * mass_));
         }
         // And the independent brake on top, by a double check valve: the two feed the

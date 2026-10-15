@@ -422,6 +422,72 @@ const glm::vec3 kLining(0.80f, 0.80f, 0.78f); // interior walls and partitions
 const glm::vec3 kFloorIn(0.28f, 0.28f, 0.30f);
 } // namespace t5
 
+// SJ Norge Type 76 (Stadler FLIRT). Every position below is measured from the Norske Tog
+// car diagrams - doors from their orange surrounds, windows from the glazing - in metres
+// from each car's BMb-facing end, which is the -y end of its section. Heights are over the
+// railhead and are read off the same drawings, scaled to the sourced 4.38 m.
+namespace t76 {
+const glm::vec3 kBody(0.28f, 0.28f, 0.28f);    // the SJ grey, as drawn
+const glm::vec3 kLower(0.23f, 0.23f, 0.23f);   // the darker lower panels
+const glm::vec3 kRoof(0.20f, 0.20f, 0.21f);
+const glm::vec3 kGlass(0.39f, 0.33f, 0.29f);   // the drawings' bronze-tinted glazing
+const glm::vec3 kDoor(0.23f, 0.23f, 0.23f);
+const glm::vec3 kOrange(1.00f, 0.31f, 0.00f);  // door surrounds
+const glm::vec3 kSkirt(0.13f, 0.14f, 0.14f);   // valances, bogie skirts, gangways
+const glm::vec3 kEquip(0.17f, 0.17f, 0.18f);   // roof and underfloor equipment
+const glm::vec3 kGrille(0.12f, 0.12f, 0.12f);  // XDe's louvres
+const glm::vec3 kLight(0.93f, 0.92f, 0.84f);   // headlights
+const glm::vec3 kCoupler(0.22f, 0.23f, 0.25f);
+constexpr float kHalfWidth = 1.60f;  // 3.20 m
+constexpr float kTumble = 0.94f;     // sill half width, fraction
+constexpr float kRoofHalf = 0.70f;   // crown half width, fraction
+constexpr float kSillLow = 0.50f;    // skirt bottom between the bogies (low floor)
+constexpr float kSillBogie = 1.14f;  // ...and over them, clear of the bogie frame
+constexpr float kFloor = 0.80f;      // low floor
+constexpr float kWinLow = 1.52f;     // window band
+constexpr float kWinHigh = 2.84f;
+constexpr float kCant = 3.30f;       // cantrail
+constexpr float kRoofTop = 4.05f;    // crown; roof equipment takes it to 4.38
+constexpr float kNoseLen = 3.10f;    // the raked front, from where the roof starts to fall
+constexpr float kNoseTipZ = 2.15f;   // where the windscreen meets the nose tip
+constexpr float kGangGap = 0.30f;    // each car's end inset from the joint, for the bellows
+constexpr float kDoorW = 1.78f;      // door with its surround
+constexpr float kSurround = 0.10f;   // the orange frame
+constexpr float kCabFloor = 1.40f;   // the cab's raised floor
+const glm::vec3 kDesk(0.13f, 0.14f, 0.15f);    // the driver's desk
+const glm::vec3 kScreen(0.13f, 0.22f, 0.30f);  // its displays
+const glm::vec3 kWall(0.62f, 0.62f, 0.60f);    // the cab's back wall, inside
+
+struct Car {
+    int cab;              // -1: a cab at the -y end, +1 at +y, 0 none
+    bool power;           // XDe
+    bool pantograph;      // BPa, at its +y end
+    float doors[2];       // door centres
+    int doorCount;
+    float win[12][2];     // bodyside windows
+    int winCount;
+};
+// BMb, BPb, XDe, BC, BPa, BMa - the order kT76Sections lays them out in.
+inline constexpr Car kCars[6] = {
+    {-1, false, false, {9.77f, 18.24f}, 2,
+     {{2.06f, 2.60f}, {6.93f, 8.54f}, {11.15f, 12.77f}, {13.36f, 14.97f}, {15.57f, 17.18f},
+      {19.55f, 21.15f}}, 6},
+    {0, false, false, {3.69f, 13.71f}, 2,
+     {{0.62f, 2.24f}, {4.94f, 6.54f}, {6.90f, 8.50f}, {8.86f, 10.47f}, {10.81f, 12.43f},
+      {14.95f, 16.57f}, {16.82f, 18.44f}, {18.70f, 20.31f}}, 8},
+    {0, true, false, {0.0f, 0.0f}, 0, {}, 0},
+    {0, false, false, {7.53f, 17.34f}, 2,
+     {{2.21f, 3.81f}, {4.46f, 6.07f}, {8.77f, 10.37f}, {10.68f, 12.30f}, {12.61f, 14.21f},
+      {14.52f, 16.14f}, {18.78f, 20.40f}}, 7},
+    {0, false, true, {3.82f, 13.88f}, 2,
+     {{0.62f, 2.24f}, {5.10f, 6.72f}, {7.08f, 8.68f}, {9.03f, 10.65f}, {10.99f, 12.61f},
+      {15.43f, 17.03f}}, 6},
+    {+1, false, false, {3.63f, 11.95f}, 2,
+     {{0.74f, 2.36f}, {4.91f, 6.51f}, {6.96f, 8.56f}, {9.00f, 10.62f}, {13.22f, 14.83f},
+      {18.90f, 19.43f}}, 6},
+};
+} // namespace t76
+
 namespace c93 {
 const glm::vec3 kBody(0.72f, 0.73f, 0.75f);  // silver-grey car body
 const glm::vec3 kBand(0.11f, 0.12f, 0.14f);  // dark window band / glazing
@@ -569,14 +635,18 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
     const float frameTopZ = frameCentreZ + kFrameHalfHeight;
 
     // A bogie frame box (low steel box above the wheels, spanning the wheelbase).
-    auto emitBogieFrame = [&](const VehicleFrame& b) {
+    auto emitBogieFrame = [&](const VehicleFrame& b, float wheelbase) {
         emitBox(b.right, b.tangent, b.up, b.pos + b.up * frameCentreZ,
-                kFrameHalfWidth, 0.5f * vehicle.wheelbase(), kFrameHalfHeight,
-                kFrameCol);
+                kFrameHalfWidth, 0.5f * wheelbase, kFrameHalfHeight, kFrameCol);
     };
 
-    // A bogie frame per bogie (none for a bare wheelset).
-    for (const VehicleFrame& bf : vehicle.bogieFrames()) emitBogieFrame(bf);
+    // A bogie frame per bogie (none for a bare wheelset), each its own length: a multiple
+    // unit's bogies need not all have one wheelbase.
+    {
+        const std::vector<VehicleFrame> bfs = vehicle.bogieFrames();
+        for (std::size_t i = 0; i < bfs.size(); ++i)
+            emitBogieFrame(bfs[i], vehicle.bogieWheelbase(static_cast<int>(i)));
+    }
 
     // A flat quad (p0..p3); its normal is oriented to point away from `inside`
     // so winding order doesn't matter (the body is roughly convex).
@@ -2620,12 +2690,295 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
         }
     };
 
+    // SJ Norge Type 76: one car of the six, by its index in kT76Sections. The shell is a
+    // lofted profile like the Class 93's - straight sides carrying the window band, rounded
+    // shoulders into a crown - coloured facet by facet along the car from the measured door
+    // and window positions. The skirt steps up over each bogie under the car, which is
+    // where a low-floor body has to clear the wheels; between them it hangs low.
+    auto emitType76 = [&](const VehicleFrame& f, float halfLen, int car) {
+        const t76::Car& C = t76::kCars[car];
+        const glm::vec3 X = f.right, Y = f.tangent, Z = f.up;
+        auto zr = [&](float overRail) { return wheelset::kRailTopZ + overRail; };
+        auto P = [&](float x, float y, float z) { return f.pos + X * x + Y * y + Z * z; };
+        const float hw = t76::kHalfWidth, rhw = hw * t76::kRoofHalf;
+        const float zRoof = zr(t76::kRoofTop);
+        // The car's two ends: a cab end is the nose tip, a gangway end is inset from the
+        // joint so the bellows have room.
+        const float yLo = -halfLen + (C.cab == -1 ? 0.0f : t76::kGangGap);
+        const float yHi = halfLen - (C.cab == +1 ? 0.0f : t76::kGangGap);
+        const float bodyLo = C.cab == -1 ? yLo + t76::kNoseLen : yLo;
+        const float bodyHi = C.cab == +1 ? yHi - t76::kNoseLen : yHi;
+        const glm::vec3 in = P(0.0f, 0.5f * (yLo + yHi), zr(2.2f));
+        auto yAt = [&](float x) { return -halfLen + x; }; // diagram metres -> section y
+
+        // The bogies under this car, in its own coordinates, for the skirt cut-ups.
+        const float mid = 0.5f * (kT76Sections[car].from + kT76Sections[car].to);
+        std::vector<std::pair<float, float>> overBogie;
+        for (const GearBogie& b : kT76Bogies) {
+            const float y = b.centre - mid, h = 0.5f * b.wheelbase + 0.75f;
+            if (y + h > -halfLen && y - h < halfLen) overBogie.push_back({y - h, y + h});
+        }
+        auto sillAt = [&](float y) {
+            for (const auto& o : overBogie)
+                if (y > o.first && y < o.second) return zr(t76::kSillBogie);
+            return zr(t76::kSillLow);
+        };
+
+        // The profile. Points: sill, band bottom, band top, the shoulder arcs over the
+        // crown, and back down the other side; so facet 1 is the +x window band, 13 the -x
+        // one, 0/14 the lower sides, 2/12 the upper sides and 3..11 the roof.
+        const int arcN = 4;
+        auto ring = [&](float y, float wS, float roofZ, float zb) {
+            const float w = hw * wS, rw = rhw * wS;
+            const float zC = std::min(zr(t76::kCant), roofZ - 0.05f);
+            const float zH = std::min(zr(t76::kWinHigh), zC - 0.02f);
+            const float zL = std::min(zr(t76::kWinLow), zH - 0.02f);
+            const float zB = std::min(zb, zL - 0.02f);
+            const float wb = w * t76::kTumble;
+            std::vector<glm::vec3> p;
+            p.push_back(P(wb, y, zB));
+            p.push_back(P(w, y, zL));
+            p.push_back(P(w, y, zH));
+            for (int i = 0; i <= arcN; ++i) {
+                const float a = kPi * 0.5f * i / arcN;
+                p.push_back(P(rw + (w - rw) * std::cos(a), y, zC + (roofZ - zC) * std::sin(a)));
+            }
+            for (int i = arcN; i >= 0; --i) {
+                const float a = kPi * 0.5f * i / arcN;
+                p.push_back(P(-(rw + (w - rw) * std::cos(a)), y,
+                              zC + (roofZ - zC) * std::sin(a)));
+            }
+            p.push_back(P(-w, y, zH));
+            p.push_back(P(-w, y, zL));
+            p.push_back(P(-wb, y, zB));
+            return p;
+        };
+        auto loft = [&](const std::vector<glm::vec3>& A, const std::vector<glm::vec3>& B,
+                        const glm::vec3& lower, const glm::vec3& band, const glm::vec3& upper) {
+            for (std::size_t k = 0; k + 1 < A.size(); ++k) {
+                const glm::vec3& col = (k >= 3 && k <= 11)     ? t76::kRoof
+                                       : (k == 1 || k == 13)   ? band
+                                       : (k == 2 || k == 12)   ? upper
+                                                               : lower;
+                quadN(A[k], A[k + 1], B[k + 1], B[k], col, in);
+            }
+        };
+        // Close a ring's end: the gangway end wall, or the floor of the open bottom.
+        auto cap = [&](const std::vector<glm::vec3>& R, const glm::vec3& col) {
+            glm::vec3 c(0.0f);
+            for (const glm::vec3& q : R) c += q;
+            c /= static_cast<float>(R.size());
+            for (std::size_t k = 0; k < R.size(); ++k)
+                quadN(R[k], R[(k + 1) % R.size()], c, c, col, in);
+        };
+
+        // Panels along the body: windows, doors with their orange surrounds, and the grey
+        // between. Each is lofted between rings, split where the skirt steps over a bogie.
+        struct Panel { float a, b; glm::vec3 lower, band, upper; };
+        std::vector<Panel> panels;
+        {
+            struct Mark { float a, b; int kind; }; // 0 window, 1 door
+            std::vector<Mark> marks;
+            for (int i = 0; i < C.winCount; ++i)
+                marks.push_back({yAt(C.win[i][0]), yAt(C.win[i][1]), 0});
+            for (int i = 0; i < C.doorCount; ++i)
+                marks.push_back({yAt(C.doors[i] - 0.5f * t76::kDoorW),
+                                 yAt(C.doors[i] + 0.5f * t76::kDoorW), 1});
+            std::sort(marks.begin(), marks.end(),
+                      [](const Mark& l, const Mark& r) { return l.a < r.a; });
+            float y = bodyLo;
+            const Panel grey{0, 0, t76::kLower, t76::kBody, t76::kBody};
+            for (const Mark& m : marks) {
+                const float a = std::max(m.a, bodyLo), b = std::min(m.b, bodyHi);
+                if (b <= a + 0.01f || a < y - 0.01f) continue;
+                if (a > y) panels.push_back({y, a, grey.lower, grey.band, grey.upper});
+                if (m.kind == 0) {
+                    panels.push_back({a, b, t76::kLower, t76::kGlass, t76::kBody});
+                } else {
+                    const float sw = t76::kSurround;
+                    panels.push_back({a, a + sw, t76::kOrange, t76::kOrange, t76::kBody});
+                    panels.push_back({a + sw, b - sw, t76::kDoor, t76::kGlass, t76::kBody});
+                    panels.push_back({b - sw, b, t76::kOrange, t76::kOrange, t76::kBody});
+                }
+                y = b;
+            }
+            if (bodyHi > y) panels.push_back({y, bodyHi, grey.lower, grey.band, grey.upper});
+        }
+        // The power car's sides are equipment, not saloon: no glazing, two hatches and a
+        // louvre band each end.
+        if (C.power) {
+            panels.clear();
+            const float L = bodyHi - bodyLo;
+            const float cuts[] = {0.0f, 0.10f, 0.15f, 0.47f, 0.53f, 0.85f, 0.90f, 1.0f};
+            for (int i = 0; i + 1 < 8; ++i) {
+                const bool louvre = i == 0 || i == 6;
+                const bool hatch = i == 2 || i == 4;
+                const glm::vec3 c = louvre ? t76::kGrille : hatch ? t76::kLower : t76::kBody;
+                panels.push_back({bodyLo + cuts[i] * L, bodyLo + cuts[i + 1] * L, c,
+                                  louvre ? t76::kGrille : c, t76::kBody});
+            }
+        }
+        auto bodyRing = [&](float y) { return ring(y, 1.0f, zRoof, sillAt(y)); };
+        for (const Panel& pn : panels) {
+            std::vector<float> ys = {pn.a, pn.b};
+            for (const auto& o : overBogie)
+                for (const float e : {o.first, o.second})
+                    if (e > pn.a + 0.02f && e < pn.b - 0.02f) {
+                        ys.push_back(e - 0.02f);
+                        ys.push_back(e + 0.02f);
+                    }
+            std::sort(ys.begin(), ys.end());
+            for (std::size_t i = 0; i + 1 < ys.size(); ++i) {
+                loft(bodyRing(ys[i]), bodyRing(ys[i + 1]), pn.lower, pn.band, pn.upper);
+                const float zs = std::min(sillAt(0.5f * (ys[i] + ys[i + 1])), zr(t76::kWinLow));
+                const float wb = hw * t76::kTumble;
+                quadN(P(-wb, ys[i], zs), P(wb, ys[i], zs), P(wb, ys[i + 1], zs),
+                      P(-wb, ys[i + 1], zs), t76::kSkirt, in);
+            }
+        }
+        // Gangway end walls.
+        if (C.cab != -1) cap(bodyRing(yLo), t76::kSkirt);
+        if (C.cab != +1) cap(bodyRing(yHi), t76::kSkirt);
+
+        // The cab: a long raked nose, the roof falling to a deep windscreen and the sides
+        // drawing in a little toward a rounded front, with the small side window just
+        // behind the screen.
+        if (C.cab != 0) {
+            const float base = C.cab == -1 ? bodyLo : bodyHi;
+            const float tip = C.cab == -1 ? yLo : yHi;
+            const float ts = tip < base ? -1.0f : 1.0f;
+            const glm::vec3 fdir = Y * ts;
+            const int N = 12;
+            auto station = [&](int i) {
+                const float u = static_cast<float>(i) / N;
+                const float y = base + (tip - base) * u;
+                const float wS = 1.0f - 0.16f * u * u;
+                const float roofZ = zRoof - (zRoof - zr(t76::kNoseTipZ + 0.35f)) *
+                                                std::pow(u, 1.7f);
+                return ring(y, wS, roofZ, sillAt(y));
+            };
+            std::vector<glm::vec3> prev = station(0);
+            for (int i = 1; i <= N; ++i) {
+                const std::vector<glm::vec3> cur = station(i);
+                const float u = (static_cast<float>(i) - 0.5f) / N;
+                for (std::size_t k = 0; k + 1 < cur.size(); ++k) {
+                    const glm::vec3 a = prev[k], b = prev[k + 1], c = cur[k + 1], d = cur[k];
+                    glm::vec3 nn = glm::cross(b - a, d - a);
+                    const float l = glm::length(nn);
+                    nn = l > 1e-9f ? nn / l : Z;
+                    const glm::vec3 cen = 0.25f * (a + b + c + d);
+                    if (glm::dot(nn, cen - in) < 0.0f) nn = -nn;
+                    const float locZ = glm::dot(cen - f.pos, Z);
+                    glm::vec3 col = t76::kBody;
+                    if (glm::dot(nn, fdir) > 0.35f && locZ > zr(1.55f))
+                        col = t76::kGlass; // windscreen
+                    else if ((k == 1 || k == 13) && u > 0.66f - 0.5f / N && u < 0.84f)
+                        col = t76::kGlass; // the cab side window
+                    else if (k >= 3 && k <= 11 && glm::dot(nn, fdir) < 0.35f)
+                        col = t76::kRoof;
+                    else if (k == 0 || k == 14)
+                        col = t76::kLower;
+                    quadN(a, b, c, d, col, in);
+                }
+                prev = cur;
+            }
+            {
+                glm::vec3 c(0.0f);
+                for (const glm::vec3& q : prev) c += q;
+                c /= static_cast<float>(prev.size());
+                for (std::size_t k = 0; k < prev.size(); ++k) {
+                    const glm::vec3& a = prev[k];
+                    const glm::vec3& b = prev[(k + 1) % prev.size()];
+                    const float za = glm::dot(0.5f * (a + b) - f.pos, Z);
+                    quadN(a, b, c, c, za > zr(1.6f) ? t76::kGlass : t76::kBody, in);
+                }
+            }
+            // The cab inside: its raised floor over the motor bogie, the desk across under the
+            // windscreen, and the back wall that shuts it off from the saloon. drivercam's eye
+            // sits between the desk and the wall.
+            {
+                const float back = tip - ts * (t76::kNoseLen + 0.80f);
+                const float yFl0 = std::min(tip, back), yFl1 = std::max(tip, back);
+                emitBox(X, Y, Z, P(0.0f, 0.5f * (yFl0 + yFl1), zr(t76::kCabFloor) - 0.03f),
+                        hw * 0.90f, 0.5f * (yFl1 - yFl0), 0.03f, t76::kSkirt);
+                emitBox(X, Y, Z, P(0.0f, tip - ts * (t76::kNoseLen - 0.75f), zr(2.02f)),
+                        hw * 0.86f, 0.42f, 0.16f, t76::kDesk);
+                emitBox(X, Y, Z, P(0.0f, tip - ts * (t76::kNoseLen - 1.05f), zr(1.62f)),
+                        hw * 0.86f, 0.30f, 0.26f, t76::kDesk);
+                emitBox(X, Y, Z, P(-ts * 0.35f, tip - ts * (t76::kNoseLen - 0.60f), zr(2.20f)),
+                        0.30f, 0.10f, 0.10f, t76::kScreen); // the driver's displays
+                cap(ring(back, 0.97f, zRoof - 0.06f, zr(t76::kCabFloor)), t76::kWall);
+            }
+            // Lamps: two low in the front, one high over the screen.
+            const float yl = tip - ts * 0.30f;
+            for (const float xh : {hw * 0.55f, -hw * 0.55f})
+                emitBox(X, Y, Z, P(xh, yl, zr(1.25f)), 0.15f, 0.08f, 0.06f, t76::kLight);
+            {
+                // On the skin, where the nose's roof line has come down to at that point,
+                // and not under it: from the cab it would be a lamp hanging in the screen.
+                const float u = 1.0f - 0.62f / t76::kNoseLen;
+                const float zSkin = zRoof - (zRoof - zr(t76::kNoseTipZ + 0.35f)) *
+                                                std::pow(u, 1.7f);
+                emitBox(X, Y, Z, P(0.0f, tip - ts * 0.62f, zSkin + 0.05f), 0.12f, 0.06f,
+                        0.05f, t76::kLight);
+            }
+            // Coupler and the skirt round it, and the obstacle deflector.
+            emitBox(X, Y, Z, P(0.0f, tip - ts * 0.35f, zr(0.78f)), hw * 0.80f, 0.40f, 0.28f,
+                    t76::kSkirt);
+            emitBox(X, Y, Z, P(0.0f, tip + ts * 0.18f, zr(1.02f)), 0.10f, 0.20f, 0.10f,
+                    t76::kCoupler);
+            emitBox(X, Y, Z, P(0.0f, tip + ts * 0.34f, zr(1.02f)), 0.30f, 0.05f, 0.16f,
+                    t76::kCoupler);
+        }
+
+        // Roof equipment: the air-conditioning unit every saloon car carries, the power
+        // car's radiators and its four exhausts, and BPa's pantograph lowered - it runs as a
+        // diesel here.
+        const float Lb = bodyHi - bodyLo, yMid = 0.5f * (bodyLo + bodyHi);
+        if (C.power) {
+            emitBox(X, Y, Z, P(0.0f, yMid, zRoof + 0.14f), rhw * 0.95f, 0.42f * Lb, 0.14f,
+                    t76::kEquip);
+            for (int i = 0; i < 4; ++i)
+                emitBox(X, Y, Z, P((i % 2 ? -1.0f : 1.0f) * 0.35f,
+                                   yMid + (i < 2 ? -0.25f : 0.25f) * Lb, zRoof + 0.36f),
+                        0.10f, 0.10f, 0.10f, t76::kGrille);
+            // Louvres along the upper sides.
+            for (const float sx : {-1.0f, 1.0f})
+                emitBox(X, Y, Z, P(sx * (hw + 0.005f), yMid, zr(t76::kCant - 0.35f)), 0.01f,
+                        0.30f * Lb, 0.20f, t76::kGrille);
+        } else {
+            const float yA = C.cab == 0 ? yMid : yMid - 0.15f * Lb * static_cast<float>(C.cab);
+            emitBox(X, Y, Z, P(0.0f, yA, zRoof + 0.13f), rhw * 0.85f, 1.9f, 0.15f,
+                    t76::kEquip);
+        }
+        if (C.pantograph) {
+            const float yp = yHi - 2.6f; // over the BMa end
+            emitBox(X, Y, Z, P(0.0f, yp, zRoof + 0.10f), 0.55f, 0.75f, 0.10f, t76::kEquip);
+            emitBox(X, Y, Z, P(0.0f, yp - 0.55f, zRoof + 0.26f), 0.05f, 1.05f, 0.04f,
+                    t76::kCoupler); // lower arm, folded
+            emitBox(X, Y, Z, P(0.0f, yp + 0.35f, zRoof + 0.32f), 0.04f, 1.15f, 0.03f,
+                    t76::kCoupler); // upper arm
+            emitBox(X, Y, Z, P(0.0f, yp + 1.45f, zRoof + 0.36f), 0.85f, 0.06f, 0.03f,
+                    t76::kSkirt);   // the pan head
+        }
+
+        // Underfloor: a FLIRT's low floor leaves little room, so most of its kit is on
+        // the roof. The cab cars carry a raft between their bogies.
+        if (C.cab != 0)
+            emitBox(X, Y, Z, P(0.0f, yMid + 0.1f * Lb * static_cast<float>(C.cab), zr(0.62f)),
+                    hw * 0.70f, 0.18f * Lb, 0.10f, t76::kEquip);
+    };
+
     const std::vector<VehicleFrame> sections = vehicle.bodySectionFrames();
+    const std::vector<float> halfLens = vehicle.bodySectionHalfLens();
     if (!sections.empty()) {
-        const float halfLen =
-            0.5f * vehicle.length() / static_cast<float>(sections.size());
+        // Every body so far is divided evenly, and the gangways below are drawn with one
+        // length for all of them; a multiple unit's cars each take their own.
+        const float halfLen = halfLens[0];
         for (std::size_t i = 0; i < sections.size(); ++i) {
-            if (vehicle.bodyStyle() == BodyClass93) {
+            if (vehicle.bodyStyle() == BodyType76 && sections.size() == 6) {
+                emitType76(sections[i], halfLens[i], static_cast<int>(i));
+            } else if (vehicle.bodyStyle() == BodyClass93) {
                 emitClass93(sections[i], halfLen, i == 0, i == 1); // WC in the 2nd car
             } else if (vehicle.bodyStyle() == BodyDi4) {
                 emitDi4(sections[i], halfLen);
@@ -2654,6 +3007,44 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                 emitBox(sections[i].right, sections[i].tangent, sections[i].up,
                         centre, 0.5f * vehicle.width(), halfLen,
                         kUnderframeHalfHeight, kUnderframeCol);
+            }
+        }
+
+        // The Type 76's bellows, between every pair of its six cars - XDe included, which
+        // has a corridor through it. Each car's end is its own: the cars are not one length.
+        if (vehicle.bodyStyle() == BodyType76 && sections.size() == halfLens.size()) {
+            const float z0b = wheelset::kRailTopZ + t76::kFloor;
+            const float zCb = wheelset::kRailTopZ + t76::kWinHigh + 0.10f;
+            const float bw = t76::kHalfWidth * 0.66f;
+            auto gwEnd = [&](const VehicleFrame& f, float h, float sign) {
+                const glm::vec3 e = f.pos + f.tangent * (sign * (h - t76::kGangGap));
+                return std::array<glm::vec3, 4>{
+                    e + f.right * bw + f.up * z0b, e + f.right * bw + f.up * zCb,
+                    e - f.right * bw + f.up * zCb, e - f.right * bw + f.up * z0b};
+            };
+            for (std::size_t i = 0; i + 1 < sections.size(); ++i) {
+                const std::array<glm::vec3, 4> A = gwEnd(sections[i], halfLens[i], +1.0f);
+                const std::array<glm::vec3, 4> B =
+                    gwEnd(sections[i + 1], halfLens[i + 1], -1.0f);
+                glm::vec3 mid(0.0f);
+                for (int k = 0; k < 4; ++k) mid += A[k] + B[k];
+                mid *= 0.125f;
+                const int M = 6;
+                std::array<glm::vec3, 4> prev = A;
+                for (int j = 1; j <= M; ++j) {
+                    const float t = static_cast<float>(j) / M;
+                    std::array<glm::vec3, 4> cur;
+                    glm::vec3 cen(0.0f);
+                    for (int k = 0; k < 4; ++k) cen += glm::mix(A[k], B[k], t);
+                    cen *= 0.25f;
+                    const float sc = (j % 2 == 0 || j == M) ? 1.0f : 0.86f;
+                    for (int k = 0; k < 4; ++k)
+                        cur[k] = cen + (glm::mix(A[k], B[k], t) - cen) * sc;
+                    for (int k = 0; k < 4; ++k)
+                        quadN(prev[k], prev[(k + 1) % 4], cur[(k + 1) % 4], cur[k],
+                              t76::kSkirt, mid);
+                    prev = cur;
+                }
             }
         }
 
@@ -2831,7 +3222,7 @@ void VehicleMesh::sortGlass() {
                 return std::abs(c.x - g.x) < 0.005f && std::abs(c.y - g.y) < 0.005f &&
                        std::abs(c.z - g.z) < 0.005f;
             };
-            return eq(c93::kBand) || eq(c93::kGlass) || eq(di4::kGlass);
+            return eq(c93::kBand) || eq(c93::kGlass) || eq(di4::kGlass) || eq(t76::kGlass);
         };
         std::vector<std::uint32_t> opaque, glass;
         opaque.reserve(indices_.size());
@@ -2869,6 +3260,7 @@ int cabsOn(const Vehicle& v) {
     if (v.cabCount() == 0) return 0; // a carriage: no driving position at all
     if (v.bodyStyle() == BodyDi4 || v.bodyStyle() == BodyCD312) return 2;
     if (v.bodyStyle() == BodyClass93 && v.bodySectionFrames().size() >= 2) return 2;
+    if (v.bodyStyle() == BodyType76 && v.bodySectionFrames().size() == 6) return 2;
     return 0;
 }
 } // namespace
@@ -2941,6 +3333,22 @@ bool eyePose(const Consist& c, int position, glm::vec3& eye, glm::vec3& forward)
         const float sy = yB + so * 1.25f - so * cd312::kSeatBack;
         eye = f.pos + f.tangent * sy + f.right * (-so * 0.02f) +
               f.up * (zFl + cd312::kEyeAboveFloor);
+        forward = f.tangent * so;
+        return true;
+    }
+
+    if (v.bodyStyle() == BodyType76 && sections.size() == 6) {
+        // Cab 0 is BMb's, at the -y end of the first car; cab 1 is BMa's, at the +y end of
+        // the last. The seat is a little behind the windscreen's foot, on the raised cab
+        // floor over the motor bogie, as emitType76 places the nose.
+        const std::vector<float> half = v.bodySectionHalfLens();
+        const int car = position == 0 ? 0 : 5;
+        const VehicleFrame& f = sections[static_cast<std::size_t>(car)];
+        const float so = position == 0 ? -1.0f : 1.0f;
+        const float tip = so * half[static_cast<std::size_t>(car)];
+        const float sy = tip - so * (t76::kNoseLen + 0.15f);
+        eye = f.pos + f.tangent * sy + f.right * (-so * 0.35f) +
+              f.up * (wheelset::kRailTopZ + 2.65f);
         forward = f.tangent * so;
         return true;
     }
