@@ -70,6 +70,9 @@ constexpr float kGravity = 9.81f;
 constexpr float kRailAdhesionMu = 0.25f;
 // Tighter than about a 300 m radius before a curve can squeal at all.
 constexpr float kSquealCurvature = 1.0f / 300.0f;
+// What of the disc squeal reaches the cab of the train making it. A modern unit's cab is
+// sealed and insulated, and the discs are under the floor at the far end of the car.
+constexpr float kDiscInsideGain = 0.12f;
 // Rolling noise runs with the 30*log10(v) law measured on real track, which is an
 // amplitude proportional to v^1.5. Referenced to a brisk line speed so that is ~1.
 constexpr float kRollRefSpeed = 33.0f; // m/s (~120 km/h)
@@ -166,6 +169,8 @@ void Audio::render(float* out, int n) {
     const float rollLoadT = rollAxleLoad_.load(std::memory_order_relaxed);
     const float rollWorkT = rollWork_.load(std::memory_order_relaxed);
     const float brakeWorkT = brakeWork_.load(std::memory_order_relaxed);
+    const float discT = discSqueal_.load(std::memory_order_relaxed);
+    const float discInsT = insideCab_.load(std::memory_order_relaxed) ? kDiscInsideGain : 1.0f;
     const float flangeT = railborne ? flangeLoad_.load(std::memory_order_relaxed) : 0.0f;
     const float rollGainT = rollGain_.load(std::memory_order_relaxed);
     const unsigned impacts = impacts_.load(std::memory_order_relaxed);
@@ -506,6 +511,8 @@ void Audio::render(float* out, int n) {
         rollLoadEnv_ += (rollLoadT - rollLoadEnv_) * 0.0008f;
         rollWorkEnv_ += (rollWorkT - rollWorkEnv_) * 0.0008f;
         brakeWorkEnv_ += (brakeWorkT - brakeWorkEnv_) * 0.0010f;
+        discEnv_ += (discT - discEnv_) * 0.0010f;
+        discIns_ += (discInsT - discIns_) * 0.0005f;
         flangeEnv_ += (flangeT - flangeEnv_) * 0.0008f;
         rollGainEnv_ += (rollGainT - rollGainEnv_) * 0.0010f;
 
@@ -660,6 +667,35 @@ void Audio::render(float* out, int n) {
                        std::clamp((vv - 0.3f) / 4.0f, 0.0f, 1.0f) * rollGainEnv_;
         }
 
+        // Squealing discs: the pads ringing the disc, a near-tone up in the 3 kHz region
+        // with its own overtone, drifting as the pads heat and fluttering with the
+        // stick-slip. Loudest at the bottom of a stop, which is when a blended brake has
+        // handed everything to the pads and the train is slow enough for the ring to
+        // build; it thins out at speed. Heard outside: from the cab the bodyshell takes
+        // most of it, which is what a well-insulated unit is for.
+        float disc = 0.0f;
+        if (discEnv_ > 1e-3f && vv > 0.15f) {
+            rng_ = rng_ * 1664525u + 1013904223u;
+            const float dn = static_cast<float>(rng_ >> 8) / 8388608.0f - 1.0f;
+            discWalk_ = std::clamp(discWalk_ + dn * 0.0004f, -1.0f, 1.0f);
+            discWob_ += 0.31f / fs;
+            if (discWob_ > 1.0f) discWob_ -= 1.0f;
+            const float f0 = 3150.0f + 170.0f * std::sin(2.0f * kPi * discWob_) +
+                             120.0f * discWalk_;
+            discPh1_ += f0 / fs;
+            if (discPh1_ > 1.0f) discPh1_ -= 1.0f;
+            discPh2_ += 2.03f * f0 / fs;
+            if (discPh2_ > 1.0f) discPh2_ -= 1.0f;
+            discFl_ += 13.0f / fs;
+            if (discFl_ > 1.0f) discFl_ -= 1.0f;
+            const float tone = std::sin(2.0f * kPi * discPh1_) * 0.72f +
+                               std::sin(2.0f * kPi * discPh2_) * 0.22f + dn * 0.06f;
+            const float am = 0.62f + 0.38f * std::sin(2.0f * kPi * discFl_);
+            const float slow = std::clamp((vv - 0.15f) / 1.2f, 0.0f, 1.0f) *
+                               (1.0f - 0.75f * std::clamp((vv - 6.0f) / 20.0f, 0.0f, 1.0f));
+            disc = tone * am * discEnv_ * slow * rollGainEnv_ * discIns_;
+        }
+
         // The four wheel/rail voices are one group and are mixed as one: their balance
         // against each other is what makes the sound, so a level change scales all four
         // together rather than picking at one of them. This is a quarter down on where
@@ -669,7 +705,7 @@ void Audio::render(float* out, int n) {
                         : (hiss * 1.2f + click * 0.9f) * envEnv_ + engine * 0.30f +
                               comp * 0.22f + grid * 0.45f + bell * 0.34f + bang * 0.55f +
                               (roll * 0.45f + joints * 0.30f + squeal * 0.16f +
-                               brakeRub * 0.16f) * rollMix;
+                               brakeRub * 0.16f + disc * 0.30f) * rollMix;
         s = std::clamp(s, -1.0f, 1.0f);
         out[i] = s;
     }
@@ -682,6 +718,7 @@ void Audio::setRolling(const RollingSample& r) {
     rollAxleLoad_.store(std::max(r.axleLoadN, 0.0f), std::memory_order_relaxed);
     rollWork_.store(std::clamp(r.work, 0.0f, 1.0f), std::memory_order_relaxed);
     brakeWork_.store(std::clamp(r.brake, 0.0f, 1.0f), std::memory_order_relaxed);
+    discSqueal_.store(on ? std::clamp(r.squeal, 0.0f, 1.0f) : 0.0f, std::memory_order_relaxed);
     // The squeal is gated on the way in, not in the synth: off the rails, or on track
     // that is not being worked across, there is nothing for a flange to grind on.
     flangeLoad_.store(on ? std::clamp(r.flange, 0.0f, 1.0f) : 0.0f,
@@ -774,6 +811,10 @@ void Audio::update(const Consist& sounded, float /*dt*/, float brakeGain,
     const float adhesion = std::max(kRailAdhesionMu * weight, 1.0f);
     r.work = (std::fabs(v.tractiveEffort()) + v.rollingResistance(r.speed)) / adhesion;
     r.brake = v.brakeForce() / adhesion;
+    // The pads alone, on stock whose discs squeal: a quarter of the adhesion is a firm
+    // service application, and that is full voice.
+    r.squeal = v.brakeSqueal() *
+               std::clamp(v.frictionBrakeForce() / adhesion / 0.25f, 0.0f, 1.0f);
 
     // Work across the rail: the lateral acceleration the cant does *not* take out is
     // what the flange has to. On a well canted curve at line speed that is near zero
@@ -1106,7 +1147,7 @@ void Audio::dumpRollingTest(const std::string& wavPath) {
     // of a mixture that could hide any of them. `points` is how many turnouts are run
     // over during the segment, spread evenly through it.
     struct Seg { float dur, speed, axleTonnes, work, brake, flange; int points;
-                 const char* what; };
+                 const char* what; float squeal = 0.0f; bool inside = false; };
     const Seg segs[] = {
         {1.5f, 0.0f, 11.5f, 0.0f, 0.0f, 0.0f, 0, "standing"},
         {6.0f, 6.0f, 11.5f, 0.5f, 0.0f, 0.0f, 1, "moving off, over the points"},
@@ -1122,6 +1163,14 @@ void Audio::dumpRollingTest(const std::string& wavPath) {
         {5.0f, 20.0f, 11.5f, 0.0f, 0.8f, 0.0f, 0, "braking (discs: very little to hear)"},
         {5.0f, 6.0f, 11.5f, 0.0f, 0.9f, 0.0f, 0, "nearly stopped"},
         {2.5f, 0.0f, 11.5f, 0.0f, 0.0f, 0.0f, 0, "stood"},
+        // A Type 76, whose discs squeal: the same stop heard from the platform and then
+        // from its own cab, where the insulation takes most of it.
+        {4.0f, 10.0f, 16.0f, 0.0f, 0.5f, 0.0f, 0, "Type 76 braking, from the platform", 0.8f},
+        {4.0f, 2.5f, 16.0f, 0.0f, 0.6f, 0.0f, 0, "...the last few km/h", 1.0f},
+        {2.0f, 0.0f, 16.0f, 0.0f, 0.0f, 0.0f, 0, "stood"},
+        {4.0f, 10.0f, 16.0f, 0.0f, 0.5f, 0.0f, 0, "the same stop, from its cab", 0.8f, true},
+        {4.0f, 2.5f, 16.0f, 0.0f, 0.6f, 0.0f, 0, "...the last few km/h", 1.0f, true},
+        {2.5f, 0.0f, 16.0f, 0.0f, 0.0f, 0.0f, 0, "stood", 0.0f, true},
     };
     std::vector<std::int16_t> pcm;
     for (const Seg& s : segs) {
@@ -1130,6 +1179,8 @@ void Audio::dumpRollingTest(const std::string& wavPath) {
         r.work = s.work;
         r.brake = s.brake;
         r.flange = s.flange;
+        r.squeal = s.squeal;
+        a.setInsideCab(s.inside);
         const int total = static_cast<int>(s.dur * fs);
         // When each axle reaches each turnout: the nose axle first, the rest as far
         // behind it as they are down the train, which at 33 m/s is a bogie's two 76 ms

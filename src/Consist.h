@@ -188,6 +188,17 @@ public:
     float bpRate() const;                   // loudest airflow over the train, for sound
     float tractiveEffort() const { return tractiveEffort_; }
     float brakeForce() const { return brakeForce_; }
+    // The pads' share, over every set, and how loudly the train's brakes squeal.
+    float frictionBrakeForce() const {
+        float f = 0.0f;
+        for (const Vehicle& u : units_) f += u.frictionBrakeForce();
+        return f;
+    }
+    float brakeSqueal() const {
+        float q = 0.0f;
+        for (const Vehicle& u : units_) q = std::max(q, u.brakeSqueal());
+        return q;
+    }
     unsigned railImpacts() const;           // every wheel of every set
     int axleCount() const;
     bool compressorRunning() const;         // any set's compressor pumping

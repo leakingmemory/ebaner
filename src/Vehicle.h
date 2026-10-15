@@ -226,6 +226,9 @@ struct VehicleSpec {
     // charge to give. Zero for everything without one.
     float batteryJ = 0.0f;      // J, capacity
     float batteryBoostW = 0.0f; // W, on top of powerW
+    // How loudly the friction brake squeals, 0..1. Disc brakes on some stock ring
+    // audibly whenever the pads are on; most is quiet enough to say nothing.
+    float brakeSqueal = 0.0f;
 };
 
 // A formation: the same machine, with something coupled behind it. Written as a copy so
@@ -366,7 +369,10 @@ inline constexpr VehicleSpec kVehicleSpecs[] = {
      .category = CatTrain,
      .gear = &kT76Gear,
      .batteryJ = 112.0f * 3.6e6f, // 112 kWh
-     .batteryBoostW = 250000.0f},
+     .batteryBoostW = 250000.0f,
+     // Its disc brakes squeal, loudly, whenever the pads are on: plain to anyone on the
+     // platform, and little of it heard inside.
+     .brakeSqueal = 1.0f},
     // The standard rake, as it is marshalled: cafe second, 2nd class third and fourth,
     // and 1st class on the tail.
     hauling(kDi4Spec, "NSB Di 4 + 5 (cafe 2nd)", "BC5-3,FR5-1,B5-3,B5-5,A5-1"),
@@ -978,6 +984,10 @@ public:
     // and the rolling-noise synth needs the force at the friction surfaces, not the
     // pressure behind them.
     float brakeForce() const { return brakeForce_; }
+    // The friction brake's share of it alone - the pads or shoes, without the electric or
+    // engine brake - which is what squeals.
+    float frictionBrakeForce() const { return frictionBrake_; }
+    float brakeSqueal() const { return brakeSqueal_; }
     // Wheels crossing turnouts, counted since the vehicle was created. Modern track is
     // welded and silent between them, so the points are where the gaps are: every wheel
     // drops across the gap in the running rail at the frog, and a bogie's pair of them
@@ -1180,6 +1190,8 @@ private:
     float shiftTimer_ = 0.0f;           // s remaining in an upshift dwell (TE cut)
     float tractiveEffort_ = 0.0f;       // N applied this step (+ in +s), for the HUD
     float brakeForce_ = 0.0f;           // N of friction brake this step, for the sound
+    float frictionBrake_ = 0.0f;        // N of it from the pads alone
+    float brakeSqueal_ = 0.0f;
     unsigned railImpacts_ = 0;          // axles that have crossed a turnout, for the sound
     bool compOn_ = false;               // compressor state (cut-in/cut-out governor)
     float engBrake_ = 0.0f;             // engine brake this step (N at the rail)

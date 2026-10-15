@@ -5692,6 +5692,9 @@ int main(int argc, char** argv) {
                                                0.0f, 1.0f));
             }
             audio.setCrossingBell(bellGain);
+            // In the cab of the train being heard, its insulation is between the listener
+            // and its running gear.
+            audio.setInsideCab(g_driverPos >= 0 && sounded == vehicle);
             audio.update(*sounded, simDt, distGain, voices, nGain, rollGain);
             // refresh, not build: the trains have moved but their composition has not, so
             // the index buffer on the GPU still describes this geometry and only the

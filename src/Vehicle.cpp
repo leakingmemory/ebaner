@@ -267,6 +267,7 @@ Vehicle::Vehicle(const TrackPath* path, const VehicleSpec& spec, float s,
       batteryCapJ_(spec.batteryJ),
       batteryBoostW_(spec.batteryBoostW),
       batteryJ_(spec.batteryJ), // charged
+      brakeSqueal_(spec.brakeSqueal),
       bodyStyle_(spec.body),
       name_(spec.name),
       physV_(initialSpeed),
@@ -1309,6 +1310,7 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
     // branch below sets this, so clear it or a derailed vehicle reports the last
     // brake force it had for ever.
     brakeForce_ = 0.0f;
+    frictionBrake_ = 0.0f;
 
     // Engines crank up to / spin down from idle, independent of motion; a running
     // compressor loads its engine down a little (compActive_ is last frame's value).
@@ -1595,6 +1597,7 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
     // shoes on every wheel do; at the forces it makes here that limit is never reached,
     // and saying so is better than code that pretends the difference does not exist.
     brakeForce_ = std::min(bf + dynBrake_ + engBrake_, kAdhesionMu * mass_ * kG);
+    frictionBrake_ = std::min(bf, kAdhesionMu * mass_ * kG);
 
     UnitStep out;
     // Back into the physical frame for the train to add up.
