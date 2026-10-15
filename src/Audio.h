@@ -30,6 +30,7 @@ struct RollingSample {
     float work = 0.0f;       // [0,1] traction + running resistance, vs adhesion
     float brake = 0.0f;      // [0,1] friction-brake force, vs adhesion
     float squeal = 0.0f;     // [0,1] how hard squealing discs are being worked
+    float wheelR = 0.46f;    // m, which sets how fast the discs on the axles turn
     float flange = 0.0f;     // [0,1] lateral acceleration the cant does not take out
     float gain = 0.0f;       // [0,1] camera distance attenuation
     bool railborne = true;   // false when derailed: no rail to roar on
@@ -175,6 +176,7 @@ private:
     std::atomic<float> rollWork_{0.0f};     // traction + running resistance, [0,1]
     std::atomic<float> brakeWork_{0.0f};    // friction-brake force / adhesion cap, [0,1]
     std::atomic<float> discSqueal_{0.0f};   // squealing discs, [0,1]
+    std::atomic<float> discWheelR_{0.46f};  // m
     std::atomic<bool> insideCab_{false};    // listening from the sounded train's cab
     std::atomic<float> flangeLoad_{0.0f};   // unbalanced lateral accel / g, [0,1]
     std::atomic<unsigned> impacts_{0};      // wheels over a frog, counted since the start
@@ -260,8 +262,9 @@ private:
     float gritLp_ = 0.0f, gritAm_ = 0.0f;        // working-hard edge + its modulation
     float brkLow_ = 0.0f, brkBand_ = 0.0f;       // the quiet low brake rumble
     float discEnv_ = 0.0f, discIns_ = 1.0f;      // disc squeal level, and the insulation
-    float discPh1_ = 0.0f, discPh2_ = 0.0f, discWob_ = 0.0f, discFl_ = 0.0f;
-    float discWalk_ = 0.0f;
+    float discWob_ = 0.0f, discWalk_ = 0.0f, discRot_ = 0.0f;
+    float discPh_[3] = {}, discHoleG_[3] = {1.0f, 1.0f, 1.0f};
+    int discHole_[3] = {};
     unsigned lastImpacts_ = 0;                   // impacts already sounded
     int impactQueue_ = 0;                        // knocks still to sound
     float impactWait_ = 0.0f;                    // s until the next of them

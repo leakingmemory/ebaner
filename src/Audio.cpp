@@ -170,6 +170,7 @@ void Audio::render(float* out, int n) {
     const float rollWorkT = rollWork_.load(std::memory_order_relaxed);
     const float brakeWorkT = brakeWork_.load(std::memory_order_relaxed);
     const float discT = discSqueal_.load(std::memory_order_relaxed);
+    const float discWheelRT = discWheelR_.load(std::memory_order_relaxed);
     const float discInsT = insideCab_.load(std::memory_order_relaxed) ? kDiscInsideGain : 1.0f;
     const float flangeT = railborne ? flangeLoad_.load(std::memory_order_relaxed) : 0.0f;
     const float rollGainT = rollGain_.load(std::memory_order_relaxed);
@@ -667,33 +668,53 @@ void Audio::render(float* out, int n) {
                        std::clamp((vv - 0.3f) / 4.0f, 0.0f, 1.0f) * rollGainEnv_;
         }
 
-        // Squealing discs: the pads ringing the disc, a near-tone up in the 3 kHz region
-        // with its own overtone, drifting as the pads heat and fluttering with the
-        // stick-slip. Loudest at the bottom of a stop, which is when a blended brake has
-        // handed everything to the pads and the train is slow enough for the ring to
-        // build; it thins out at speed. Heard outside: from the cab the bodyshell takes
-        // most of it, which is what a well-insulated unit is for.
+        // Squealing discs: the pads ringing the discs, high - around 6 kHz - and not one
+        // clean tone but three, a disc each a little apart in pitch so they beat against
+        // each other, drifting as the pads heat. And not steady: a disc is ventilated, so
+        // the pads ride over its holes, and each hole passing breaks the ring and lets it
+        // catch again. That is tied to the disc turning, so at walking pace it is a slow
+        // chatter of a few pulses a second and at speed a buzz in the tone; every hole
+        // catches a little differently, and the disc's run-out swells it once a turn.
+        // Loudest at the bottom of a stop, which is when a blended brake has handed
+        // everything to the pads. Heard outside: from the cab the bodyshell takes most
+        // of it, which is what a well-insulated unit is for.
         float disc = 0.0f;
         if (discEnv_ > 1e-3f && vv > 0.15f) {
             rng_ = rng_ * 1664525u + 1013904223u;
             const float dn = static_cast<float>(rng_ >> 8) / 8388608.0f - 1.0f;
             discWalk_ = std::clamp(discWalk_ + dn * 0.0004f, -1.0f, 1.0f);
-            discWob_ += 0.31f / fs;
+            discWob_ += 0.23f / fs;
             if (discWob_ > 1.0f) discWob_ -= 1.0f;
-            const float f0 = 3150.0f + 170.0f * std::sin(2.0f * kPi * discWob_) +
-                             120.0f * discWalk_;
-            discPh1_ += f0 / fs;
-            if (discPh1_ > 1.0f) discPh1_ -= 1.0f;
-            discPh2_ += 2.03f * f0 / fs;
-            if (discPh2_ > 1.0f) discPh2_ -= 1.0f;
-            discFl_ += 13.0f / fs;
-            if (discFl_ > 1.0f) discFl_ -= 1.0f;
-            const float tone = std::sin(2.0f * kPi * discPh1_) * 0.72f +
-                               std::sin(2.0f * kPi * discPh2_) * 0.22f + dn * 0.06f;
-            const float am = 0.62f + 0.38f * std::sin(2.0f * kPi * discFl_);
+            const float f0 = 6100.0f + 260.0f * std::sin(2.0f * kPi * discWob_) +
+                             180.0f * discWalk_;
+            // Turns of the disc, which is on the axle and turns with the wheel.
+            const float wr = std::max(0.2f, discWheelRT);
+            discRot_ += vv / (2.0f * kPi * wr) / fs;
+            if (discRot_ > 1000.0f) discRot_ -= 1000.0f;
+            constexpr float kDetune[3] = {1.0f, 1.043f, 0.962f};
+            constexpr float kVents = 32.0f; // cooling holes round a disc's face
+            float ring = 0.0f;
+            for (int k = 0; k < 3; ++k) {
+                discPh_[k] += f0 * kDetune[k] / fs;
+                if (discPh_[k] > 1.0f) discPh_[k] -= 1.0f;
+                const float rot = discRot_ + 0.37f * static_cast<float>(k); // each its own
+                const float holes = rot * kVents;
+                const int hole = static_cast<int>(holes);
+                if (hole != discHole_[k]) { // a new hole under the pad, catching its own way
+                    discHole_[k] = hole;
+                    rng_ = rng_ * 1664525u + 1013904223u;
+                    discHoleG_[k] = 0.45f + 0.55f * static_cast<float>(rng_ >> 8) / 16777216.0f;
+                }
+                const float h = holes - static_cast<float>(hole) - 0.5f;
+                const float catchAmp = 0.25f + 0.75f * discHoleG_[k] * std::exp(-h * h / 0.05f);
+                const float runout = 0.65f + 0.35f * std::sin(2.0f * kPi * rot);
+                ring += (std::sin(2.0f * kPi * discPh_[k]) +
+                         0.12f * std::sin(4.0f * kPi * discPh_[k])) *
+                        catchAmp * runout;
+            }
             const float slow = std::clamp((vv - 0.15f) / 1.2f, 0.0f, 1.0f) *
                                (1.0f - 0.75f * std::clamp((vv - 6.0f) / 20.0f, 0.0f, 1.0f));
-            disc = tone * am * discEnv_ * slow * rollGainEnv_ * discIns_;
+            disc = (ring * 0.50f + dn * 0.04f) * discEnv_ * slow * rollGainEnv_ * discIns_;
         }
 
         // The four wheel/rail voices are one group and are mixed as one: their balance
@@ -705,7 +726,7 @@ void Audio::render(float* out, int n) {
                         : (hiss * 1.2f + click * 0.9f) * envEnv_ + engine * 0.30f +
                               comp * 0.22f + grid * 0.45f + bell * 0.34f + bang * 0.55f +
                               (roll * 0.45f + joints * 0.30f + squeal * 0.16f +
-                               brakeRub * 0.16f + disc * 0.30f) * rollMix;
+                               brakeRub * 0.16f + disc * 0.40f) * rollMix;
         s = std::clamp(s, -1.0f, 1.0f);
         out[i] = s;
     }
@@ -719,6 +740,7 @@ void Audio::setRolling(const RollingSample& r) {
     rollWork_.store(std::clamp(r.work, 0.0f, 1.0f), std::memory_order_relaxed);
     brakeWork_.store(std::clamp(r.brake, 0.0f, 1.0f), std::memory_order_relaxed);
     discSqueal_.store(on ? std::clamp(r.squeal, 0.0f, 1.0f) : 0.0f, std::memory_order_relaxed);
+    discWheelR_.store(r.wheelR, std::memory_order_relaxed);
     // The squeal is gated on the way in, not in the synth: off the rails, or on track
     // that is not being worked across, there is nothing for a flange to grind on.
     flangeLoad_.store(on ? std::clamp(r.flange, 0.0f, 1.0f) : 0.0f,
@@ -813,6 +835,7 @@ void Audio::update(const Consist& sounded, float /*dt*/, float brakeGain,
     r.brake = v.brakeForce() / adhesion;
     // The pads alone, on stock whose discs squeal: a quarter of the adhesion is a firm
     // service application, and that is full voice.
+    r.wheelR = v.lead().wheelRadius();
     r.squeal = v.brakeSqueal() *
                std::clamp(v.frictionBrakeForce() / adhesion / 0.25f, 0.0f, 1.0f);
 
