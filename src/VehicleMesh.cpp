@@ -486,6 +486,252 @@ inline constexpr Car kCars[6] = {
      {{0.74f, 2.36f}, {4.91f, 6.51f}, {6.96f, 8.56f}, {9.00f, 10.62f}, {13.22f, 14.83f},
       {18.90f, 19.43f}}, 6},
 };
+
+// The interiors, from the Norske Tog seat maps, one per car in the order above. Positions
+// are in the same frame as the car table - metres from the car's BMb-facing end along it,
+// and across it toward +x - measured off the maps with each one's length scale fixed by
+// matching its EXIT markers to the doors in the car diagrams, and its width by its floor.
+// Three of the maps do not fit the car they are named for: the one called BPb is BPa's
+// 18.3 m and fits its doors as drawn, the one called BPa is BPb's 21.4 m and the one for
+// BC only fit their doors turned end for end, which is how they are taken here.
+//
+// The floor is high over the bogies and low between them; `lowFrom`..`lowTo` is the low
+// floor, which runs through the doors, and the rest of the car is the high one.
+const glm::vec3 kLining(0.80f, 0.80f, 0.78f);  // walls inside
+const glm::vec3 kCeiling(0.90f, 0.90f, 0.90f);
+const glm::vec3 kFloorIn(0.30f, 0.30f, 0.32f);
+const glm::vec3 kStepEdge(0.95f, 0.75f, 0.15f); // the yellow edge on each step
+const glm::vec3 kSeat(0.20f, 0.22f, 0.28f);    // upholstery
+const glm::vec3 kSeatPri(0.16f, 0.32f, 0.62f); // priority seats, blue on the maps
+const glm::vec3 kSeatShell(0.55f, 0.56f, 0.58f);
+const glm::vec3 kTable(0.62f, 0.60f, 0.56f);
+const glm::vec3 kMetal(0.58f, 0.59f, 0.61f);   // racks, poles, frames
+const glm::vec3 kModule(0.74f, 0.74f, 0.72f);  // WCs and cabinets
+const glm::vec3 kLamp(0.97f, 0.97f, 0.92f);    // ceiling light strips
+constexpr float kHighFloor = 1.18f;
+constexpr float kCeilingZ = 2.95f + kFloor;     // over the low floor
+
+enum FittingKind { FitTable, FitRack, FitModule, FitScreen, FitTipUp, FitFold };
+struct Seat { float x, y; int face, kind; };      // face: +1 toward +y; kind 1 = priority
+struct Fitting { float x0, x1, y0, y1; int kind; };
+struct Interior {
+    float lowFrom, lowTo;
+    const Seat* seats;
+    int seatCount;
+    const Fitting* fittings;
+    int fittingCount;
+};
+// GENERATED from the Norske Tog seat maps (see the comment above Interior).
+inline constexpr Seat kBMbSeats[] = {
+    {7.08f, -0.99f, 1, 0}, {7.08f, -0.59f, 1, 0}, {7.08f, 0.59f, 1, 0},
+    {7.08f, 0.99f, 1, 0}, {8.42f, -0.99f, -1, 0}, {8.42f, -0.59f, -1, 0},
+    {8.42f, 0.59f, -1, 0}, {8.42f, 0.99f, -1, 0}, {11.46f, -1.01f, 1, 1},
+    {11.46f, -0.57f, 1, 1}, {11.50f, 0.58f, 1, 1}, {11.50f, 0.98f, 1, 1},
+    {12.46f, -0.99f, 1, 0}, {12.46f, -0.59f, 1, 0}, {12.46f, 0.58f, 1, 0},
+    {12.46f, 0.98f, 1, 0}, {13.42f, -0.99f, 1, 0}, {13.42f, -0.59f, 1, 0},
+    {13.42f, 0.58f, 1, 0}, {13.42f, 0.98f, 1, 0}, {14.73f, -0.99f, -1, 0},
+    {14.73f, -0.59f, -1, 0}, {14.73f, 0.58f, -1, 0}, {14.73f, 0.98f, -1, 0},
+    {15.69f, -0.99f, -1, 0}, {15.69f, -0.59f, -1, 0}, {15.72f, 0.58f, -1, 1},
+    {15.72f, 0.98f, -1, 1}, {16.66f, -0.99f, -1, 0}, {16.66f, -0.59f, -1, 0},
+    {19.81f, -0.99f, 1, 0}, {19.81f, -0.59f, 1, 0}, {19.81f, 0.59f, 1, 0},
+    {19.81f, 0.99f, 1, 0}, {21.07f, -0.99f, -1, 0}, {21.07f, -0.59f, -1, 0},
+    {21.07f, 0.59f, -1, 0}, {21.07f, 0.99f, -1, 0},
+};
+inline constexpr Fitting kBMbFittings[] = {
+    {3.15f, 3.63f, 0.08f, 0.52f, FitTipUp},
+    {3.23f, 6.60f, -1.41f, -0.40f, FitModule},
+    {3.24f, 6.61f, 0.39f, 1.40f, FitModule},
+    {7.50f, 7.83f, 0.34f, 1.32f, FitTable},
+    {7.50f, 7.83f, -1.34f, -0.36f, FitTable},
+    {8.72f, 8.79f, -1.41f, -0.29f, FitScreen},
+    {8.73f, 8.78f, 0.30f, 1.37f, FitScreen},
+    {8.85f, 9.24f, -0.97f, -0.63f, FitTipUp},
+    {8.85f, 9.24f, 0.62f, 0.95f, FitTipUp},
+    {10.50f, 10.89f, -0.97f, -0.63f, FitTipUp},
+    {10.93f, 11.00f, -1.41f, -0.54f, FitScreen},
+    {10.94f, 10.99f, 0.57f, 1.37f, FitScreen},
+    {13.88f, 14.21f, 0.34f, 1.32f, FitTable},
+    {13.88f, 14.21f, -1.34f, -0.36f, FitTable},
+    {16.24f, 17.10f, 0.54f, 1.33f, FitRack},
+    {17.09f, 17.16f, -1.41f, -0.55f, FitScreen},
+    {17.10f, 17.15f, 0.57f, 1.37f, FitScreen},
+    {17.21f, 17.60f, -0.97f, -0.63f, FitTipUp},
+    {18.86f, 19.25f, -0.97f, -0.63f, FitTipUp},
+    {18.86f, 19.25f, 0.62f, 0.95f, FitTipUp},
+    {19.30f, 19.36f, -1.41f, -0.29f, FitScreen},
+    {19.31f, 19.35f, 0.30f, 1.37f, FitScreen},
+    {20.31f, 20.64f, 0.34f, 1.32f, FitTable},
+    {20.31f, 20.64f, -1.34f, -0.36f, FitTable},
+};
+inline constexpr Seat kBPbSeats[] = {
+    {5.31f, -0.98f, 1, 0}, {5.31f, -0.59f, 1, 0}, {5.33f, 0.59f, 1, 1},
+    {5.33f, 1.02f, 1, 0}, {6.27f, -0.98f, 1, 1}, {6.27f, -0.59f, 1, 1},
+    {6.59f, 0.62f, -1, 0}, {6.59f, 1.02f, -1, 0}, {7.24f, -0.98f, 1, 0},
+    {7.24f, -0.59f, 1, 0}, {7.57f, 0.62f, -1, 0}, {7.57f, 1.02f, -1, 0},
+    {8.23f, -0.98f, 1, 0}, {8.23f, -0.59f, 1, 0}, {8.52f, 0.62f, -1, 0},
+    {8.52f, 1.02f, -1, 0}, {9.43f, -0.98f, -1, 0}, {9.44f, -0.57f, -1, 1},
+    {9.51f, 0.62f, -1, 0}, {9.51f, 1.02f, -1, 0}, {15.27f, 0.62f, 1, 0},
+    {15.27f, 1.02f, 1, 0}, {15.32f, -0.97f, 1, 0}, {15.32f, -0.58f, 1, 0},
+    {16.17f, 0.62f, 1, 0}, {16.17f, 1.02f, 1, 0}, {16.48f, -0.97f, -1, 0},
+    {16.48f, -0.58f, -1, 0}, {17.07f, 0.62f, 1, 0}, {17.07f, 1.02f, 1, 0},
+    {17.38f, -0.97f, -1, 0}, {17.38f, -0.58f, -1, 0}, {17.97f, 0.62f, 1, 0},
+    {17.97f, 1.02f, 1, 0}, {18.27f, -0.97f, -1, 0}, {18.27f, -0.58f, -1, 0},
+    {18.87f, 0.62f, 1, 0}, {18.87f, 1.02f, 1, 0}, {19.16f, -0.97f, -1, 0},
+    {19.16f, -0.58f, -1, 0}, {20.02f, -0.97f, -1, 0}, {20.02f, -0.58f, -1, 0},
+    {20.02f, 0.62f, -1, 0}, {20.02f, 1.02f, -1, 0},
+};
+inline constexpr Fitting kBPbFittings[] = {
+    {0.29f, 2.56f, -1.33f, -0.38f, FitModule},
+    {0.30f, 2.59f, 0.44f, 1.33f, FitModule},
+    {2.60f, 2.66f, 0.57f, 1.40f, FitScreen},
+    {2.61f, 2.65f, -1.37f, -0.58f, FitScreen},
+    {2.71f, 3.09f, -0.95f, -0.62f, FitTipUp},
+    {4.35f, 4.73f, -0.95f, -0.62f, FitTipUp},
+    {4.35f, 4.73f, 0.64f, 0.96f, FitTipUp},
+    {4.78f, 4.84f, 0.57f, 1.40f, FitScreen},
+    {4.79f, 4.83f, -1.37f, -0.58f, FitScreen},
+    {10.06f, 10.42f, -1.29f, -0.94f, FitTipUp},
+    {10.48f, 10.84f, -1.29f, -0.94f, FitTipUp},
+    {10.91f, 11.27f, -1.29f, -0.94f, FitTipUp},
+    {11.34f, 11.70f, -1.29f, -0.94f, FitTipUp},
+    {11.76f, 12.12f, -1.29f, -0.94f, FitTipUp},
+    {12.19f, 12.55f, -1.29f, -0.94f, FitTipUp},
+    {14.35f, 14.73f, -0.95f, -0.62f, FitTipUp},
+    {14.36f, 14.74f, 0.64f, 0.96f, FitTipUp},
+    {14.77f, 14.84f, 0.29f, 1.40f, FitScreen},
+    {14.78f, 14.83f, -1.37f, -0.32f, FitScreen},
+};
+inline constexpr Seat kBCSeats[] = {
+    {3.14f, -1.04f, 1, 0}, {3.14f, -0.59f, 1, 0}, {3.17f, 0.57f, 1, 0},
+    {3.17f, 1.02f, 1, 0}, {4.00f, -1.04f, 1, 0}, {4.00f, -0.59f, 1, 0},
+    {4.02f, 0.57f, 1, 0}, {4.02f, 1.02f, 1, 0}, {4.85f, -1.04f, 1, 0},
+    {4.85f, -0.59f, 1, 0}, {4.87f, 0.57f, 1, 0}, {4.87f, 1.02f, 1, 0},
+    {6.10f, 0.56f, -1, 0}, {6.10f, 1.01f, -1, 0}, {6.12f, -1.04f, -1, 0},
+    {6.12f, -0.59f, -1, 0}, {14.08f, 0.57f, -1, 0}, {14.08f, 1.02f, -1, 0},
+    {14.11f, -1.04f, -1, 0}, {14.11f, -0.59f, -1, 0}, {14.93f, 0.56f, -1, 0},
+    {14.93f, 1.01f, -1, 0}, {14.95f, -1.04f, -1, 0}, {14.95f, -0.59f, -1, 0},
+    {15.82f, -1.02f, -1, 1}, {15.82f, -0.58f, -1, 1}, {15.82f, 0.55f, -1, 1},
+    {15.82f, 1.00f, -1, 1}, {18.95f, -1.04f, 1, 0}, {18.95f, -0.59f, 1, 0},
+    {18.95f, 0.57f, 1, 0}, {18.95f, 1.02f, 1, 0}, {20.24f, 0.56f, -1, 0},
+    {20.24f, 1.01f, -1, 0}, {20.25f, -1.04f, -1, 0}, {20.25f, -0.59f, -1, 0},
+};
+inline constexpr Fitting kBCFittings[] = {
+    {0.58f, 2.68f, 0.41f, 1.33f, FitModule},
+    {0.58f, 2.69f, -1.42f, -0.41f, FitModule},
+    {6.53f, 6.58f, -1.34f, -0.33f, FitScreen},
+    {6.54f, 6.58f, 0.31f, 1.33f, FitScreen},
+    {6.59f, 7.27f, -1.40f, -0.59f, FitRack},
+    {6.59f, 7.27f, 0.59f, 1.40f, FitRack},
+    {8.28f, 10.52f, -1.38f, 0.11f, FitModule},
+    {8.73f, 9.07f, 0.93f, 1.27f, FitTipUp},
+    {9.18f, 9.52f, 0.93f, 1.27f, FitTipUp},
+    {9.63f, 9.97f, 0.93f, 1.27f, FitTipUp},
+    {10.07f, 10.42f, 0.93f, 1.27f, FitTipUp},
+    {10.60f, 10.97f, -1.27f, -0.94f, FitTipUp},
+    {10.60f, 10.97f, -0.87f, -0.54f, FitTipUp},
+    {11.08f, 11.64f, -1.15f, -0.63f, FitFold},
+    {11.08f, 11.64f, 0.63f, 1.15f, FitFold},
+    {11.73f, 12.11f, -1.27f, -0.94f, FitTipUp},
+    {11.73f, 12.11f, -0.87f, -0.54f, FitTipUp},
+    {11.73f, 12.11f, 0.51f, 0.84f, FitTipUp},
+    {11.73f, 12.11f, 0.91f, 1.24f, FitTipUp},
+    {12.17f, 12.21f, -1.34f, -0.43f, FitScreen},
+    {12.17f, 12.22f, 0.43f, 1.33f, FitScreen},
+    {12.27f, 12.82f, -1.27f, -0.76f, FitFold},
+    {12.27f, 12.82f, 0.74f, 1.25f, FitFold},
+    {16.27f, 16.31f, -1.33f, -0.57f, FitScreen},
+    {16.27f, 16.31f, 0.56f, 1.33f, FitScreen},
+    {16.36f, 16.73f, -0.95f, -0.63f, FitTipUp},
+    {17.97f, 18.34f, -0.95f, -0.63f, FitTipUp},
+    {17.97f, 18.34f, 0.62f, 0.94f, FitTipUp},
+    {18.38f, 18.45f, 0.28f, 1.39f, FitScreen},
+    {18.39f, 18.43f, -1.39f, -0.34f, FitScreen},
+};
+inline constexpr Seat kBPaSeats[] = {
+    {0.83f, -1.01f, 1, 0}, {0.83f, -0.60f, 1, 0}, {0.83f, 0.60f, 1, 0},
+    {0.83f, 1.01f, 1, 0}, {2.20f, -1.01f, -1, 0}, {2.20f, -0.60f, -1, 0},
+    {2.20f, 0.60f, -1, 0}, {2.20f, 1.01f, -1, 0}, {6.28f, -1.03f, 1, 1},
+    {6.28f, -0.58f, 1, 1}, {7.14f, 0.59f, 1, 1}, {7.14f, 1.00f, 1, 0},
+    {7.29f, -1.01f, 1, 0}, {7.29f, -0.60f, 1, 0}, {8.27f, -1.01f, 1, 0},
+    {8.27f, -0.60f, 1, 0}, {8.45f, 0.59f, -1, 0}, {8.45f, 1.00f, -1, 0},
+    {9.25f, -1.01f, 1, 0}, {9.25f, -0.60f, 1, 0}, {9.43f, 0.59f, -1, 0},
+    {9.43f, 1.00f, -1, 0}, {10.23f, -1.01f, 1, 0}, {10.23f, -0.60f, 1, 0},
+    {10.39f, 0.59f, -1, 0}, {10.39f, 1.00f, -1, 0}, {11.34f, 0.59f, -1, 0},
+    {11.34f, 1.00f, -1, 0}, {11.58f, -1.01f, -1, 0}, {11.58f, -0.60f, -1, 0},
+    {12.31f, 0.59f, -1, 1}, {12.31f, 1.00f, -1, 1}, {15.55f, -1.02f, 1, 0},
+    {15.55f, -0.61f, 1, 0}, {15.55f, 0.59f, 1, 0}, {15.55f, 1.00f, 1, 0},
+    {16.83f, -1.02f, -1, 0}, {16.83f, -0.61f, -1, 0}, {16.83f, 0.59f, -1, 0},
+    {16.83f, 1.00f, -1, 0},
+};
+inline constexpr Fitting kBPaFittings[] = {
+    {2.68f, 2.75f, -1.40f, -0.31f, FitScreen},
+    {2.69f, 2.74f, 0.32f, 1.38f, FitScreen},
+    {2.78f, 3.18f, -0.97f, -0.64f, FitTipUp},
+    {2.80f, 3.20f, 0.60f, 0.94f, FitTipUp},
+    {4.89f, 4.96f, -1.40f, -0.54f, FitScreen},
+    {4.94f, 5.80f, -1.35f, -0.55f, FitRack},
+    {4.98f, 5.35f, 0.93f, 1.29f, FitTipUp},
+    {5.42f, 5.80f, 0.93f, 1.29f, FitTipUp},
+    {5.87f, 6.25f, 0.93f, 1.29f, FitTipUp},
+    {6.32f, 6.70f, 0.93f, 1.29f, FitTipUp},
+    {11.99f, 12.74f, -1.34f, -0.43f, FitRack},
+    {12.74f, 12.81f, -1.40f, -0.56f, FitScreen},
+    {12.76f, 12.80f, 0.57f, 1.38f, FitScreen},
+    {12.88f, 13.27f, 0.60f, 0.94f, FitTipUp},
+    {14.51f, 14.91f, -0.96f, -0.62f, FitTipUp},
+    {14.51f, 14.91f, 0.60f, 0.94f, FitTipUp},
+    {14.95f, 15.01f, -1.40f, -0.28f, FitScreen},
+    {14.96f, 15.00f, 0.31f, 1.38f, FitScreen},
+};
+inline constexpr Seat kBMaSeats[] = {
+    {0.71f, -1.00f, 1, 0}, {0.71f, -0.59f, 1, 0}, {0.71f, 0.59f, 1, 0},
+    {0.71f, 1.00f, 1, 0}, {1.98f, -1.00f, -1, 0}, {1.98f, -0.59f, -1, 0},
+    {1.98f, 0.59f, -1, 0}, {1.98f, 1.00f, -1, 0}, {5.16f, 0.59f, 1, 0},
+    {5.16f, 1.00f, 1, 0}, {6.14f, -0.99f, 1, 1}, {6.14f, -0.58f, 1, 1},
+    {6.14f, 0.59f, 1, 0}, {6.14f, 1.00f, 1, 0}, {7.12f, -0.99f, 1, 0},
+    {7.12f, -0.58f, 1, 0}, {7.12f, 0.59f, 1, 0}, {7.12f, 1.00f, 1, 0},
+    {8.43f, -0.99f, -1, 0}, {8.43f, -0.58f, -1, 0}, {8.43f, 0.59f, -1, 0},
+    {8.43f, 1.00f, -1, 0}, {9.41f, -0.99f, -1, 0}, {9.41f, -0.58f, -1, 0},
+    {9.41f, 0.59f, -1, 0}, {9.41f, 1.00f, -1, 0}, {10.41f, -0.99f, -1, 1},
+    {10.41f, -0.58f, -1, 1}, {10.41f, 0.58f, -1, 1}, {10.41f, 1.02f, -1, 1},
+    {13.49f, -1.00f, 1, 0}, {13.49f, -0.59f, 1, 0}, {13.49f, 0.59f, 1, 0},
+    {13.49f, 1.00f, 1, 0}, {14.85f, -1.00f, -1, 0}, {14.85f, -0.59f, -1, 0},
+    {14.85f, 0.59f, -1, 0}, {14.85f, 1.00f, -1, 0},
+};
+inline constexpr Fitting kBMaFittings[] = {
+    {1.16f, 1.49f, -1.32f, -0.34f, FitTable},
+    {1.16f, 1.49f, 0.36f, 1.34f, FitTable},
+    {2.45f, 2.51f, 0.29f, 1.41f, FitScreen},
+    {2.46f, 2.50f, -1.37f, -0.30f, FitScreen},
+    {2.56f, 2.95f, -0.95f, -0.62f, FitTipUp},
+    {2.56f, 2.95f, 0.63f, 0.97f, FitTipUp},
+    {4.22f, 4.61f, 0.63f, 0.97f, FitTipUp},
+    {4.66f, 4.73f, 0.55f, 1.41f, FitScreen},
+    {4.67f, 4.71f, -1.37f, -0.57f, FitScreen},
+    {4.72f, 5.58f, -1.33f, -0.54f, FitRack},
+    {7.61f, 7.94f, 0.36f, 1.34f, FitTable},
+    {7.62f, 7.94f, -1.32f, -0.34f, FitTable},
+    {10.83f, 10.90f, 0.54f, 1.41f, FitScreen},
+    {10.84f, 10.89f, -1.37f, -0.57f, FitScreen},
+    {10.94f, 11.33f, 0.63f, 0.97f, FitTipUp},
+    {12.59f, 12.99f, -0.95f, -0.62f, FitTipUp},
+    {12.59f, 12.99f, 0.63f, 0.97f, FitTipUp},
+    {13.04f, 13.11f, 0.29f, 1.41f, FitScreen},
+    {13.05f, 13.10f, -1.37f, -0.30f, FitScreen},
+    {14.01f, 14.34f, -1.32f, -0.34f, FitTable},
+    {14.01f, 14.34f, 0.36f, 1.34f, FitTable},
+    {15.23f, 18.61f, -1.40f, -0.39f, FitModule},
+    {15.24f, 18.62f, 0.40f, 1.41f, FitModule},
+    {18.29f, 18.77f, 0.11f, 0.55f, FitTipUp},
+};
+inline constexpr Interior kInteriors[6] = {
+    {8.02f, 19.76f, kBMbSeats, 38, kBMbFittings, 24},
+    {2.32f, 15.24f, kBPbSeats, 44, kBPbFittings, 19},
+    {0.0f, 0.0f, nullptr, 0, nullptr, 0}, // XDe: a corridor, drawn by hand
+    {6.13f, 18.86f, kBCSeats, 36, kBCFittings, 30},
+    {2.28f, 15.45f, kBPaSeats, 40, kBPaFittings, 18},
+    {2.05f, 13.56f, kBMaSeats, 38, kBMaFittings, 24},
+};
 } // namespace t76
 
 namespace c93 {
@@ -2836,9 +3082,176 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                       P(-wb, ys[i + 1], zs), t76::kSkirt, in);
             }
         }
-        // Gangway end walls.
-        if (C.cab != -1) cap(bodyRing(yLo), t76::kSkirt);
-        if (C.cab != +1) cap(bodyRing(yHi), t76::kSkirt);
+        // Gangway end walls, each with the walk-through to the next car: side panels and a
+        // lintel round the opening, and the end of the roof above them.
+        auto gangWall = [&](float y) {
+            const float aisle = 0.55f, zFl = zr(t76::kHighFloor);
+            const float zTop = zFl + 1.95f, zC = zr(t76::kCant);
+            const float w = hw * 0.97f, wb = hw * t76::kTumble;
+            const float zs = sillAt(y);
+            for (const float sx : {-1.0f, 1.0f}) {
+                quadN(P(sx * aisle, y, zs), P(sx * wb, y, zs), P(sx * w, y, zC),
+                      P(sx * aisle, y, zC), t76::kSkirt, in);
+            }
+            quadN(P(-aisle, y, zs), P(aisle, y, zs), P(aisle, y, zFl), P(-aisle, y, zFl),
+                  t76::kSkirt, in);
+            quadN(P(-aisle, y, zTop), P(aisle, y, zTop), P(aisle, y, zC), P(-aisle, y, zC),
+                  t76::kSkirt, in);
+            // The roof end: the profile above the cantrail, fanned to its middle.
+            const std::vector<glm::vec3> R = bodyRing(y);
+            const glm::vec3 c = P(0.0f, y, zC);
+            for (std::size_t k = 2; k + 3 < R.size(); ++k)
+                quadN(R[k], R[k + 1], c, c, t76::kSkirt, in);
+        };
+        if (C.cab != -1) gangWall(yLo);
+        if (C.cab != +1) gangWall(yHi);
+
+        // ---- Inside. Seen from the cab door or by flying the camera in: the floors, the
+        // lining with its windows, and every seat and fitting on the seat map. ----
+        const float iLo = C.cab == -1 ? yLo + t76::kNoseLen + 0.80f : yLo;
+        const float iHi = C.cab == +1 ? yHi - t76::kNoseLen - 0.80f : yHi;
+        const float ihw = hw * 0.90f;
+        // A box faced inward: its faces are seen from inside the car, so they are lit as such.
+        auto quadIn = [&](const glm::vec3& a, const glm::vec3& b, const glm::vec3& c,
+                          const glm::vec3& d, const glm::vec3& col, const glm::vec3& toward) {
+            const glm::vec3 cen = 0.25f * (a + b + c + d);
+            quadN(a, b, c, d, col, 2.0f * cen - toward);
+        };
+        if (C.power) {
+            // XDe: a corridor between the two power packs, on the high floor its
+            // neighbours' ends share.
+            const float half = 0.36f, zFl = zr(t76::kHighFloor), zTop = zRoof - 0.30f;
+            emitBox(X, Y, Z, P(0.0f, 0.5f * (yLo + yHi), zFl - 0.03f), ihw,
+                    0.5f * (yHi - yLo), 0.03f, t76::kFloorIn);
+            for (const float sx : {-1.0f, 1.0f})
+                emitBox(X, Y, Z, P(sx * 0.5f * (half + ihw), 0.5f * (yLo + yHi),
+                                   0.5f * (zFl + zTop)),
+                        0.5f * (ihw - half), 0.5f * (yHi - yLo), 0.5f * (zTop - zFl),
+                        t76::kModule);
+            emitBox(X, Y, Z, P(0.0f, 0.5f * (yLo + yHi), zTop + 0.02f), half,
+                    0.5f * (yHi - yLo), 0.02f, t76::kCeiling);
+            emitBox(X, Y, Z, P(0.0f, 0.5f * (yLo + yHi), zTop - 0.01f), 0.08f,
+                    0.5f * (yHi - yLo) - 0.3f, 0.01f, t76::kLamp);
+        } else {
+            const t76::Interior& I = t76::kInteriors[car];
+            const float yLowA = std::clamp(yAt(I.lowFrom), iLo, iHi);
+            const float yLowB = std::clamp(yAt(I.lowTo), iLo, iHi);
+            const float zLow = zr(t76::kFloor), zHigh = zr(t76::kHighFloor);
+            auto floorAt = [&](float y) { return (y > yLowA && y < yLowB) ? zLow : zHigh; };
+
+            // Floors: the low floor between the doors, the high floor over the bogies as a
+            // solid block so its edge is a riser, and a step down from each.
+            emitBox(X, Y, Z, P(0.0f, 0.5f * (yLowA + yLowB), zLow - 0.03f), ihw,
+                    0.5f * (yLowB - yLowA), 0.03f, t76::kFloorIn);
+            const float zMid = 0.5f * (zLow + zHigh);
+            for (const auto& [ya, yb, sgn] : {std::tuple{iLo, yLowA, 1.0f},
+                                              std::tuple{yLowB, iHi, -1.0f}}) {
+                if (yb - ya < 0.05f) continue;
+                emitBox(X, Y, Z, P(0.0f, 0.5f * (ya + yb), 0.5f * (zLow + zHigh)), ihw,
+                        0.5f * (yb - ya), 0.5f * (zHigh - zLow), t76::kFloorIn);
+                // The step, on the low side of the edge, and its yellow nosings.
+                const float edge = sgn > 0.0f ? yb : ya;
+                emitBox(X, Y, Z, P(0.0f, edge + sgn * 0.18f, 0.5f * (zLow + zMid)), ihw,
+                        0.18f, 0.5f * (zMid - zLow), t76::kFloorIn);
+                emitBox(X, Y, Z, P(0.0f, edge + sgn * 0.33f, zMid + 0.004f), ihw, 0.03f,
+                        0.006f, t76::kStepEdge);
+                emitBox(X, Y, Z, P(0.0f, edge - sgn * 0.03f, zHigh + 0.004f), ihw, 0.03f,
+                        0.006f, t76::kStepEdge);
+            }
+
+            // The lining: the same profile drawn in, with the windows and the doors' glazing
+            // where the outside has them, so the view out is the view through the glass.
+            auto liningRing = [&](float y) {
+                return ring(y, 0.955f, zRoof - 0.10f, floorAt(y));
+            };
+            for (const Panel& pn : panels) {
+                const float a = std::max(pn.a, iLo), b = std::min(pn.b, iHi);
+                if (b <= a + 0.01f) continue;
+                const bool glazed = pn.band == t76::kGlass;
+                std::vector<float> ys = {a, b};
+                for (const float e : {yLowA, yLowB})
+                    if (e > a + 0.02f && e < b - 0.02f) {
+                        ys.push_back(e - 0.01f);
+                        ys.push_back(e + 0.01f);
+                    }
+                std::sort(ys.begin(), ys.end());
+                for (std::size_t i = 0; i + 1 < ys.size(); ++i) {
+                    const std::vector<glm::vec3> A = liningRing(ys[i]);
+                    const std::vector<glm::vec3> B = liningRing(ys[i + 1]);
+                    for (std::size_t k = 0; k + 1 < A.size(); ++k) {
+                        const glm::vec3& col = (k == 1 || k == 13)
+                                                   ? (glazed ? t76::kGlass : t76::kLining)
+                                               : (k >= 3 && k <= 11) ? t76::kCeiling
+                                                                     : t76::kLining;
+                        const glm::vec3 cen = 0.25f * (A[k] + A[k + 1] + B[k + 1] + B[k]);
+                        quadIn(A[k], A[k + 1], B[k + 1], B[k], col,
+                               P(0.0f, glm::dot(cen - f.pos, Y), zr(2.0f)));
+                    }
+                }
+            }
+            // Light strips along the ceiling, and the luggage racks over the windows.
+            for (const float sx : {-0.48f, 0.48f})
+                emitBox(X, Y, Z, P(sx, 0.5f * (iLo + iHi), zRoof - 0.22f), 0.07f,
+                        0.5f * (iHi - iLo) - 0.4f, 0.012f, t76::kLamp);
+            for (const float sx : {-1.0f, 1.0f})
+                emitBox(X, Y, Z, P(sx * (ihw - 0.20f), 0.5f * (iLo + iHi),
+                                   zr(t76::kWinHigh + 0.22f)),
+                        0.20f, 0.5f * (iHi - iLo) - 0.3f, 0.015f, t76::kMetal);
+
+            // Seats: a pan, a backrest with its shell, and the pedestal under it.
+            for (int i = 0; i < I.seatCount; ++i) {
+                const t76::Seat& st = I.seats[i];
+                const float y = yAt(st.x), x = st.y, fc = static_cast<float>(st.face);
+                const float zf = floorAt(y);
+                const glm::vec3& col = st.kind == 1 ? t76::kSeatPri : t76::kSeat;
+                emitBox(X, Y, Z, P(x, y + fc * 0.03f, zf + 0.44f), 0.19f, 0.22f, 0.05f, col);
+                emitBox(X, Y, Z, P(x, y - fc * 0.21f, zf + 0.82f), 0.19f, 0.05f, 0.36f, col);
+                emitBox(X, Y, Z, P(x, y - fc * 0.27f, zf + 0.80f), 0.20f, 0.015f, 0.38f,
+                        t76::kSeatShell);
+                emitBox(X, Y, Z, P(x, y, zf + 0.20f), 0.05f, 0.08f, 0.20f, t76::kMetal);
+            }
+            // And the rest of the seat map.
+            for (int i = 0; i < I.fittingCount; ++i) {
+                const t76::Fitting& ft = I.fittings[i];
+                const float y0 = yAt(ft.x0), y1 = yAt(ft.x1);
+                const float yc = 0.5f * (y0 + y1), hy = 0.5f * (y1 - y0);
+                const float xc = 0.5f * (ft.y0 + ft.y1), hx = 0.5f * (ft.y1 - ft.y0);
+                const float zf = floorAt(yc);
+                switch (ft.kind) {
+                case t76::FitTable:
+                    emitBox(X, Y, Z, P(xc, yc, zf + 0.74f), hx, hy, 0.02f, t76::kTable);
+                    emitBox(X, Y, Z, P(xc, yc, zf + 0.37f), 0.04f, 0.04f, 0.37f, t76::kMetal);
+                    break;
+                case t76::FitRack: // a luggage stack, or the vending machine
+                    emitBox(X, Y, Z, P(xc, yc, zf + 0.78f), hx, hy, 0.78f, t76::kMetal);
+                    break;
+                case t76::FitModule: { // the WCs and the cab cars' cabinets, to the ceiling
+                    const float zTop = zRoof - 0.40f;
+                    emitBox(X, Y, Z, P(xc, yc, 0.5f * (zf + zTop)), hx, hy, 0.5f * (zTop - zf),
+                            t76::kModule);
+                    break;
+                }
+                case t76::FitScreen: // a glazed draught screen at a door, and its pole
+                    emitBox(X, Y, Z, P(xc, yc, zf + 1.05f), hx, std::max(hy, 0.012f), 0.90f,
+                            t76::kGlass);
+                    emitBox(X, Y, Z, P(xc, yc, zf + 1.96f), hx, 0.025f, 0.02f, t76::kMetal);
+                    {
+                        const float xe = std::abs(ft.y0) < std::abs(ft.y1) ? ft.y0 : ft.y1;
+                        const float zTop = zRoof - 0.30f;
+                        emitBox(X, Y, Z, P(xe, yc, 0.5f * (zf + zTop)), 0.02f, 0.02f,
+                                0.5f * (zTop - zf), t76::kMetal);
+                    }
+                    break;
+                case t76::FitTipUp: // folded up against the screen behind it
+                case t76::FitFold:
+                    emitBox(X, Y, Z, P(xc, yc, zf + 0.72f), hx * 0.9f, 0.05f, 0.24f,
+                            ft.kind == t76::FitFold ? t76::kSeatPri : t76::kSeat);
+                    break;
+                default:
+                    break;
+                }
+            }
+        }
 
         // The cab: a long raked nose, the roof falling to a deep windscreen and the sides
         // drawing in a little toward a rounded front, with the small side window just
@@ -3013,7 +3426,8 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
         // The Type 76's bellows, between every pair of its six cars - XDe included, which
         // has a corridor through it. Each car's end is its own: the cars are not one length.
         if (vehicle.bodyStyle() == BodyType76 && sections.size() == halfLens.size()) {
-            const float z0b = wheelset::kRailTopZ + t76::kFloor;
+            // Every joint is over a bogie, so the bellows meet the high floor each side.
+            const float z0b = wheelset::kRailTopZ + t76::kHighFloor;
             const float zCb = wheelset::kRailTopZ + t76::kWinHigh + 0.10f;
             const float bw = t76::kHalfWidth * 0.66f;
             auto gwEnd = [&](const VehicleFrame& f, float h, float sign) {
@@ -3045,6 +3459,8 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                               t76::kSkirt, mid);
                     prev = cur;
                 }
+                // The floor across, so the aisle walks through.
+                quadN(A[3], A[0], B[0], B[3], t76::kFloorIn, mid - glm::vec3(0.0f, 0.0f, 2.0f));
             }
         }
 
