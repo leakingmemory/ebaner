@@ -146,6 +146,22 @@ int main() {
         check(std::abs(planDrive(far, 0.0f).targetMs - 130.0f / 3.6f) < 0.01f,
               "  and 130 is still 130", planDrive(far, 0.0f).targetMs * 3.6, 130.0);
 
+        // A crossing is planned on the same curve at half as hard again: the same 380 m
+        // at 1.5 * 0.52 is sqrt(2 * 0.78 * 380) = 24.4 m/s.
+        RoadAhead lc = openRoad(130);
+        lc.stops.push_back({400.0f, RoadAhead::StopKind::Crossing, 3});
+        const DriverDemand dc = planDrive(lc, 0.0f);
+        check(dc.stopping && std::abs(dc.targetMs - 24.36f) < 0.1f,
+              "a crossing is braked for half as hard again as a signal", dc.targetMs, 24.36);
+        check(std::abs(dc.targetMs / d.targetMs - std::sqrt(1.5f)) < 0.001f,
+              "  which is sqrt(1.5) on the speed at every distance",
+              dc.targetMs / d.targetMs, std::sqrt(1.5));
+        // A signal behind the crossing still binds on its own curve.
+        lc.stops.push_back({450.0f, RoadAhead::StopKind::Signal, 8});
+        check(planDrive(lc, 0.0f).stopRef == 8,
+              "  and a signal just past it, on the gentler curve, is the one aimed at",
+              planDrive(lc, 0.0f).stopRef, 8.0);
+
         // The lowest ceiling wins, wherever it comes from.
         RoadAhead two = openRoad(130);
         two.limits.push_back({0.0f, 70});

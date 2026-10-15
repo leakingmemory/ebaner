@@ -106,6 +106,14 @@ inline constexpr float kEndDecel = 0.25f; // m/s^2, at the mark
 // the steep part too long and it arrives under the curve with the brake still hard on,
 // stops short, and has to be driven up again.
 inline constexpr float kShallowM = 400.0f;
+// How much harder the whole plan is for a level crossing than for a signal. A crossing
+// is set to clear late on purpose - the approach is sized so the road is shut no longer
+// than it must be, and it goes white with the train already close - so a train braking
+// for one at the signal rate is braking for a stop that seldom happens, from much
+// further out than it needs to. Planning it steeper keeps the train up to speed until a
+// stop is genuinely in prospect. A scale on both ends of the curve rather than a second
+// curve, so it is still eased at the mark.
+inline constexpr float kCrossingDecelScale = 1.5f;
 // What the brake costs before it does anything: the seconds between the handle moving
 // and the shoes being on, which the train runs through at whatever speed it had. Counted
 // out of the distance available rather than hidden in a fudge factor, so it scales with

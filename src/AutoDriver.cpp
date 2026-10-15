@@ -72,20 +72,21 @@ namespace {
 
 // The deceleration the plan plans for, `d` metres from whatever it is braking for.
 // Shallower as it closes, so the last stretch is eased rather than fought.
-float plannedDecel(float d) {
+// `scale` steepens the whole curve, both ends of it, for a mark that is planned harder.
+float plannedDecel(float d, float scale = 1.0f) {
     // Squared rather than linear, so the rate is already most of the way down to
     // kEndDecel by the middle of the transition instead of half way. The point of the
     // easing is to be in light braking EARLY; a straight line leaves it too late.
     const float t = std::clamp(d / kShallowM, 0.0f, 1.0f);
-    return kEndDecel + (kAutoDecel - kEndDecel) * t * t;
+    return scale * (kEndDecel + (kAutoDecel - kEndDecel) * t * t);
 }
 
 // The fastest a train may be doing `d` metres from something it must be down to `vLimit`
 // for. The build-up run comes out of the distance first: the brake does nothing for the
 // first few seconds, and the train covers that at the speed it already has.
-float allowedAt(float d, float vLimit, float speedMs) {
+float allowedAt(float d, float vLimit, float speedMs, float scale = 1.0f) {
     const float usable = std::max(0.0f, d - speedMs * kBuildUpS);
-    return std::sqrt(vLimit * vLimit + 2.0f * plannedDecel(usable) * usable);
+    return std::sqrt(vLimit * vLimit + 2.0f * plannedDecel(usable, scale) * usable);
 }
 
 // ...and the deceleration that would actually be needed from here, which is what picks
@@ -194,7 +195,9 @@ DriverDemand planDrive(const RoadAhead& road, float speedMs) {
     float bestStopAllow = 1e9f;
     for (const RoadAhead::Stop& s : road.stops) {
         const float d = std::max(0.0f, s.d - kStopShortM);
-        const float allow = allowedAt(d, 0.0f, speedMs);
+        const float scale =
+            s.kind == RoadAhead::StopKind::Crossing ? kCrossingDecelScale : 1.0f;
+        const float allow = allowedAt(d, 0.0f, speedMs, scale);
         if (allow < bestStopAllow) {
             bestStopAllow = allow;
             out.stopIn = s.d;
