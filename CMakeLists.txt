@@ -458,6 +458,13 @@ target_link_libraries(RunningGearTest PRIVATE ebaner_engine)
 target_include_directories(RunningGearTest PRIVATE src)
 add_test(NAME running-gear COMMAND RunningGearTest)
 
+# A battery train's energy system: the generator sets, the battery and where the charge is held.
+add_executable(EnergyManagerTest tests/EnergyManagerTest.cpp src/Vehicle.cpp src/Consist.cpp)
+add_dependencies(EnergyManagerTest shaders)
+target_link_libraries(EnergyManagerTest PRIVATE ebaner_engine)
+target_include_directories(EnergyManagerTest PRIVATE src)
+add_test(NAME energy-manager COMMAND EnergyManagerTest)
+
 add_executable(AirBrakeTest tests/AirBrakeTest.cpp src/Vehicle.cpp src/Consist.cpp)
 add_dependencies(AirBrakeTest shaders)
 target_link_libraries(AirBrakeTest PRIVATE ebaner_engine)

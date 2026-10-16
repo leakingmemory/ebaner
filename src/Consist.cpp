@@ -860,6 +860,16 @@ bool Consist::enginesRunning() const {
     return any;
 }
 
+bool Consist::tractionReady() const {
+    bool any = false;
+    for (const Vehicle& u : units_) {
+        if (u.engineCount() == 0) continue;
+        any = true;
+        if (!u.tractionReady()) return false;
+    }
+    return any;
+}
+
 // --- geometry -------------------------------------------------------------------
 
 std::vector<VehicleFrame> Consist::axleFrames() const {

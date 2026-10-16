@@ -5411,7 +5411,7 @@ int main(int argc, char** argv) {
                 } else if (t.state() != VehicleState::OnRail) {
                     setMapMsg("auto-drive: this train is not on the rails");
                 } else {
-                    if (!t.enginesRunning()) t.toggleEngines();
+                    if (!t.tractionReady()) t.toggleEngines();
                     if (t.activeCab() < 0) t.setReverser(autoCab, 1);
                     t.setPowerNotch(t.activeCab() < 0 ? autoCab : t.activeCab(), 0);
                     t.setBrakeNotch(t.activeCab() < 0 ? autoCab : t.activeCab(), 0);
@@ -5470,11 +5470,22 @@ int main(int argc, char** argv) {
                 if (autoLog && &t == vehicle && now >= autoLogAt) {
                     autoLogAt = now + 1.0;
                     std::printf("[AutoDrive] %5.1f km/h  target %5.1f  P%d B%d  bp %.2f "
-                                "bc %.2f  eb %3.0f kN  batt %3.0f%%  emerg %d  %s%s\n",
+                                "bc %.2f  eb %3.0f kN  batt %3.0f%% %+4.0f kW  gen %d "
+                                "%4.0f kW  rec %4.1f%%  emerg %d  %s%s\n",
                                 t.speed() * 3.6f, d.targetMs * 3.6f, t.powerNotch(acab),
                                 t.brakeNotch(acab), t.bpPressure(acab), t.bcPressure(acab),
                                 t.dynamicBrakeForce() / 1000.0f,
-                                t.lead().batteryFrac() * 100.0f, int(t.emergencyLine()),
+                                t.lead().batteryFrac() * 100.0f,
+                                t.lead().batteryPower() / 1000.0f,
+                                t.lead().generatorsRunning(),
+                                t.lead().generatorPower() / 1000.0f,
+                                // What the brake has put back, as a share of what traction
+                                // has taken, over the whole run so far.
+                                t.lead().energyTotals().traction > 0.0
+                                    ? 100.0 * t.lead().energyTotals().recovered /
+                                          t.lead().energyTotals().traction
+                                    : 0.0,
+                                int(t.emergencyLine()),
                                 d.stopping ? "stopping for " : "running",
                                 d.stopping
                                     ? (d.stopKind == RoadAhead::StopKind::Station
@@ -5660,7 +5671,13 @@ int main(int argc, char** argv) {
                 const std::vector<VehicleFrame> secs = t.bodySectionFrames();
                 const int n =
                     std::min<int>(t.engineCount(), static_cast<int>(secs.size()));
+                // Heard from the car they are in, where the layout says which; otherwise
+                // one to a section, as an evenly built vehicle carries them.
+                const int inCar = t.lead().engineSection();
                 for (int k = 0; k < n && nGain < Audio::kMaxEngines; ++k) {
+                    const glm::vec3 at =
+                        secs[inCar >= 0 && inCar < static_cast<int>(secs.size()) ? inCar : k]
+                            .pos;
                     // The timbre travels with the rpm, from the machine the slot is
                     // sounding. A slot keeps its filter state between frames, so these
                     // must change in step with the engine it belongs to or one machine's
@@ -5668,7 +5685,7 @@ int main(int argc, char** argv) {
                     const Vehicle& u = t.lead();
                     voices[nGain++] = {
                         t.engineRpm(k),
-                        glm::clamp((50.0f - glm::distance(camPos, secs[k].pos)) / 38.0f,
+                        glm::clamp((50.0f - glm::distance(camPos, at)) / 38.0f,
                                    0.0f, 1.0f),
                         u.firingsPerRev(), u.engineVolume(), u.engineRumble(),
                         u.engineBright(), u.idleRpm()};
@@ -5913,7 +5930,19 @@ int main(int argc, char** argv) {
                                fbw, fbh);
                     y += lh;
                 }
-                if (vehicle->engineCount() > 0) {
+                // A battery train's engines are generator sets the energy manager starts
+                // and stops: how many are on line, and what they are making.
+                if (vehicle->lead().isHybrid()) {
+                    const Vehicle& u = vehicle->lead();
+                    if (!u.enginesOn())
+                        std::snprintf(buf, sizeof(buf), "OFF   I to switch on");
+                    else
+                        std::snprintf(buf, sizeof(buf), "GEN %d/%d  %4.0f kW  %4.0f rpm",
+                                      u.generatorsRunning(), u.engineCount(),
+                                      u.generatorPower() / 1000.0f, u.engineRpm(0));
+                    appendText(tv, buf, x, y, sc, glm::vec3(0.7f, 0.85f, 0.7f), fbw, fbh);
+                    y += lh;
+                } else if (vehicle->engineCount() > 0) {
                     const EngineState es = vehicle->engineState(0);
                     if (es == EngineState::Off)
                         std::snprintf(buf, sizeof(buf), "ENG OFF   I to start");
@@ -5940,12 +5969,18 @@ int main(int argc, char** argv) {
                     appendText(tv, buf, x, y, sc, glm::vec3(0.7f, 0.85f, 0.7f), fbw, fbh);
                     y += lh;
                 }
-                // The traction battery, where there is one: how much is in it, and whether
-                // the motors are braking into it.
+                // The traction battery, where there is one: how much is in it against
+                // where it is held, what is going in or out (+ out), and how much of the
+                // electric brake it is not taking.
                 if (vehicle->lead().hasBattery()) {
-                    std::snprintf(buf, sizeof(buf), "BATT %3.0f%%   e-brake %3.0f kN",
-                                  vehicle->lead().batteryFrac() * 100.0f,
-                                  vehicle->dynamicBrakeForce() / 1000.0f);
+                    const Vehicle& u = vehicle->lead();
+                    std::snprintf(buf, sizeof(buf),
+                                  "BATT %3.0f%% (%2.0f)  %+4.0f kW   e-brake %3.0f kN  "
+                                  "grids %4.0f kW",
+                                  u.batteryFrac() * 100.0f, u.batteryTarget() * 100.0f,
+                                  u.batteryPower() / 1000.0f,
+                                  vehicle->dynamicBrakeForce() / 1000.0f,
+                                  u.gridPower() / 1000.0f);
                     appendText(tv, buf, x, y, sc, glm::vec3(0.7f, 0.85f, 0.7f), fbw, fbh);
                     y += lh;
                 }

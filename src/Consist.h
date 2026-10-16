@@ -209,6 +209,10 @@ public:
     float engineRpm(int i) const;
     EngineState engineState(int i) const;
     bool enginesRunning() const;
+    // Whether the train can be driven: every set with a prime mover able to take power.
+    // The same as enginesRunning() except on a battery train, which is ready as soon as it
+    // is switched on, with its generator sets coming and going underneath.
+    bool tractionReady() const;
 
     // --- geometry, over the whole train -----------------------------------------
     VehicleFrame frame() const { return lead().frame(); }

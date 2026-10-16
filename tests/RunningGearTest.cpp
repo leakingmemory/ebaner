@@ -17,9 +17,10 @@
 // three evenly spaced bogies - eight bogies under six cars of six lengths - which must put
 // every axle and every car body where the layout says, and must leave the vehicles that do
 // not use it exactly as they were. A traction battery that adds to the diesel while it has
-// charge and is filled again by braking. And the electric brake on a combined lever, which
-// blends: the notch asks for a deceleration, the motors give what they can of it, and the
-// shoes are asked only for the rest.
+// charge and is filled again by braking; the energy manager behind it has its own test.
+// And the electric brake on a combined lever, which blends: the notch asks for a
+// deceleration, the motors give what they can of it, and the shoes are asked only for the
+// rest.
 //
 // No dataset: a long straight TrackPath is the whole world, as in DrivingTest.
 
@@ -188,8 +189,9 @@ int main() {
         // the air and the rolling take off it.
         check(decel > 0.60f && decel < 0.80f, "  and the train still slows at B2's rate (m/s^2)",
               decel, 0.66);
-        check(c.lead().batteryFrac() > 0.5f, "  and what it makes charges the battery",
-              c.lead().batteryFrac(), 0.5);
+        check(c.lead().energyTotals().recovered > 0.0,
+              "  and what it makes is put to use (kWh)",
+              c.lead().energyTotals().recovered / 3.6e6, 1.0);
         check(v0 > v2, "  (it did slow)", v0 - v2, 1.0);
     }
 

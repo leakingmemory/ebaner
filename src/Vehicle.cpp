@@ -173,19 +173,48 @@ constexpr float kEta = 0.9f;             // driveline efficiency
 // Alternator, rectifier and six traction motors between the crankshaft and the rail.
 // Lower than a mechanical driveline's, which is the price of having no gearbox.
 constexpr float kElectricEta = 0.85f;
-// The traction battery's floor and its top-up. The floor is what is kept back for the
-// auxiliaries and for getting away again, so the boost stops there rather than at empty;
-// the top-up is what a running diesel spares it off the brake and off the power. Both are
-// ESTIMATES - no source gives either for the Type 76 - chosen so a battery drawn down on a
-// long climb comes back over the following half hour of ordinary running.
-constexpr float kBatteryFloor = 0.20f;    // of capacity
-constexpr float kBatteryTrickleW = 60000.0f; // W
+// The battery train's energy system - see manageEnergy. All of these are ESTIMATES: no
+// source gives them for the Type 76, and they are what a lithium traction pack and a
+// genset controller of this size would plausibly have.
+//
+// The floor is kept back for the auxiliaries and for getting away again; the discharge
+// fades into it over kBatteryFloorBand rather than stopping dead at it.
+constexpr float kBatteryFloor = 0.20f;     // of capacity
+constexpr float kBatteryFloorBand = 0.10f; // of capacity
+// Charge acceptance against the state of charge, as a fraction of the rated current: full
+// while the cells charge at constant current, then the steep taper once they reach their
+// voltage ceiling. Linear between the points.
+constexpr float kChargeTaperSoc[] = {0.80f, 0.90f, 0.95f, 1.00f};
+constexpr float kChargeTaperFrac[] = {1.00f, 0.35f, 0.12f, 0.00f};
+// Each way through the battery - cells, converter - this much survives.
+constexpr float kBatteryEta = 0.95f;
+// Where the manager holds the charge: lower at speed, where the next stop has the most to
+// put back. Well inside the flat part of the charge curve either way, which is the point:
+// a battery kept full has no room for the brake.
+constexpr float kSocTargetRest = 0.60f;
+constexpr float kSocTargetDrop = 0.10f;  // less at line speed
+constexpr float kHybridTopSpeed = 44.4f; // m/s, 160 km/h
+// The manager follows the bus load smoothed over a minute, so a burst of power or a brake
+// application is the battery's to carry and only a sustained one moves the sets; and it
+// drifts the charge back to the target over ten minutes.
+constexpr float kLoadAvgTime = 60.0f;  // s
+constexpr float kSocReturnTime = 600.0f; // s
+// A set no longer wanted is kept on for this long before it is stopped, so the sets do not
+// hunt on and off with every notch.
+constexpr float kSetStopHold = 60.0f; // s
+// A generator set at idle will carry a little load; the rest of its output comes with the
+// revs, rising from there to the full rating at governed speed.
+constexpr float kIdleLoadFrac = 0.10f;
+// An inverter drive's own ramp, which is all a battery train's power waits for: there is no
+// engine to bring round first. About three seconds to full.
+constexpr float kInverterRate = 0.35f; // fraction of full per second
 constexpr float kRevSpeedCap = 11.0f;    // m/s (~40 km/h) reverse power cut
-// Where the electric brake fades away. Below the lower figure there is nothing at all, and
-// it comes fully in by the upper one - about 5 km/h, by which speed the machines are
-// turning fast enough to generate. A brake that did not fade would hold the train at rest.
-constexpr float kDynFadeOut = 0.4f;      // m/s
-constexpr float kDynFadeIn = 1.4f;       // m/s
+// Where the electric brake fades away. Below 25 km/h there is nothing at all, and it comes
+// fully in by 35 km/h: a traction motor turning slowly generates too little to brake
+// against, so the electric brake is a brake for speed and the shoes bring the train to a
+// stand. A brake that did not fade would hold the train at rest.
+constexpr float kDynFadeOut = 25.0f / 3.6f; // m/s
+constexpr float kDynFadeIn = 35.0f / 3.6f;  // m/s
 // The governor's spool time is VehicleSpec::spoolTime, held as a time rather than an
 // rpm/s so it means the same lag on any engine instead of a different one per rev range.
 // It used to be one shared 900 rpm/s, which over the Di 4's 315-to-900 span put a 16-645
@@ -266,13 +295,15 @@ Vehicle::Vehicle(const TrackPath* path, const VehicleSpec& spec, float s,
       dynBrakeW_(spec.dynBrakeW),
       batteryCapJ_(spec.batteryJ),
       batteryBoostW_(spec.batteryBoostW),
-      batteryJ_(spec.batteryJ), // charged
+      batteryJ_(spec.batteryJ * kSocTargetRest), // where the manager would hold it
+      auxW_(spec.auxW),
+      compressorW_(spec.compressorW),
       brakeSqueal_(spec.brakeSqueal),
       bodyStyle_(spec.body),
       name_(spec.name),
       physV_(initialSpeed),
       mrPres_(kMRCapacity), // reservoir starts at capacity
-      engineCount_(std::min(spec.engines, 2)) { // the rpm array holds two
+      engineCount_(std::min(spec.engines, 4)) { // the rpm array holds four
     // One brake unit per bogie - three on a Class 93. A vehicle with no bogies at all
     // still gets one, because something has to brake it and a bare wheelset has a shoe.
     brakes_.resize(static_cast<std::size_t>(std::max(1, bogieCount_)));
@@ -574,6 +605,18 @@ EngineState Vehicle::engineState(int i) const {
     if (i < 0 || i >= engineCount_ || engineRpm_[i] <= 0.0f) return EngineState::Off;
     if (engineRpm_[i] >= idleRpm_ * 0.99f) return EngineState::Running;
     return engineOn_ ? EngineState::Starting : EngineState::Stopping;
+}
+
+bool Vehicle::tractionReady() const {
+    if (!engineOn_ || engineCount_ == 0) return false;
+    return isHybrid() ? batteryJ_ > 0.0f || generatorsRunning() > 0 : enginesRunning();
+}
+
+int Vehicle::generatorsRunning() const {
+    int n = 0;
+    for (int i = 0; i < engineCount_; ++i)
+        if (engineRpm_[i] >= idleRpm_ * 0.99f) ++n;
+    return n;
 }
 
 bool Vehicle::enginesRunning() const {
@@ -1080,35 +1123,61 @@ void Vehicle::updateElectricDrive(float demandSigned, float demand, bool powerin
     if (!powering) {
         // Excitation falls away with the notch. The revs are the cranking block's.
         load_ = std::max(0.0f, load_ - kLoadOffRate * dt);
-        railPower_ = 0.0f;
+        railPower_ = askW_ = 0.0f;
         return;
     }
 
-    // The governor answers the notch and nothing else - there is no geared speed for the
-    // engine to be dragged to, which is why a diesel-electric revs up standing still.
-    const float span = std::max(1.0f, governedRpm_ - idleRpm_);
-    const float slew = span / std::max(0.05f, spoolTime_);
-    const float rpmWant = idleRpm_ + demand * span;
-    float rpm = engineRpm_[0];
-    rpm += std::clamp(rpmWant - rpm, -slew * dt, slew * dt);
-    rpm = std::clamp(rpm, idleRpm_, governedRpm_);
-    for (int i = 0; i < engineCount_; ++i) engineRpm_[i] = rpm;
+    // A battery train's engines are not on the notch at all. The handle asks the drive for
+    // power, the drive takes it off the bus, and the bus is the battery's to hold up until
+    // the energy manager has brought the generator sets round - so the power comes at once,
+    // wound on only as fast as the inverters will, and the engines follow behind it.
+    if (isHybrid()) {
+        const float rate = demand > load_ ? kInverterRate : kLoadOffRate;
+        load_ = std::clamp(load_ + std::clamp(demand - load_, -rate * dt, rate * dt), 0.0f,
+                           1.0f);
+    } else {
+        // The governor answers the notch and nothing else - there is no geared speed for
+        // the engine to be dragged to, which is why a diesel-electric revs up standing
+        // still.
+        const float span = std::max(1.0f, governedRpm_ - idleRpm_);
+        const float slew = span / std::max(0.05f, spoolTime_);
+        const float rpmWant = idleRpm_ + demand * span;
+        float rpm = engineRpm_[0];
+        rpm += std::clamp(rpmWant - rpm, -slew * dt, slew * dt);
+        rpm = std::clamp(rpm, idleRpm_, governedRpm_);
+        for (int i = 0; i < engineCount_; ++i) engineRpm_[i] = rpm;
 
-    // What the engine is *making*, which is not what the notch asked for until it has got
-    // there. Taking this from the notch instead - as this did - hands the driver full
-    // power the instant he touches the handle, with the engine still at idle underneath
-    // it, and is the whole of why the locomotive answered too quickly. Zero at idle: an
-    // idling engine's output goes on its own auxiliaries, not down the alternator.
-    const float made = std::clamp((rpm - idleRpm_) / span, 0.0f, 1.0f);
-    const float rate = made > load_ ? kLoadOnRate : kLoadOffRate;
-    load_ = std::clamp(load_ + std::clamp(made - load_, -rate * dt, rate * dt), 0.0f, 1.0f);
+        // What the engine is *making*, which is not what the notch asked for until it has
+        // got there. Taking this from the notch instead - as this did - hands the driver
+        // full power the instant he touches the handle, with the engine still at idle
+        // underneath it, and is the whole of why the locomotive answered too quickly. Zero
+        // at idle: an idling engine's output goes on its own auxiliaries, not down the
+        // alternator.
+        const float made = std::clamp((rpm - idleRpm_) / span, 0.0f, 1.0f);
+        const float rate = made > load_ ? kLoadOnRate : kLoadOffRate;
+        load_ =
+            std::clamp(load_ + std::clamp(made - load_, -rate * dt, rate * dt), 0.0f, 1.0f);
+    }
 
     const float sp = std::abs(physV_);
-    // The battery adds to the diesel while it has charge to give, and stops at a floor
-    // kept back for the auxiliaries and for starting off again.
-    const bool boosting = batteryBoostW_ > 0.0f && batteryJ_ > kBatteryFloor * batteryCapJ_;
-    const float pAvail = powerW_ + (boosting ? batteryBoostW_ : 0.0f);
-    const float pRail = load_ * pAvail * kElectricEta;
+    // On a battery train the rating is the diesel's and the battery's together, and what
+    // can actually be had is what the sets on line deliver at their present revs, less the
+    // auxiliaries, plus what the battery will give at its present charge.
+    float pIn = load_ * powerW_;
+    if (isHybrid()) {
+        const float bus = genCapW_ + batteryDischargeLimit(batteryFrac()) - auxNowW_;
+        askW_ = load_ * (powerW_ + batteryBoostW_);
+        pIn = std::min(askW_, std::max(0.0f, bus));
+        // What the drive would draw if the bus had it, which below the corner is the
+        // current limit's and not the notch's: 128 kN at 20 km/h is under 900 kW however far
+        // the handle is open, and the sets are not to be run for the rest.
+        const float flat =
+            startTE_ > 0.0f ? load_ * startTE_ : std::numeric_limits<float>::max();
+        const float teAsk = std::min(std::min(flat, askW_ * kElectricEta / std::max(sp, 0.05f)),
+                                     kTractionMu * drivenFrac_ * mass_ * kG);
+        askW_ = (reverse && sp > kRevSpeedCap) ? 0.0f : teAsk * sp / kElectricEta;
+    }
+    const float pRail = pIn * kElectricEta;
     // Three limits, and which one binds is the whole character of the machine.
     //
     // The flat one is a CURRENT limit. Tractive effort is what amperes buy, and there is
@@ -1131,13 +1200,6 @@ void Vehicle::updateElectricDrive(float demandSigned, float demand, bool powerin
     if (reverse && sp > kRevSpeedCap) TE = 0.0f;
     tractiveEffort_ = dir * TE;
     railPower_ = TE * sp;
-    // What came out of the battery: whatever the drive used beyond what the diesel makes.
-    // At low speed the current limit binds well under the diesel's power and nothing does.
-    if (boosting) {
-        const float drawn = std::clamp(railPower_ / kElectricEta - load_ * powerW_, 0.0f,
-                                       batteryBoostW_);
-        batteryJ_ = std::max(0.0f, batteryJ_ - drawn * dt);
-    }
 }
 
 // The rheostatic brake: the same machines turned round. They are driven as generators and
@@ -1158,7 +1220,7 @@ void Vehicle::updateDynamicBrake(float demand, bool inGear, float dt) {
     if (dynBrakeN_ <= 0.0f || demand <= 0.0f) return;
     // Part of the traction system: no engine, no auxiliaries, nothing to excite the
     // machines with - and nothing at all from a cab that is not in gear.
-    if (!engineOn_ || !enginesRunning() || !inGear) return;
+    if (!tractionReady() || !inGear) return;
     if (state_ != VehicleState::OnRail) return;
 
     const float sp = std::abs(physV_);
@@ -1173,17 +1235,151 @@ void Vehicle::updateDynamicBrake(float demand, bool inGear, float dt) {
     dynBrake_ = fade * std::min(std::min(beFlat, bePower), beAdh);
 }
 
-// Charging. Braking on the motors makes current, and with a battery aboard as much of it as
-// the battery will take goes in rather than up in heat; the rest still goes to the grids.
-// Off the brake, a running diesel tops it up slowly. Called every step from update().
-void Vehicle::chargeBattery(float dt) {
-    if (batteryCapJ_ <= 0.0f || batteryJ_ >= batteryCapJ_) return;
-    float inW = 0.0f;
-    if (dynBrake_ > 0.0f)
-        inW = std::min(dynBrake_ * std::abs(physV_) * kElectricEta, batteryBoostW_);
-    else if (engineOn_ && enginesRunning() && railPower_ <= 0.0f)
-        inW = kBatteryTrickleW;
-    batteryJ_ = std::min(batteryCapJ_, batteryJ_ + inW * dt);
+float Vehicle::batteryChargeLimit(float frac) const {
+    constexpr int n = static_cast<int>(sizeof(kChargeTaperSoc) / sizeof(kChargeTaperSoc[0]));
+    if (frac <= kChargeTaperSoc[0]) return batteryBoostW_;
+    for (int i = 1; i < n; ++i)
+        if (frac <= kChargeTaperSoc[i]) {
+            const float t = (frac - kChargeTaperSoc[i - 1]) /
+                            (kChargeTaperSoc[i] - kChargeTaperSoc[i - 1]);
+            const float lo = kChargeTaperFrac[i - 1], hi = kChargeTaperFrac[i];
+            return batteryBoostW_ * (lo + t * (hi - lo));
+        }
+    return 0.0f;
+}
+
+float Vehicle::batteryDischargeLimit(float frac) const {
+    return batteryBoostW_ * std::clamp((frac - kBatteryFloor) / kBatteryFloorBand, 0.0f, 1.0f);
+}
+
+float Vehicle::batteryTarget() const {
+    const float r = std::min(1.0f, std::abs(physV_) / kHybridTopSpeed);
+    return kSocTargetRest - kSocTargetDrop * r * r;
+}
+
+// The energy manager of a battery train. Everything on it is electric - traction, the hotel
+// load, the compressor - and all of it hangs off one bus, fed by the generator sets and the
+// battery. The sets are there for the battery, not for the handle: a burst of power or a
+// brake application is the battery's to carry or soak up, and the sets follow only the
+// load as it is over the last minute, plus what it takes to bring the charge back to where
+// it is held. That is kept well below full, so a brake application has somewhere to go.
+//
+// The battery is the one bound to its limits, which come from its charge: it takes no more
+// than its taper allows near full and gives nothing at its floor. Whatever the bus needs
+// beyond what it may give, the sets are told to make at once; whatever braking current
+// it will not take goes up in the grids, so the brake is as strong full as empty.
+//
+// The sets come on line as they are wanted - as many as the setpoint needs - and are
+// stopped only once they have not been for a minute. Each one's revs follow its share of
+// the load, so the engines are heard winding up some seconds after the train starts pulling,
+// and at a platform there is one idling or none. Called every step from update(), after
+// the drive and the brake have said what they are taking and making.
+void Vehicle::manageEnergy(float dt) {
+    if (!isHybrid() || dt <= 0.0f) return;
+    battW_ = gridW_ = genW_ = genCapW_ = 0.0f;
+    const float sp = std::abs(physV_);
+    const float span = std::max(1.0f, governedRpm_ - idleRpm_);
+    const float crank = idleRpm_ / kCrankTime, spinDown = idleRpm_ / kSpinDownTime;
+    const float slew = span / std::max(0.05f, spoolTime_);
+    // Switched off: a dead bus. The sets run down and the battery is left alone.
+    if (!engineOn_) {
+        auxNowW_ = loadAvgW_ = genSetW_ = 0.0f;
+        setsWanted_ = 0;
+        for (int i = 0; i < engineCount_; ++i)
+            engineRpm_[i] = std::max(0.0f, engineRpm_[i] - spinDown * dt);
+        if (dynBrake_ > 0.0f) gridW_ = dynBrake_ * sp * kElectricEta;
+        return;
+    }
+
+    // What the bus is asked for: + is a load, and braking current comes off it.
+    auxNowW_ = auxW_ + (compActive_ ? compressorW_ : 0.0f);
+    const float tractionW = railPower_ / kElectricEta;
+    const float brakeW = dynBrake_ * sp * kElectricEta;
+    const float load = tractionW + auxNowW_ - brakeW;
+
+    const float frac = batteryFrac();
+    const float giveW = batteryDischargeLimit(frac), takeW = batteryChargeLimit(frac);
+    const float perSet = (powerW_ + auxW_) / static_cast<float>(engineCount_);
+    const float genMax = perSet * static_cast<float>(engineCount_);
+    // The setpoint: the smoothed load, and the charge brought back toward the target. Never
+    // less than what the battery cannot cover, and never so much that it would be charged
+    // past what it will take. What it cannot cover is reckoned on what the handle asks, not
+    // on what the drive is getting: the drive is held to what the bus has, so the load it
+    // actually draws can never show the shortfall that the sets are needed for.
+    const float asked = std::max(load, askW_ + auxNowW_ - brakeW);
+    float want = loadAvgW_ + (batteryTarget() - frac) * batteryCapJ_ / kSocReturnTime;
+    want = std::max(want, asked - giveW);
+    want = std::min(want, std::max(0.0f, asked + takeW));
+    // And the sets charge it only while it is below where it is held. Above that, room in it
+    // is the brake's: the setpoint trailing down after a burst of power must not fill it.
+    if (frac >= batteryTarget()) want = std::min(want, std::max(0.0f, asked));
+    genSetW_ = std::clamp(want, 0.0f, genMax);
+
+    // How many sets that needs, each worked to no more than nine tenths of its rating.
+    const int need = std::min(
+        engineCount_, static_cast<int>(std::ceil(genSetW_ / (0.9f * perSet) - 1e-3f)));
+    if (need >= setsWanted_) {
+        setsWanted_ = need;
+        setsHold_ = 0.0f;
+    } else if ((setsHold_ += dt) >= kSetStopHold) {
+        setsWanted_ = need;
+        setsHold_ = 0.0f;
+    }
+
+    // The sets on line share the setpoint; one still starting makes nothing yet, and the
+    // battery covers it until it is up. Revs follow the share asked of each.
+    int onLine = 0;
+    for (int i = 0; i < setsWanted_; ++i)
+        if (engineRpm_[i] >= idleRpm_ * 0.99f) ++onLine;
+    const float share = onLine > 0 ? genSetW_ / static_cast<float>(onLine) : 0.0f;
+    const float shareFrac =
+        std::clamp((share / perSet - kIdleLoadFrac) / (1.0f - kIdleLoadFrac), 0.0f, 1.0f);
+    for (int i = 0; i < engineCount_; ++i) {
+        float& rpm = engineRpm_[i];
+        if (i >= setsWanted_) {
+            rpm = std::max(0.0f, rpm - spinDown * dt);
+            continue;
+        }
+        if (rpm < idleRpm_ * 0.99f) {
+            rpm = std::min(idleRpm_, rpm + crank * dt);
+            continue;
+        }
+        const float rpmWant = idleRpm_ + shareFrac * span;
+        rpm = std::clamp(rpm + std::clamp(rpmWant - rpm, -slew * dt, slew * dt), idleRpm_,
+                         governedRpm_);
+        const float revs = (rpm - idleRpm_) / span;
+        const float can = perSet * (kIdleLoadFrac + (1.0f - kIdleLoadFrac) * revs);
+        genCapW_ += can;
+        genW_ += std::min(share, can);
+    }
+
+    // The battery takes up the difference, inside its limits. Braking current it will not
+    // take goes to the grids; generator output it will not take is not made.
+    float batt = load - genW_;
+    if (batt < -takeW) {
+        const float excess = -takeW - batt;
+        gridW_ = std::min(excess, brakeW);
+        genW_ = std::max(0.0f, genW_ - (excess - gridW_));
+        batt = -takeW;
+    }
+    batt = std::min(batt, giveW);
+    battW_ = batt;
+    // The load the sets follow is the bus's as it was actually met: braking current burned
+    // in the grids never reached the bus, and counting it would hold the sets down for a
+    // minute after every hard brake application and leave the next start to the battery.
+    loadAvgW_ += (load + gridW_ - loadAvgW_) * std::min(1.0f, dt / kLoadAvgTime);
+    if (batt > 0.0f)
+        batteryJ_ -= batt / kBatteryEta * dt;
+    else
+        batteryJ_ -= batt * kBatteryEta * dt;
+    batteryJ_ = std::clamp(batteryJ_, 0.0f, batteryCapJ_);
+
+    // What the brake gave back is all of its current that was not burned: what ran the hotel
+    // load in place of the sets, and what went into the battery for later.
+    energy_.traction += static_cast<double>(tractionW) * dt;
+    energy_.recovered += static_cast<double>(brakeW - gridW_) * dt;
+    energy_.grids += static_cast<double>(gridW_) * dt;
+    energy_.generated += static_cast<double>(genW_) * dt;
 }
 
 // Motor current as a fraction of what the drive will pass. Effort is what current buys,
@@ -1303,8 +1499,8 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
     // sets whose paths disagree about which way is +s then pull the same way.
     const float demandSigned = static_cast<float>(orient_) * cmd.demand;
     const float demand = std::abs(demandSigned);
-    const bool powering = engineOn_ && cmd.powering && demand > 0.0f &&
-                          enginesRunning() && state_ == VehicleState::OnRail;
+    const bool powering = cmd.powering && demand > 0.0f && tractionReady() &&
+                          state_ == VehicleState::OnRail;
     tractiveEffort_ = 0.0f;
     // Off the rails there are no friction surfaces doing anything; only the on-rail
     // branch below sets this, so clear it or a derailed vehicle reports the last
@@ -1314,7 +1510,8 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
 
     // Engines crank up to / spin down from idle, independent of motion; a running
     // compressor loads its engine down a little (compActive_ is last frame's value).
-    if (!powering) {
+    // A battery train's sets are the energy manager's, not the handle's.
+    if (!powering && !isHybrid()) {
         const float rpmTarget =
             engineOn_ ? idleRpm_ - (compActive_ ? kCompLoadDrop : 0.0f) : 0.0f;
         const float up = idleRpm_ / kCrankTime, down = idleRpm_ / kSpinDownTime;
@@ -1345,7 +1542,10 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
             dynBrakeW_ > 0.0f ? std::min(dynBrakeN_, dynBrakeW_ / sp) : dynBrakeN_;
         dynDemand = std::max(dynDemand, std::min(1.0f, serviceDecel(cmdNotch_) * mass_ / canN));
     }
-    updateDynamicBrake(cmd.emergency ? 0.0f : dynDemand, cmd.demand != 0.0f || dynDemand > 0.0f,
+    // An emergency application drops it, whether it came down the train-wide line or from
+    // the driver's own valve put to EMERG: either way what is wanted is every shoe there is.
+    const bool emergency = cmd.emergency || effectiveNotch() == kEmergencyNotch;
+    updateDynamicBrake(emergency ? 0.0f : dynDemand, cmd.demand != 0.0f || dynDemand > 0.0f,
                        dt);
 
     if (state_ != VehicleState::OnRail) return {};
@@ -1353,7 +1553,7 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
     // Traction: a torque converter feeding a 5-speed automatic gearbox. The effort is
     // left in tractiveEffort_ rather than applied - the train moves as one.
     updateTraction(demandSigned, demand, powering, cmd.reverse, dt);
-    chargeBattery(dt);
+    manageEnergy(dt);
 
     // Low main-reservoir safety: if the reservoir falls below the trip pressure this
     // set calls for emergency regardless of the handle, latched until the reservoir
@@ -1557,9 +1757,14 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
     // a real fault on a machine that has a compressor, and stays modelled. "Running"
     // uses a threshold below the compressor load droop so the droop can't make it cut
     // out and hunt.
+    // A battery train's compressor is an electric motor on the bus, so it works whenever
+    // the set is switched on, whether a generator set is running or not.
     int running = 0;
-    for (int i = 0; i < engineCount_; ++i)
-        if (engineRpm_[i] >= idleRpm_ * 0.9f) ++running;
+    if (isHybrid())
+        running = tractionReady() ? engineCount_ : 0;
+    else
+        for (int i = 0; i < engineCount_; ++i)
+            if (engineRpm_[i] >= idleRpm_ * 0.9f) ++running;
     if (running > 0 && compOn_)
         mrPres_ += kCompRate * (static_cast<float>(running) / engineCount_) * dt;
     mrPres_ = std::clamp(mrPres_, 0.0f, kMRCapacity);

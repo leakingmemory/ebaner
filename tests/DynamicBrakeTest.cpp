@@ -21,7 +21,8 @@
 //
 // The shape is what is tested here rather than those numbers. It shares its hardware with
 // the traction curve and is bounded the same way - current below a corner, grid power above
-// it - and the end that matters is the bottom: a machine turning slowly generates nothing.
+// it - and the end that matters is the bottom: a machine turning slowly generates nothing,
+// so the brake fades out between 35 and 25 km/h and the shoes stop the train.
 // A dynamic brake that did NOT fade out would hold a train at a stand, because the consist
 // clamps retardation to the speed the train has rather than letting it push the train
 // backwards, and a force that never faded would be indistinguishable from a parking brake.
@@ -118,12 +119,20 @@ int main() {
               atRest, 0.0);
         check(crawl == 0.0f, "  and nothing at a crawl either", crawl, 0.0);
 
-        const float b10 = brakeAt(w, *di4, 10.0f / 3.6f);
+        // Below 25 km/h there is nothing, it comes in through 30, and by 35 it is whole.
+        // The Di 4's corner is at 28 km/h, inside that band, so at 35 it is already on its
+        // grids' limit rather than its current limit.
+        const auto whole = [&](float v) {
+            return std::min(di4->dynBrakeN, di4->dynBrakeW / v);
+        };
         const float b20 = brakeAt(w, *di4, 20.0f / 3.6f);
-        check(b10 > 0.9f * di4->dynBrakeN, "at 10 km/h it is at its current limit", b10,
-              di4->dynBrakeN);
-        check(std::abs(b10 - b20) < 0.02f * di4->dynBrakeN,
-              "  and flat from there to the corner", b10, b20);
+        const float b30 = brakeAt(w, *di4, 30.0f / 3.6f);
+        const float b36 = brakeAt(w, *di4, 36.0f / 3.6f);
+        check(b20 == 0.0f, "at 20 km/h it makes nothing", b20, 0.0);
+        check(b30 > 0.2f * whole(30.0f / 3.6f) && b30 < 0.8f * whole(30.0f / 3.6f),
+              "  at 30 km/h it is coming in", b30, 0.5 * whole(30.0f / 3.6f));
+        check(std::abs(b36 - whole(36.0f / 3.6f)) < 0.02f * whole(36.0f / 3.6f),
+              "  and at 36 km/h it is whole", b36, whole(36.0f / 3.6f));
 
         // Above the corner the grids are the limit, so effort times speed is constant.
         float worst = 0.0f;
@@ -142,7 +151,7 @@ int main() {
 
     std::puts("\nIt holds a train back, and on grids rather than shoes");
     {
-        Consist c(&w.paths, &w.paths[0], *night, 50000.0f, 25.0f);
+        Consist c(&w.paths, &w.paths[0], *night, 50000.0f, 40.0f);
         c.attachNetwork(&w.paths, nullptr);
         c.toggleEngines();
         c.setReverser(0, 1);
@@ -153,9 +162,9 @@ int main() {
         const float v0 = std::abs(c.velocity());
 
         for (int i = 0; i < 5; ++i) c.movePower(0, -1); // controller back to E5
-        for (int i = 0; i < 20 * 60; ++i) c.update(1.0f / 60.0f, 0.0f);
+        for (int i = 0; i < 10 * 60; ++i) c.update(1.0f / 60.0f, 0.0f);
         const float v1 = std::abs(c.velocity());
-        std::printf("    %.1f km/h down to %.1f in 20 s, electric brake %.0f kN\n",
+        std::printf("    %.1f km/h down to %.1f in 10 s, electric brake %.0f kN\n",
                     v0 * 3.6f, v1 * 3.6f, c.lead().dynamicBrakeForce() / 1000.0f);
         check(v1 < v0 - 1.0f, "E5 pulls a 435 t train down", v1, v0);
         check(c.lead().dynamicBrakeForce() > 1000.0f, "  on the electric brake",
@@ -216,7 +225,7 @@ int main() {
 
     std::puts("\nAnd it comes off before the train does stop");
     {
-        Consist c(&w.paths, &w.paths[0], *di4, 50000.0f, 6.0f);
+        Consist c(&w.paths, &w.paths[0], *di4, 50000.0f, 15.0f);
         c.attachNetwork(&w.paths, nullptr);
         c.toggleEngines();
         c.setReverser(0, 1);
@@ -229,13 +238,13 @@ int main() {
         // coasting to a stand sooner or later, so it stops either way. What has to be true
         // is that the ELECTRIC BRAKE is not what did it.
         int steps = 0;
-        while (std::abs(c.velocity()) > 0.30f && steps < 300 * 60) {
+        while (std::abs(c.velocity()) > 25.0f / 3.6f - 0.2f && steps < 300 * 60) {
             c.update(1.0f / 60.0f, 0.0f);
             ++steps;
         }
         const float vFade = std::abs(c.velocity());
         check(c.lead().dynamicBrakeForce() == 0.0f,
-              "by walking pace the brake has let go entirely",
+              "by 25 km/h the brake has let go entirely",
               c.lead().dynamicBrakeForce(), 0.0);
 
         // What is left is Davis and nothing else: on 120 t that is about 0.02 m/s2, where
@@ -269,15 +278,12 @@ int main() {
         check(corner > 5.0f && corner < 20.0f,
               "  and the corner lands somewhere a freight train actually runs", corner,
               8.2);
-        // Below the corner, flat at the current limit. Asked at 20 m/s to begin with,
-        // which is a speed this machine is well PAST the corner at - the answer came back
-        // at four tenths of the maximum and looked like a fault, when it was the brake
-        // being grid-limited exactly as it should be.
-        const float slow = brakeAt(w, *cd, 0.6f * corner);
-        check(slow > 0.9f * cd->dynBrakeN, "below the corner it is at its current limit",
-              slow / 1000.0f, cd->dynBrakeN / 1000.0f);
+        // Its corner is inside the band the brake fades in, so what is left of the flat
+        // part is faded: below 25 km/h there is nothing, and from 36 up it is on its grids.
+        const float slow = brakeAt(w, *cd, 20.0f / 3.6f);
+        check(slow == 0.0f, "at 20 km/h it makes nothing", slow / 1000.0f, 0.0);
         float worst = 0.0f;
-        for (const float kmh : {50.0f, 90.0f, 120.0f}) {
+        for (const float kmh : {36.0f, 50.0f, 90.0f, 120.0f}) {
             const float v = kmh / 3.6f;
             const float p = brakeAt(w, *cd, v) * v;
             worst = std::max(worst, std::abs(p - cd->dynBrakeW) / cd->dynBrakeW);

@@ -125,6 +125,9 @@ struct RunningGear {
     int bogieCount;
     const GearSection* sections;
     int sectionCount;
+    // The car the prime movers are in, which is where they are heard from; -1 spreads them
+    // over the sections one each, as an evenly built vehicle has them.
+    int engineSection = -1;
 };
 
 struct VehicleSpec {
@@ -229,6 +232,12 @@ struct VehicleSpec {
     // How loudly the friction brake squeals, 0..1. Disc brakes on some stock ring
     // audibly whenever the pads are on; most is quiet enough to say nothing.
     float brakeSqueal = 0.0f;
+    // On a battery train everything is electric and hangs off one bus: the auxiliaries -
+    // heating, ventilation, lighting, the doors - and the air compressor, which is a motor
+    // like the rest. What they draw comes off the generator sets and the battery before
+    // the traction does. Zero for everything without a battery.
+    float auxW = 0.0f;        // W, the hotel load
+    float compressorW = 0.0f; // W, while it pumps
 };
 
 // A formation: the same machine, with something coupled behind it. Written as a copy so
@@ -303,7 +312,7 @@ inline constexpr GearSection kT76Sections[] = {
     {16.524f, 34.857f, 16.309f, 34.583f},     // BPa
     {34.857f, 56.350f, 34.583f, 51.374f},     // BMa
 };
-inline constexpr RunningGear kT76Gear = {kT76Bogies, 8, kT76Sections, 6};
+inline constexpr RunningGear kT76Gear = {kT76Bogies, 8, kT76Sections, 6, 2}; // XDe
 
 // The vehicles offered on the start screen.
 inline constexpr VehicleSpec kVehicleSpecs[] = {
@@ -372,7 +381,12 @@ inline constexpr VehicleSpec kVehicleSpecs[] = {
      .batteryBoostW = 250000.0f,
      // Its disc brakes squeal, loudly, whenever the pads are on: plain to anyone on the
      // platform, and little of it heard inside.
-     .brakeSqueal = 1.0f},
+     .brakeSqueal = 1.0f,
+     // ESTIMATES, chosen so the published figures reconcile: four 480 kW engines make
+     // about 1770 kW of electricity at 92%, and what is left for traction after the hotel
+     // load and the compressor is the 1550 kW Norske Tog gives.
+     .auxW = 150000.0f,
+     .compressorW = 20000.0f},
     // The standard rake, as it is marshalled: cafe second, 2nd class third and fourth,
     // and 1st class on the tail.
     hauling(kDi4Spec, "NSB Di 4 + 5 (cafe 2nd)", "BC5-3,FR5-1,B5-3,B5-5,A5-1"),
@@ -926,8 +940,33 @@ public:
     // The traction battery, as a fraction of its capacity; 0 for a vehicle without one.
     float batteryFrac() const { return batteryCapJ_ > 0.0f ? batteryJ_ / batteryCapJ_ : 0.0f; }
     bool hasBattery() const { return batteryCapJ_ > 0.0f; }
-    // Set the charge, 0..1. For the tests; a set is put on the road charged.
+    // Set the charge, 0..1. For the tests; a set is put on the road at its target.
     void setBatteryFrac(float f) { batteryJ_ = std::clamp(f, 0.0f, 1.0f) * batteryCapJ_; }
+    // A battery train's energy system. Everything is electric, so the generator sets are
+    // there only to keep the battery where it should be: see manageEnergy.
+    bool isHybrid() const { return batteryCapJ_ > 0.0f && drive_ == DriveElectric; }
+    // What the battery will take and give at a charge, W. A lithium pack charges at its
+    // full current until its cells reach their voltage ceiling, and then tapers steeply,
+    // so a nearly full battery takes little of a brake application; and it is kept from
+    // being run flat by a floor its discharge fades into.
+    float batteryChargeLimit(float frac) const;
+    float batteryDischargeLimit(float frac) const;
+    float batteryTarget() const;            // where the energy manager holds the charge
+    float batteryPower() const { return battW_; } // W, + out of the battery
+    float gridPower() const { return gridW_; }    // W of the electric brake into the grids
+    float generatorPower() const { return genW_; } // W the sets are delivering
+    int generatorsRunning() const;          // sets up to speed and on load
+    int engineSection() const {
+        return runningGear_ != nullptr ? runningGear_->engineSection : -1;
+    }
+    // Running totals, J, for judging the energy system over a trip.
+    struct EnergyTotals {
+        double traction = 0.0;  // into the traction drive
+        double recovered = 0.0; // braking energy put to use: the battery, the hotel load
+        double grids = 0.0;     // braking energy burned in the grids
+        double generated = 0.0; // out of the generator sets
+    };
+    const EnergyTotals& energyTotals() const { return energy_; }
     // How hard the grids are working, 0..1. What the blower is fed from.
     float dynamicBrakeFrac() const {
         if (dynBrakeN_ <= 0.0f) return 0.0f;
@@ -1050,6 +1089,10 @@ public:
     // Two Cummins N14E-R (14 L), full power at 1500 rev/min (the tachometer top).
     static constexpr float kMaxRpm = 1500.0f;
     void toggleEngines();                   // start if off, else stop (both together)
+    // Whether the set can take power and brake on its motors. On most it is the engines
+    // being on and up to idle. On a battery train it is the set being switched on: the bus
+    // is live from the battery, and the generator sets come and go underneath it.
+    bool tractionReady() const;
     int engineCount() const { return engineCount_; }
     float engineRpm(int i) const;           // current speed (rev/min)
     EngineState engineState(int i) const;
@@ -1093,7 +1136,7 @@ private:
     void updateElectricDrive(float demandSigned, float demand, bool powering,
                              bool reverse, float dt);
     void updateDynamicBrake(float demand, bool inGear, float dt);
-    void chargeBattery(float dt);
+    void manageEnergy(float dt);
     // Arc-length offsets of each bogie centre from the body centre (s_).
     std::vector<float> bogieCentres() const;
     // Half the span between the body's two support points (the two end bogies for
@@ -1154,6 +1197,15 @@ private:
     float dynBrakeN_ = 0.0f, dynBrakeW_ = 0.0f;
     float batteryCapJ_ = 0.0f, batteryBoostW_ = 0.0f;
     float batteryJ_ = 0.0f; // what is in it now
+    float auxW_ = 0.0f, compressorW_ = 0.0f;
+    // The energy manager's state: the bus load smoothed, the sets' combined setpoint, how
+    // many sets it wants and how long it has wanted fewer, and what flowed this step.
+    float loadAvgW_ = 0.0f, genSetW_ = 0.0f, genCapW_ = 0.0f;
+    float askW_ = 0.0f; // what the handle asks of the bus, which may be more than it gets
+    int setsWanted_ = 0;
+    float setsHold_ = 0.0f;
+    float battW_ = 0.0f, gridW_ = 0.0f, genW_ = 0.0f, auxNowW_ = 0.0f;
+    EnergyTotals energy_;
     float dynBrake_ = 0.0f; // what the electric brake is making this step, N
     bool valveHere_ = true;  // the driver's brake valve is on this vehicle
     bool emergVent_ = false; // the accelerator: this distributor is dumping its own pipe
@@ -1199,7 +1251,7 @@ private:
     bool feedCut_ = false;              // feed to the brake pipe closed on low reservoir
     int engineCount_ = 0;               // diesel engines (2 for a Class 93, else 0)
     bool engineOn_ = false;             // commanded on/off (both engines together)
-    float engineRpm_[2] = {0.0f, 0.0f}; // per-engine speed
+    float engineRpm_[4] = {0.0f, 0.0f, 0.0f, 0.0f}; // per-engine speed
     bool compActive_ = false;           // a compressor is pumping (loads the engine)
     glm::vec3 pos_{0.0f};               // derailed free-body position
     glm::vec3 vel_{0.0f};               // derailed velocity
