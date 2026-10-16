@@ -238,6 +238,10 @@ struct VehicleSpec {
     // the traction does. Zero for everything without a battery.
     float auxW = 0.0f;        // W, the hotel load
     float compressorW = 0.0f; // W, while it pumps
+    // What the battery will give for a short while, above the batteryBoostW it is rated to
+    // carry. The energy manager sizes the generator sets on the rating, so the peak is what
+    // covers the gap while they start and wind up. Zero means no more than the rating.
+    float batteryPeakW = 0.0f; // W
 };
 
 // A formation: the same machine, with something coupled behind it. Written as a copy so
@@ -386,7 +390,10 @@ inline constexpr VehicleSpec kVehicleSpecs[] = {
      // about 1770 kW of electricity at 92%, and what is left for traction after the hotel
      // load and the compressor is the 1550 kW Norske Tog gives.
      .auxW = 150000.0f,
-     .compressorW = 20000.0f},
+     .compressorW = 20000.0f,
+     // ESTIMATE: no published figure; twice the rating, which a lithium traction pack
+     // gives for some seconds without complaint. Charging stays at the rating.
+     .batteryPeakW = 500000.0f},
     // The standard rake, as it is marshalled: cafe second, 2nd class third and fourth,
     // and 1st class on the tail.
     hauling(kDi4Spec, "NSB Di 4 + 5 (cafe 2nd)", "BC5-3,FR5-1,B5-3,B5-5,A5-1"),
@@ -1198,7 +1205,7 @@ private:
     int indNotch_[2] = {0, 0}; // per-cab independent brake handle
     float indDemand_ = 0.0f;   // what the link is asking of this vehicle's own cylinders
     float dynBrakeN_ = 0.0f, dynBrakeW_ = 0.0f;
-    float batteryCapJ_ = 0.0f, batteryBoostW_ = 0.0f;
+    float batteryCapJ_ = 0.0f, batteryBoostW_ = 0.0f, batteryPeakW_ = 0.0f;
     float batteryJ_ = 0.0f; // what is in it now
     float auxW_ = 0.0f, compressorW_ = 0.0f;
     // The energy manager's state: the bus load smoothed, the sets' combined setpoint, how

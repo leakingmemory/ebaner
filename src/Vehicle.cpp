@@ -295,6 +295,7 @@ Vehicle::Vehicle(const TrackPath* path, const VehicleSpec& spec, float s,
       dynBrakeW_(spec.dynBrakeW),
       batteryCapJ_(spec.batteryJ),
       batteryBoostW_(spec.batteryBoostW),
+      batteryPeakW_(std::max(spec.batteryPeakW, spec.batteryBoostW)),
       batteryJ_(spec.batteryJ * kSocTargetRest), // where the manager would hold it
       auxW_(spec.auxW),
       compressorW_(spec.compressorW),
@@ -1248,8 +1249,10 @@ float Vehicle::batteryChargeLimit(float frac) const {
     return 0.0f;
 }
 
+// What it will give at a charge: its peak, fading out above the floor. What it may carry
+// for any length of time is its rating, scaled the same way - see manageEnergy().
 float Vehicle::batteryDischargeLimit(float frac) const {
-    return batteryBoostW_ * std::clamp((frac - kBatteryFloor) / kBatteryFloorBand, 0.0f, 1.0f);
+    return batteryPeakW_ * std::clamp((frac - kBatteryFloor) / kBatteryFloorBand, 0.0f, 1.0f);
 }
 
 float Vehicle::batteryTarget() const {
@@ -1308,7 +1311,10 @@ void Vehicle::manageEnergy(float dt) {
     // actually draws can never show the shortfall that the sets are needed for.
     const float asked = std::max(load, askW_ + auxNowW_ - brakeW);
     float want = loadAvgW_ + (batteryTarget() - frac) * batteryCapJ_ / kSocReturnTime;
-    want = std::max(want, asked - giveW);
+    // What it cannot cover is reckoned on its rating, not its peak: the peak is for the
+    // seconds it takes the sets so ordered to come up, and is not to be leaned on after.
+    const float ratedGiveW = batteryPeakW_ > 0.0f ? giveW * batteryBoostW_ / batteryPeakW_ : 0.0f;
+    want = std::max(want, asked - ratedGiveW);
     want = std::min(want, std::max(0.0f, asked + takeW));
     // And the sets charge it only while it is below where it is held. Above that, room in it
     // is the brake's: the setpoint trailing down after a burst of power must not fill it.

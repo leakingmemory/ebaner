@@ -5476,7 +5476,7 @@ int main(int argc, char** argv) {
                                 t.brakeNotch(acab), t.bpPressure(acab), t.bcPressure(acab),
                                 t.dynamicBrakeForce() / 1000.0f,
                                 t.lead().batteryFrac() * 100.0f,
-                                t.lead().batteryPower() / 1000.0f,
+                                -t.lead().batteryPower() / 1000.0f, // + charging
                                 t.lead().generatorsRunning(),
                                 t.lead().generatorPower() / 1000.0f,
                                 // What the brake has put back, as a share of what traction
@@ -5970,15 +5970,15 @@ int main(int argc, char** argv) {
                     y += lh;
                 }
                 // The traction battery, where there is one: how much is in it against
-                // where it is held, what is going in or out (+ out), and how much of the
-                // electric brake it is not taking.
+                // where it is held, what is going in or out (+ charging, - discharging), and
+                // how much of the electric brake it is not taking.
                 if (vehicle->lead().hasBattery()) {
                     const Vehicle& u = vehicle->lead();
                     std::snprintf(buf, sizeof(buf),
                                   "BATT %3.0f%% (%2.0f)  %+4.0f kW   e-brake %3.0f kN  "
                                   "grids %4.0f kW",
                                   u.batteryFrac() * 100.0f, u.batteryTarget() * 100.0f,
-                                  u.batteryPower() / 1000.0f,
+                                  -u.batteryPower() / 1000.0f,
                                   vehicle->dynamicBrakeForce() / 1000.0f,
                                   u.gridPower() / 1000.0f);
                     appendText(tv, buf, x, y, sc, glm::vec3(0.7f, 0.85f, 0.7f), fbw, fbh);

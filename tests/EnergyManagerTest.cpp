@@ -116,7 +116,8 @@ int main() {
                   "charge at " + std::to_string(int(p.soc * 100)) + "% (of rated)", got,
                   p.want);
         }
-        for (const Pt p : {Pt{0.20f, 0.0f}, Pt{0.25f, 0.5f}, Pt{0.30f, 1.0f}}) {
+        // It gives up to its peak, twice its rating, and charges at no more than the rating.
+        for (const Pt p : {Pt{0.20f, 0.0f}, Pt{0.25f, 1.0f}, Pt{0.30f, 2.0f}}) {
             const float got = u.batteryDischargeLimit(p.soc) / rated;
             check(std::abs(got - p.want) < 0.01f,
                   "discharge at " + std::to_string(int(p.soc * 100)) + "% (of rated)", got,
@@ -137,9 +138,13 @@ int main() {
         const Vehicle& u = c.lead();
         check(u.generatorsRunning() < 4, "two seconds in, the sets are still starting",
               u.generatorsRunning(), 1);
-        check(u.batteryPower() > 200000.0f, "  and the battery is carrying it (kW)",
-              u.batteryPower() / 1000.0f, 250.0);
+        check(u.batteryPower() > 300000.0f,
+              "  and the battery is carrying it, past its rating (kW)", u.batteryPower() / 1000.0f, 500.0);
+        check(u.batteryPower() <= 500500.0f, "  but no further than its peak (kW)",
+              u.batteryPower() / 1000.0f, 500.0);
         run(c, 13.0f);
+        check(u.batteryPower() <= 250500.0f,
+              "  and once they are up, it is back inside its rating (kW)", u.batteryPower() / 1000.0f, 250.0);
         check(u.generatorsRunning() == 4, "fifteen seconds in, all four sets are on line",
               u.generatorsRunning(), 4);
         check(std::abs(railKW(c) - 1800.0f) < 30.0f, "  and the rail has its 1800 kW",
