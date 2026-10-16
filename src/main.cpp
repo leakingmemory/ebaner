@@ -5711,8 +5711,29 @@ int main(int argc, char** argv) {
             audio.setCrossingBell(bellGain);
             // In the cab of the train being heard, its insulation is between the listener
             // and its running gear.
-            audio.setInsideCab(g_driverPos >= 0 && sounded == vehicle);
-            audio.update(*sounded, simDt, distGain, voices, nGain, rollGain);
+            const bool insideCab = g_driverPos >= 0 && sounded == vehicle;
+            audio.setInsideCab(insideCab);
+            // The brake pipe is heard at the driver's brake valve, in the cab the train is
+            // driven from: the one in gear, or failing that the one the keyboard drives.
+            // Sat in that cab it is right there. From outside it is the cab end that hisses,
+            // fading with distance from it and never as loud as inside; from another cab of
+            // the same train it comes down the length of it through two cab walls.
+            float pipeGain = 0.0f;
+            {
+                int brakeCab = sounded->activeCab();
+                if (brakeCab < 0) brakeCab = sounded == vehicle ? std::max(0, g_driverPos) : 0;
+                glm::vec3 eye, fwd;
+                if (insideCab && g_driverPos == brakeCab) {
+                    pipeGain = 1.0f;
+                } else if (drivercam::eyePose(*sounded, brakeCab, eye, fwd)) {
+                    const float d = glm::distance(camPos, eye);
+                    pipeGain = 0.5f * glm::clamp((45.0f - d) / 40.0f, 0.0f, 1.0f);
+                    if (insideCab) pipeGain *= 0.3f;
+                } else {
+                    pipeGain = distGain * 0.5f; // nothing to sit in: heard off the train
+                }
+            }
+            audio.update(*sounded, simDt, distGain, pipeGain, voices, nGain, rollGain);
             // refresh, not build: the trains have moved but their composition has not, so
             // the index buffer on the GPU still describes this geometry and only the
             // vertices need making again. Anything that changes what is in the train -

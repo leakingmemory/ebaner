@@ -129,7 +129,7 @@ std::vector<float> renderEngines(int units, const std::vector<float>& gains,
             g[i].rpm = static_cast<int>(i) < b.train->engineCount()
                            ? b.train->engineRpm(static_cast<int>(i))
                            : 0.0f;
-        a.update(*b.train, 1.0f / 60.0f, 0.0f, g.data(), static_cast<int>(g.size()), 0.0f);
+        a.update(*b.train, 1.0f / 60.0f, 0.0f, 0.0f, g.data(), static_cast<int>(g.size()), 0.0f);
         for (int done = 0; done < static_cast<int>(2.5f * kFs); done += 512)
             a.render(buf.data(), 512);
     }

@@ -73,6 +73,9 @@ constexpr float kSquealCurvature = 1.0f / 300.0f;
 // What of the disc squeal reaches the cab of the train making it. A modern unit's cab is
 // sealed and insulated, and the discs are under the floor at the far end of the car.
 constexpr float kDiscInsideGain = 0.12f;
+// And of the brake cylinders filling and exhausting, for the same reason: they are on
+// the bogies, outside and under the floor, and the cab keeps most of them out.
+constexpr float kCylInsideGain = 0.15f;
 // Rolling noise runs with the 30*log10(v) law measured on real track, which is an
 // amplitude proportional to v^1.5. Referenced to a brisk line speed so that is ~1.
 constexpr float kRollRefSpeed = 33.0f; // m/s (~120 km/h)
@@ -156,6 +159,9 @@ void Audio::render(float* out, int n) {
     const float targetAmp = amp_.load(std::memory_order_relaxed);
     const float targetBright = brightness_.load(std::memory_order_relaxed);
     const float targetEnv = envGain_.load(std::memory_order_relaxed);
+    const float pipeAmpT = pipeAmp_.load(std::memory_order_relaxed);
+    const float pipeBrightT = pipeBright_.load(std::memory_order_relaxed);
+    const float pipeEnvT = pipeGain_.load(std::memory_order_relaxed);
     float engRpmT[kMaxEngines] = {}, engGainT[kMaxEngines] = {};
     for (int k = 0; k < kMaxEngines; ++k) {
         engRpmT[k] = engRpm_[k].load(std::memory_order_relaxed);
@@ -193,6 +199,9 @@ void Audio::render(float* out, int n) {
         ampEnv_ += (targetAmp - ampEnv_) * (targetAmp > ampEnv_ ? 0.004f : 0.0015f);
         brightEnv_ += (targetBright - brightEnv_) * 0.002f;
         envEnv_ += (targetEnv - envEnv_) * 0.001f; // smooth distance fade
+        pipeAmpEnv_ += (pipeAmpT - pipeAmpEnv_) * (pipeAmpT > pipeAmpEnv_ ? 0.004f : 0.0015f);
+        pipeBrightEnv_ += (pipeBrightT - pipeBrightEnv_) * 0.002f;
+        pipeEnvEnv_ += (pipeEnvT - pipeEnvEnv_) * 0.001f;
 
         // White noise in [-1,1).
         rng_ = rng_ * 1664525u + 1013904223u;
@@ -206,6 +215,14 @@ void Audio::render(float* out, int n) {
         const float high = noise - svfLow_ - 1.0f * svfBand_;
         svfBand_ += f * high;
         const float hiss = svfBand_ * ampEnv_;
+        // The brake pipe through the driver's valve: the same kind of hiss off the same
+        // noise, through a filter of its own, since it is a different opening in a
+        // different place and is often doing the opposite thing at the same moment.
+        const float pfc = 1200.0f + pipeBrightEnv_ * 2200.0f;
+        const float pf = 2.0f * std::sin(kPi * pfc / fs);
+        pipeLow_ += pf * pipeBand_;
+        pipeBand_ += pf * (noise - pipeLow_ - pipeBand_);
+        const float pipeHiss = pipeBand_ * pipeAmpEnv_;
 
         // Valve click: a short band-passed noise edge plus a low "clunk" sine.
         float click = 0.0f;
@@ -723,7 +740,8 @@ void Audio::render(float* out, int n) {
         // they started, which sat a little loud against the engines.
         const float rollMix = 0.75f;
         float s = muted ? 0.0f
-                        : (hiss * 1.2f + click * 0.9f) * envEnv_ + engine * 0.30f +
+                        : hiss * 1.2f * envEnv_ + (pipeHiss * 1.2f + click * 0.9f) * pipeEnvEnv_ +
+                              engine * 0.30f +
                               comp * 0.22f + grid * 0.45f + bell * 0.34f + bang * 0.55f +
                               (roll * 0.45f + joints * 0.30f + squeal * 0.16f +
                                brakeRub * 0.16f + disc * 0.40f) * rollMix;
@@ -758,15 +776,16 @@ void Audio::impact(float severity, float gain) {
     bangs_.fetch_add(1, std::memory_order_release);
 }
 
-void Audio::update(const Consist& sounded, float /*dt*/, float brakeGain,
+void Audio::update(const Consist& sounded, float /*dt*/, float brakeGain, float pipeGain,
                    const EngineVoice* engines, int engineCount, float rollGain) {
     const Consist& v = sounded; // everything below asks the train, not a set
     // Two different sounds of air, and the brake makes both at once.
     //
-    // The train line is the one you hear: it runs the length of the train, and a
-    // reduction or a dump is a long loud rush from everywhere at once. The cylinders are
-    // local - a bogie filling is a short sigh under your feet - so they are quieter, and
-    // they matter mostly for the moment after the pipe has gone quiet again.
+    // The train line is let in and out at the driver's brake valve, so that is where it
+    // is heard: in the cab a reduction or a dump is a long loud rush, and from outside
+    // it is a sound from the cab end, fading with distance from it. The cylinders are on
+    // the bogies - a bogie filling is a short sigh under the floor - so they are heard
+    // outside along the train, and the cab keeps most of them out.
     //
     // Venting to atmosphere is prominent and bright; charging is subdued and dull. That
     // holds for both, which is why the pipe recharging after a release is the soft fill
@@ -779,12 +798,13 @@ void Audio::update(const Consist& sounded, float /*dt*/, float brakeGain,
     const float cylAmp = (bcR < 0.0f)
                              ? std::min(std::fabs(bcR) / 1.6f, 1.0f) * 0.55f   // exhaust
                              : std::min(std::fabs(bcR) / 6.0f, 1.0f) * 0.30f;  // fill
-    const float amp = std::max(pipeAmp, cylAmp);
-    amp_.store(amp, std::memory_order_relaxed);
-    // Bright if whichever of the two is louder is venting rather than filling.
-    const float loud = (pipeAmp >= cylAmp) ? bpR : bcR;
-    brightness_.store(loud < 0.0f ? 1.0f : 0.0f, std::memory_order_relaxed);
-    envGain_.store(std::clamp(brakeGain, 0.0f, 1.0f), std::memory_order_relaxed);
+    amp_.store(cylAmp, std::memory_order_relaxed);
+    brightness_.store(bcR < 0.0f ? 1.0f : 0.0f, std::memory_order_relaxed);
+    const float cylIns = insideCab_.load(std::memory_order_relaxed) ? kCylInsideGain : 1.0f;
+    envGain_.store(std::clamp(brakeGain, 0.0f, 1.0f) * cylIns, std::memory_order_relaxed);
+    pipeAmp_.store(pipeAmp, std::memory_order_relaxed);
+    pipeBright_.store(bpR < 0.0f ? 1.0f : 0.0f, std::memory_order_relaxed);
+    pipeGain_.store(std::clamp(pipeGain, 0.0f, 1.0f), std::memory_order_relaxed);
     // Every voice handed in gets a slot, up to what the synth holds. A slot nothing is
     // driving is silent rather than absent, so a train losing engines - a set uncoupled
     // away - leaves its slots quiet instead of shifting the others along, and no filter
@@ -1044,9 +1064,17 @@ void Audio::dumpTest(const std::string& wavPath) {
     std::vector<std::int16_t> pcm;
     for (const Seg& s : segs) {
         if (s.rate != 0.0f) a.valveEvents_.fetch_add(1); // valve opens as flow starts
-        a.amp_.store(s.rate < 0.0f ? std::min(std::fabs(s.rate) / 1.5f, 1.0f)
-                                   : std::min(std::fabs(s.rate) / 5.0f, 1.0f) * 0.5f);
+        // Heard from the cab. `rate` is the cylinders', mostly kept out under the floor;
+        // the pipe through the driver's valve does the opposite at the same time - it
+        // vents to apply and is recharged to release.
+        const float amp = s.rate < 0.0f ? std::min(std::fabs(s.rate) / 1.5f, 1.0f)
+                                        : std::min(std::fabs(s.rate) / 5.0f, 1.0f) * 0.5f;
+        a.amp_.store(amp);
         a.brightness_.store(s.rate < 0.0f ? 1.0f : 0.0f);
+        a.envGain_.store(kCylInsideGain);
+        a.pipeAmp_.store(s.rate > 0.0f ? std::min(s.rate / 3.0f, 1.0f)
+                                       : std::min(-s.rate / 1.6f, 1.0f) * 0.40f);
+        a.pipeBright_.store(s.rate > 0.0f ? 1.0f : 0.0f);
         const int total = static_cast<int>(s.dur * fs);
         float buf[256];
         for (int done = 0; done < total; done += 256) {

@@ -88,14 +88,18 @@ public:
     // Main thread, per sim frame. `sounded` is the train the single rolling, brake and
     // compressor voices are taken from - there is one of each and one set of filters
     // behind them, so exactly one train can have them, and the caller picks which.
-    // `brakeGain` attenuates the brake sound by camera distance to the bogies;
+    // The air brake is two voices from two places. `brakeGain` is the brake cylinders',
+    // by camera distance to the bogies; `pipeGain` is the brake pipe's, which is heard
+    // where the driver's brake valve lets it in and out - in the cab - and is worked
+    // out by the caller, who knows where the cab is and whether the listener is in it.
+    // The valve click is that valve's too, and goes with the pipe.
     // `engines` is the engine voices, in slot order (extra entries ignored, missing
     // ones silent); `rollGain` the wheel/rail noise, which comes from the same wheels
     // but carries much further. All gains in [0,1].
     // Whether the listener is sitting in the cab of the train being sounded: its
     // insulation then takes most of what the running gear radiates outside.
     void setInsideCab(bool inside) { insideCab_.store(inside, std::memory_order_relaxed); }
-    void update(const Consist& sounded, float dt, float brakeGain,
+    void update(const Consist& sounded, float dt, float brakeGain, float pipeGain,
                 const EngineVoice* engines, int engineCount, float rollGain);
     // Main thread: how loudly the nearest ringing level crossing is heard, already
     // attenuated by camera distance, in [0,1]. Zero silences it.
@@ -150,9 +154,14 @@ public:
 
 private:
     // Shared main -> audio thread (lock-free).
+    // The brake cylinders filling and exhausting, at the bogies.
     std::atomic<float> amp_{0.0f};        // target hiss amplitude [0,1]
     std::atomic<float> brightness_{0.0f}; // 0 = apply (warm), 1 = release (bright vent)
     std::atomic<float> envGain_{1.0f};    // brake distance attenuation [0,1]
+    // The brake pipe charging and venting, at the driver's brake valve.
+    std::atomic<float> pipeAmp_{0.0f};
+    std::atomic<float> pipeBright_{0.0f};
+    std::atomic<float> pipeGain_{1.0f};
     // The rheostatic brake's grid blower: how hard the grids are working, 0..1.
     std::atomic<float> gridLoad_{};
     float gridFan_ = 0.0f;   // fan speed, which lags the load - a big fan has inertia
@@ -213,6 +222,8 @@ private:
 
     // Audio-thread only synth state.
     float ampEnv_ = 0.0f, brightEnv_ = 0.0f, envEnv_ = 1.0f;
+    float pipeAmpEnv_ = 0.0f, pipeBrightEnv_ = 0.0f, pipeEnvEnv_ = 1.0f;
+    float pipeLow_ = 0.0f, pipeBand_ = 0.0f; // the pipe's own band-pass
     float svfLow_ = 0.0f, svfBand_ = 0.0f;   // hiss band-pass
     float clkLow_ = 0.0f, clkBand_ = 0.0f;   // click band-pass
     float clickEnv_ = 0.0f, clickPhase_ = 0.0f;
