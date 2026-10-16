@@ -423,16 +423,20 @@ const glm::vec3 kFloorIn(0.28f, 0.28f, 0.30f);
 } // namespace t5
 
 // SJ Norge Type 76 (Stadler FLIRT). Every position below is measured from the Norske Tog
-// car diagrams - doors from their orange surrounds, windows from the glazing - in metres
+// car diagrams - doors from their surrounds, windows from the glazing - in metres
 // from each car's BMb-facing end, which is the -y end of its section. Heights are over the
 // railhead and are read off the same drawings, scaled to the sourced 4.38 m.
 namespace t76 {
-const glm::vec3 kBody(0.28f, 0.28f, 0.28f);    // the SJ grey, as drawn
-const glm::vec3 kLower(0.23f, 0.23f, 0.23f);   // the darker lower panels
-const glm::vec3 kRoof(0.20f, 0.20f, 0.21f);
+// The colours are SJ Nord's, as the units run in Trøndelag: dark navy all over, nose
+// included, with red round every door and a red line swept back behind each cab. Sampled
+// off photographs of 76-005, 76-501 and 76-511.
+const glm::vec3 kBody(0.10f, 0.14f, 0.29f);    // SJ navy
+const glm::vec3 kLower(0.09f, 0.12f, 0.25f);   // the same below the windows, in shadow
+const glm::vec3 kRoof(0.15f, 0.17f, 0.24f);
 const glm::vec3 kGlass(0.39f, 0.33f, 0.29f);   // the drawings' bronze-tinted glazing
-const glm::vec3 kDoor(0.23f, 0.23f, 0.23f);
-const glm::vec3 kOrange(1.00f, 0.31f, 0.00f);  // door surrounds
+const glm::vec3 kDoor(0.10f, 0.14f, 0.29f);
+const glm::vec3 kTrim(0.84f, 0.14f, 0.22f);    // the red round the doors, and the cab line
+const glm::vec3 kMask(0.04f, 0.04f, 0.05f);    // the black band under the windscreen
 const glm::vec3 kSkirt(0.13f, 0.14f, 0.14f);   // valances, bogie skirts, gangways
 const glm::vec3 kEquip(0.17f, 0.17f, 0.18f);   // roof and underfloor equipment
 const glm::vec3 kGrille(0.12f, 0.12f, 0.12f);  // XDe's louvres
@@ -452,7 +456,7 @@ constexpr float kNoseLen = 3.10f;    // the raked front, from where the roof sta
 constexpr float kNoseTipZ = 2.15f;   // where the windscreen meets the nose tip
 constexpr float kGangGap = 0.30f;    // each car's end inset from the joint, for the bellows
 constexpr float kDoorW = 1.78f;      // door with its surround
-constexpr float kSurround = 0.10f;   // the orange frame
+constexpr float kSurround = 0.10f;   // the red frame
 constexpr float kCabFloor = 1.40f;   // the cab's raised floor
 // The cab's side window, measured off the BMb diagram: low, and beside the driver rather
 // than forward in the nose - which is why the view to the side from a Type 76 is limited.
@@ -3047,7 +3051,7 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                 quadN(R[k], R[(k + 1) % R.size()], c, c, col, in);
         };
 
-        // Panels along the body: windows, doors with their orange surrounds, and the grey
+        // Panels along the body: windows, doors with their red surrounds, and the navy
         // between. Each is lofted between rings, split where the skirt steps over a bogie.
         struct Panel { float a, b; glm::vec3 lower, band, upper; };
         std::vector<Panel> panels;
@@ -3062,22 +3066,22 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
             std::sort(marks.begin(), marks.end(),
                       [](const Mark& l, const Mark& r) { return l.a < r.a; });
             float y = bodyLo;
-            const Panel grey{0, 0, t76::kLower, t76::kBody, t76::kBody};
+            const Panel plain{0, 0, t76::kLower, t76::kBody, t76::kBody};
             for (const Mark& m : marks) {
                 const float a = std::max(m.a, bodyLo), b = std::min(m.b, bodyHi);
                 if (b <= a + 0.01f || a < y - 0.01f) continue;
-                if (a > y) panels.push_back({y, a, grey.lower, grey.band, grey.upper});
+                if (a > y) panels.push_back({y, a, plain.lower, plain.band, plain.upper});
                 if (m.kind == 0) {
                     panels.push_back({a, b, t76::kLower, t76::kGlass, t76::kBody});
                 } else {
                     const float sw = t76::kSurround;
-                    panels.push_back({a, a + sw, t76::kOrange, t76::kOrange, t76::kBody});
+                    panels.push_back({a, a + sw, t76::kTrim, t76::kTrim, t76::kTrim});
                     panels.push_back({a + sw, b - sw, t76::kDoor, t76::kGlass, t76::kBody});
-                    panels.push_back({b - sw, b, t76::kOrange, t76::kOrange, t76::kBody});
+                    panels.push_back({b - sw, b, t76::kTrim, t76::kTrim, t76::kTrim});
                 }
                 y = b;
             }
-            if (bodyHi > y) panels.push_back({y, bodyHi, grey.lower, grey.band, grey.upper});
+            if (bodyHi > y) panels.push_back({y, bodyHi, plain.lower, plain.band, plain.upper});
         }
         // The power car's sides are equipment, not saloon: no glazing, two hatches and a
         // louvre band each end.
@@ -3109,6 +3113,48 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                 const float wb = hw * t76::kTumble;
                 quadN(P(-wb, ys[i], zs), P(wb, ys[i], zs), P(wb, ys[i + 1], zs),
                       P(-wb, ys[i + 1], zs), t76::kSkirt, in);
+            }
+        }
+        // Lines painted on the bodyside, which do not follow the facets: the tops of the door
+        // frames and the line behind each cab. Drawn just proud of the side, as quads between
+        // (y, z) corners. The side is upright from the band's foot to the cantrail and tucks
+        // in below, so a quad must not straddle the band's foot.
+        auto onSide = [&](float y, float z, float sx) {
+            const float zB = sillAt(y), zL = zr(t76::kWinLow), wb = hw * t76::kTumble;
+            const float x = z >= zL ? hw : wb + (hw - wb) * (z - zB) / (zL - zB);
+            return P(sx * (x + 0.012f), y, z);
+        };
+        auto paint = [&](float ya, float za, float yb, float zb, float yc, float zc, float yd,
+                         float zd) {
+            for (const float sx : {-1.0f, 1.0f})
+                quadN(onSide(ya, za, sx), onSide(yb, zb, sx), onSide(yc, zc, sx),
+                      onSide(yd, zd, sx), t76::kTrim, in);
+        };
+        {
+            const float zC = zr(t76::kCant), sw = t76::kSurround;
+            for (int i = 0; i < C.doorCount; ++i) {
+                const float a = yAt(C.doors[i] - 0.5f * t76::kDoorW);
+                const float b = yAt(C.doors[i] + 0.5f * t76::kDoorW);
+                paint(a, zC - sw, b, zC - sw, b, zC, a, zC);
+            }
+        }
+        // The cab line: from low on the side just behind the cab it rises toward the
+        // cantrail, leaning back and bending further back near the top. Metres back from
+        // the nose tip, read off the photographs against the windows either side of it.
+        if (C.cab != 0) {
+            const float tip = C.cab == -1 ? yLo : yHi;
+            const float ts = C.cab == -1 ? 1.0f : -1.0f; // into the car
+            const float lw = 0.045f;                     // half its width
+            struct Pt { float d, z; };
+            const float zFoot = sillAt(tip + ts * 5.15f) + 0.10f;
+            const Pt line[] = {{5.15f, zFoot},
+                               {5.45f, zr(t76::kWinLow)},
+                               {5.90f, zr(t76::kWinHigh)},
+                               {6.55f, zr(t76::kCant) - 0.02f}};
+            for (int i = 0; i + 1 < 4; ++i) {
+                const float y0 = tip + ts * line[i].d, y1 = tip + ts * line[i + 1].d;
+                paint(y0 - lw, line[i].z, y0 + lw, line[i].z, y1 + lw, line[i + 1].z,
+                      y1 - lw, line[i + 1].z);
             }
         }
         // Gangway end walls, each with the walk-through to the next car: side panels and a
@@ -3351,6 +3397,12 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                     const float za = glm::dot(0.5f * (a + b) - f.pos, Z);
                     quadN(a, b, c, c, za > zr(1.6f) ? t76::kGlass : t76::kBody, in);
                 }
+            }
+            // The black band across the front under the windscreen, which carries the number.
+            {
+                const float bx = hw * noseW(0.0f) * 0.80f, yb = tip + ts * 0.012f;
+                quadN(P(-bx, yb, zr(1.98f)), P(bx, yb, zr(1.98f)), P(bx, yb, zr(2.28f)),
+                      P(-bx, yb, zr(2.28f)), t76::kMask, in);
             }
             // ---- The cab inside, after the Stadler FLIRT cabs in the photographs (NSB 75551
             // among them): the driver sits in the middle at a wraparound desk, the combined
