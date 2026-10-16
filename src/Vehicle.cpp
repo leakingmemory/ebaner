@@ -383,7 +383,7 @@ void Vehicle::derailFreeze() {
     state_ = VehicleState::Derailed;
 }
 
-void Vehicle::swapPath(int newIdx, float newS) {
+void Vehicle::swapPath(int newIdx, double newS) {
     // Preserve the physical velocity vector across the join: if the new path's +s
     // tangent opposes the old one, flip orient_ so the driver's controls stay
     // physically continuous. The speed itself is held in the physical frame and so
@@ -398,7 +398,7 @@ void Vehicle::swapPath(int newIdx, float newS) {
     s_ = newS;
 }
 
-void Vehicle::countRailImpacts(float sBefore) {
+void Vehicle::countRailImpacts(double sBefore) {
     if (!net_ || state_ != VehicleState::OnRail) return;
     if (s_ == sBefore) return;
     // Called before crossTurnouts, so sBefore and s_ are always on the same path: a
@@ -415,17 +415,17 @@ void Vehicle::countRailImpacts(float sBefore) {
         for (const float o : offs) {
             // Half-open, so an axle sitting exactly on a turnout at the end of one frame
             // and the start of the next is one crossing rather than two.
-            const float a0 = sBefore + o, a1 = s_ + o;
+            const double a0 = sBefore + o, a1 = s_ + o;
             if ((a0 < sT && sT <= a1) || (a1 < sT && sT <= a0)) ++railImpacts_;
         }
     }
 }
 
-bool Vehicle::crossTurnouts(float sBefore) {
+bool Vehicle::crossTurnouts(double sBefore) {
     const std::vector<Turnout>& tos = net_->turnouts();
     if (sBefore == s_) return false;
     const int dirS = (s_ > sBefore) ? 1 : -1; // travel direction along +s this step
-    auto crossed = [&](float x) { return (x - sBefore) * (x - s_) <= 0.0f; };
+    auto crossed = [&](double x) { return (x - sBefore) * (x - s_) <= 0.0; };
     // A swap lands the train exactly on the turnout's junction s; skip re-evaluating
     // that same turnout for the one following frame, else the boundary re-triggers as a
     // spurious trailing move (which would wrongly break the switch we just merged over).
@@ -731,10 +731,10 @@ float Vehicle::bogieWheelbase(int i) const {
     return wheelbase_;
 }
 
-bool Vehicle::walkTo(float bodyOffset, int& cp, float& cs, int& nose) const {
+bool Vehicle::walkTo(float bodyOffset, int& cp, double& cs, int& nose) const {
     if (!net_ || !paths_ || pathIdx_ < 0) { // no network: straight sample on path_
         cp = pathIdx_;
-        cs = s_ + static_cast<float>(orient_) * bodyOffset;
+        cs = s_ + orient_ * static_cast<double>(bodyOffset);
         nose = orient_;
         return false;
     }
@@ -745,16 +745,16 @@ bool Vehicle::walkTo(float bodyOffset, int& cp, float& cs, int& nose) const {
     constexpr float kTol = 0.05f;              // "at the junction" slack (m)
     const std::vector<Turnout>& tos = net_->turnouts();
     const int walkSign = bodyOffset >= 0.0f ? 1 : -1; // +1 toward nose, -1 toward tail
-    float remaining = std::abs(bodyOffset);
+    double remaining = std::abs(bodyOffset);
     int prevCross = -1;                         // don't immediately re-cross a turnout
 
     for (int guard = 0; guard < 64 && remaining > 1e-4f; ++guard) {
         const TrackPath& P = (*paths_)[cp];
         const int arcDir = walkSign * nose;               // path-s direction we move in
-        const float distToEnd = arcDir > 0 ? (P.length() - cs) : cs;
+        const double distToEnd = arcDir > 0 ? (P.length() - cs) : cs;
 
         // Nearest turnout junction reached in the travel direction, with its target.
-        float bestDist = std::min(remaining, distToEnd);
+        double bestDist = std::min(remaining, distToEnd);
         int toPath = -1, toTurn = -1;
         float toS = 0.0f;
         for (int i = 0; i < static_cast<int>(tos.size()); ++i) {
@@ -763,8 +763,8 @@ bool Vehicle::walkTo(float bodyOffset, int& cp, float& cs, int& nose) const {
             if (to.mainPath < 0 || to.sidingPath < 0) continue;
             // main -> siding: walking toe->frog on a switch set to the siding path.
             if (cp == to.mainPath && net_->routesToSiding(i) && arcDir == to.facingS) {
-                const float dj = (to.sMain - cs) * static_cast<float>(arcDir);
-                const float adv = std::max(dj, 0.0f);
+                const double dj = (to.sMain - cs) * arcDir;
+                const double adv = std::max(dj, 0.0);
                 if (dj > -kTol && adv <= bestDist) {
                     bestDist = adv; toPath = to.sidingPath; toS = to.sSiding; toTurn = i;
                 }
@@ -773,8 +773,8 @@ bool Vehicle::walkTo(float bodyOffset, int& cp, float& cs, int& nose) const {
             if (cp == to.sidingPath) {
                 const bool towardEnd =
                     static_cast<float>(arcDir) * (to.sSiding < 1.0f ? -1.0f : 1.0f) > 0.0f;
-                const float dj = (to.sSiding - cs) * static_cast<float>(arcDir);
-                const float adv = std::max(dj, 0.0f);
+                const double dj = (to.sSiding - cs) * arcDir;
+                const double adv = std::max(dj, 0.0);
                 if (towardEnd && dj > -kTol && adv <= bestDist) {
                     bestDist = adv; toPath = to.mainPath; toS = to.sMain; toTurn = i;
                 }
@@ -828,8 +828,8 @@ bool Vehicle::walkRoad(float bodyOffset, std::vector<RoadStretch>& out) const {
         // reading the road ahead was told there were two kilometres of it when the track
         // stopped in eight hundred metres, and drove off the end without ever being told
         // the road had run out.
-        const float a = s_;
-        const float b = std::clamp(s_ + static_cast<float>(orient_) * bodyOffset, 0.0f,
+        const float a = s();
+        const float b = std::clamp(a + static_cast<float>(orient_) * bodyOffset, 0.0f,
                                    (*paths_)[pathIdx_].length());
         out.push_back({pathIdx_, a, b, 0.0f});
         return std::abs(b - a) >= std::abs(bodyOffset) - 1e-4f;
@@ -954,7 +954,7 @@ bool Vehicle::occupiedSpans(std::vector<PathSpan>& out) const {
 // actually on, asked over a longer distance.
 bool Vehicle::anchorAtOffset(float bodyOffset, TrackAnchor& out) const {
     int cp = -1, nose = 1;
-    float cs = 0.0f;
+    double cs = 0.0;
     if (!walkTo(bodyOffset, cp, cs, nose) || cp < 0 || !paths_) return false;
     const TrackPath& P = (*paths_)[cp];
     if (cs < 0.0f || cs > P.length()) return false; // walked off the end of the track
@@ -966,7 +966,7 @@ bool Vehicle::anchorAtOffset(float bodyOffset, TrackAnchor& out) const {
 
 TrackPose Vehicle::walkPose(float bodyOffset) const {
     int cp = -1, nose = 1;
-    float cs = 0.0f;
+    double cs = 0.0;
     walkTo(bodyOffset, cp, cs, nose);
     TrackPose p = (cp >= 0 && paths_) ? (*paths_)[cp].poseAt(cs) : path_->poseAt(cs);
     const float nf = static_cast<float>(nose); // orient tangent/right toward the nose
@@ -1068,7 +1068,7 @@ std::vector<AxlePlace> Vehicle::axlePlaces() const {
         AxlePlace a;
         if (state_ == VehicleState::OnRail) {
             int cp = -1, nose = 1;
-            float cs = 0.0f;
+            double cs = 0.0;
             // walkTo says which path the axle ended up on and where; when there is no
             // network attached it answers on the one path the vehicle was placed on.
             walkTo(off, cp, cs, nose);
@@ -1813,8 +1813,8 @@ UnitStep Vehicle::stepSubsystems(float dt, const LinkCommand& cmd,
 
 bool Vehicle::advance(float ds) {
     if (state_ != VehicleState::OnRail) return false;
-    const float sBefore = s_;
-    s_ += static_cast<float>(orient_) * ds; // the physical move, in this path's frame
+    const double sBefore = s_;
+    s_ += orient_ * static_cast<double>(ds); // the physical move, in this path's frame
 
     // The wheels crossing the points, for the sound. Before crossTurnouts, which may
     // swap the path out from under the comparison.

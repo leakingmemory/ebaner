@@ -778,7 +778,7 @@ public:
     // The physical speed the consist last stepped this set with (m/s, unsigned).
     void setPhysicalSpeed(float v) { physV_ = v; }
     // Where a set sits on the network: which path, where along it, and which way round.
-    struct TrackAnchor { int pathIdx = -1; float s = 0.0f; int orient = 1; };
+    struct TrackAnchor { int pathIdx = -1; double s = 0.0; int orient = 1; };
     // Follow the track `bodyOffset` metres from this set's centre (+ = toward its nose)
     // and report where that lands, crossing turnouts by rail geometry on the way. How a
     // consist places the set coupled behind this one. False if it runs off the end.
@@ -1099,13 +1099,16 @@ public:
     bool enginesRunning() const;            // all engines at idle
     bool compressorRunning() const { return compActive_; } // charging the reservoir
 
-    float s() const { return s_; }
+    // Where the set is along its path. Held as a double and integrated as one: see
+    // TrackPath::poseAt. Read as a float everywhere a few centimetres do not matter.
+    float s() const { return static_cast<float>(s_); }
+    double sExact() const { return s_; }
     int pathIdx() const { return pathIdx_; }
     // Which way this set faces along its path's +s (+1 or -1).
     int orientation() const { return orient_; }
     // Slide along the current path without walking turnouts: the small correction a
     // consist makes to take up the slack a turnout crossing leaves in a coupler.
-    void nudge(float ds) { s_ += ds; }
+    void nudge(double ds) { s_ += ds; }
     bool enginesOn() const { return engineOn_; }
     float mass() const { return mass_; }
     float length() const { return length_; }
@@ -1160,25 +1163,25 @@ private:
     TrackPose walkPose(float bodyOffset) const;
     // The walk itself: leaves the path, arc-length and nose direction it ends on.
     // False when there is no switch network to walk (the caller gets a straight sample).
-    bool walkTo(float bodyOffset, int& cp, float& cs, int& nose) const;
+    bool walkTo(float bodyOffset, int& cp, double& cs, int& nose) const;
     // The same walk, recording every stretch it crosses rather than only where it lands.
     // False if it ran out of track before covering `bodyOffset`.
     bool walkSpans(float bodyOffset, std::vector<PathSpan>& out) const;
 
     // Resolve turnout crossings between sBefore and s_ on the current path (divert /
     // merge / trailing-break / facing-broken derail). Returns true if it derailed.
-    bool crossTurnouts(float sBefore);
+    bool crossTurnouts(double sBefore);
     // Count each *axle* passing a turnout between sBefore and s_, for the sound. A
     // separate question from crossTurnouts, which asks where the body centre is routed;
     // this one asks which wheels have just crossed a frog, and every axle does.
-    void countRailImpacts(float sBefore);
+    void countRailImpacts(double sBefore);
     // Move onto another path, preserving the physical velocity vector (and flipping
     // orient_ so the reverser/push keep driving the same physical way).
-    void swapPath(int newIdx, float newS);
+    void swapPath(int newIdx, double newS);
     void derailFreeze(); // freeze the body pose and go to Derailed
 
     const TrackPath* path_;
-    float s_;
+    double s_;
     float mass_;
     float length_, width_, height_, wheelbase_, bogieSpacing_;
     int bogieCount_;

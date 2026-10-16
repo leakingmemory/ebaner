@@ -691,7 +691,7 @@ void Consist::update(float dt, float pushInput) {
                         "the points have split the train\n", i + 1);
             continue;
         }
-        const float slip = want.s - units_[i].s();
+        const double slip = want.s - units_[i].sExact();
         if (std::abs(slip) > kCouplerSlack) {
             std::printf("[Consist] coupler between sets %zu and %zu is %.2f m out\n",
                         i, i + 1, slip);

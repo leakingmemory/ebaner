@@ -134,7 +134,7 @@ int main(int argc, char** argv) {
 
     // Where the path puts (track, frac), in world coordinates.
     auto onPath = [&](int pi, std::uint32_t id, double frac, glm::dvec2& out) {
-        float s = 0.0f;
+        double s = 0.0; // a float this far along a long path is centimetres out
         if (!paths[pi].fracToS(id, frac, s)) return false;
         const glm::vec3 p = paths[pi].poseAt(s).pos;
         out = {double(p.x) + org.x, double(p.y) + org.y};

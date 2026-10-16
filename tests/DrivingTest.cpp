@@ -354,6 +354,28 @@ int main() {
         check(!l.c.interlockEmergency(), "  so the interlock is satisfied");
     }
 
+    // A path can be a whole line chained end to end - the longest in the dataset is 703 km -
+    // and a float arc length that far out resolves only to 6 cm. Held as one, a slow
+    // train's step each frame was rounded to nothing or to a whole jump: it stopped dead
+    // and started with a lurch, at speeds up to several km/h at the far end of the line.
+    std::puts("\nA crawl moves the train, however far along the line it is");
+    {
+        std::vector<glm::vec3> pts;
+        for (int i = 0; i <= 1400; ++i)
+            pts.push_back({static_cast<float>(i) * 500.0f, 0.0f, 0.0f});
+        const TrackPath line(1u, 0u, pts, std::vector<std::uint16_t>(pts.size(), 200));
+        Vehicle u(&line, *di4, 600000.0f);
+        const float x0 = u.bodyFrame().pos.x;
+        const double s0 = u.sExact();
+        const float step = 0.01f / 3.6f / 60.0f; // 0.01 km/h, one frame at a time
+        for (int i = 0; i < 60 * 60; ++i) u.advance(step);
+        const double moved = u.sExact() - s0;
+        check(std::abs(moved - 0.01 / 3.6 * 60.0) < 1e-3,
+              "600 km out, a minute at 0.01 km/h moves it 17 cm (m)", moved, 0.01 / 3.6 * 60.0);
+        check(u.bodyFrame().pos.x - x0 > 0.1f, "  and the train drawn there moves with it (m)",
+              u.bodyFrame().pos.x - x0, 0.167);
+    }
+
     std::printf("\n%s\n", failures == 0 ? "all ok" : "FAILURES");
     return failures == 0 ? 0 : 1;
 }

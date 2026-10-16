@@ -50,7 +50,7 @@ TrackPath::TrackPath(std::uint32_t trackId, std::uint8_t trackType,
 
     // Centripetal knots (alpha = 0.5).
     knot_.resize(ctrl_.size());
-    knot_[0] = 0.0f;
+    knot_[0] = 0.0;
     for (std::size_t i = 1; i < ctrl_.size(); ++i) {
         const float d = glm::distance(ctrl_[i], ctrl_[i - 1]);
         knot_[i] = knot_[i - 1] + std::sqrt(std::max(d, 1e-4f));
@@ -61,7 +61,7 @@ TrackPath::TrackPath(std::uint32_t trackId, std::uint8_t trackType,
     table_.push_back({0.0f, 0.0f, 0.0f});
     glm::vec3 prev;
     eval(0, 0.0f, &prev, nullptr, nullptr);
-    float s = 0.0f;
+    double s = 0.0;
     for (int span = 0; span < numSpans; ++span) {
         for (int k = 1; k <= kSubStepsPerSpan; ++k) {
             const float u = static_cast<float>(k) / kSubStepsPerSpan;
@@ -72,7 +72,7 @@ TrackPath::TrackPath(std::uint32_t trackId, std::uint8_t trackType,
             table_.push_back({s, static_cast<float>(span) + u, 0.0f});
         }
     }
-    length_ = table_.empty() ? 0.0f : table_.back().s;
+    length_ = table_.empty() ? 0.0 : table_.back().s;
 
     bmin_ = bmax_ = ctrl_.front();
     for (const glm::vec3& c : ctrl_) {
@@ -112,7 +112,7 @@ TrackPath::TrackPath(std::uint32_t trackId, std::uint8_t trackType,
     }
     // Box-smooth over ~kCantSmoothM metres so cant ramps in/out (table sorted by s).
     for (std::size_t i = 0; i < table_.size(); ++i) {
-        const float s0 = table_[i].s;
+        const double s0 = table_[i].s;
         float sum = 0.0f;
         int cnt = 0;
         for (int j = static_cast<int>(i); j >= 0 && s0 - table_[j].s <= kCantSmoothM; --j) {
@@ -145,7 +145,7 @@ void TrackPath::buildTrackRuns(const std::vector<std::uint32_t>& ptTrack,
         static_cast<int>(ptFrac.size()) != n)
         return; // no bridge; every query below fails cleanly
 
-    const std::vector<float> sOf = pointArcLengths();
+    const std::vector<double> sOf = pointArcLengths();
     if (static_cast<int>(sOf.size()) != n) return;
 
     for (int i = 0; i < n;) {
@@ -179,11 +179,11 @@ void TrackPath::buildTrackRuns(const std::vector<std::uint32_t>& ptTrack,
     }
 }
 
-std::vector<float> TrackPath::pointArcLengths() const {
+std::vector<double> TrackPath::pointArcLengths() const {
     // Surveyed point i is the start of span i, so it sits at global parameter g = i. The
     // arc-length table runs the other way (s -> g), so walk it once and read off the s
     // where g crosses each whole number - the same walk speedPoints() makes.
-    std::vector<float> out;
+    std::vector<double> out;
     const int n = static_cast<int>(ctrl_.size()) - 2;
     if (n < 1 || table_.size() < 2) return out;
     out.reserve(n);
@@ -194,12 +194,12 @@ std::vector<float> TrackPath::pointArcLengths() const {
         const Sample& a = table_[t - 1];
         const Sample& b = table_[t];
         const float f = (b.g > a.g) ? (g - a.g) / (b.g - a.g) : 0.0f;
-        out.push_back(std::clamp(a.s + f * (b.s - a.s), 0.0f, length_));
+        out.push_back(std::clamp(a.s + f * (b.s - a.s), 0.0, length_));
     }
     return out;
 }
 
-bool TrackPath::fracToS(std::uint32_t trackId, double frac, float& s) const {
+bool TrackPath::fracToS(std::uint32_t trackId, double frac, double& s) const {
     for (std::size_t ri = 0; ri < runs_.size(); ++ri) {
         if (runs_[ri].trackId != trackId) continue;
         const int first = runFirst_[ri], count = runCount_[ri];
@@ -224,8 +224,7 @@ bool TrackPath::fracToS(std::uint32_t trackId, double frac, float& s) const {
             // the last one, which owns everything past the end.
             if (key > b && k != first + count - 1) continue;
             const double t = (b != a) ? std::clamp((key - a) / (b - a), 0.0, 1.0) : 0.0;
-            s = runPts_[k - 1].s +
-                static_cast<float>(t) * (runPts_[k].s - runPts_[k - 1].s);
+            s = runPts_[k - 1].s + t * (runPts_[k].s - runPts_[k - 1].s);
             return true;
         }
         s = runPts_[first + count - 1].s;
@@ -234,7 +233,7 @@ bool TrackPath::fracToS(std::uint32_t trackId, double frac, float& s) const {
     return false;
 }
 
-bool TrackPath::trackAt(float s, std::uint32_t& trackId, double& frac) const {
+bool TrackPath::trackAt(double s, std::uint32_t& trackId, double& frac) const {
     if (runs_.empty()) return false;
     for (std::size_t ri = 0; ri < runs_.size(); ++ri) {
         const int first = runFirst_[ri], count = runCount_[ri];
@@ -245,12 +244,12 @@ bool TrackPath::trackAt(float s, std::uint32_t& trackId, double& frac) const {
         trackId = runs_[ri].trackId;
         if (count < 2) { frac = runPts_[first].frac; return true; }
         for (int k = first + 1; k < first + count; ++k) {
-            const float sa = runPts_[k - 1].s, sb = runPts_[k].s;
+            const double sa = runPts_[k - 1].s, sb = runPts_[k].s;
             const bool last = k == first + count - 1;
             if (!((s >= std::min(sa, sb) || k == first + 1) &&
                   (s <= std::max(sa, sb) || last)))
                 continue;
-            const float t = (sb != sa) ? std::clamp((s - sa) / (sb - sa), 0.0f, 1.0f) : 0.0f;
+            const double t = (sb != sa) ? std::clamp((s - sa) / (sb - sa), 0.0, 1.0) : 0.0;
             frac = runPts_[k - 1].frac + t * (runPts_[k].frac - runPts_[k - 1].frac);
             return true;
         }
@@ -264,15 +263,18 @@ void TrackPath::eval(int span, float u, glm::vec3* p, glm::vec3* d1,
                      glm::vec3* d2) const {
     const glm::vec3 P0 = ctrl_[span], P1 = ctrl_[span + 1];
     const glm::vec3 P2 = ctrl_[span + 2], P3 = ctrl_[span + 3];
-    const float t0 = knot_[span], t1 = knot_[span + 1];
-    const float t2 = knot_[span + 2], t3 = knot_[span + 3];
+    // The knots are running sums and only their differences matter here, so those are
+    // taken in double and only then made floats.
+    const double t0 = knot_[span], t1 = knot_[span + 1];
+    const double t2 = knot_[span + 2], t3 = knot_[span + 3];
+    const float d10 = static_cast<float>(t1 - t0), d20 = static_cast<float>(t2 - t0);
+    const float d21 = static_cast<float>(t2 - t1), d31 = static_cast<float>(t3 - t1);
+    const float d32 = static_cast<float>(t3 - t2);
 
     // Non-uniform Catmull-Rom tangents (in global knot space) at P1 and P2.
-    const glm::vec3 m1 =
-        (P1 - P0) / (t1 - t0) - (P2 - P0) / (t2 - t0) + (P2 - P1) / (t2 - t1);
-    const glm::vec3 m2 =
-        (P2 - P1) / (t2 - t1) - (P3 - P1) / (t3 - t1) + (P3 - P2) / (t3 - t2);
-    const float dt = t2 - t1;
+    const glm::vec3 m1 = (P1 - P0) / d10 - (P2 - P0) / d20 + (P2 - P1) / d21;
+    const glm::vec3 m2 = (P2 - P1) / d21 - (P3 - P1) / d31 + (P3 - P2) / d32;
+    const float dt = d21;
     const glm::vec3 M1 = m1 * dt, M2 = m2 * dt; // scaled to local u in [0,1]
 
     const float u2 = u * u, u3 = u2 * u;
@@ -293,7 +295,7 @@ void TrackPath::eval(int span, float u, glm::vec3* p, glm::vec3* d1,
     }
 }
 
-void TrackPath::locate(float s, int& span, float& u, float& cant) const {
+void TrackPath::locate(double s, int& span, float& u, float& cant) const {
     const int numSpans = static_cast<int>(ctrl_.size()) - 3;
     cant = 0.0f;
     if (numSpans < 1 || table_.size() < 2 || length_ <= 0.0f) {
@@ -301,7 +303,7 @@ void TrackPath::locate(float s, int& span, float& u, float& cant) const {
         u = 0.0f;
         return;
     }
-    s = std::clamp(s, 0.0f, length_);
+    s = std::clamp(s, 0.0, length_);
     // Binary search the arc-length table for the bracket around s.
     int lo = 0, hi = static_cast<int>(table_.size()) - 1;
     while (hi - lo > 1) {
@@ -313,14 +315,14 @@ void TrackPath::locate(float s, int& span, float& u, float& cant) const {
     }
     const Sample& a = table_[lo];
     const Sample& b = table_[hi];
-    const float frac = (b.s > a.s) ? (s - a.s) / (b.s - a.s) : 0.0f;
+    const float frac = (b.s > a.s) ? static_cast<float>((s - a.s) / (b.s - a.s)) : 0.0f;
     const float g = a.g + frac * (b.g - a.g);
     span = std::clamp(static_cast<int>(std::floor(g)), 0, numSpans - 1);
     u = std::clamp(g - static_cast<float>(span), 0.0f, 1.0f);
     cant = a.cant + frac * (b.cant - a.cant);
 }
 
-TrackPose TrackPath::poseAt(float s) const {
+TrackPose TrackPath::poseAt(double s) const {
     TrackPose pose;
     int span;
     float u, cant;
@@ -389,12 +391,13 @@ std::vector<TrackPath::SpeedPoint> TrackPath::speedPoints() const {
         const Sample& a = table_[t - 1];
         const Sample& b = table_[t];
         const float frac = (b.g > a.g) ? (g - a.g) / (b.g - a.g) : 0.0f;
-        out.push_back({std::clamp(a.s + frac * (b.s - a.s), 0.0f, length_), speed_[i]});
+        const double s = std::clamp(a.s + frac * (b.s - a.s), 0.0, length_);
+        out.push_back({static_cast<float>(s), speed_[i]});
     }
     return out;
 }
 
-bool TrackPath::undergroundAt(float s) const {
+bool TrackPath::undergroundAt(double s) const {
     if (medium_.empty()) return false;
     int span;
     float u, cant;
@@ -406,7 +409,7 @@ bool TrackPath::undergroundAt(float s) const {
     return medium_[i] == 0x55 || medium_[i] == 0x54;
 }
 
-float TrackPath::speedLimitAt(float s) const {
+float TrackPath::speedLimitAt(double s) const {
     if (speed_.empty()) return 0.0f;
     int span;
     float u, cant;

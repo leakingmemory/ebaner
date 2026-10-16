@@ -54,13 +54,16 @@ public:
               // other point was the seam has nowhere to put fraction 0.
               const std::vector<float>& ptSeam = {});
 
-    float length() const { return length_; }
-    TrackPose poseAt(float s) const;       // s clamped to [0, length]
-    float speedLimitAt(float s) const;     // km/h at s (0 = unknown)
+    float length() const { return static_cast<float>(length_); }
+    // Arc length is taken as a double. A path can be a whole line chained end to end -
+    // seven hundred kilometres of it - and a float that far along resolves only to 6 cm,
+    // which rounds a slow train's step each frame to nothing or to a whole jump.
+    TrackPose poseAt(double s) const;      // s clamped to [0, length]
+    float speedLimitAt(double s) const;    // km/h at s (0 = unknown)
     // Whether the line runs underground here. Lineside furniture needs to know: a bore
     // is a far tighter space than the open line, and a sign set out for daylight ends
     // up inside the rock.
-    bool undergroundAt(float s) const;
+    bool undergroundAt(double s) const;
 
     // The surveyed limits as imported, in order along the path: km/h with 0 meaning
     // unknown, paired with where each takes effect. Raw on purpose - speedLimitAt() hides
@@ -112,26 +115,32 @@ public:
     // this path. `frac` outside the run's own extent is clamped to it - which is right at
     // a seam, where the shared point belongs to the neighbour and the run stops a
     // millimetre short of its own end.
-    bool fracToS(std::uint32_t trackId, double frac, float& s) const;
+    bool fracToS(std::uint32_t trackId, double frac, double& s) const;
+    bool fracToS(std::uint32_t trackId, double frac, float& s) const {
+        double d = 0.0;
+        if (!fracToS(trackId, frac, d)) return false;
+        s = static_cast<float>(d);
+        return true;
+    }
     // Which track is at arc length `s`, and where along it. False if the bridge is absent.
-    bool trackAt(float s, std::uint32_t& trackId, double& frac) const;
+    bool trackAt(double s, std::uint32_t& trackId, double& frac) const;
 
 private:
     // Control points (with reflected phantom endpoints prepended/appended, so
     // span i interpolates ctrl_[i+1]..ctrl_[i+2]) and their centripetal knots.
     std::vector<glm::vec3> ctrl_;
-    std::vector<float> knot_;
+    std::vector<double> knot_; // running sums over the whole path, so double like s
     glm::vec3 bmin_{0.0f}, bmax_{0.0f};
 
     // Arc-length table entry mapping cumulative length s -> global parameter
     // g = span + local-u (in [0, numSpans]).
     struct Sample {
-        float s;    // cumulative arc length
+        double s;   // cumulative arc length
         float g;    // span + local u
         float cant; // smoothed superelevation roll (radians)
     };
     std::vector<Sample> table_;
-    float length_ = 0.0f;
+    double length_ = 0.0;
 
     std::vector<std::uint16_t> speed_; // one per surveyed point (aligned to pts)
     std::vector<std::uint8_t> medium_; // ditto; empty when the caller did not say
@@ -143,13 +152,13 @@ private:
     // fraction 0 or 1 lands exactly there, so the run keeps it.
     struct RunPoint {
         float frac = 0.0f;
-        float s = 0.0f;
+        double s = 0.0;
     };
     std::vector<RunPoint> runPts_;
     std::vector<TrackRun> runs_;
     std::vector<int> runFirst_, runCount_; // into runPts_, parallel to runs_
     // Arc length of every surveyed point, which is what places a fraction on the path.
-    std::vector<float> pointArcLengths() const;
+    std::vector<double> pointArcLengths() const;
     void buildTrackRuns(const std::vector<std::uint32_t>& ptTrack,
                         const std::vector<float>& ptFrac,
                         const std::vector<float>& ptSeam);
@@ -159,7 +168,7 @@ private:
 
     // Map arc-length s -> interpolated span index, local u in [0,1], and the
     // interpolated (smoothed) cant angle.
-    void locate(float s, int& span, float& u, float& cant) const;
+    void locate(double s, int& span, float& u, float& cant) const;
     // Evaluate position / first / second derivative in knot space at span,u.
     void eval(int span, float u, glm::vec3* p, glm::vec3* d1, glm::vec3* d2) const;
 };
