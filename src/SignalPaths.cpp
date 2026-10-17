@@ -154,7 +154,7 @@ std::vector<SignalPath> loadRoutes(const std::string& file, const char* keyword)
                 p.twoLamp = true;
                 continue;
             }
-            if (tok == "crossing") { // main signals: shown green only once a crossing is secured
+            if (tok == "crossing") { // mains and exit routes: green once its crossing is secured
                 p.crossing = true;
                 continue;
             }
@@ -196,10 +196,15 @@ std::vector<SignalPath> loadRoutes(const std::string& file, const char* keyword)
 // main signal does, and something a road *leading up to* a mast has no business saying at
 // all. Written only when the answer is left, so every file that means right - which is all
 // of them today - comes back out of a round trip exactly as it went in.
+//
+// `withCrossing` lets `crossing` through without the rest of the mast flags. An exit route
+// has no mast to build, but it can run over a crossing inside the station on its way up to
+// the signal, and saying so is what holds its signals until that crossing is secured.
 bool writeRoutes(const std::string& datasetRoot, const std::string& file,
                  const char* keyword, const char* header,
                  const std::vector<SignalPath>& routes, bool withType = false,
-                 bool withMastFlags = false, bool withSide = false) {
+                 bool withMastFlags = false, bool withSide = false,
+                 bool withCrossing = false) {
     std::error_code ec;
     fs::create_directories(datasetRoot + "/overlay", ec);
     std::ofstream f(file, std::ios::trunc);
@@ -207,7 +212,8 @@ bool writeRoutes(const std::string& datasetRoot, const std::string& file,
     f << header << "# " << keyword
       << " <id> \"<name>\" <startTrackHex>:<frac> <endTrackHex>:<frac> "
          "[signal <exitId> type <C1|C2>] "
-      << (withMastFlags ? "[distant] [twolamp] [crossing] " : "")
+      << (withMastFlags ? "[distant] [twolamp] [crossing] "
+                        : withCrossing ? "[crossing] " : "")
       << (withSide ? "[left] " : "")
       << "[station \"<name>\"] [via <trackHex>:<frac>]... "
          "<trackHex>:<from>:<to> ...\n";
@@ -222,7 +228,7 @@ bool writeRoutes(const std::string& datasetRoot, const std::string& file,
         if (withType) f << " type " << (p.type == RouteType::C2 ? "C2" : "C1");
         if (withMastFlags && p.distant) f << " distant";
         if (withMastFlags && p.twoLamp) f << " twolamp";
-        if (withMastFlags && p.crossing) f << " crossing";
+        if ((withMastFlags || withCrossing) && p.crossing) f << " crossing";
         if (withSide && p.side < 0) f << " left";
         if (!p.station.empty()) f << " station " << quoteName(p.station);
         for (const Border& v : p.vias)
@@ -256,7 +262,8 @@ bool writeExitRoutes(const std::string& datasetRoot,
     return writeRoutes(datasetRoot, exitRoutesFile(datasetRoot), "route",
                        "# ebaner exit routes: the authority to move from a border inside the\n"
                        "# station up to an exit signal, which the signal then displays.\n",
-                       routes, true);
+                       routes, /*withType=*/true, /*withMastFlags=*/false, /*withSide=*/false,
+                       /*withCrossing=*/true);
 }
 
 std::vector<SignalPath> loadEntryApproaches(const std::string& datasetRoot) {

@@ -1690,6 +1690,14 @@ int main(int argc, char** argv) {
         };
         std::vector<Chained> chained;
         std::vector<int> ownBeyond;
+        // A crossing on the road *up to* the signal, inside the station, where the exit
+        // route says `crossing`: a train waiting short of it for a departure is held there
+        // by the dwarf it stands at. Setting the route clears that dwarf, which is what
+        // brings the waiting train into the crossing's approach - so the dwarfs the route
+        // opens and the mast itself are SHOWN at danger until the crossing is secured,
+        // exactly as a mast waits for a crossing on its own road out.
+        std::vector<CrossingTie> routeTies;
+        std::vector<int> routeDwarfs; // placements of the dwarfs along that road
     };
     std::vector<MainCandidate> mainCandidates;
     {
@@ -1766,6 +1774,22 @@ int main(int argc, char** argv) {
                              "says \"%s\"; taking the route's\n", c.name.c_str(),
                              exitRoutes[ri].station.c_str(), exitSignals[e].station.c_str());
             c.anchor = sceneAt(c.departure.start); // the platform end
+            if (exitRoutes[ri].crossing) {
+                c.routeTies = tiesOf(exitRoutes[ri]);
+                if (c.routeTies.empty())
+                    std::fprintf(stderr, "[Crossing] route %s is marked crossing but its "
+                                         "road crosses none\n", c.name.c_str());
+                for (const CrossingTie& t : c.routeTies)
+                    std::printf("[Crossing] route %s holds its signals until \"%s\" is "
+                                "secured\n", c.name.c_str(), crossings[t.crossing].name.c_str());
+                for (std::size_t pi = 0; pi < signalPaths.size(); ++pi) {
+                    if (!routeContains(exitRoutes[ri], signalPaths[pi])) continue;
+                    const int pl = mastOf(SignalKind::Dwarf, static_cast<int>(pi));
+                    if (pl >= 0 && std::find(c.routeDwarfs.begin(), c.routeDwarfs.end(), pl) ==
+                                       c.routeDwarfs.end())
+                        c.routeDwarfs.push_back(pl);
+                }
+            }
             mainCandidates.push_back(std::move(c));
         }
         for (std::size_t ei = 0; ei < entrySignals.size(); ++ei) {
@@ -1986,6 +2010,11 @@ int main(int argc, char** argv) {
         // to danger by its own circuits only.
         struct Chained { int placement = -1; std::vector<int> beyond; bool clear = true; };
         std::vector<Chained> chained;
+        // Whether the crossing on the road up to the signal (MainCandidate::routeTies) has
+        // been secured for this route. Once it has, the train is let go and nothing is held
+        // again: the crossing opens behind the train while it is still short of the exit
+        // signal, and that signal must not drop back to red in front of it.
+        bool routeCrossingSeen = false;
     };
     std::vector<MainRoute> mainRoutes;
 
@@ -3324,7 +3353,21 @@ int main(int argc, char** argv) {
         std::vector<char> held(sigPlacements.size(), 0);
         std::vector<std::string> by(sigPlacements.size()); // the route lighting each mast
         bool anyHeld = false;
-        for (const MainRoute& mr : mainRoutes) {
+        for (MainRoute& mr : mainRoutes) {
+            // A crossing on the road up to the signal holds the dwarfs along that road and
+            // the mast itself, until it has once been secured for this route.
+            const MainCandidate& cand = mainCandidates[mr.route];
+            for (const int pl : cand.routeDwarfs)
+                by[static_cast<std::size_t>(pl)] = exitRouteName(mr.route);
+            if (!cand.routeTies.empty() && !mr.routeCrossingSeen) {
+                if (crossingSecuredFor(cand.routeTies, crossingStates)) {
+                    mr.routeCrossingSeen = true;
+                } else {
+                    for (const int pl : cand.routeDwarfs) held[static_cast<std::size_t>(pl)] = 1;
+                    if (mr.placement >= 0) held[static_cast<std::size_t>(mr.placement)] = 1;
+                    anyHeld = true;
+                }
+            }
             // A chained mast waits for its own crossings, as the first waits for its own.
             const std::vector<MainCandidate::Chained>& chs = mainCandidates[mr.route].chained;
             for (std::size_t k = 0; k < mr.chained.size() && k < chs.size(); ++k) {

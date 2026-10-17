@@ -2795,6 +2795,22 @@ int main(int argc, char** argv) {
         const std::vector<SignalPath> back = loadEntrySignals(root);
         check(back.size() == 2 && back[0].crossing && !back[1].crossing,
               "and read back: flagged where written, absent where not");
+        // An exit route has no mast, but it can run over a crossing on its way up to the
+        // signal, and the flag that says so must come back out of the file - and alone:
+        // the mast flags beside it are not an exit route's to carry.
+        SignalPath r = e;
+        r.name = "STJ NB T1";
+        r.exitId = 116;
+        r.distant = true;
+        SignalPath rPlain = r;
+        rPlain.id = 8;
+        rPlain.crossing = false;
+        check(writeExitRoutes(root, {r, rPlain}), "exit routes with the flag write");
+        const std::vector<SignalPath> rBack = loadExitRoutes(root);
+        check(rBack.size() == 2 && rBack[0].crossing && !rBack[1].crossing,
+              "and an exit route keeps it, flagged where written, absent where not");
+        check(rBack.size() == 2 && !rBack[0].distant,
+              "without picking up the mast flags it has no mast for");
         std::filesystem::remove_all(root, ec);
     }
 

@@ -275,6 +275,12 @@ Four heads, each red over white, flashing: two to the train, two to the road.
 - A **circuit-driven signal at danger** inside the approach, facing the crossing, cuts
   the approach circuit there, so a train held at it doesn't close the crossing. Simple
   entry signals don't.
+- A **crossing inside a station**, between where departing trains wait and their exit
+  signal: put a track-circuit border short of the crossing, more than 50 m out, with a
+  signal path from it up to the exit signal. The dwarf that stands there holds a waiting
+  train clear of the approach. The exit route starts at that border and carries
+  `crossing`: setting it clears the dwarf, which closes the crossing, and the dwarf and
+  the exit signal show red until the crossing shows white.
 - **Barriers** start down 7 s after the crossing activates and take 8 s, so they are down
   at 15 s. They start up as soon as the train leaves the inner circuit, and are still
   rising for about 3 s after the crossing is idle again. Written as a trailing `barriers`
