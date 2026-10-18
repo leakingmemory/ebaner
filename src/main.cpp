@@ -1679,7 +1679,10 @@ int main(int argc, char** argv) {
         std::vector<CrossingTie> ties;
         // Exit signals in series. Where an exit's own road ends at another exit mast facing
         // the same way - an inner and an outer group, as at Steinkjer southbound - the
-        // departure runs on through it and lights it too, with the same C1/C2. Each such mast
+        // departure runs on through it and lights it too. Each mast shows the speed of its
+        // own road: an outer mast on a straight road shows C1 even when the departure left
+        // the station through a turnout to the side and its first mast shows C2 - unless the
+        // exit route names what it shows (`onward`). Each such mast
         // goes back to danger only once a train is past *it*, so `ownBeyond` is the first
         // mast's own circuits and `beyond` above is the whole road past it, which is what the
         // occupancy and conflict tests have to see. Unchained, the two are the same.
@@ -1687,6 +1690,7 @@ int main(int argc, char** argv) {
             int placement = -1;
             std::vector<int> beyond;
             std::vector<CrossingTie> ties;
+            RouteType type = RouteType::C1; // what this mast shows: its own road's speed
         };
         std::vector<Chained> chained;
         std::vector<int> ownBeyond;
@@ -1754,12 +1758,18 @@ int main(int argc, char** argv) {
                     ch.placement = mastOf(SignalKind::Exit, nx);
                     ch.beyond = pathSections(exitSignals[nx], circuits);
                     ch.ties = tiesOf(exitSignals[nx]);
+                    // What the route says this mast shows, else what its own road allows.
+                    const std::vector<RouteType>& onward = exitRoutes[ri].onward;
+                    ch.type = c.chained.size() < onward.size()
+                                  ? onward[c.chained.size()]
+                                  : roadAuthority(exitSignals[nx], switchNet, polys);
                     for (const int id : ch.beyond)
                         if (std::find(c.beyond.begin(), c.beyond.end(), id) == c.beyond.end())
                             c.beyond.push_back(id);
                     c.chained.push_back(std::move(ch));
-                    std::printf("[Route] %s runs on through exit \"%s\"\n", c.name.c_str(),
-                                named(exitSignals[nx], "X").c_str());
+                    std::printf("[Route] %s runs on through exit \"%s\" (%s)\n", c.name.c_str(),
+                                named(exitSignals[nx], "X").c_str(),
+                                ch.type == RouteType::C2 ? "C2" : "C1");
                     at = nx;
                 }
             }
@@ -4614,13 +4624,17 @@ int main(int argc, char** argv) {
             // not yet been entered, then C1 (two greens) or C2 (one green) per its type.
             std::vector<SignalAspect> exitAspects(sigPlacements.size(), SignalAspect::Stop);
             for (const MainRoute& mr : mainRoutes) {
-                const SignalAspect go = mainCandidates[mr.route].type == RouteType::C2
-                                            ? SignalAspect::ClearReduced
-                                            : SignalAspect::Clear;
+                auto aspectOf = [](RouteType t) {
+                    return t == RouteType::C2 ? SignalAspect::ClearReduced : SignalAspect::Clear;
+                };
+                const SignalAspect go = aspectOf(mainCandidates[mr.route].type);
                 // Each mast of a chained departure on its own say: the first may be back at
-                // danger behind the train while the next still shows it the road.
-                for (const MainRoute::Chained& ch : mr.chained)
-                    if (ch.clear && ch.placement >= 0) exitAspects[ch.placement] = go;
+                // danger behind the train while the next still shows it the road, and each
+                // shows the speed of its own road.
+                const std::vector<MainCandidate::Chained>& chs = mainCandidates[mr.route].chained;
+                for (std::size_t k = 0; k < mr.chained.size() && k < chs.size(); ++k)
+                    if (mr.chained[k].clear && mr.chained[k].placement >= 0)
+                        exitAspects[mr.chained[k].placement] = aspectOf(chs[k].type);
                 if (!mr.signalClear || mr.placement < 0) continue;
                 exitAspects[mr.placement] = go;
             }

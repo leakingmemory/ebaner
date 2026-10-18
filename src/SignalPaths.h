@@ -49,6 +49,10 @@ struct SignalPath {
     // --- exit routes only (left at these defaults by mini paths and exit signals) ---
     int exitId = 0;                  // >0: the exit signal this route leads up to
     RouteType type = RouteType::C1;  // the authority it grants
+    // What each further exit mast the departure runs on through shows, in order along the
+    // road: `onward C2` where an outer mast is to repeat the reduced speed although its own
+    // road runs straight. A mast with no entry here shows the speed of its own road.
+    std::vector<RouteType> onward;
     // --- main signals only (entry and exit signals) ---
     // A distant hangs on this signal's mast, repeating the next main signal ahead. It is a
     // fact about the *mast*, not about this one route: several records sharing a start
@@ -366,6 +370,12 @@ struct PathSwitch {
 // Every turnout the path traverses, with the position that path needs.
 std::vector<PathSwitch> pathSwitchRequirements(const SignalPath& p, const SwitchNetwork& net,
                                                const std::vector<TrackPoly>& polys);
+
+// The speed a main signal shows for this road: C2 where it takes any turnout to the side,
+// C1 where it runs straight through all of them. Read off the geometry, as the requirements
+// above are.
+RouteType roadAuthority(const SignalPath& p, const SwitchNetwork& net,
+                        const std::vector<TrackPoly>& polys);
 
 // True if every turnout the path traverses currently sits in the position that path needs.
 bool pathSwitchesAligned(const SignalPath& p, const SwitchNetwork& net,

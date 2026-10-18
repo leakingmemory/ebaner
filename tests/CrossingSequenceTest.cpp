@@ -2802,15 +2802,20 @@ int main(int argc, char** argv) {
         r.name = "STJ NB T1";
         r.exitId = 116;
         r.distant = true;
+        r.onward = {RouteType::C2};
         SignalPath rPlain = r;
         rPlain.id = 8;
         rPlain.crossing = false;
+        rPlain.onward.clear();
         check(writeExitRoutes(root, {r, rPlain}), "exit routes with the flag write");
         const std::vector<SignalPath> rBack = loadExitRoutes(root);
         check(rBack.size() == 2 && rBack[0].crossing && !rBack[1].crossing,
               "and an exit route keeps it, flagged where written, absent where not");
         check(rBack.size() == 2 && !rBack[0].distant,
               "without picking up the mast flags it has no mast for");
+        check(rBack.size() == 2 && rBack[0].onward.size() == 1 &&
+                  rBack[0].onward[0] == RouteType::C2 && rBack[1].onward.empty(),
+              "and what the next mast in series shows, where the route names it");
         std::filesystem::remove_all(root, ec);
     }
 

@@ -146,6 +146,11 @@ std::vector<SignalPath> loadRoutes(const std::string& file, const char* keyword)
                 if (is >> tt) p.type = tt == "C2" ? RouteType::C2 : RouteType::C1;
                 continue;
             }
+            if (tok == "onward") { // exit routes: what the next mast in series shows
+                std::string tt;
+                if (is >> tt) p.onward.push_back(tt == "C2" ? RouteType::C2 : RouteType::C1);
+                continue;
+            }
             if (tok == "distant") { // main signals: a distant hangs on this mast
                 p.distant = true;
                 continue;
@@ -197,6 +202,9 @@ std::vector<SignalPath> loadRoutes(const std::string& file, const char* keyword)
 // all. Written only when the answer is left, so every file that means right - which is all
 // of them today - comes back out of a round trip exactly as it went in.
 //
+// `onward` is an exit route's alone - the masts a departure runs on through belong to the
+// departure, not to any one signal - which is what a route with a type and no mast flags is.
+//
 // `withCrossing` lets `crossing` through without the rest of the mast flags. An exit route
 // has no mast to build, but it can run over a crossing inside the station on its way up to
 // the signal, and saying so is what holds its signals until that crossing is secured.
@@ -212,6 +220,7 @@ bool writeRoutes(const std::string& datasetRoot, const std::string& file,
     f << header << "# " << keyword
       << " <id> \"<name>\" <startTrackHex>:<frac> <endTrackHex>:<frac> "
          "[signal <exitId> type <C1|C2>] "
+      << (withType && !withMastFlags ? "[onward <C1|C2>]... " : "")
       << (withMastFlags ? "[distant] [twolamp] [crossing] "
                         : withCrossing ? "[crossing] " : "")
       << (withSide ? "[left] " : "")
@@ -226,6 +235,7 @@ bool writeRoutes(const std::string& datasetRoot, const std::string& file,
         // C1 default.
         if (p.exitId != 0) f << " signal " << p.exitId;
         if (withType) f << " type " << (p.type == RouteType::C2 ? "C2" : "C1");
+        for (const RouteType t : p.onward) f << " onward " << (t == RouteType::C2 ? "C2" : "C1");
         if (withMastFlags && p.distant) f << " distant";
         if (withMastFlags && p.twoLamp) f << " twolamp";
         if ((withMastFlags || withCrossing) && p.crossing) f << " crossing";
@@ -617,6 +627,13 @@ double planarDist(const glm::dvec3& a, const glm::dvec3& b) {
     return std::hypot(a.x - b.x, a.y - b.y);
 }
 } // namespace
+
+RouteType roadAuthority(const SignalPath& p, const SwitchNetwork& net,
+                        const std::vector<TrackPoly>& polys) {
+    for (const PathSwitch& ps : pathSwitchRequirements(p, net, polys))
+        if (ps.need == SwitchState::Diverging) return RouteType::C2;
+    return RouteType::C1;
+}
 
 std::vector<PathSwitch> pathSwitchRequirements(const SignalPath& p, const SwitchNetwork& net,
                                                const std::vector<TrackPoly>& polys) {

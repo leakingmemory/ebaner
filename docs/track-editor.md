@@ -180,6 +180,15 @@ worked is in [Using the traffic manager](traffic-manager.md).
 - **Exit signals** are written in two parts: the signal and the road beyond it in
   `exit-signals.txt`, and the roads leading up to it in `exit-routes.txt`, one per line
   in the route list.
+- **Exit signals in series.** Where an exit signal's road ends at a second exit signal
+  facing the same way, a departure clears both. The second shows the speed of its own
+  road: C2 where it takes a turnout to the side, C1 where it runs straight. An exit route
+  that should show something else on it says so with `onward C1` or `onward C2`, one per
+  further signal in order:
+
+  ```
+  route 86 "STK SB PASS" d000000d:1 d000000d:0.433581 signal 75 type C2 onward C2 …
+  ```
 - **Entry approaches.** Where several roads lead to one entry signal, each is written in
   `entry-approaches.txt`. In Entry signals mode, right-click the entry route, press **B**,
   and click the start border out on the approach. The approach ends on the signal's
