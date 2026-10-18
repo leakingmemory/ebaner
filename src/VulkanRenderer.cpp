@@ -1424,7 +1424,9 @@ void VulkanRenderer::updateStructs(const std::vector<TrackVertex>& vertices,
 }
 
 void VulkanRenderer::updateRoads(const std::vector<TrackVertex>& vertices,
-                                 const std::vector<std::uint32_t>& indices) {
+                                 const std::vector<std::uint32_t>& indices,
+                                 const std::vector<TrackDrawChunk>& chunks) {
+    roadChunks_ = chunks;
     createRoadBuffers(vertices, indices);
 }
 
@@ -1789,17 +1791,29 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageInde
     }
 
     // Roads reuse the track pipeline (flat solid-colour lit ribbons). Drawn before
-    // the railway so tracks sit on top at level crossings.
+    // the railway so tracks sit on top at level crossings. By draw cell, in buffer order
+    // so the public network still lands on top of the private roads.
     if (roadIndexCount_ > 0) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, trackPipeline_);
         vkCmdBindVertexBuffers(cmd, 0, 1, &roadVertexBuffer_, &offset);
         vkCmdBindIndexBuffer(cmd, roadIndexBuffer_, 0, VK_INDEX_TYPE_UINT32);
-        vkCmdDrawIndexed(cmd, roadIndexCount_, 1, 0, 0, 0);
+        if (roadChunks_.empty()) {
+            vkCmdDrawIndexed(cmd, roadIndexCount_, 1, 0, 0, 0);
+        } else {
+            for (const TrackDrawChunk& c : roadChunks_)
+                if (c.indexCount > 0 &&
+                    (c.radius <= 0.0f || frustum.sees(c.centroid, c.radius)))
+                    vkCmdDrawIndexed(cmd, c.indexCount, 1, c.firstIndex, 0, 0);
+        }
     }
 
-    // Buildings — extruded prisms on the same track pipeline, drawn by locality so a
-    // town behind the camera costs nothing. What follows them in the buffer (platforms,
-    // speed signs, tunnel bores) is small and sits along the line, so it is drawn whole.
+    // Buildings — extruded prisms on the same track pipeline, drawn by draw cell so a
+    // town behind the camera costs nothing, and only out to where a house is still more
+    // than a pixel or two: beyond that a town is thousands of triangles each smaller than
+    // a pixel, and the cost of a view toward one. What follows them in the buffer
+    // (platforms, speed signs, tunnel bores) is small and sits along the line, so it is
+    // drawn whole.
+    constexpr float kBuildingDrawDistance = 4000.0f; // metres, to the nearest of a cell
     if (buildingIndexCount_ > 0) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, trackPipeline_);
         vkCmdBindVertexBuffers(cmd, 0, 1, &buildingVertexBuffer_, &offset);
@@ -1807,9 +1821,12 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageInde
         if (buildingChunks_.empty()) {
             vkCmdDrawIndexed(cmd, buildingIndexCount_, 1, 0, 0, 0);
         } else {
+            const glm::vec3 eye = glm::vec3(lastPush_.camPos);
             for (const TrackDrawChunk& c : buildingChunks_)
                 if (c.indexCount > 0 &&
-                    (c.radius <= 0.0f || frustum.sees(c.centroid, c.radius)))
+                    (c.radius <= 0.0f ||
+                     (glm::distance(eye, c.centroid) - c.radius < kBuildingDrawDistance &&
+                      frustum.sees(c.centroid, c.radius))))
                     vkCmdDrawIndexed(cmd, c.indexCount, 1, c.firstIndex, 0, 0);
             if (buildingIndexCount_ > buildingChunkedIndexCount_)
                 vkCmdDrawIndexed(cmd, buildingIndexCount_ - buildingChunkedIndexCount_,

@@ -139,6 +139,7 @@ void WorldStreamer::run() {
         roads.build(*data_);
         b.roadV = roads.vertices();
         b.roadI = roads.indices();
+        b.roadChunks = roads.chunks();
 
         // The static bucket: buildings, platforms, speed signs and bores share one
         // buffer, in the same order main.cpp assembles them at startup.

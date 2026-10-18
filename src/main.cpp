@@ -657,7 +657,7 @@ int main(int argc, char** argv) {
     renderer.updateTracks(tracks.vertices(), tracks.indices(),
                           tracks.alwaysIndexCount(), tracks.sleeperChunks(),
                           tracks.alwaysChunks());
-    renderer.updateRoads(roads.vertices(), roads.indices());
+    renderer.updateRoads(roads.vertices(), roads.indices(), roads.chunks());
     // The buildings' own chunks, and how far into the buffer they reach: what follows
     // them here is platforms, speed signs and bores, which are always drawn.
     renderer.updateStructs(structVerts, structIndices, buildings.chunks(),
@@ -4422,7 +4422,7 @@ int main(int argc, char** argv) {
                 }
                 renderer.updateTracks(nb.trackV, nb.trackI, nb.trackAlways,
                                       nb.sleeperChunks, nb.trackAlwaysChunks);
-                renderer.updateRoads(nb.roadV, nb.roadI);
+                renderer.updateRoads(nb.roadV, nb.roadI, nb.roadChunks);
                 renderer.updateStructs(nb.structV, nb.structI, nb.structChunks,
                                        nb.structChunked);
                 switches.build(switchNet, worldCentre, data.loadedRadius());

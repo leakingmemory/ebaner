@@ -66,6 +66,7 @@ public:
         std::vector<TrackDrawChunk> sleeperChunks;
         std::vector<TrackVertex> roadV;
         std::vector<std::uint32_t> roadI;
+        std::vector<TrackDrawChunk> roadChunks;
         std::vector<TrackVertex> structV;
         std::vector<std::uint32_t> structI;
         // The buildings grouped by locality, covering the first structChunked indices;

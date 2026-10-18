@@ -14,6 +14,7 @@
 #pragma once
 
 #include <glm/glm.hpp>
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -39,6 +40,18 @@ struct TrackDrawChunk {
     // at once. Zero means "not known", and such a chunk is always drawn.
     float radius = 0.0f;
 };
+
+// The square of the ground that roads and buildings are grouped by for drawing, so a
+// view draws the squares it can see rather than the whole 20 km around it. A kilometre:
+// a town is several of them and a farm one, and a hundred-odd draws a frame is nothing.
+constexpr double kDrawCellMetres = 1000.0;
+// Which cell a world position (x, y) falls in, as one sortable key: rows south to north,
+// each west to east.
+inline std::int64_t drawCell(double x, double y) {
+    const auto cx = static_cast<std::int64_t>(std::floor(x / kDrawCellMetres));
+    const auto cy = static_cast<std::int64_t>(std::floor(y / kDrawCellMetres));
+    return cy * (std::int64_t(1) << 32) + cx;
+}
 
 // Builds a realistic railway cross-section (ballast bed, sleepers, two rails) for
 // the tracks near a point.

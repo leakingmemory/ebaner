@@ -68,24 +68,35 @@ void BuildingMesh::build(const TerrainData& data) {
 
     std::unordered_set<std::uint64_t> seen;
     std::vector<const BuildingSegment*> uniq;
-    // Which tile each of them came off, so the geometry can be grouped by where it
-    // stands without being reordered. The buildings are gathered a tile at a time and a
-    // tile is already a piece of the map, so the run of one tile's buildings is exactly
-    // the group wanted - and taking it as it comes leaves the buffer byte for byte what
-    // it was. Sorting them into a grid of my own would have been tidier and would have
-    // changed which of two roofs at one height is the one drawn.
-    std::vector<int> ofTile;
-    int tileOrdinal = 0;
     for (const auto& [tileKey, tilePtr] : data.tiles()) {
         const Tile& t = *tilePtr;
         for (const BuildingSegment& b : t.buildings) {
             if (b.footprint.size() < 3) continue;
-            if (seen.insert(hashBuilding(b)).second) {
-                uniq.push_back(&b);
-                ofTile.push_back(tileOrdinal);
-            }
+            if (seen.insert(hashBuilding(b)).second) uniq.push_back(&b);
         }
-        ++tileOrdinal;
+    }
+    // Grouped by the draw cell each stands in (drawCell), so a view draws the cells it can
+    // see and none further than it can make a house out. Grouping by the tile they were
+    // read from was not enough: tiles reach 20 km across, and around Trondheim the 110 000
+    // buildings fell into 21 groups half of them 7 km wide, which a view nearly always
+    // touches. The sort is stable, so within a cell the buildings keep the order they were
+    // read in, and two that overlap - which share a cell - still draw in that order.
+    std::vector<std::int64_t> ofCell(uniq.size());
+    for (std::size_t i = 0; i < uniq.size(); ++i)
+        ofCell[i] = drawCell(uniq[i]->footprint.front().x, uniq[i]->footprint.front().y);
+    {
+        std::vector<std::size_t> order(uniq.size());
+        for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+        std::stable_sort(order.begin(), order.end(),
+                         [&](std::size_t a, std::size_t b) { return ofCell[a] < ofCell[b]; });
+        std::vector<const BuildingSegment*> u2(uniq.size());
+        std::vector<std::int64_t> c2(uniq.size());
+        for (std::size_t i = 0; i < order.size(); ++i) {
+            u2[i] = uniq[order[i]];
+            c2[i] = ofCell[order[i]];
+        }
+        uniq.swap(u2);
+        ofCell.swap(c2);
     }
 
     // Quad with an outward normal (flipped to face away from `inside`).
@@ -132,7 +143,7 @@ void BuildingMesh::build(const TerrainData& data) {
         indices_.push_back(base + 2);
     };
 
-    int openCell = -1;
+    std::int64_t openCell = 0;
     bool cellOpen = false;
     std::uint32_t cellFirst = 0, cellVertFirst = 0;
     // Close the run that is open and record it as a chunk.
@@ -164,7 +175,7 @@ void BuildingMesh::build(const TerrainData& data) {
     for (std::size_t bi = 0; bi < uniq.size(); ++bi) {
         const BuildingSegment& b = *uniq[bi];
         {
-            const int cc = ofTile[bi];
+            const std::int64_t cc = ofCell[bi];
             if (!cellOpen || cc != openCell) {
                 closeCell();
                 openCell = cc;

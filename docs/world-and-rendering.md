@@ -69,11 +69,15 @@ Switches route the trains:
 
 ## What is drawn
 
-Each frame draws only what is in the view frustum (`Frustum.h`). The ground, the
-buildings and the track are split into pieces with a bounding sphere each: a terrain tile,
-one map tile's buildings, a 200 m length of track. The bounds are measured from the
-vertices actually emitted. Pieces are drawn in the order they arrive, because which of two
-surfaces at the same depth wins depends on that order.
+Each frame draws only what is in the view frustum (`Frustum.h`). The ground, the roads,
+the buildings and the track are split into pieces with a bounding sphere each: a terrain
+tile, the roads or the buildings of one square kilometre, a 200 m length of track. The
+bounds are measured from the vertices actually emitted. Pieces are drawn in the order they
+arrive, because which of two surfaces at the same depth wins depends on that order: the
+private roads go first so the public network lands on top.
+
+Buildings are also drawn only **out to 4 km**. Further away a house is a pixel or less,
+and a town in view is tens of thousands of such triangles.
 
 Vehicles are culled per unit: a unit outside the frustum has its part of the vertex
 buffer filled with one repeated point, so its triangles are degenerate while the buffer

@@ -30,8 +30,13 @@ public:
 
     const std::vector<TrackVertex>& vertices() const { return vertices_; }
     const std::vector<std::uint32_t>& indices() const { return indices_; }
+    // The roads grouped by draw cell (drawCell) within each pass, private then public, so
+    // a view draws the roads it can see. Drawn in this order the chunks keep the public
+    // network on top, as drawing the buffer whole does.
+    const std::vector<TrackDrawChunk>& chunks() const { return chunks_; }
 
 private:
     std::vector<TrackVertex> vertices_;
     std::vector<std::uint32_t> indices_;
+    std::vector<TrackDrawChunk> chunks_;
 };

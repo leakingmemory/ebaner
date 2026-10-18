@@ -15,6 +15,7 @@
 
 #include "TerrainData.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <unordered_set>
@@ -62,6 +63,9 @@ std::uint64_t hashRoad(const RoadSegment& r) {
 
 void RoadMesh::build(const TerrainData& data) {
     const glm::dvec3 origin = data.sceneOrigin();
+    vertices_.clear();
+    indices_.clear();
+    chunks_.clear();
 
     // Collect unique roads across tiles (dedup by geometry).
     std::unordered_set<std::uint64_t> seen;
@@ -126,14 +130,52 @@ void RoadMesh::build(const TerrainData& data) {
         }
     };
 
+    // A road's cell is where its middle point is. A long road makes its cell's bound
+    // larger, which costs only that the cell is drawn a little more often than it need be.
+    auto cellOf = [](const RoadSegment& r) {
+        const glm::dvec3& m = r.pts[r.pts.size() / 2];
+        return drawCell(m.x, m.y);
+    };
+    // Close a run of one cell's roads as a chunk, bounded by what it actually emitted.
+    auto closeChunk = [&](std::uint32_t first, std::uint32_t vertFirst) {
+        const std::uint32_t count = static_cast<std::uint32_t>(indices_.size()) - first;
+        if (count == 0) return;
+        glm::vec3 lo(1e30f), hi(-1e30f);
+        for (std::size_t k = vertFirst; k < vertices_.size(); ++k) {
+            lo = glm::min(lo, vertices_[k].pos);
+            hi = glm::max(hi, vertices_[k].pos);
+        }
+        TrackDrawChunk c;
+        c.firstIndex = first;
+        c.indexCount = count;
+        c.centroid = 0.5f * (lo + hi);
+        c.radius = 0.5f * glm::length(hi - lo);
+        chunks_.push_back(c);
+    };
+
     // Emit private first, then public, so the public network draws on top at
-    // junctions (reinforced by the higher public lift).
+    // junctions (reinforced by the higher public lift). Within each pass the roads go
+    // cell by cell, in the order they were read inside a cell.
     for (int pass = 0; pass < 2; ++pass) {
         const bool wantPrivate = (pass == 0);
-        for (const RoadSegment* r : uniq) {
-            const RoadStyle st = styleFor(r->kategori);
-            if (st.priv == wantPrivate) emitRibbon(*r, st);
+        std::vector<const RoadSegment*> these;
+        for (const RoadSegment* r : uniq)
+            if (styleFor(r->kategori).priv == wantPrivate) these.push_back(r);
+        std::stable_sort(these.begin(), these.end(),
+                         [&](const RoadSegment* a, const RoadSegment* b) {
+                             return cellOf(*a) < cellOf(*b);
+                         });
+        std::uint32_t first = static_cast<std::uint32_t>(indices_.size());
+        std::uint32_t vertFirst = static_cast<std::uint32_t>(vertices_.size());
+        for (std::size_t i = 0; i < these.size(); ++i) {
+            if (i > 0 && cellOf(*these[i]) != cellOf(*these[i - 1])) {
+                closeChunk(first, vertFirst);
+                first = static_cast<std::uint32_t>(indices_.size());
+                vertFirst = static_cast<std::uint32_t>(vertices_.size());
+            }
+            emitRibbon(*these[i], styleFor(these[i]->kategori));
         }
+        closeChunk(first, vertFirst);
     }
 
     std::printf("[RoadMesh] %zu roads, %zu vertices, %zu triangles\n",

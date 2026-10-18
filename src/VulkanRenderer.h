@@ -113,8 +113,11 @@ public:
                        const std::vector<std::uint32_t>& indices,
                        const std::vector<TrackDrawChunk>& chunks = {},
                        std::uint32_t chunkedIndexCount = 0);
+    // `chunks` cover the whole buffer and are drawn in order, each only when it is in
+    // view. Without them the roads are drawn whole (what the editor does).
     void updateRoads(const std::vector<TrackVertex>& vertices,
-                     const std::vector<std::uint32_t>& indices);
+                     const std::vector<std::uint32_t>& indices,
+                     const std::vector<TrackDrawChunk>& chunks = {});
     // Set the 2-D text overlay (screen-space triangles) drawn on top each frame.
     void setOverlayText(const std::vector<TextVertex>& vertices);
 
@@ -320,6 +323,7 @@ private:
     VkBuffer roadIndexBuffer_ = VK_NULL_HANDLE;
     VkDeviceMemory roadIndexMemory_ = VK_NULL_HANDLE;
     uint32_t roadIndexCount_ = 0;
+    std::vector<TrackDrawChunk> roadChunks_;
 
     VkBuffer buildingVertexBuffer_ = VK_NULL_HANDLE;
     VkDeviceMemory buildingVertexMemory_ = VK_NULL_HANDLE;
