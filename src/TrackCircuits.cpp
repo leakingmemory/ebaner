@@ -308,6 +308,27 @@ TrackJunctions trackJunctions(const std::vector<TrackPoly>& polys) {
     // end-to-end join listed twice looks like a two-way choice, no turnout is found there,
     // and the walk stops dead at a track boundary. That is why no distant signal in the
     // dataset could see past the end of its own track.
+    //
+    // The two writings need not agree exactly. One comes from matching end to end and says
+    // 1; the other projects that end onto the track's last segment and can come out a
+    // fraction of a millimetre short, 0.999999. Both are the same joint, so a fraction
+    // within a quarter of a metre of a track's end is that end before duplicates are
+    // looked for (Hommelvik's distant on the line from Hell was blind for exactly this).
+    std::unordered_map<std::uint32_t, double> nearEnd;
+    for (const TrackPoly& P : polys) {
+        const double L = polyLength(P.pts);
+        nearEnd[P.id] = L > 1.0 ? 0.25 / L : 1e-6;
+    }
+    auto snap = [&](std::uint32_t id, double f) {
+        const auto it = nearEnd.find(id);
+        const double tol = it == nearEnd.end() ? 1e-6 : it->second;
+        return f <= tol ? 0.0 : f >= 1.0 - tol ? 1.0 : f;
+    };
+    for (auto& [id, v] : conns)
+        for (TrackJunction& c : v) {
+            c.here = snap(id, c.here);
+            c.there = snap(c.other, c.there);
+        }
     for (auto& [id, v] : conns) {
         std::sort(v.begin(), v.end(), [](const TrackJunction& a, const TrackJunction& b) {
             if (a.other != b.other) return a.other < b.other;

@@ -1737,6 +1737,32 @@ int main(int argc, char** argv) {
               "a signal beyond the reach is not seen");
         check(firstMainSignalAhead(polys, junctions, none, ps, 1, 0.1, +1, 4000.0) == 0,
               "...and is seen once the reach is long enough to get there");
+
+        // Two tracks meeting end to end where the join is found once from each end, and
+        // the two findings disagree by a hair: one end projected onto the other track's
+        // last segment lands a fraction of a millimetre short of its end. Both are the
+        // same joint, and must be listed as one - two listings of a plain join read as
+        // a fork with no points on it, and the walk stops at the track boundary.
+        std::vector<TrackPoly> hair(2);
+        hair[0].id = 5;
+        for (int i = 0; i <= 10; ++i) hair[0].pts.push_back({i * 100.0, 0.0, 0.0});
+        hair[1].id = 6;
+        for (int i = 0; i <= 10; ++i) hair[1].pts.push_back({999.9999 + i * 100.0, 0.0, 0.0});
+        const TrackJunctions hairJ = trackJunctions(hair);
+        std::size_t joins = 0;
+        if (const auto it = hairJ.find(5); it != hairJ.end())
+            for (const TrackJunction& c : it->second)
+                if (c.other == 6) ++joins;
+        check(joins == 1, "a joint found from both ends is listed once (" +
+                              std::to_string(joins) + ")");
+        SignalPlacement far;
+        far.kind = SignalKind::Entry;
+        far.at = {6, 0.5};
+        far.forward = trackTangent(hair, 6, 0.5, +1);
+        far.world = fracToWorld(hair, 6, 0.5);
+        far.aspect = SignalAspect::Clear;
+        check(firstMainSignalAhead(hair, hairJ, none, {far}, 5, 0.1, +1, kDistantReach) == 0,
+              "and the walk carries on across it to the signal beyond");
     }
 
     // Two routes over one road: a chain or a head-on.
