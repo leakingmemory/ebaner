@@ -34,10 +34,10 @@ listed in [The track editor](track-editor.md#saving-the-overlay). An optional
 
 `overlay/production-stations.txt` lists the stations that are finished enough to start
 at: their track, signalling and station working are in place. Both station pickers (the
-start screen and Esc → *Place a train at a station*) list these first, in the order the
-file gives them, which follows the line. Every other station is listed under the last row,
-**Under development (not finished)**. Each line names one station exactly as the data
-spells it:
+start screen and Esc → *Place a train at a station*) list these first. Every other
+station is listed under the last row, **Under development (not finished)**. Both lists are
+grouped by line and alphabetical inside each line, in Norwegian order: Æ, Ø and Å come
+after Z. Each line of the file names one station exactly as the data spells it:
 
 ```
 station "Stjørdal"

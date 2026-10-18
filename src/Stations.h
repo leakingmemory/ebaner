@@ -28,13 +28,13 @@ struct Station {
     glm::dvec3 world{0}; // EPSG:25833, the station node
     char type = 'S';     // 'S' a station (sidings, signals), 'I' a stop
     std::string line;    // "Nordlandsbanen", ...
-    int production = -1; // its row in the overlay's production list; -1 still being built
+    bool production = false; // open for play; false while it is still being built
 
     bool isStop() const { return type == 'I'; }
-    bool inProduction() const { return production >= 0; }
 };
 
-// Every station in the dataset, sorted by line then name, deduplicated: one near a tile
+// Every station in the dataset, sorted by line then name in Norwegian alphabetical order
+// (norwegianLess), deduplicated: one near a tile
 // boundary is written into both tiles. Reads every tile's meta.json, which sounds worse
 // than it is - the whole sweep is well under a second.
 std::vector<Station> loadStations(const std::string& datasetRoot);
@@ -52,7 +52,7 @@ void applyStationOverrides(const std::string& datasetRoot, std::vector<Station>&
 // Mark the stations that are open for play: finished enough - track, signalling, the
 // station's own working - to be offered as a place to start. The rest are still being built
 // and the pickers keep them out of the way, under one last row. Lines in
-// `<datasetRoot>/overlay/production-stations.txt`, in the order the pickers list them:
+// `<datasetRoot>/overlay/production-stations.txt`:
 //   station "<name>"
 // Matched by the name exactly as the data spells it. Called by loadStations.
 void applyProductionStations(const std::string& datasetRoot, std::vector<Station>& all);
@@ -60,8 +60,13 @@ void applyProductionStations(const std::string& datasetRoot, std::vector<Station
 // How a station reads in a picker: "Bodø  Nordlandsbanen", "Vudu  (stop)  Nordlandsbanen".
 std::string stationLabel(const Station& s);
 
-// What the station pickers show. The top level is the stations open for play, in the
-// order the overlay lists them, and then one row that opens everything still being built.
+// Whether `a` comes before `b` in the Norwegian alphabet: Æ, Ø and Å after Z, in that
+// order, and upper and lower case together. Ä, Ö and Ü file as Æ, Ø and Y, É as E.
+bool norwegianLess(const std::string& a, const std::string& b);
+
+// What the station pickers show. The top level is the stations open for play, grouped by
+// line and alphabetical inside each (the order loadStations leaves them in), and then one
+// row that opens everything still being built, in the same order.
 // Without a production list there is no second level: every station is on the top one.
 struct StationMenu {
     std::vector<std::string> top;

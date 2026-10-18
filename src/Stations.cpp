@@ -95,6 +95,29 @@ std::string fold(const std::string& s) {
     return out;
 }
 
+// A key that sorts in Norwegian alphabetical order as plain bytes: letters lower case,
+// and Æ, Ø, Å given the three characters after 'z'. The other letters the names carry
+// file where a Norwegian dictionary puts them: Ä with Æ, Ö with Ø, Ü with Y, É with E.
+std::string collationKey(const std::string& s) {
+    std::string out;
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        const unsigned char c = static_cast<unsigned char>(s[i]);
+        if (c == 0xC3 && i + 1 < s.size()) { // two-byte Latin-1 supplement
+            switch (static_cast<unsigned char>(s[++i])) {
+                case 0xA6: case 0x86: case 0xA4: case 0x84: out.push_back('z' + 1); break; // æ ä
+                case 0xB8: case 0x98: case 0xB6: case 0x96: out.push_back('z' + 2); break; // ø ö
+                case 0xA5: case 0x85: out.push_back('z' + 3); break;                     // å
+                case 0xBC: case 0x9C: out.push_back('y'); break;                         // ü
+                case 0xA9: case 0x89: out.push_back('e'); break;                         // é
+                default: out.push_back('~'); break;
+            }
+            continue;
+        }
+        out.push_back(static_cast<char>(std::tolower(c)));
+    }
+    return out;
+}
+
 // Levenshtein, capped - only used to suggest what someone meant.
 std::size_t editDistance(const std::string& a, const std::string& b) {
     std::vector<std::size_t> prev(b.size() + 1), cur(b.size() + 1);
@@ -172,8 +195,8 @@ std::vector<Station> loadStations(const std::string& datasetRoot) {
     applyStationOverrides(datasetRoot, out);
     applyProductionStations(datasetRoot, out);
     std::sort(out.begin(), out.end(), [](const Station& a, const Station& b) {
-        if (a.line != b.line) return a.line < b.line;
-        return a.name < b.name;
+        if (a.line != b.line) return norwegianLess(a.line, b.line);
+        return norwegianLess(a.name, b.name);
     });
     return out;
 }
@@ -213,7 +236,7 @@ void applyStationOverrides(const std::string& datasetRoot, std::vector<Station>&
 void applyProductionStations(const std::string& datasetRoot, std::vector<Station>& all) {
     std::ifstream f(datasetRoot + "/overlay/production-stations.txt");
     if (!f) return;
-    int rows = 0, marked = 0;
+    int marked = 0;
     std::string line;
     while (std::getline(f, line)) {
         if (line.empty() || line[0] == '#') continue;
@@ -225,16 +248,21 @@ void applyProductionStations(const std::string& datasetRoot, std::vector<Station
         bool found = false;
         for (Station& s : all)
             if (s.name == name) {
-                s.production = rows;
+                s.production = true;
                 found = true;
                 ++marked;
             }
         if (!found)
             std::fprintf(stderr, "[Stations] production: no station called \"%s\"\n",
                          name.c_str());
-        ++rows;
     }
     std::printf("[Stations] %d station(s) open for play\n", marked);
+}
+
+bool norwegianLess(const std::string& a, const std::string& b) {
+    const std::string ka = collationKey(a), kb = collationKey(b);
+    if (ka != kb) return ka < kb;
+    return a < b; // the same letters: settle it on the bytes, so the order is total
 }
 
 std::string stationLabel(const Station& s) {
@@ -254,20 +282,10 @@ int StationMenu::row(int idx) const {
 
 StationMenu stationMenu(const std::vector<Station>& all) {
     StationMenu m;
-    std::vector<int> open;
     for (std::size_t i = 0; i < all.size(); ++i)
-        if (all[i].inProduction()) open.push_back(static_cast<int>(i));
-        else m.devRow.push_back(static_cast<int>(i));
-    if (open.empty()) { // no list: nothing is held back
-        m.topRow.swap(m.devRow);
-    } else {
-        std::stable_sort(open.begin(), open.end(), [&](int a, int b) {
-            return all[static_cast<std::size_t>(a)].production <
-                   all[static_cast<std::size_t>(b)].production;
-        });
-        m.topRow = open;
-        if (!m.devRow.empty()) m.topRow.push_back(-1);
-    }
+        (all[i].production ? m.topRow : m.devRow).push_back(static_cast<int>(i));
+    if (m.topRow.empty()) m.topRow.swap(m.devRow); // no list: nothing is held back
+    else if (!m.devRow.empty()) m.topRow.push_back(-1);
     for (int i : m.topRow)
         m.top.push_back(i < 0 ? StationMenu::kDevRow
                               : stationLabel(all[static_cast<std::size_t>(i)]));
