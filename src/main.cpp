@@ -645,6 +645,7 @@ int main(int argc, char** argv) {
     // afterwards. The ground goes in per tile, exactly as the streamer will replace it.
     {
         loading.stage(kStageGround);
+        renderer.setSceneOriginHeight(static_cast<float>(data.sceneOrigin().z));
         TerrainMesh chunk;
         std::size_t verts = 0, built = 0;
         for (const auto& [key, t] : data.tiles()) {

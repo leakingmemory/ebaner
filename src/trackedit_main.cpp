@@ -303,6 +303,7 @@ int main(int argc, char** argv) {
 
     // Hand the built world over - what renderer.init used to carry in.
     loading.stage(kStageUpload);
+    renderer.setSceneOriginHeight(static_cast<float>(data.sceneOrigin().z));
     renderer.updateTerrain(mesh.vertices(), mesh.indices());
     renderer.updateTracks(tracks.vertices(), tracks.indices(),
                           tracks.alwaysIndexCount(), tracks.sleepers(),

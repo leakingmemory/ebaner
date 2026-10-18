@@ -14,6 +14,7 @@
 #include "VulkanRenderer.h"
 
 #include "Frustum.h"
+#include "PackedVertex.h"
 #include "Paths.h"
 
 #include "TerrainMesh.h" // Vertex
@@ -461,14 +462,12 @@ void VulkanRenderer::createGraphicsPipeline() {
 
     VkVertexInputBindingDescription binding{};
     binding.binding = 0;
-    binding.stride = sizeof(Vertex);
+    binding.stride = sizeof(PackedGroundVertex);
     binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    std::array<VkVertexInputAttributeDescription, 4> attrs{};
-    attrs[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, pos)};
-    attrs[1] = {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)};
-    attrs[2] = {2, 0, VK_FORMAT_R32_SFLOAT, offsetof(Vertex, elevation)};
-    attrs[3] = {3, 0, VK_FORMAT_R32_SFLOAT, offsetof(Vertex, landcover)};
+    std::array<VkVertexInputAttributeDescription, 2> attrs{};
+    attrs[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(PackedGroundVertex, pos)};
+    attrs[1] = {1, 0, VK_FORMAT_R32_UINT, offsetof(PackedGroundVertex, normalCover)};
 
     VkPipelineVertexInputStateCreateInfo vertexInput{
         VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
@@ -702,6 +701,34 @@ void VulkanRenderer::createTrackPipeline() {
                                         &sleeperPipeline_),
               "vkCreateGraphicsPipelines(sleeper)");
         vkDestroyShaderModule(device_, sleeperVert, nullptr);
+    }
+
+    // The static scenery, packed (PackedSolidVertex): the same fragment stage and state.
+    {
+        auto solidCode = readFile(shaderPath("solid.vert.spv"));
+        VkShaderModule solidVert = createShaderModule(solidCode);
+        VkPipelineShaderStageCreateInfo solidStages[] = {vs, fs};
+        solidStages[0].module = solidVert;
+        const VkVertexInputBindingDescription solidBinding{0, sizeof(PackedSolidVertex),
+                                                           VK_VERTEX_INPUT_RATE_VERTEX};
+        const std::array<VkVertexInputAttributeDescription, 4> pattrs{{
+            {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(PackedSolidVertex, pos)},
+            {1, 0, VK_FORMAT_R8G8B8A8_SNORM, offsetof(PackedSolidVertex, normalLayer)},
+            {2, 0, VK_FORMAT_R8G8B8A8_UNORM, offsetof(PackedSolidVertex, color)},
+            {3, 0, VK_FORMAT_R16G16_SFLOAT, offsetof(PackedSolidVertex, uv)},
+        }};
+        VkPipelineVertexInputStateCreateInfo solidInput = vertexInput;
+        solidInput.vertexBindingDescriptionCount = 1;
+        solidInput.pVertexBindingDescriptions = &solidBinding;
+        solidInput.vertexAttributeDescriptionCount = static_cast<uint32_t>(pattrs.size());
+        solidInput.pVertexAttributeDescriptions = pattrs.data();
+        VkGraphicsPipelineCreateInfo pci = ci;
+        pci.pStages = solidStages;
+        pci.pVertexInputState = &solidInput;
+        check(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pci, nullptr,
+                                        &solidPipeline_),
+              "vkCreateGraphicsPipelines(solid)");
+        vkDestroyShaderModule(device_, solidVert, nullptr);
     }
 
     // Translucent variant (same shaders/layout) for vehicle glazing: alpha blend
@@ -1151,25 +1178,6 @@ void VulkanRenderer::setTerrainChunk(std::uint64_t key,
     removeTerrainChunk(key);
     if (indices.empty()) return;
 
-    auto upload = [&](const void* data, VkDeviceSize size, VkBufferUsageFlags usage,
-                      VkBuffer& buffer, VkDeviceMemory& memory) {
-        VkBuffer staging;
-        VkDeviceMemory stagingMem;
-        createBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                     staging, stagingMem);
-        void* mapped;
-        vkMapMemory(device_, stagingMem, 0, size, 0, &mapped);
-        std::memcpy(mapped, data, static_cast<std::size_t>(size));
-        vkUnmapMemory(device_, stagingMem);
-        createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage,
-                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, buffer, memory);
-        copyBuffer(staging, buffer, size);
-        vkDestroyBuffer(device_, staging, nullptr);
-        vkFreeMemory(device_, stagingMem, nullptr);
-    };
-
     TerrainChunk c;
     c.indexCount = static_cast<uint32_t>(indices.size());
     // The chunk's bounding sphere, taken once here rather than every frame: a tile of
@@ -1181,10 +1189,13 @@ void VulkanRenderer::setTerrainChunk(std::uint64_t key,
         c.centre = 0.5f * (lo + hi);
         c.radius = 0.5f * glm::length(hi - lo);
     }
-    upload(vertices.data(), sizeof(Vertex) * vertices.size(),
-           VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, c.vbuf, c.vmem);
-    upload(indices.data(), sizeof(std::uint32_t) * indices.size(),
-           VK_BUFFER_USAGE_INDEX_BUFFER_BIT, c.ibuf, c.imem);
+    uploadDeviceLocal(sizeof(PackedGroundVertex) * vertices.size(),
+                      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, c.vbuf, c.vmem, [&](void* out) {
+                          auto* p = static_cast<PackedGroundVertex*>(out);
+                          for (const Vertex& v : vertices) *p++ = packGround(v);
+                      });
+    uploadDeviceLocal(indices.data(), sizeof(std::uint32_t) * indices.size(),
+                      VK_BUFFER_USAGE_INDEX_BUFFER_BIT, c.ibuf, c.imem);
     terrainChunks_[key] = c;
 }
 
@@ -1200,6 +1211,23 @@ void VulkanRenderer::createMeshBuffers(const std::vector<Vertex>& vertices,
 void VulkanRenderer::uploadDeviceLocal(const void* data, VkDeviceSize size,
                                        VkBufferUsageFlags usage, VkBuffer& buffer,
                                        VkDeviceMemory& memory) {
+    uploadDeviceLocal(size, usage, buffer, memory, [&](void* out) {
+        std::memcpy(out, data, static_cast<std::size_t>(size));
+    });
+}
+
+void VulkanRenderer::uploadSolid(const std::vector<TrackVertex>& vertices, VkBuffer& buffer,
+                                 VkDeviceMemory& memory) {
+    uploadDeviceLocal(sizeof(PackedSolidVertex) * vertices.size(),
+                      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, buffer, memory, [&](void* out) {
+                          auto* p = static_cast<PackedSolidVertex*>(out);
+                          for (const TrackVertex& v : vertices) *p++ = packSolid(v);
+                      });
+}
+
+void VulkanRenderer::uploadDeviceLocal(VkDeviceSize size, VkBufferUsageFlags usage,
+                                       VkBuffer& buffer, VkDeviceMemory& memory,
+                                       const std::function<void(void*)>& fill) {
     VkBuffer staging;
     VkDeviceMemory stagingMem;
     createBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -1207,7 +1235,7 @@ void VulkanRenderer::uploadDeviceLocal(const void* data, VkDeviceSize size,
                  staging, stagingMem);
     void* mapped;
     vkMapMemory(device_, stagingMem, 0, size, 0, &mapped);
-    std::memcpy(mapped, data, static_cast<std::size_t>(size));
+    fill(mapped);
     vkUnmapMemory(device_, stagingMem);
 
     createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage,
@@ -1228,9 +1256,7 @@ void VulkanRenderer::createTrackBuffers(
     trackIndexCount_ = static_cast<uint32_t>(indices.size());
     if (indices.empty()) return; // no tracks in the loaded area
 
-    uploadDeviceLocal(vertices.data(), sizeof(TrackVertex) * vertices.size(),
-                      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, trackVertexBuffer_,
-                      trackVertexMemory_);
+    uploadSolid(vertices, trackVertexBuffer_, trackVertexMemory_);
     uploadDeviceLocal(indices.data(), sizeof(std::uint32_t) * indices.size(),
                       VK_BUFFER_USAGE_INDEX_BUFFER_BIT, trackIndexBuffer_,
                       trackIndexMemory_);
@@ -1267,31 +1293,9 @@ void VulkanRenderer::createRoadBuffers(
     roadIndexCount_ = static_cast<uint32_t>(indices.size());
     if (indices.empty()) return; // no roads in the loaded area
 
-    auto upload = [&](const void* data, VkDeviceSize size, VkBufferUsageFlags usage,
-                      VkBuffer& buffer, VkDeviceMemory& memory) {
-        VkBuffer staging;
-        VkDeviceMemory stagingMem;
-        createBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                     staging, stagingMem);
-        void* mapped;
-        vkMapMemory(device_, stagingMem, 0, size, 0, &mapped);
-        std::memcpy(mapped, data, static_cast<std::size_t>(size));
-        vkUnmapMemory(device_, stagingMem);
-
-        createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage,
-                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, buffer, memory);
-        copyBuffer(staging, buffer, size);
-
-        vkDestroyBuffer(device_, staging, nullptr);
-        vkFreeMemory(device_, stagingMem, nullptr);
-    };
-
-    upload(vertices.data(), sizeof(TrackVertex) * vertices.size(),
-           VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, roadVertexBuffer_, roadVertexMemory_);
-    upload(indices.data(), sizeof(std::uint32_t) * indices.size(),
-           VK_BUFFER_USAGE_INDEX_BUFFER_BIT, roadIndexBuffer_, roadIndexMemory_);
+    uploadSolid(vertices, roadVertexBuffer_, roadVertexMemory_);
+    uploadDeviceLocal(indices.data(), sizeof(std::uint32_t) * indices.size(),
+                      VK_BUFFER_USAGE_INDEX_BUFFER_BIT, roadIndexBuffer_, roadIndexMemory_);
 }
 
 void VulkanRenderer::createBuildingBuffers(
@@ -1304,33 +1308,9 @@ void VulkanRenderer::createBuildingBuffers(
     buildingIndexCount_ = static_cast<uint32_t>(indices.size());
     if (indices.empty()) return; // no buildings in the loaded area
 
-    auto upload = [&](const void* data, VkDeviceSize size, VkBufferUsageFlags usage,
-                      VkBuffer& buffer, VkDeviceMemory& memory) {
-        VkBuffer staging;
-        VkDeviceMemory stagingMem;
-        createBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                     staging, stagingMem);
-        void* mapped;
-        vkMapMemory(device_, stagingMem, 0, size, 0, &mapped);
-        std::memcpy(mapped, data, static_cast<std::size_t>(size));
-        vkUnmapMemory(device_, stagingMem);
-
-        createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage,
-                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, buffer, memory);
-        copyBuffer(staging, buffer, size);
-
-        vkDestroyBuffer(device_, staging, nullptr);
-        vkFreeMemory(device_, stagingMem, nullptr);
-    };
-
-    upload(vertices.data(), sizeof(TrackVertex) * vertices.size(),
-           VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, buildingVertexBuffer_,
-           buildingVertexMemory_);
-    upload(indices.data(), sizeof(std::uint32_t) * indices.size(),
-           VK_BUFFER_USAGE_INDEX_BUFFER_BIT, buildingIndexBuffer_,
-           buildingIndexMemory_);
+    uploadSolid(vertices, buildingVertexBuffer_, buildingVertexMemory_);
+    uploadDeviceLocal(indices.data(), sizeof(std::uint32_t) * indices.size(),
+                      VK_BUFFER_USAGE_INDEX_BUFFER_BIT, buildingIndexBuffer_, buildingIndexMemory_);
 }
 
 void VulkanRenderer::createSwitchBuffers(
@@ -1846,11 +1826,11 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageInde
         vkCmdDrawIndexed(cmd, c.indexCount, 1, 0, 0, 0);
     }
 
-    // Roads reuse the track pipeline (flat solid-colour lit ribbons). Drawn before
+    // Roads: flat solid-colour lit ribbons, on the solid pipeline. Drawn before
     // the railway so tracks sit on top at level crossings. By draw cell, in buffer order
     // so the public network still lands on top of the private roads.
     if (roadIndexCount_ > 0) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, trackPipeline_);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, solidPipeline_);
         vkCmdBindVertexBuffers(cmd, 0, 1, &roadVertexBuffer_, &offset);
         vkCmdBindIndexBuffer(cmd, roadIndexBuffer_, 0, VK_INDEX_TYPE_UINT32);
         if (roadChunks_.empty()) {
@@ -1863,7 +1843,7 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageInde
         }
     }
 
-    // Buildings — extruded prisms on the same track pipeline, drawn by draw cell so a
+    // Buildings — extruded prisms on the solid pipeline, drawn by draw cell so a
     // town behind the camera costs nothing, and only out to where a house is still more
     // than a pixel or two: beyond that a town is thousands of triangles each smaller than
     // a pixel, and the cost of a view toward one. What follows them in the buffer
@@ -1871,7 +1851,7 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageInde
     // drawn whole.
     constexpr float kBuildingDrawDistance = 4000.0f; // metres, to the nearest of a cell
     if (buildingIndexCount_ > 0) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, trackPipeline_);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, solidPipeline_);
         vkCmdBindVertexBuffers(cmd, 0, 1, &buildingVertexBuffer_, &offset);
         vkCmdBindIndexBuffer(cmd, buildingIndexBuffer_, 0, VK_INDEX_TYPE_UINT32);
         if (buildingChunks_.empty()) {
@@ -1923,7 +1903,7 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageInde
     // are always drawn; the sleepers after them, only near the camera (the ballast
     // texture stands in for sleepers at distance).
     if (trackIndexCount_ > 0) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, trackPipeline_);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, solidPipeline_);
         vkCmdBindVertexBuffers(cmd, 0, 1, &trackVertexBuffer_, &offset);
         vkCmdBindIndexBuffer(cmd, trackIndexBuffer_, 0, VK_INDEX_TYPE_UINT32);
         // Ballast and rails: every piece that is on screen. Cut up at build time, so
@@ -2094,6 +2074,7 @@ void VulkanRenderer::saveSwapchainImage(uint32_t imageIndex,
 
 void VulkanRenderer::drawFrame(const PushConstants& pc) {
     lastPush_ = pc;
+    lastPush_.params.z = sceneOriginHeight_;
 
     vkWaitForFences(device_, 1, &inFlight_[currentFrame_], VK_TRUE, UINT64_MAX);
 
@@ -2257,6 +2238,7 @@ void VulkanRenderer::cleanup() {
     vkDestroyPipeline(device_, vehicleGlassPipeline_, nullptr);
     vkDestroyPipeline(device_, trackPipeline_, nullptr);
     vkDestroyPipeline(device_, sleeperPipeline_, nullptr);
+    vkDestroyPipeline(device_, solidPipeline_, nullptr);
     vkDestroyPipeline(device_, pipeline_, nullptr);
     vkDestroyPipelineLayout(device_, pipelineLayout_, nullptr);
     vkDestroyRenderPass(device_, renderPass_, nullptr);

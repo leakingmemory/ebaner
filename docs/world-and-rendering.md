@@ -80,6 +80,13 @@ private roads go first so the public network lands on top.
 Buildings are also drawn only **out to 4 km**. Further away a house is a pixel or less,
 and a town in view is tens of thousands of such triangles.
 
+The ground and the static scenery are held on the graphics card **packed**
+(`src/PackedVertex.h`): a ground vertex is its position and one 32-bit word with the
+normal and the land cover, and a track, road or building vertex is half the size of the
+one the meshes are built in. The renderer packs them as it uploads them, so the meshes are
+built in plain floats. Trains, signals and switch stands, which are rebuilt as they
+change, are not packed.
+
 Vehicles are culled per unit: a unit outside the frustum has its part of the vertex
 buffer filled with one repeated point, so its triangles are degenerate while the buffer
 and its indices stay valid.

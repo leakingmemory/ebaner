@@ -22,6 +22,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -34,7 +35,9 @@ struct PushConstants {
     glm::mat4 viewProj;
     glm::vec4 sunDir;  // xyz = direction to sun (normalised)
     glm::vec4 camPos;  // xyz = scene-relative camera position
-    glm::vec4 params{1.0f, 0.0f, 0.0f, 0.0f}; // x = scene alpha (1 = opaque)
+    // x = scene alpha (1 = opaque), y = blink clock. z is the scene origin's height,
+    // which the renderer fills in (setSceneOriginHeight).
+    glm::vec4 params{1.0f, 0.0f, 0.0f, 0.0f};
 };
 
 // Land-cover texture array to upload (RGBA8, layer-major).
@@ -66,6 +69,9 @@ public:
               const std::vector<TrackDrawChunk>& buildingChunks = {},
               std::uint32_t buildingChunkedIndexCount = 0);
     void drawFrame(const PushConstants& pc);
+    // The height of the scene origin above sea level. The ground's vertices hold their
+    // height above the origin only, and the shader adds this to colour by elevation.
+    void setSceneOriginHeight(float z) { sceneOriginHeight_ = z; }
     void waitIdle();
     void cleanup();
 
@@ -182,6 +188,13 @@ private:
     // A buffer in device memory filled through a staging copy. Waits for the copy.
     void uploadDeviceLocal(const void* data, VkDeviceSize size, VkBufferUsageFlags usage,
                            VkBuffer& buffer, VkDeviceMemory& memory);
+    // The same, with `fill` writing the `size` bytes straight into the staging memory, so
+    // a mesh can be packed on its way up without a packed copy of it in between.
+    void uploadDeviceLocal(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buffer,
+                           VkDeviceMemory& memory, const std::function<void(void*)>& fill);
+    // The static scenery's vertices, packed (PackedSolidVertex) into a vertex buffer.
+    void uploadSolid(const std::vector<TrackVertex>& vertices, VkBuffer& buffer,
+                     VkDeviceMemory& memory);
     void createRoadBuffers(const std::vector<TrackVertex>& vertices,
                            const std::vector<std::uint32_t>& indices);
     void createBuildingBuffers(const std::vector<TrackVertex>& vertices,
@@ -275,6 +288,7 @@ private:
     VkPipeline pipeline_ = VK_NULL_HANDLE;
     VkPipeline trackPipeline_ = VK_NULL_HANDLE; // railway ribbons (reuses layout)
     VkPipeline sleeperPipeline_ = VK_NULL_HANDLE; // the sleeper box, once per sleeper
+    VkPipeline solidPipeline_ = VK_NULL_HANDLE; // static scenery, packed vertices
     VkPipeline vehicleGlassPipeline_ = VK_NULL_HANDLE; // translucent vehicle glazing
     VkPipeline overlayLinePipeline_ = VK_NULL_HANDLE;  // editor track-graph links
     VkPipeline overlayPointPipeline_ = VK_NULL_HANDLE; // editor geo-point sprites
@@ -317,6 +331,7 @@ private:
     uint32_t trackIndexCount_ = 0;
     uint32_t trackAlwaysIndexCount_ = 0;       // ballast + rails, drawn always
     std::vector<TrackDrawChunk> trackAlwaysChunks_; // frustum-culled ballast + rails
+    float sceneOriginHeight_ = 0.0f;
     std::vector<TrackDrawChunk> sleeperChunks_; // distance-culled runs of instances
     // The one sleeper box, and where each sleeper lies.
     VkBuffer sleeperBoxVertexBuffer_ = VK_NULL_HANDLE;
@@ -331,7 +346,7 @@ private:
     std::vector<TrackDrawChunk> buildingChunks_;
     std::uint32_t buildingChunkedIndexCount_ = 0;
 
-    // Roads reuse the track pipeline (flat solid-colour lit ribbons).
+    // Roads: flat solid-colour lit ribbons, on the solid pipeline.
     VkBuffer roadVertexBuffer_ = VK_NULL_HANDLE;
     VkDeviceMemory roadVertexMemory_ = VK_NULL_HANDLE;
     VkBuffer roadIndexBuffer_ = VK_NULL_HANDLE;

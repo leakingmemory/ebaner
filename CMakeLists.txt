@@ -140,7 +140,7 @@ set(SHADER_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
 file(MAKE_DIRECTORY ${SHADER_OUT_DIR})
 
 set(SHADER_SPV)
-foreach(shader terrain.vert terrain.frag track.vert track.frag sleeper.vert text.vert text.frag
+foreach(shader terrain.vert terrain.frag track.vert track.frag sleeper.vert solid.vert text.vert text.frag
                overlay.vert overlay_line.frag overlay_point.frag)
     set(src ${SHADER_DIR}/${shader})
     set(spv ${SHADER_OUT_DIR}/${shader}.spv)
@@ -418,6 +418,13 @@ add_dependencies(RouteQueueTest shaders)
 target_link_libraries(RouteQueueTest PRIVATE ebaner_engine)
 target_include_directories(RouteQueueTest PRIVATE src)
 add_test(NAME route-queue COMMAND RouteQueueTest)
+
+# Packing the scenery for the graphics card: how much precision the packed vertices keep.
+# No dataset - it packs directions on a sphere and the handful of values the meshes use.
+add_executable(PackedVertexTest tests/PackedVertexTest.cpp)
+target_link_libraries(PackedVertexTest PRIVATE ebaner_engine)
+target_include_directories(PackedVertexTest PRIVATE src)
+add_test(NAME packed-vertex COMMAND PackedVertexTest)
 
 # Placing a train: where one fits on the line, and refusing a spot that will not hold it
 # or already has a train standing on it. No dataset - a kilometre of straight TrackPath

@@ -16,6 +16,7 @@
 
 #include "TrackPath.h"
 
+#include <cmath>
 #include <cstdio>
 #include <vector>
 
@@ -232,8 +233,13 @@ void TrackMesh::build(const std::vector<TrackPath>& paths, const glm::vec3& cent
             const glm::vec3 Ra = pa.right, Rb = pb.right;
             const glm::vec3 Ua = pa.up, Ub = pb.up;
             const glm::vec3 mid = (A + B) * 0.5f;
-            const float vA = ss[i] / kSleeperSpacing;
-            const float vB = ss[i + 1] / kSleeperSpacing;
+            // Along the track in sleeper pitches, counted from a whole number of them
+            // behind this quad rather than from the start of the path: the texture
+            // repeats every pitch, so it looks the same, and the number stays small
+            // enough for the half float the card holds it in (PackedSolidVertex).
+            const float vBase = std::floor(ss[i] / kSleeperSpacing);
+            const float vA = ss[i] / kSleeperSpacing - vBase;
+            const float vB = ss[i + 1] / kSleeperSpacing - vBase;
 
             // Ballast top (textured with the ballast/sleeper layer).
             emitQuad(pt(A, Ra, Ua,-kBallastTopHalf, kBallastTopZ),
