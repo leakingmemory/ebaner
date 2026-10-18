@@ -150,7 +150,7 @@ train brake (`K`/`L`) and locomotive brake (`H`/`J`).
 | O            | Open / close the traffic-manager map |
 | M            | Mute / unmute sound             |
 | Tab          | Release/grab cursor             |
-| Esc          | Open menu (Exit); press again to resume. In a picker, backs out one step |
+| Esc          | Open menu (Full screen, Exit); press again to resume. In a picker, backs out one step |
 
 In the traffic-manager map (`O`), the cab keys are replaced by the map's own. See
 [Using the traffic manager](docs/traffic-manager.md) for how to work it, and

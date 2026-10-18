@@ -272,6 +272,50 @@ void resizeCallback(GLFWwindow*, int, int) {
     if (g_renderer) g_renderer->notifyResize();
 }
 
+// Full screen: the window covers one monitor at that monitor's own resolution, so the
+// desktop's video mode is never changed and switching back is instant. The windowed size
+// and place are kept so leaving full screen puts the window back where it was.
+struct WindowedPlace { int x = 0, y = 0, w = 1280, h = 720; } g_windowed;
+
+bool isFullscreen(GLFWwindow* window) { return glfwGetWindowMonitor(window) != nullptr; }
+
+// The monitor the window's centre is on. Wayland tells no client where its window is, so
+// there it is the primary monitor, and the compositor is told which output to fill.
+GLFWmonitor* monitorUnder(GLFWwindow* window) {
+    GLFWmonitor* primary = glfwGetPrimaryMonitor();
+    if (glfwGetPlatform() == GLFW_PLATFORM_WAYLAND) return primary;
+    int wx = 0, wy = 0, ww = 0, wh = 0;
+    glfwGetWindowPos(window, &wx, &wy);
+    glfwGetWindowSize(window, &ww, &wh);
+    const int cx = wx + ww / 2, cy = wy + wh / 2;
+    int count = 0;
+    GLFWmonitor** mons = glfwGetMonitors(&count);
+    for (int i = 0; i < count; ++i) {
+        int mx = 0, my = 0;
+        glfwGetMonitorPos(mons[i], &mx, &my);
+        const GLFWvidmode* vm = glfwGetVideoMode(mons[i]);
+        if (vm && cx >= mx && cx < mx + vm->width && cy >= my && cy < my + vm->height)
+            return mons[i];
+    }
+    return primary;
+}
+
+void setFullscreen(GLFWwindow* window, bool on) {
+    if (on == isFullscreen(window)) return;
+    if (on) {
+        GLFWmonitor* mon = monitorUnder(window);
+        const GLFWvidmode* vm = mon ? glfwGetVideoMode(mon) : nullptr;
+        if (!vm) return;
+        if (glfwGetPlatform() != GLFW_PLATFORM_WAYLAND)
+            glfwGetWindowPos(window, &g_windowed.x, &g_windowed.y);
+        glfwGetWindowSize(window, &g_windowed.w, &g_windowed.h);
+        glfwSetWindowMonitor(window, mon, 0, 0, vm->width, vm->height, vm->refreshRate);
+    } else {
+        glfwSetWindowMonitor(window, nullptr, g_windowed.x, g_windowed.y, g_windowed.w,
+                             g_windowed.h, GLFW_DONT_CARE);
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -355,6 +399,9 @@ int main(int argc, char** argv) {
     glfwSetKeyCallback(window, keyCallback);
     glfwSetScrollCallback(window, scrollCallback);
     glfwSetFramebufferSizeCallback(window, resizeCallback);
+    // EBANER_FULLSCREEN=1 starts in full screen, as the menu item would put it.
+    if (const char* fs = std::getenv("EBANER_FULLSCREEN"); fs && *fs && *fs != '0')
+        setFullscreen(window, true);
 
     // --- Land-cover textures ---
     std::vector<std::uint8_t> texPixels = landtex::generate();
@@ -2578,10 +2625,14 @@ int main(int argc, char** argv) {
     bool prevMapClick = false; // edge-trigger for the map left-click
     bool prevPickUp = false, prevPickDown = false, prevPickEnter = false;
     bool prevPickArm = false; // Q in the route picker: arm the highlighted route
-    const std::vector<std::string> kMenuItems = {"Drive another train",
-                                                "Place a train here",
-                                                "Place a train at a station",
-                                                "Traffic manager", "Exit"};
+    // The full-screen item reads as what choosing it would do, so its text follows the
+    // window's state; it is refreshed each time the menu is drawn.
+    const char* const kFullscreenOn = "Full screen";
+    const char* const kFullscreenOff = "Leave full screen";
+    std::vector<std::string> kMenuItems = {"Drive another train",
+                                           "Place a train here",
+                                           "Place a train at a station",
+                                           "Traffic manager", kFullscreenOn, "Exit"};
     std::vector<std::string> menuList; // what the open sub-list is showing
     std::string menuNote;              // outcome of the last thing done, shown in the title
     // Where a train being placed is to go. Settled when the place step is entered, used
@@ -5043,6 +5094,9 @@ int main(int argc, char** argv) {
             if (root && !menuNote.empty()) title += "  -  " + menuNote;
 
             if (g_menuStep == MenuStep::PickTrain) menuList = trainLabels();
+            for (std::string& item : kMenuItems)
+                if (item == kFullscreenOn || item == kFullscreenOff)
+                    item = isFullscreen(window) ? kFullscreenOff : kFullscreenOn;
             const std::vector<std::string>& list =
                 g_menuStep == MenuStep::PickStation  ? stationLabels
                 : g_menuStep == MenuStep::PickVehicle ? vehicleLabels
@@ -5068,6 +5122,8 @@ int main(int argc, char** argv) {
                     const std::string& s2 = kMenuItems[g_menuSel];
                     menuNote.clear();
                     if (s2 == "Exit") glfwSetWindowShouldClose(window, GLFW_TRUE);
+                    else if (s2 == kFullscreenOn || s2 == kFullscreenOff)
+                        setFullscreen(window, !isFullscreen(window));
                     else if (s2 == "Traffic manager") {
                         g_mapMode = true; g_mapDirty = true; g_menuOpen = false;
                         g_mapPan = glm::vec2(0.0f); // start centred on the throat
