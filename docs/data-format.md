@@ -29,3 +29,19 @@ Everything authored on top of the export, such as track fixes, signalling and li
 equipment, lives in `<dataset>/overlay/`, which the export never touches. The files are
 listed in [The track editor](track-editor.md#saving-the-overlay). An optional
 `overlay/overlay.lua` is run at startup; see [Scripting](scripting.md).
+
+### Stations open for play
+
+`overlay/production-stations.txt` lists the stations that are finished enough to start
+at: their track, signalling and station working are in place. Both station pickers (the
+start screen and Esc → *Place a train at a station*) list these first, in the order the
+file gives them, which follows the line. Every other station is listed under the last row,
+**Under development (not finished)**. Each line names one station exactly as the data
+spells it:
+
+```
+station "Stjørdal"
+station "Vold"
+```
+
+Without the file, the pickers list every station as before.

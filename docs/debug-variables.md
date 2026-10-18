@@ -22,7 +22,7 @@ screenshotted without a keyboard.
 | `EBANER_CAM="x,y,z,yaw,pitch"` | place the camera, in scene-relative metres and degrees |
 | `EBANER_AUTO=1` | hand the train to the auto-driver and log what it does once a second |
 | `EBANER_ROLL=<m/s>` | start the train at this speed with the brake released, so it coasts |
-| `EBANER_MENU=1` / `train` / `station` / `vehicle` | open the Esc menu, the train picker, the station list or the vehicle list |
+| `EBANER_MENU=1` / `train` / `station` / `devstation` / `vehicle` | open the Esc menu, the train picker, the station list, the stations still under development or the vehicle list |
 | `EBANER_FULLSCREEN=1` | start in full screen, as the Esc menu's Full screen item puts it |
 
 ## Signalling

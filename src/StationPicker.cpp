@@ -52,36 +52,49 @@ const Station* runStationPicker(GLFWwindow* window, VulkanRenderer& renderer,
     }
     if (std::getenv("EBANER_SCREENSHOT")) return initial; // scripted: never stop here
 
-    int pick = 0;
-    for (std::size_t i = 0; i < all.size(); ++i)
-        if (&all[i] == initial) pick = static_cast<int>(i);
+    // Two levels: the stations open for play, and behind the last row of those, the ones
+    // still being built. A station asked for on the command line may be either, so the
+    // picker opens on whichever level it is on.
+    const StationMenu menu = stationMenu(all);
+    const int initialIdx = initial ? static_cast<int>(initial - all.data()) : -1;
+    bool inDev = initialIdx >= 0 && !menu.onTop(initialIdx);
+    int pick = initialIdx >= 0 ? menu.row(initialIdx) : 0;
 
-    std::vector<std::string> names;
-    names.reserve(all.size());
-    for (const Station& s : all)
-        names.push_back(s.name + (s.isStop() ? "  (stop)" : "") + "  " + s.line);
-
-    bool pUp = false, pDn = false, pPgU = false, pPgD = false, pEnter = false;
-    const int n = static_cast<int>(names.size());
+    bool pUp = false, pDn = false, pPgU = false, pPgD = false, pEnter = false, pEsc = true;
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
         int fw = 0, fh = 0;
         glfwGetFramebufferSize(window, &fw, &fh);
         if (fw == 0 || fh == 0) continue; // minimised
 
+        const std::vector<std::string>& names = inDev ? menu.dev : menu.top;
+        const int n = std::max(1, static_cast<int>(names.size()));
         auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
         const bool u = down(GLFW_KEY_UP), d = down(GLFW_KEY_DOWN);
         const bool pu = down(GLFW_KEY_PAGE_UP), pd = down(GLFW_KEY_PAGE_DOWN);
-        const bool en = down(GLFW_KEY_ENTER);
+        const bool en = down(GLFW_KEY_ENTER), esc = down(GLFW_KEY_ESCAPE);
         if (u && !pUp) pick = (pick + n - 1) % n;
         if (d && !pDn) pick = (pick + 1) % n;
-        if (pu && !pPgU) pick = (pick + n - kPageStep) % n;
+        if (pu && !pPgU) pick = (pick + n - kPageStep % n) % n;
         if (pd && !pPgD) pick = (pick + kPageStep) % n;
-        if (down(GLFW_KEY_ESCAPE)) glfwSetWindowShouldClose(window, GLFW_TRUE);
-        if (en && !pEnter) return &all[pick];
-        pUp = u; pDn = d; pPgU = pu; pPgD = pd; pEnter = en;
+        if (esc && !pEsc) {
+            // Out of the sub-list one level, back on the row that opened it.
+            if (inDev) { inDev = false; pick = menu.devRowIndex(); }
+            else glfwSetWindowShouldClose(window, GLFW_TRUE);
+        }
+        if (en && !pEnter && !names.empty()) {
+            const int idx = inDev ? menu.devRow[static_cast<std::size_t>(pick)]
+                                  : menu.topRow[static_cast<std::size_t>(pick)];
+            if (idx >= 0) return &all[static_cast<std::size_t>(idx)];
+            inDev = true;
+            pick = 0;
+        }
+        pUp = u; pDn = d; pPgU = pu; pPgD = pd; pEnter = en; pEsc = esc;
 
-        drawPanel(window, renderer, "START AT  (arrows, PgUp/PgDn, Enter)", names, pick);
+        drawPanel(window, renderer,
+                  inDev ? "START AT - UNDER DEVELOPMENT  (arrows, PgUp/PgDn, Enter, Esc)"
+                        : "START AT  (arrows, PgUp/PgDn, Enter)",
+                  inDev ? menu.dev : menu.top, pick);
     }
     return nullptr; // closed
 }

@@ -28,8 +28,10 @@ struct Station {
     glm::dvec3 world{0}; // EPSG:25833, the station node
     char type = 'S';     // 'S' a station (sidings, signals), 'I' a stop
     std::string line;    // "Nordlandsbanen", ...
+    int production = -1; // its row in the overlay's production list; -1 still being built
 
     bool isStop() const { return type == 'I'; }
+    bool inProduction() const { return production >= 0; }
 };
 
 // Every station in the dataset, sorted by line then name, deduplicated: one near a tile
@@ -46,6 +48,38 @@ std::vector<Station> loadStations(const std::string& datasetRoot);
 // than `<trackHex>:<frac>` as the other overlay files anchor things, because the
 // stations are loaded before the track. Called by loadStations.
 void applyStationOverrides(const std::string& datasetRoot, std::vector<Station>& all);
+
+// Mark the stations that are open for play: finished enough - track, signalling, the
+// station's own working - to be offered as a place to start. The rest are still being built
+// and the pickers keep them out of the way, under one last row. Lines in
+// `<datasetRoot>/overlay/production-stations.txt`, in the order the pickers list them:
+//   station "<name>"
+// Matched by the name exactly as the data spells it. Called by loadStations.
+void applyProductionStations(const std::string& datasetRoot, std::vector<Station>& all);
+
+// How a station reads in a picker: "Bodø  Nordlandsbanen", "Vudu  (stop)  Nordlandsbanen".
+std::string stationLabel(const Station& s);
+
+// What the station pickers show. The top level is the stations open for play, in the
+// order the overlay lists them, and then one row that opens everything still being built.
+// Without a production list there is no second level: every station is on the top one.
+struct StationMenu {
+    std::vector<std::string> top;
+    std::vector<int> topRow; // -> index into the stations, or -1 for the row opening `dev`
+    std::vector<std::string> dev;
+    std::vector<int> devRow; // -> index into the stations
+
+    static constexpr const char* kDevRow = "Under development (not finished)";
+    // Where station `idx` is listed: whether on the top level, and its row on that level.
+    bool onTop(int idx) const;
+    int row(int idx) const;
+    // The top-level row that opens `dev`, or -1 when there is none.
+    int devRowIndex() const {
+        return !topRow.empty() && topRow.back() < 0 ? static_cast<int>(topRow.size()) - 1
+                                                    : -1;
+    }
+};
+StationMenu stationMenu(const std::vector<Station>& all);
 
 // Look one up by name, ignoring case and the difference between the Norwegian letters
 // and their ASCII shapes, so "fauske", "Bodo" and "Bodø" all work from a shell that may

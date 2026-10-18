@@ -170,6 +170,7 @@ std::vector<Station> loadStations(const std::string& datasetRoot) {
     }
 
     applyStationOverrides(datasetRoot, out);
+    applyProductionStations(datasetRoot, out);
     std::sort(out.begin(), out.end(), [](const Station& a, const Station& b) {
         if (a.line != b.line) return a.line < b.line;
         return a.name < b.name;
@@ -207,6 +208,71 @@ void applyStationOverrides(const std::string& datasetRoot, std::vector<Station>&
                          name.c_str());
     }
     if (moved > 0) std::printf("[Stations] overlay moved %d station(s)\n", moved);
+}
+
+void applyProductionStations(const std::string& datasetRoot, std::vector<Station>& all) {
+    std::ifstream f(datasetRoot + "/overlay/production-stations.txt");
+    if (!f) return;
+    int rows = 0, marked = 0;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        std::istringstream is(line);
+        std::string kind, name;
+        is >> kind;
+        if (kind != "station" || !readName(is, name)) continue;
+        // Exactly, as the overrides match: folding would let "Os" open "Ås".
+        bool found = false;
+        for (Station& s : all)
+            if (s.name == name) {
+                s.production = rows;
+                found = true;
+                ++marked;
+            }
+        if (!found)
+            std::fprintf(stderr, "[Stations] production: no station called \"%s\"\n",
+                         name.c_str());
+        ++rows;
+    }
+    std::printf("[Stations] %d station(s) open for play\n", marked);
+}
+
+std::string stationLabel(const Station& s) {
+    return s.name + (s.isStop() ? "  (stop)" : "") + "  " + s.line;
+}
+
+bool StationMenu::onTop(int idx) const {
+    return std::find(topRow.begin(), topRow.end(), idx) != topRow.end();
+}
+
+int StationMenu::row(int idx) const {
+    for (const std::vector<int>* rows : {&topRow, &devRow})
+        for (std::size_t i = 0; i < rows->size(); ++i)
+            if ((*rows)[i] == idx) return static_cast<int>(i);
+    return 0;
+}
+
+StationMenu stationMenu(const std::vector<Station>& all) {
+    StationMenu m;
+    std::vector<int> open;
+    for (std::size_t i = 0; i < all.size(); ++i)
+        if (all[i].inProduction()) open.push_back(static_cast<int>(i));
+        else m.devRow.push_back(static_cast<int>(i));
+    if (open.empty()) { // no list: nothing is held back
+        m.topRow.swap(m.devRow);
+    } else {
+        std::stable_sort(open.begin(), open.end(), [&](int a, int b) {
+            return all[static_cast<std::size_t>(a)].production <
+                   all[static_cast<std::size_t>(b)].production;
+        });
+        m.topRow = open;
+        if (!m.devRow.empty()) m.topRow.push_back(-1);
+    }
+    for (int i : m.topRow)
+        m.top.push_back(i < 0 ? StationMenu::kDevRow
+                              : stationLabel(all[static_cast<std::size_t>(i)]));
+    for (int i : m.devRow) m.dev.push_back(stationLabel(all[static_cast<std::size_t>(i)]));
+    return m;
 }
 
 const Station* findStation(const std::vector<Station>& all, const std::string& name) {

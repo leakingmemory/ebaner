@@ -108,7 +108,7 @@ bool g_mapDirty = false;    // (re)build the map overlay this frame
 // train to drive and place new ones, and each of those is its own list. Out here beside the
 // other pickers because Escape has to be able to back out of a step, and Escape is handled
 // in the key callback.
-enum class MenuStep { Root, PickTrain, PickStation, PickVehicle };
+enum class MenuStep { Root, PickTrain, PickStation, PickDevStation, PickVehicle };
 MenuStep g_menuStep = MenuStep::Root;
 int g_menuSubSel = 0; // highlighted line of whichever sub-list is open
 
@@ -184,6 +184,9 @@ void keyCallback(GLFWwindow* win, int key, int, int action, int) {
             g_routePickSel = 0;
         } else if (g_routeStep == RoutePickStep::PickKind) {
             g_routeStep = RoutePickStep::None;
+        } else if (g_menuOpen && g_menuStep == MenuStep::PickDevStation) {
+            g_menuStep = MenuStep::PickStation; // back to the stations open for play
+            g_menuSubSel = -1;                  // on the row that opened this; see the menu
         } else if (g_menuOpen && g_menuStep != MenuStep::Root) {
             g_menuStep = MenuStep::Root; // back out of a sub-list, not out of the menu
             g_menuSubSel = 0;
@@ -2778,24 +2781,24 @@ int main(int argc, char** argv) {
         return std::string("on the line");
     };
 
-    // Which line of the station list to open on. The list is 720 long and runs the length
-    // of the country; the one meant is nearly always the nearest.
-    auto stationNearCamera = [&]() {
+    // The station lists, built once: 720 stations, and the menu is redrawn every frame it
+    // is open. The stations open for play first, the rest behind the last row of those.
+    const StationMenu stationRows = stationMenu(stations);
+
+    // Open the station list on the nearest station - the list runs the length of the
+    // country, and the one meant is nearly always the nearest. One still being built is
+    // behind the under-development row, so the list opens on that row instead.
+    auto openStationList = [&]() {
         const glm::vec3 c = g_camera.position();
         const glm::dvec3 w(c.x + data.sceneOrigin().x, c.y + data.sceneOrigin().y, 0.0);
         const Station* st = nearestStation(stations, w);
-        return st ? static_cast<int>(st - stations.data()) : 0;
+        const int idx = st ? static_cast<int>(st - stations.data()) : -1;
+        g_menuStep = MenuStep::PickStation;
+        g_menuSubSel = idx < 0               ? 0
+                       : stationRows.onTop(idx) ? stationRows.row(idx)
+                                                : std::max(0, stationRows.devRowIndex());
     };
 
-    // The two lists that cannot change, built once. Stations especially: 720 of them, and
-    // the menu is redrawn every frame it is open.
-    const std::vector<std::string> stationLabels = [&] {
-        std::vector<std::string> out;
-        out.reserve(stations.size());
-        for (const Station& st : stations)
-            out.push_back(st.name + (st.isStop() ? "  (stop)" : "") + "  " + st.line);
-        return out;
-    }();
     // The runtime picker's rows, with a heading wherever the category changes and a map
     // back to the spec each row stands for. A heading maps to -1 and the selection steps
     // over it, so the list reads the same as the start screen's without the caller having
@@ -2931,18 +2934,18 @@ int main(int argc, char** argv) {
     //   EBANER_MENU=1        the root menu
     //   EBANER_MENU=train    the train picker
     //   EBANER_MENU=station  the station list, opened where the camera is
+    //   EBANER_MENU=devstation  the stations still being built
     //   EBANER_MENU=vehicle  the what-to-place list
     if (const char* m = std::getenv("EBANER_MENU")) {
         g_menuOpen = true;
         const std::string which(m);
         if (which == "train") g_menuStep = MenuStep::PickTrain;
-        else if (which == "station") g_menuStep = MenuStep::PickStation;
+        else if (which == "station") openStationList();
+        else if (which == "devstation") g_menuStep = MenuStep::PickDevStation;
         else if (which == "vehicle") g_menuStep = MenuStep::PickVehicle;
         if (g_menuStep == MenuStep::PickTrain)
             g_menuSubSel =
                 std::clamp(driverTrain, 0, std::max(0, static_cast<int>(trains.size()) - 1));
-        else if (g_menuStep == MenuStep::PickStation)
-            g_menuSubSel = stationNearCamera();
     }
     // Whether the line between two TXP stations holds a train. What the neighbours check
     // before agreeing to a station opening between them.
@@ -5090,6 +5093,8 @@ int main(int argc, char** argv) {
             std::string title = "MENU";
             if (g_menuStep == MenuStep::PickTrain) title = "DRIVE WHICH TRAIN";
             else if (g_menuStep == MenuStep::PickStation) title = "PLACE A TRAIN AT";
+            else if (g_menuStep == MenuStep::PickDevStation)
+                title = "PLACE A TRAIN AT - UNDER DEVELOPMENT";
             else if (g_menuStep == MenuStep::PickVehicle) title = "WHICH TRAIN TO PLACE";
             if (root && !menuNote.empty()) title += "  -  " + menuNote;
 
@@ -5098,11 +5103,16 @@ int main(int argc, char** argv) {
                 if (item == kFullscreenOn || item == kFullscreenOff)
                     item = isFullscreen(window) ? kFullscreenOff : kFullscreenOn;
             const std::vector<std::string>& list =
-                g_menuStep == MenuStep::PickStation  ? stationLabels
-                : g_menuStep == MenuStep::PickVehicle ? vehicleLabels
-                : root                                ? kMenuItems
-                                                      : menuList;
+                g_menuStep == MenuStep::PickStation      ? stationRows.top
+                : g_menuStep == MenuStep::PickDevStation ? stationRows.dev
+                : g_menuStep == MenuStep::PickVehicle    ? vehicleLabels
+                : root                                   ? kMenuItems
+                                                         : menuList;
             int& sel = root ? g_menuSel : g_menuSubSel;
+            // Escape out of the stations still being built lands back on the row that
+            // opened them; the key callback cannot know which row that is, so it says -1.
+            if (g_menuStep == MenuStep::PickStation && sel < 0)
+                sel = std::max(0, stationRows.devRowIndex());
             const int n = std::max(1, static_cast<int>(list.size()));
             if (mU && !prevMenuUp) sel = (sel + n - 1) % n;
             if (mD && !prevMenuDown) sel = (sel + 1) % n;
@@ -5149,8 +5159,7 @@ int main(int argc, char** argv) {
                             g_menuSubSel = 0;
                         }
                     } else if (s2 == "Place a train at a station") {
-                        g_menuStep = MenuStep::PickStation;
-                        g_menuSubSel = stationNearCamera();
+                        openStationList();
                     }
                 } else if (g_menuStep == MenuStep::PickTrain) {
                     const int idx = g_menuSubSel;
@@ -5166,8 +5175,17 @@ int main(int argc, char** argv) {
                     std::printf("[Train] now driving %d of %zu (%d set(s)) from cab %d\n",
                                 idx + 1, trains.size(), vehicle->unitCount(), g_driverPos);
                     std::fflush(stdout);
-                } else if (g_menuStep == MenuStep::PickStation) {
-                    const Station& st = stations[static_cast<std::size_t>(g_menuSubSel)];
+                } else if (g_menuStep == MenuStep::PickStation &&
+                           stationRows.topRow[static_cast<std::size_t>(g_menuSubSel)] < 0) {
+                    g_menuStep = MenuStep::PickDevStation;
+                    g_menuSubSel = 0;
+                } else if (g_menuStep == MenuStep::PickStation ||
+                           g_menuStep == MenuStep::PickDevStation) {
+                    const std::vector<int>& rows = g_menuStep == MenuStep::PickStation
+                                                       ? stationRows.topRow
+                                                       : stationRows.devRow;
+                    const Station& st = stations[static_cast<std::size_t>(
+                        rows[static_cast<std::size_t>(g_menuSubSel)])];
                     placeTarget = glm::vec2(st.world.x - data.sceneOrigin().x,
                                             st.world.y - data.sceneOrigin().y);
                     g_menuStep = MenuStep::PickVehicle;
