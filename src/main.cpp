@@ -666,12 +666,13 @@ int main(int argc, char** argv) {
                            buildingIndexCount);
     // The graphics card has its own copy now, and from here on the streamer builds the
     // scenery afresh, so nothing reads these again. Kept, they are the better part of a
-    // gigabyte for the whole run.
+    // gigabyte for the whole run. The bores keep their centrelines, which the signals
+    // still ask to know which of them hang on a tunnel wall.
     tracks = TrackMesh();
     roads = RoadMesh();
     buildings = BuildingMesh();
     platforms = PlatformMesh();
-    tunnels = TunnelMesh();
+    tunnels.releaseMesh();
     speedSignMesh = SpeedSignMesh();
     std::vector<TrackVertex>().swap(structVerts);
     std::vector<std::uint32_t>().swap(structIndices);

@@ -39,6 +39,13 @@ public:
     std::size_t boreCount() const { return bores_; }
     float totalLength() const { return lengthM_; }
 
+    // Free the drawing once the graphics card has it, keeping the bore test: the signals
+    // are rebuilt against insideBore for the whole run, every time an aspect changes.
+    void releaseMesh() {
+        std::vector<TrackVertex>().swap(vertices_);
+        std::vector<std::uint32_t>().swap(indices_);
+    }
+
     // Is this scene-relative point inside a bore, with a little margin? True only within a
     // tunnel's own length, within half-width of its centreline, and below its crown - all
     // three matter, see the comment on the implementation. `intoHill`, when given, gets the
