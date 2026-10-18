@@ -123,6 +123,8 @@ int g_routeKindSel = 0;     // highlighted line of the kind step
 int g_routePickSel = 0;     // highlighted route in that picker
 bool g_signalPick = false;  // traffic manager: the simple-entry-signal picker is open
 int g_signalPickSel = 0;    // highlighted signal in that picker
+bool g_linePick = false;    // traffic manager: the line picker is open
+int g_linePickSel = 0;      // highlighted line in that picker
 // Asking for a line is three choices - dispatch, where to, what train - so the station
 // panel is the one place that is not a flat list. The step lives out here because Escape
 // is handled in the key callback and has to back out of one step at a time.
@@ -179,6 +181,8 @@ void keyCallback(GLFWwindow* win, int key, int, int action, int) {
             g_dispatchTo.clear();
         } else if (g_signalPick) {
             g_signalPick = false;
+        } else if (g_linePick) {
+            g_linePick = false;
         } else if (g_routeStep == RoutePickStep::PickList) {
             g_routeStep = RoutePickStep::PickKind;
             g_routePickSel = 0;
@@ -243,9 +247,21 @@ void keyCallback(GLFWwindow* win, int key, int, int action, int) {
     // E offers the simple entry signals of the nearest station. Only in the map, and
     // only E is free there - the map binds nothing but WASD to pan.
     if (g_mapMode && key == GLFW_KEY_E && action == GLFW_PRESS) {
+        g_linePick = false;
         g_signalPick = !g_signalPick;
         g_signalPickSel = 0;
         g_dispatchStep = DispatchStep::None; // no half-made choice left behind
+        g_dispatchTo.clear();
+    }
+    // G picks the line the traffic manager works. G because the letters a line could be
+    // named by are the cab's (L is the train brake) and the cab still reads them under the
+    // map. The other pickers close: they all draw centred, one over the other.
+    if (g_mapMode && key == GLFW_KEY_G && action == GLFW_PRESS) {
+        g_linePick = !g_linePick;
+        g_linePickSel = -1; // opens on the line being worked; the picker knows which
+        g_signalPick = false;
+        g_routeStep = RoutePickStep::None;
+        g_dispatchStep = DispatchStep::None;
         g_dispatchTo.clear();
     }
     // Walk to the next / previous station to work. Only in the map: N is the cab
@@ -2411,38 +2427,35 @@ int main(int argc, char** argv) {
         renderer.setMapOverlay(lines, points);
     };
 
-    // The stations the traffic manager can work, in the order the line runs.
+    // The stations the traffic manager can work, one line at a time, in the order the line
+    // runs.
     //
     // A dispatcher works one station at a time, so the panel needs to be told which one
-    // rather than inferring it from wherever the map happens to have been panned. The set
-    // is the start station's own line: the signals, flags and TXP positions are all
-    // loaded whole and the rail network is resident, so any station on the line can be
-    // worked, whether or not anything is authored at it yet - offering only the ones that
-    // already own something would leave nowhere to switch *to*, which is the whole point.
-    // The dataset carries the line name, so this is a filter and not a table of ours.
+    // rather than inferring it from wherever the map happens to have been panned, and
+    // stepping to the next has to walk the railway. Which stations a line has, and in what
+    // order, is the overlay's traffic-manager-lines.txt; a line it does not list offers
+    // every station the data puts on it, in the order they load. The G key picks the line.
     struct TmStation {
         std::string name;
         glm::vec2 at{0.0f}; // scene-relative, for centring the map and finding the nearest
     };
+    const std::vector<LineStations> tmLines = trafficManagerLines(datasetRoot, stations);
+    int tmLine = 0;
+    for (std::size_t i = 0; i < tmLines.size(); ++i)
+        if (tmLines[i].line == start->line) tmLine = static_cast<int>(i);
     std::vector<TmStation> tmStations;
-    {
+    auto tmStationsOf = [&](int li) {
+        std::vector<TmStation> out;
+        if (li < 0 || li >= static_cast<int>(tmLines.size())) return out;
         const glm::dvec3 org = data.sceneOrigin();
-        for (const Station& st : stations) {
-            if (st.line != start->line) continue;
-            tmStations.push_back({st.name,
-                                  glm::vec2(static_cast<float>(st.world.x - org.x),
-                                            static_cast<float>(st.world.y - org.y))});
+        for (int k : tmLines[static_cast<std::size_t>(li)].stations) {
+            const Station& st = stations[static_cast<std::size_t>(k)];
+            out.push_back({st.name, glm::vec2(static_cast<float>(st.world.x - org.x),
+                                              static_cast<float>(st.world.y - org.y))});
         }
-        // Ordered by how far along they are from where the run started, which on a line
-        // is the order they come in: stepping through them walks the railway rather than
-        // hopping about it alphabetically.
-        const glm::vec2 from(static_cast<float>(start->world.x - org.x),
-                             static_cast<float>(start->world.y - org.y));
-        std::sort(tmStations.begin(), tmStations.end(),
-                  [&](const TmStation& a, const TmStation& b) {
-                      return glm::length(a.at - from) < glm::length(b.at - from);
-                  });
-    }
+        return out;
+    };
+    tmStations = tmStationsOf(tmLine);
     // Which one the panel is working. Set to the nearest when the map is opened, and
     // moved from there by hand - see the N / B keys below.
     int tmStation = 0;
@@ -2457,6 +2470,30 @@ int main(int argc, char** argv) {
             if (d < bestD) { bestD = d; best = static_cast<int>(i); }
         }
         return best;
+    };
+    // Work the line and station nearest `to`, of every line. A junction station is on more
+    // than one; it is worked on the line the data puts it on.
+    auto tmWorkNearest = [&](glm::vec2 to) {
+        int bestLine = -1, bestSt = 0;
+        float bestD = std::numeric_limits<float>::max();
+        bool bestOwn = false;
+        for (std::size_t li = 0; li < tmLines.size(); ++li) {
+            const std::vector<TmStation> list = tmStationsOf(static_cast<int>(li));
+            for (std::size_t i = 0; i < list.size(); ++i) {
+                const float d = glm::length(list[i].at - to);
+                const bool own =
+                    stations[static_cast<std::size_t>(tmLines[li].stations[i])].line ==
+                    tmLines[li].line;
+                if (d < bestD - 1.0f || (d < bestD + 1.0f && own && !bestOwn)) {
+                    bestD = d; bestLine = static_cast<int>(li); bestSt = static_cast<int>(i);
+                    bestOwn = own;
+                }
+            }
+        }
+        if (bestLine < 0) return;
+        tmLine = bestLine;
+        tmStations = tmStationsOf(tmLine);
+        tmStation = bestSt;
     };
     // Where the station being worked is, for the map and for the route picker.
     auto tmStationAt = [&]() {
@@ -2483,6 +2520,8 @@ int main(int argc, char** argv) {
         {
             std::string title = "TRAFFIC MANAGER";
             const std::string here = simpleStationHere();
+            if (!tmLines.empty())
+                title += " - " + tmLines[static_cast<std::size_t>(tmLine)].line;
             if (!here.empty()) {
                 title += " - " + here;
                 if (tmStations.size() > 1)
@@ -2526,7 +2565,7 @@ int main(int argc, char** argv) {
         char hint[224];
         std::snprintf(hint, sizeof(hint),
                       "O: cab  Esc: menu  scroll/Z-X: zoom  WASD: pan  "
-                      "Left/Right or N/B: prev/next station  "
+                      "Left/Right or N/B: prev/next station  G: line  "
                       "click switch to throw  click signal then destination for a route  "
                       "R: exit routes  E: entry signals  (view %.1f km)",
                       4.0f / g_mapZoom);
@@ -2601,11 +2640,21 @@ int main(int argc, char** argv) {
         g_mapMode = true;
         g_mapDirty = true;
         mode = Mode::Sim;
-        for (std::size_t i = 0; i < tmStations.size(); ++i)
-            if (tmStations[i].name == msel) {
-                tmStation = static_cast<int>(i);
-                tmPinned = true;
-                g_mapPan = glm::clamp(tmStations[i].at, mapMin, mapMax) - mapCenter;
+        // On the line being worked if it has the station, else on whichever line does.
+        const Station* want = findStation(stations, msel);
+        for (int pass = 0; pass < 2 && want && !tmPinned; ++pass)
+            for (std::size_t li = 0; li < tmLines.size() && !tmPinned; ++li) {
+                if ((pass == 0) != (static_cast<int>(li) == tmLine)) continue;
+                const std::vector<int>& ks = tmLines[li].stations;
+                for (std::size_t i = 0; i < ks.size(); ++i)
+                    if (&stations[static_cast<std::size_t>(ks[i])] == want) {
+                        tmLine = static_cast<int>(li);
+                        tmStations = tmStationsOf(tmLine);
+                        tmStation = static_cast<int>(i);
+                        tmPinned = true;
+                        g_mapPan = glm::clamp(tmStations[i].at, mapMin, mapMax) - mapCenter;
+                        break;
+                    }
             }
     }
     bool prevUp = false, prevDown = false, prevEnter = false;
@@ -3016,6 +3065,7 @@ int main(int argc, char** argv) {
     // keypress and so could not be screenshotted or checked at all.
     //   EBANER_TXP_OPEN=A,B,C   man those stations, through the network as the panel does
     //   EBANER_PANEL=1|dest|type  open the station panel, optionally at a dispatch step
+    //   EBANER_PANEL=line         open the line picker (G)
     if (const char* names = std::getenv("EBANER_TXP_OPEN")) {
         std::string all(names), one;
         std::istringstream is(all);
@@ -3025,7 +3075,10 @@ int main(int argc, char** argv) {
         const std::string p(panel);
         // `route` is the other picker the map offers (R), which like the dispatcher's own
         // panel is reachable only by keypress and so could not be looked at headlessly.
-        if (p == "route" || p == "entry" || p == "exit") {
+        if (p == "line") {
+            g_linePick = true;
+            g_linePickSel = -1;
+        } else if (p == "route" || p == "entry" || p == "exit") {
             // `route` stops at the kind step; `entry`/`exit` go straight to that list, so
             // either screen can be looked at headlessly.
             g_routeStep = p == "route" ? RoutePickStep::PickKind : RoutePickStep::PickList;
@@ -3720,6 +3773,19 @@ int main(int argc, char** argv) {
                    std::clamp(g_signalPickSel, 0,
                               std::max(0, static_cast<int>(items.size()) - 1)),
                    fbw, fbh);
+    };
+
+    // The line picker (G): every line, with how many stations it offers.
+    auto appendLinePicker = [&](std::vector<TextVertex>& tv, int fbw, int fbh) {
+        if (!g_linePick || tmLines.empty()) return;
+        std::vector<std::string> items;
+        items.reserve(tmLines.size());
+        for (const LineStations& l : tmLines)
+            items.push_back(l.line + "  (" + std::to_string(l.stations.size()) +
+                            (l.stations.size() == 1 ? " station)" : " stations)"));
+        const int sel = g_linePickSel < 0 ? tmLine : g_linePickSel;
+        appendMenu(tv, "WORK WHICH LINE  (Up/Down, Enter, Esc)", items,
+                   std::clamp(sel, 0, static_cast<int>(items.size()) - 1), fbw, fbh);
     };
 
     // The picker panel, drawn after the map HUD so it sits over the map. Two steps, like
@@ -4810,8 +4876,10 @@ int main(int argc, char** argv) {
             // Opening the map lands on the station nearest the train - where the work is
             // - rather than nearest whatever the map was last framed on, and brings the
             // view with it. Nine times out of ten that is the station meant.
+            if (!mapAttached && !tmLines.empty() && !tmPinned) {
+                tmWorkNearest(glm::vec2(g_camera.position()));
+            }
             if (!mapAttached && !tmStations.empty() && !tmPinned) {
-                tmStation = tmNearest(glm::vec2(g_camera.position()));
                 g_mapPan = glm::clamp(tmStations[tmStation].at, mapMin, mapMax) - mapCenter;
             }
             tmPinned = false;
@@ -4900,7 +4968,37 @@ int main(int argc, char** argv) {
         // Route picker: Up/Down move, Enter chooses, Esc backs out a step (in the key
         // callback, so it works from either). The sim keeps running underneath - this is
         // not the Escape menu and must not pause it.
-        if (g_mapMode && !g_menuOpen && g_routeStep != RoutePickStep::None) {
+        if (g_mapMode && !g_menuOpen && g_linePick && !tmLines.empty()) {
+            // Which line to work. The station is the one on it nearest the middle of the
+            // map, so changing line at a junction stays at the junction.
+            auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
+            const bool pU = down(GLFW_KEY_UP), pD = down(GLFW_KEY_DOWN),
+                       pE = down(GLFW_KEY_ENTER);
+            const int n = static_cast<int>(tmLines.size());
+            if (g_linePickSel < 0) g_linePickSel = tmLine;
+            if (pU && !prevPickUp) g_linePickSel = (g_linePickSel + n - 1) % n;
+            if (pD && !prevPickDown) g_linePickSel = (g_linePickSel + 1) % n;
+            g_linePickSel = std::clamp(g_linePickSel, 0, n - 1);
+            if (pE && !prevPickEnter) {
+                tmLine = g_linePickSel;
+                tmStations = tmStationsOf(tmLine);
+                g_linePick = false;
+                if (tmStations.empty()) {
+                    tmStation = 0;
+                    setMapMsg(tmLines[static_cast<std::size_t>(tmLine)].line +
+                              ": no stations to work");
+                } else {
+                    tmStation = tmNearest(mapCenter + g_mapPan);
+                    g_mapPan = glm::clamp(tmStations[static_cast<std::size_t>(tmStation)].at,
+                                          mapMin, mapMax) - mapCenter;
+                    setMapMsg("Line: " + tmLines[static_cast<std::size_t>(tmLine)].line +
+                                  " - " + tmStations[static_cast<std::size_t>(tmStation)].name,
+                              true);
+                }
+                g_mapDirty = true;
+            }
+            prevPickUp = pU; prevPickDown = pD; prevPickEnter = pE;
+        } else if (g_mapMode && !g_menuOpen && g_routeStep != RoutePickStep::None) {
             auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
             const bool pU = down(GLFW_KEY_UP), pD = down(GLFW_KEY_DOWN),
                        pE = down(GLFW_KEY_ENTER), pQ = down(GLFW_KEY_Q);
@@ -5220,6 +5318,7 @@ int main(int argc, char** argv) {
             appendMapHud(tv, fbw, fbh, nullptr);
             appendRoutePicker(tv, fbw, fbh);
             appendSignalPicker(tv, fbw, fbh);
+            appendLinePicker(tv, fbw, fbh);
             renderer.setOverlayText(tv);
         } else if (mode == Mode::Menu) {
             // --- Start screen: pick a vehicle ---
@@ -5305,7 +5404,7 @@ int main(int argc, char** argv) {
             // --- Sim: hand push + physics + camera ---
             // Up/Down hand-push the vehicle, except while the picker has those keys.
             float pushInput = 0.0f;
-            if (g_routeStep == RoutePickStep::None) {
+            if (g_routeStep == RoutePickStep::None && !g_linePick) {
                 if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) pushInput += 1.0f;
                 if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) pushInput -= 1.0f;
             }
@@ -5941,6 +6040,7 @@ int main(int argc, char** argv) {
                 appendMapHud(tv, fbw, fbh, vehicle);
                 appendRoutePicker(tv, fbw, fbh);
                 appendSignalPicker(tv, fbw, fbh);
+                appendLinePicker(tv, fbw, fbh);
                 renderer.setOverlayText(tv);
             } else {
                 std::vector<TextVertex> tv;

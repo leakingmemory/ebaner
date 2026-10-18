@@ -30,7 +30,7 @@ screenshotted without a keyboard.
 | Variable | |
 |---|---|
 | `EBANER_MAP=1` / `<station>` | open the traffic manager, optionally at a station |
-| `EBANER_PANEL=1` / `dest` / `type` / `route` / `entry` / `exit` | open the station panel, at a dispatch step, or the `R` route picker |
+| `EBANER_PANEL=1` / `dest` / `type` / `route` / `entry` / `exit` / `line` | open the station panel, at a dispatch step, the `R` route picker or the `G` line picker |
 | `EBANER_TXP_OPEN=A,B,C` | man these stations |
 | `EBANER_ROUTE=<n>[,<n>…]` | set the worked station's routes, in order. A bare number indexes everything `EBANER_ROUTES` prints; `e3` / `x2` index the in / out lists |
 | `EBANER_ARM=<n>[,<n>…]` | arm routes, written as for `EBANER_ROUTE` and armed in that order, after it |

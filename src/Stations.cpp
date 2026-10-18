@@ -293,6 +293,58 @@ StationMenu stationMenu(const std::vector<Station>& all) {
     return m;
 }
 
+std::vector<LineStations> trafficManagerLines(const std::string& datasetRoot,
+                                              const std::vector<Station>& all) {
+    std::vector<LineStations> out;
+    auto lineNamed = [&](const std::string& name) {
+        for (std::size_t i = 0; i < out.size(); ++i)
+            if (out[i].line == name) return i;
+        out.push_back({name, {}, false});
+        return out.size() - 1;
+    };
+    for (std::size_t i = 0; i < all.size(); ++i)
+        out[lineNamed(all[i].line)].stations.push_back(static_cast<int>(i));
+
+    if (std::ifstream f{datasetRoot + "/overlay/traffic-manager-lines.txt"}) {
+        LineStations* cur = nullptr; // taken afresh at each `line`: `out` may grow
+        std::string text;
+        while (std::getline(f, text)) {
+            if (text.empty() || text[0] == '#') continue;
+            std::istringstream is(text);
+            std::string kind, name;
+            is >> kind;
+            if (!readName(is, name)) continue;
+            if (kind == "line") {
+                cur = &out[lineNamed(name)];
+                if (!cur->listed) cur->stations.clear(); // the list replaces the data's
+                cur->listed = true;
+                continue;
+            }
+            if (kind != "station") continue;
+            if (!cur) {
+                std::fprintf(stderr, "[Stations] traffic manager: \"%s\" before any line\n",
+                             name.c_str());
+                continue;
+            }
+            // A name can be on several lines; the station the data puts on this line is
+            // the one meant, and any other only if this line has none of that name.
+            int pick = -1;
+            for (std::size_t i = 0; i < all.size(); ++i)
+                if (all[i].name == name && (pick < 0 || all[i].line == cur->line))
+                    pick = static_cast<int>(i);
+            if (pick < 0)
+                std::fprintf(stderr, "[Stations] traffic manager: no station called \"%s\"\n",
+                             name.c_str());
+            else
+                cur->stations.push_back(pick);
+        }
+    }
+    std::sort(out.begin(), out.end(), [](const LineStations& a, const LineStations& b) {
+        return norwegianLess(a.line, b.line);
+    });
+    return out;
+}
+
 const Station* findStation(const std::vector<Station>& all, const std::string& name) {
     const std::string want = fold(name);
     for (const Station& s : all)

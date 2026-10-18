@@ -45,3 +45,19 @@ station "Vold"
 ```
 
 Without the file, the pickers list every station as before.
+
+### Traffic manager lines
+
+`overlay/traffic-manager-lines.txt` lists, for each line, the stations the traffic
+manager steps through, in the order the line runs. Only stations with something to work
+belong there: those with signalling or a TXP. A line opens with `line`, and the stations
+under it belong to it. A station can be on more than one line, as a junction is:
+
+```
+line "Meråkerbanen"
+station "Hell"
+station "Gudå"
+station "Kopperå"
+```
+
+A line the file does not list offers every station the data puts on it.

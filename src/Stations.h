@@ -86,6 +86,24 @@ struct StationMenu {
 };
 StationMenu stationMenu(const std::vector<Station>& all);
 
+// A line as the traffic manager steps through it: its stations in the order the line
+// runs, from `<datasetRoot>/overlay/traffic-manager-lines.txt`. A dispatcher works the
+// stations with something to work - signalling or a TXP - so the list leaves the rest
+// out. A line the file does not list offers every station the data puts on it, in the
+// order they are loaded (`listed` false). Lines in the file:
+//   line "<line>"
+//   station "<name>"
+// each station belonging to the line above it. A station may be on more than one line,
+// as a junction is.
+struct LineStations {
+    std::string line;
+    std::vector<int> stations; // -> index into the stations
+    bool listed = false;
+};
+// Every line, in Norwegian alphabetical order.
+std::vector<LineStations> trafficManagerLines(const std::string& datasetRoot,
+                                              const std::vector<Station>& all);
+
 // Look one up by name, ignoring case and the difference between the Norwegian letters
 // and their ASCII shapes, so "fauske", "Bodo" and "Bodø" all work from a shell that may
 // not make the accented forms easy to type. Null if there is no match.

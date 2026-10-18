@@ -16,14 +16,24 @@ going on whatever the handles were set to, so stop it or hand it to the auto-dri
 | `W` `A` `S` `D` | Pan |
 | Mouse wheel, `Z` / `X` | Zoom in / out |
 | `N` / `B`, or Right / Left | Next / previous station |
+| `G` | Choose the line to work |
 | `Esc` | Back out of a picker one step; with nothing open, the menu |
 
-The map opens on the **station nearest your train**. Its name is in the title,
-`TRAFFIC MANAGER - Fauske (12/40)`, and **everything the panels do acts on that
-station**. `N` and `B` walk along the stations of the line, bringing the view with them.
+The map opens on the **station nearest your train**, on its line. Both are in the
+title, `TRAFFIC MANAGER - Nordlandsbanen - Fauske (3/39)`, and **everything the panels do
+acts on that station**. `N` and `B` walk along the stations of the line in the order the
+line runs, bringing the view with them. `G` chooses another line; the map moves to that
+line's station nearest the middle of the view. A junction station such as Hell is on both
+of its lines.
+
+A line lists only the stations a dispatcher works, those with signalling or a TXP, in
+line order. The list comes from the overlay's `traffic-manager-lines.txt` (see
+[Data format](data-format.md#traffic-manager-lines)). A line without a list offers every
+station on it, in the order they load.
 
 To open it straight away: `EBANER_MAP=1 ebaner …`, or `EBANER_MAP=Fauske` to open it at
-a named station.
+a named station, on its own line if it is listed there and otherwise on the first line
+that lists it.
 
 ## Reading the map
 
