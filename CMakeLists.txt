@@ -140,7 +140,7 @@ set(SHADER_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
 file(MAKE_DIRECTORY ${SHADER_OUT_DIR})
 
 set(SHADER_SPV)
-foreach(shader terrain.vert terrain.frag track.vert track.frag text.vert text.frag
+foreach(shader terrain.vert terrain.frag track.vert track.frag sleeper.vert text.vert text.frag
                overlay.vert overlay_line.frag overlay_point.frag)
     set(src ${SHADER_DIR}/${shader})
     set(spv ${SHADER_OUT_DIR}/${shader}.spv)

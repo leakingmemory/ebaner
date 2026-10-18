@@ -600,8 +600,11 @@ int main(int argc, char** argv) {
     // Platforms are the same solid-lit static geometry as buildings and draw
     // identically, so merge them into the building buffers (offsetting the
     // platform indices) rather than adding new renderer plumbing.
-    std::vector<TrackVertex> structVerts = buildings.vertices();
-    std::vector<std::uint32_t> structIndices = buildings.indices();
+    // How far into the merged index buffer the buildings reach: what follows them is
+    // platforms, speed signs and bores, which are always drawn.
+    const auto buildingIndexCount = static_cast<std::uint32_t>(buildings.indices().size());
+    std::vector<TrackVertex> structVerts = buildings.takeVertices();
+    std::vector<std::uint32_t> structIndices = buildings.takeIndices();
     {
         const std::uint32_t vbase =
             static_cast<std::uint32_t>(structVerts.size());
@@ -655,13 +658,22 @@ int main(int argc, char** argv) {
     }
     loading.stage(kStageUpload);
     renderer.updateTracks(tracks.vertices(), tracks.indices(),
-                          tracks.alwaysIndexCount(), tracks.sleeperChunks(),
-                          tracks.alwaysChunks());
+                          tracks.alwaysIndexCount(), tracks.sleepers(),
+                          tracks.sleeperChunks(), tracks.alwaysChunks());
     renderer.updateRoads(roads.vertices(), roads.indices(), roads.chunks());
-    // The buildings' own chunks, and how far into the buffer they reach: what follows
-    // them here is platforms, speed signs and bores, which are always drawn.
     renderer.updateStructs(structVerts, structIndices, buildings.chunks(),
-                           static_cast<std::uint32_t>(buildings.indices().size()));
+                           buildingIndexCount);
+    // The graphics card has its own copy now, and from here on the streamer builds the
+    // scenery afresh, so nothing reads these again. Kept, they are the better part of a
+    // gigabyte for the whole run.
+    tracks = TrackMesh();
+    roads = RoadMesh();
+    buildings = BuildingMesh();
+    platforms = PlatformMesh();
+    tunnels = TunnelMesh();
+    speedSignMesh = SpeedSignMesh();
+    std::vector<TrackVertex>().swap(structVerts);
+    std::vector<std::uint32_t>().swap(structIndices);
 
     renderer.attachSwitches(switches.vertices(), switches.indices());
 
@@ -4420,7 +4432,7 @@ int main(int argc, char** argv) {
                     renderer.setTerrainChunk(c.key, c.vertices, c.indices);
                     chunkVerts += c.vertices.size();
                 }
-                renderer.updateTracks(nb.trackV, nb.trackI, nb.trackAlways,
+                renderer.updateTracks(nb.trackV, nb.trackI, nb.trackAlways, nb.sleepers,
                                       nb.sleeperChunks, nb.trackAlwaysChunks);
                 renderer.updateRoads(nb.roadV, nb.roadI, nb.roadChunks);
                 renderer.updateStructs(nb.structV, nb.structI, nb.structChunks,

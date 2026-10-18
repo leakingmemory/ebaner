@@ -16,6 +16,7 @@
 #include <glm/glm.hpp>
 #include <cmath>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 class TerrainData;
@@ -30,8 +31,19 @@ struct TrackVertex {
     float texLayer;     // >=0 -> sample uLand[texLayer]*color; <0 -> solid color
 };
 
-// A contiguous run of sleeper-box indices, drawn only when the camera is near
-// its centroid (distance level-of-detail).
+// Where one sleeper lies: its centre and the track's frame there. Every sleeper is the
+// same concrete box, so the box is held once (TrackMesh::sleeperBox) and drawn at each of
+// these, rather than built again as twenty vertices for every 0.6 m of line.
+struct SleeperInstance {
+    glm::vec3 pos;     // scene-relative metres, on the centreline
+    glm::vec3 right;   // across the track, banked with the cant
+    glm::vec3 tangent; // along the track
+    glm::vec3 up;
+};
+
+// A contiguous run of indices to draw as one piece. For the sleepers it is a run of
+// instances instead, drawn only when the camera is near its centroid (distance
+// level-of-detail).
 struct TrackDrawChunk {
     glm::vec3 centroid;      // scene-relative metres
     std::uint32_t firstIndex = 0;
@@ -60,10 +72,9 @@ inline std::int64_t drawCell(double x, double y) {
 // of thousands of vertices per kilometre - so only the ones within `radius` of
 // `centre` are built. The network stays resident as data and streams as pictures.
 //
-// The index buffer is laid out as [ballast + rails ("always")] followed by
-// [sleeper chunks]. Ballast and rails are always drawn; sleeper boxes are only
-// submitted for chunks close to the camera, with a sleeper-stripe texture on the
-// ballast standing in for them at distance.
+// The mesh is the ballast and the rails, always drawn. The sleepers are a list of
+// places to draw the one sleeper box, in chunks submitted only close to the camera, with
+// a sleeper-stripe texture on the ballast standing in for them at distance.
 class TrackMesh {
 public:
     // `radius` <= 0 means every path, which is only safe for a bounded network.
@@ -72,16 +83,30 @@ public:
 
     const std::vector<TrackVertex>& vertices() const { return vertices_; }
     const std::vector<std::uint32_t>& indices() const { return indices_; }
+    // The built mesh, handed over: for when it is only being passed on, so a world's worth
+    // of geometry is not held twice.
+    std::vector<TrackVertex> takeVertices() { return std::move(vertices_); }
+    std::vector<std::uint32_t> takeIndices() { return std::move(indices_); }
     std::uint32_t alwaysIndexCount() const { return alwaysIndexCount_; }
     // The ballast-and-rails run cut into pieces, so the ones the camera is not looking
     // at can be left out. Always drawn is not the same as always in view.
     const std::vector<TrackDrawChunk>& alwaysChunks() const { return alwaysChunks_; }
+    // The sleepers, and the runs of them that are drawn or left out together
+    // (firstIndex/indexCount count instances).
+    const std::vector<SleeperInstance>& sleepers() const { return sleepers_; }
+    std::vector<SleeperInstance> takeSleepers() { return std::move(sleepers_); }
     const std::vector<TrackDrawChunk>& sleeperChunks() const { return chunks_; }
+
+    // The sleeper box every SleeperInstance draws, in its own frame: x across the track,
+    // y along it, z up from the centreline.
+    static void sleeperBox(std::vector<TrackVertex>& vertices,
+                           std::vector<std::uint32_t>& indices);
 
 private:
     std::vector<TrackVertex> vertices_;
     std::vector<std::uint32_t> indices_;
     std::uint32_t alwaysIndexCount_ = 0; // ballast + rails, drawn every frame
     std::vector<TrackDrawChunk> alwaysChunks_; // ...cut up, frustum-culled
+    std::vector<SleeperInstance> sleepers_;
     std::vector<TrackDrawChunk> chunks_; // sleeper runs, distance-culled
 };

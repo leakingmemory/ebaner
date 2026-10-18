@@ -672,6 +672,38 @@ void VulkanRenderer::createTrackPipeline() {
                                     &trackPipeline_),
           "vkCreateGraphicsPipelines(track)");
 
+    // The sleepers: the same fragment stage and state, with a vertex stage that places
+    // the one box at each sleeper. The box is binding 0, the sleepers binding 1.
+    {
+        auto sleeperCode = readFile(shaderPath("sleeper.vert.spv"));
+        VkShaderModule sleeperVert = createShaderModule(sleeperCode);
+        VkPipelineShaderStageCreateInfo sleeperStages[] = {vs, fs};
+        sleeperStages[0].module = sleeperVert;
+        std::array<VkVertexInputBindingDescription, 2> bindings{{
+            binding,
+            {1, sizeof(SleeperInstance), VK_VERTEX_INPUT_RATE_INSTANCE},
+        }};
+        std::array<VkVertexInputAttributeDescription, 9> sattrs{{
+            attrs[0], attrs[1], attrs[2], attrs[3], attrs[4],
+            {5, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(SleeperInstance, pos)},
+            {6, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(SleeperInstance, right)},
+            {7, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(SleeperInstance, tangent)},
+            {8, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(SleeperInstance, up)},
+        }};
+        VkPipelineVertexInputStateCreateInfo sleeperInput = vertexInput;
+        sleeperInput.vertexBindingDescriptionCount = static_cast<uint32_t>(bindings.size());
+        sleeperInput.pVertexBindingDescriptions = bindings.data();
+        sleeperInput.vertexAttributeDescriptionCount = static_cast<uint32_t>(sattrs.size());
+        sleeperInput.pVertexAttributeDescriptions = sattrs.data();
+        VkGraphicsPipelineCreateInfo sci = ci;
+        sci.pStages = sleeperStages;
+        sci.pVertexInputState = &sleeperInput;
+        check(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &sci, nullptr,
+                                        &sleeperPipeline_),
+              "vkCreateGraphicsPipelines(sleeper)");
+        vkDestroyShaderModule(device_, sleeperVert, nullptr);
+    }
+
     // Translucent variant (same shaders/layout) for vehicle glazing: alpha blend
     // over what is already there, and no depth write so glass panes on both sides
     // of a car don't occlude each other.
@@ -1165,6 +1197,27 @@ void VulkanRenderer::createMeshBuffers(const std::vector<Vertex>& vertices,
     setTerrainChunk(0, vertices, indices);
 }
 
+void VulkanRenderer::uploadDeviceLocal(const void* data, VkDeviceSize size,
+                                       VkBufferUsageFlags usage, VkBuffer& buffer,
+                                       VkDeviceMemory& memory) {
+    VkBuffer staging;
+    VkDeviceMemory stagingMem;
+    createBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                 staging, stagingMem);
+    void* mapped;
+    vkMapMemory(device_, stagingMem, 0, size, 0, &mapped);
+    std::memcpy(mapped, data, static_cast<std::size_t>(size));
+    vkUnmapMemory(device_, stagingMem);
+
+    createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage,
+                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, buffer, memory);
+    copyBuffer(staging, buffer, size);
+
+    vkDestroyBuffer(device_, staging, nullptr);
+    vkFreeMemory(device_, stagingMem, nullptr);
+}
+
 void VulkanRenderer::createTrackBuffers(
     const std::vector<TrackVertex>& vertices,
     const std::vector<std::uint32_t>& indices) {
@@ -1175,32 +1228,33 @@ void VulkanRenderer::createTrackBuffers(
     trackIndexCount_ = static_cast<uint32_t>(indices.size());
     if (indices.empty()) return; // no tracks in the loaded area
 
-    auto upload = [&](const void* data, VkDeviceSize size, VkBufferUsageFlags usage,
-                      VkBuffer& buffer, VkDeviceMemory& memory) {
-        VkBuffer staging;
-        VkDeviceMemory stagingMem;
-        createBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                     staging, stagingMem);
-        void* mapped;
-        vkMapMemory(device_, stagingMem, 0, size, 0, &mapped);
-        std::memcpy(mapped, data, static_cast<std::size_t>(size));
-        vkUnmapMemory(device_, stagingMem);
+    uploadDeviceLocal(vertices.data(), sizeof(TrackVertex) * vertices.size(),
+                      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, trackVertexBuffer_,
+                      trackVertexMemory_);
+    uploadDeviceLocal(indices.data(), sizeof(std::uint32_t) * indices.size(),
+                      VK_BUFFER_USAGE_INDEX_BUFFER_BIT, trackIndexBuffer_,
+                      trackIndexMemory_);
+}
 
-        createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage,
-                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, buffer, memory);
-        copyBuffer(staging, buffer, size);
-
-        vkDestroyBuffer(device_, staging, nullptr);
-        vkFreeMemory(device_, stagingMem, nullptr);
-    };
-
-    upload(vertices.data(), sizeof(TrackVertex) * vertices.size(),
-           VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, trackVertexBuffer_,
-           trackVertexMemory_);
-    upload(indices.data(), sizeof(std::uint32_t) * indices.size(),
-           VK_BUFFER_USAGE_INDEX_BUFFER_BIT, trackIndexBuffer_, trackIndexMemory_);
+void VulkanRenderer::createSleeperBuffers(const std::vector<SleeperInstance>& sleepers) {
+    retireBuffer(sleeperInstanceBuffer_, sleeperInstanceMemory_);
+    // The box never changes, so it goes up once, with the first sleepers.
+    if (sleeperBoxVertexBuffer_ == VK_NULL_HANDLE) {
+        std::vector<TrackVertex> v;
+        std::vector<std::uint32_t> i;
+        TrackMesh::sleeperBox(v, i);
+        uploadDeviceLocal(v.data(), sizeof(TrackVertex) * v.size(),
+                          VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, sleeperBoxVertexBuffer_,
+                          sleeperBoxVertexMemory_);
+        uploadDeviceLocal(i.data(), sizeof(std::uint32_t) * i.size(),
+                          VK_BUFFER_USAGE_INDEX_BUFFER_BIT, sleeperBoxIndexBuffer_,
+                          sleeperBoxIndexMemory_);
+        sleeperBoxIndexCount_ = static_cast<uint32_t>(i.size());
+    }
+    if (sleepers.empty()) return;
+    uploadDeviceLocal(sleepers.data(), sizeof(SleeperInstance) * sleepers.size(),
+                      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, sleeperInstanceBuffer_,
+                      sleeperInstanceMemory_);
 }
 
 void VulkanRenderer::createRoadBuffers(
@@ -1406,9 +1460,11 @@ void VulkanRenderer::updateTerrain(const std::vector<Vertex>& vertices,
 void VulkanRenderer::updateTracks(const std::vector<TrackVertex>& vertices,
                                   const std::vector<std::uint32_t>& indices,
                                   std::uint32_t alwaysIndexCount,
+                                  const std::vector<SleeperInstance>& sleepers,
                                   const std::vector<TrackDrawChunk>& sleeperChunks,
                                   const std::vector<TrackDrawChunk>& alwaysChunks) {
     createTrackBuffers(vertices, indices);
+    createSleeperBuffers(sleepers);
     trackAlwaysIndexCount_ = alwaysIndexCount;
     sleeperChunks_ = sleeperChunks;
     trackAlwaysChunks_ = alwaysChunks;
@@ -1864,7 +1920,7 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageInde
 
     // Railway geometry — same layout/push constants; the descriptor set stays
     // bound (the track shaders sample the ballast layer from it). Ballast + rails
-    // are always drawn; sleeper boxes only for chunks near the camera (the ballast
+    // are always drawn; the sleepers after them, only near the camera (the ballast
     // texture stands in for sleepers at distance).
     if (trackIndexCount_ > 0) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, trackPipeline_);
@@ -1881,11 +1937,20 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageInde
                     vkCmdDrawIndexed(cmd, c.indexCount, 1, c.firstIndex, 0, 0);
         }
 
+    }
+    // The sleepers near the camera: the one box, once for each sleeper in a near chunk.
+    if (sleeperInstanceBuffer_ != VK_NULL_HANDLE && sleeperBoxIndexCount_ > 0) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, sleeperPipeline_);
+        const VkBuffer vbufs[] = {sleeperBoxVertexBuffer_, sleeperInstanceBuffer_};
+        const VkDeviceSize offs[] = {0, 0};
+        vkCmdBindVertexBuffers(cmd, 0, 2, vbufs, offs);
+        vkCmdBindIndexBuffer(cmd, sleeperBoxIndexBuffer_, 0, VK_INDEX_TYPE_UINT32);
         constexpr float kSleeperLODRadius = 230.0f; // metres (ties fade in ~here)
         const glm::vec3 cam = glm::vec3(lastPush_.camPos);
         for (const TrackDrawChunk& c : sleeperChunks_) {
             if (glm::distance(cam, c.centroid) < kSleeperLODRadius)
-                vkCmdDrawIndexed(cmd, c.indexCount, 1, c.firstIndex, 0, 0);
+                vkCmdDrawIndexed(cmd, sleeperBoxIndexCount_, c.indexCount, 0, 0,
+                                 c.firstIndex);
         }
     }
 
@@ -2191,6 +2256,7 @@ void VulkanRenderer::cleanup() {
     vkDestroyPipeline(device_, overlayLinePipeline_, nullptr);
     vkDestroyPipeline(device_, vehicleGlassPipeline_, nullptr);
     vkDestroyPipeline(device_, trackPipeline_, nullptr);
+    vkDestroyPipeline(device_, sleeperPipeline_, nullptr);
     vkDestroyPipeline(device_, pipeline_, nullptr);
     vkDestroyPipelineLayout(device_, pipelineLayout_, nullptr);
     vkDestroyRenderPass(device_, renderPass_, nullptr);
@@ -2202,6 +2268,12 @@ void VulkanRenderer::cleanup() {
     vkFreeMemory(device_, trackIndexMemory_, nullptr);
     vkDestroyBuffer(device_, trackVertexBuffer_, nullptr);
     vkFreeMemory(device_, trackVertexMemory_, nullptr);
+    vkDestroyBuffer(device_, sleeperBoxIndexBuffer_, nullptr);
+    vkFreeMemory(device_, sleeperBoxIndexMemory_, nullptr);
+    vkDestroyBuffer(device_, sleeperBoxVertexBuffer_, nullptr);
+    vkFreeMemory(device_, sleeperBoxVertexMemory_, nullptr);
+    vkDestroyBuffer(device_, sleeperInstanceBuffer_, nullptr);
+    vkFreeMemory(device_, sleeperInstanceMemory_, nullptr);
     vkDestroyBuffer(device_, roadIndexBuffer_, nullptr);
     vkFreeMemory(device_, roadIndexMemory_, nullptr);
     vkDestroyBuffer(device_, roadVertexBuffer_, nullptr);

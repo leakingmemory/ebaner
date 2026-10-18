@@ -105,6 +105,7 @@ public:
     void updateTracks(const std::vector<TrackVertex>& vertices,
                       const std::vector<std::uint32_t>& indices,
                       std::uint32_t alwaysIndexCount,
+                      const std::vector<SleeperInstance>& sleepers,
                       const std::vector<TrackDrawChunk>& sleeperChunks,
                       // Optional: the ballast-and-rails run cut into pieces. Left out,
                       // it is drawn whole (what the editor does).
@@ -177,6 +178,10 @@ private:
                            const std::vector<std::uint32_t>& indices);
     void createTrackBuffers(const std::vector<TrackVertex>& vertices,
                             const std::vector<std::uint32_t>& indices);
+    void createSleeperBuffers(const std::vector<SleeperInstance>& sleepers);
+    // A buffer in device memory filled through a staging copy. Waits for the copy.
+    void uploadDeviceLocal(const void* data, VkDeviceSize size, VkBufferUsageFlags usage,
+                           VkBuffer& buffer, VkDeviceMemory& memory);
     void createRoadBuffers(const std::vector<TrackVertex>& vertices,
                            const std::vector<std::uint32_t>& indices);
     void createBuildingBuffers(const std::vector<TrackVertex>& vertices,
@@ -269,6 +274,7 @@ private:
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
     VkPipeline trackPipeline_ = VK_NULL_HANDLE; // railway ribbons (reuses layout)
+    VkPipeline sleeperPipeline_ = VK_NULL_HANDLE; // the sleeper box, once per sleeper
     VkPipeline vehicleGlassPipeline_ = VK_NULL_HANDLE; // translucent vehicle glazing
     VkPipeline overlayLinePipeline_ = VK_NULL_HANDLE;  // editor track-graph links
     VkPipeline overlayPointPipeline_ = VK_NULL_HANDLE; // editor geo-point sprites
@@ -311,7 +317,15 @@ private:
     uint32_t trackIndexCount_ = 0;
     uint32_t trackAlwaysIndexCount_ = 0;       // ballast + rails, drawn always
     std::vector<TrackDrawChunk> trackAlwaysChunks_; // frustum-culled ballast + rails
-    std::vector<TrackDrawChunk> sleeperChunks_; // distance-culled sleeper runs
+    std::vector<TrackDrawChunk> sleeperChunks_; // distance-culled runs of instances
+    // The one sleeper box, and where each sleeper lies.
+    VkBuffer sleeperBoxVertexBuffer_ = VK_NULL_HANDLE;
+    VkDeviceMemory sleeperBoxVertexMemory_ = VK_NULL_HANDLE;
+    VkBuffer sleeperBoxIndexBuffer_ = VK_NULL_HANDLE;
+    VkDeviceMemory sleeperBoxIndexMemory_ = VK_NULL_HANDLE;
+    uint32_t sleeperBoxIndexCount_ = 0;
+    VkBuffer sleeperInstanceBuffer_ = VK_NULL_HANDLE;
+    VkDeviceMemory sleeperInstanceMemory_ = VK_NULL_HANDLE;
     // Buildings grouped by locality, and how much of the buffer they cover; the rest
     // (platforms, signs, bores) is drawn whatever the view.
     std::vector<TrackDrawChunk> buildingChunks_;

@@ -16,6 +16,7 @@
 #include "TrackMesh.h" // TrackVertex (shared ribbon vertex)
 
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 class TerrainData;
@@ -30,6 +31,10 @@ public:
 
     const std::vector<TrackVertex>& vertices() const { return vertices_; }
     const std::vector<std::uint32_t>& indices() const { return indices_; }
+    // The built mesh, handed over: for when it is only being passed on, so a world's worth
+    // of geometry is not held twice.
+    std::vector<TrackVertex> takeVertices() { return std::move(vertices_); }
+    std::vector<std::uint32_t> takeIndices() { return std::move(indices_); }
     // The roads grouped by draw cell (drawCell) within each pass, private then public, so
     // a view draws the roads it can see. Drawn in this order the chunks keep the public
     // network on top, as drawing the buffer whole does.

@@ -69,6 +69,54 @@ std::vector<float> sampleDistances(float from, float to, float step) {
     return ss;
 }
 
+// Emit one quad (two triangles) with an outward-facing normal. The normal is
+// the geometric normal, flipped to point away from `inside` so lighting is
+// correct regardless of winding (the pipeline draws with culling off).
+void emitQuadInto(std::vector<TrackVertex>& vertices, std::vector<std::uint32_t>& indices,
+                  const glm::vec3& p0, const glm::vec3& p1, const glm::vec3& p2,
+                  const glm::vec3& p3, const glm::vec3& inside, const glm::vec3& color,
+                  float texLayer, glm::vec2 uv0, glm::vec2 uv1, glm::vec2 uv2,
+                  glm::vec2 uv3) {
+    glm::vec3 n = glm::cross(p1 - p0, p3 - p0);
+    const float nl = glm::length(n);
+    n = (nl > 1e-12f) ? n / nl : glm::vec3(0.0f, 0.0f, 1.0f);
+    const glm::vec3 cen = (p0 + p1 + p2 + p3) * 0.25f;
+    if (glm::dot(n, cen - inside) < 0.0f) n = -n;
+    const std::uint32_t base = static_cast<std::uint32_t>(vertices.size());
+    vertices.push_back({p0, n, color, uv0, texLayer});
+    vertices.push_back({p1, n, color, uv1, texLayer});
+    vertices.push_back({p2, n, color, uv2, texLayer});
+    vertices.push_back({p3, n, color, uv3, texLayer});
+    indices.push_back(base + 0);
+    indices.push_back(base + 1);
+    indices.push_back(base + 2);
+    indices.push_back(base + 0);
+    indices.push_back(base + 2);
+    indices.push_back(base + 3);
+}
+
+
+// One sleeper, about centreline point P in the track frame (R across, T along, U up).
+void emitSleeperBox(std::vector<TrackVertex>& vertices, std::vector<std::uint32_t>& indices,
+                    const glm::vec3& P, const glm::vec3& R, const glm::vec3& U,
+                    const glm::vec3& T) {
+    const float L = kSleeperHalfLen, W = kSleeperHalfWid;
+    const float zb = kSleeperBotZ, zt = kSleeperTopZ;
+    const glm::vec3 inside = P + U * ((zb + zt) * 0.5f);
+    auto s = [&](float a, float b, float z) { return P + R * a + T * b + U * z; };
+    auto quad = [&](const glm::vec3& p0, const glm::vec3& p1, const glm::vec3& p2,
+                    const glm::vec3& p3) {
+        const glm::vec2 z2(0.0f);
+        emitQuadInto(vertices, indices, p0, p1, p2, p3, inside, kSleeperCol, -1.0f, z2, z2,
+                     z2, z2);
+    };
+    quad(s(-L, -W, zt), s(L, -W, zt), s(L, W, zt), s(-L, W, zt));
+    quad(s(L, -W, zt), s(L, -W, zb), s(L, W, zb), s(L, W, zt));
+    quad(s(-L, -W, zt), s(-L, -W, zb), s(-L, W, zb), s(-L, W, zt));
+    quad(s(-L, W, zt), s(-L, W, zb), s(L, W, zb), s(L, W, zt));
+    quad(s(-L, -W, zt), s(-L, -W, zb), s(L, -W, zb), s(L, -W, zt));
+}
+
 } // namespace
 
 void TrackMesh::build(const std::vector<TrackPath>& paths, const glm::vec3& centre,
@@ -76,6 +124,7 @@ void TrackMesh::build(const std::vector<TrackPath>& paths, const glm::vec3& cent
     // Reset accumulators so build() is idempotent (the editor rebuilds to re-preview).
     vertices_.clear();
     indices_.clear();
+    sleepers_.clear();
     chunks_.clear();
     alwaysIndexCount_ = 0;
     alwaysChunks_.clear();
@@ -116,30 +165,13 @@ void TrackMesh::build(const std::vector<TrackPath>& paths, const glm::vec3& cent
         flushRun();
     }
 
-    // Emit one quad (two triangles) with an outward-facing normal. The normal is
-    // the geometric normal, flipped to point away from `inside` so lighting is
-    // correct regardless of winding (the pipeline draws with culling off).
     auto emitQuad = [&](const glm::vec3& p0, const glm::vec3& p1,
                         const glm::vec3& p2, const glm::vec3& p3,
                         const glm::vec3& inside, const glm::vec3& color,
                         float texLayer, glm::vec2 uv0, glm::vec2 uv1,
                         glm::vec2 uv2, glm::vec2 uv3) {
-        glm::vec3 n = glm::cross(p1 - p0, p3 - p0);
-        const float nl = glm::length(n);
-        n = (nl > 1e-12f) ? n / nl : glm::vec3(0.0f, 0.0f, 1.0f);
-        const glm::vec3 cen = (p0 + p1 + p2 + p3) * 0.25f;
-        if (glm::dot(n, cen - inside) < 0.0f) n = -n;
-        const std::uint32_t base = static_cast<std::uint32_t>(vertices_.size());
-        vertices_.push_back({p0, n, color, uv0, texLayer});
-        vertices_.push_back({p1, n, color, uv1, texLayer});
-        vertices_.push_back({p2, n, color, uv2, texLayer});
-        vertices_.push_back({p3, n, color, uv3, texLayer});
-        indices_.push_back(base + 0);
-        indices_.push_back(base + 1);
-        indices_.push_back(base + 2);
-        indices_.push_back(base + 0);
-        indices_.push_back(base + 2);
-        indices_.push_back(base + 3);
+        emitQuadInto(vertices_, indices_, p0, p1, p2, p3, inside, color, texLayer, uv0,
+                     uv1, uv2, uv3);
     };
     const glm::vec2 z2(0.0f);
     auto solidQuad = [&](const glm::vec3& p0, const glm::vec3& p1,
@@ -246,49 +278,28 @@ void TrackMesh::build(const std::vector<TrackPath>& paths, const glm::vec3& cent
     closeAlways(); // the last piece has no successor to close it
     alwaysIndexCount_ = static_cast<std::uint32_t>(indices_.size());
 
-    // --- Pass 2: sleeper boxes, grouped into distance-culled chunks --------
-    auto emitSleeper = [&](const glm::vec3& P, const glm::vec3& R,
-                           const glm::vec3& U, const glm::vec3& T) {
-        const float L = kSleeperHalfLen, W = kSleeperHalfWid;
-        const float zb = kSleeperBotZ, zt = kSleeperTopZ;
-        const glm::vec3 inside = P + U * ((zb + zt) * 0.5f);
-        auto s = [&](float a, float b, float z) {
-            return P + R * a + T * b + U * z;
-        };
-        solidQuad(s(-L, -W, zt), s(L, -W, zt), s(L, W, zt), s(-L, W, zt), inside,
-                  kSleeperCol);
-        solidQuad(s(L, -W, zt), s(L, -W, zb), s(L, W, zb), s(L, W, zt), inside,
-                  kSleeperCol);
-        solidQuad(s(-L, -W, zt), s(-L, -W, zb), s(-L, W, zb), s(-L, W, zt), inside,
-                  kSleeperCol);
-        solidQuad(s(-L, W, zt), s(-L, W, zb), s(L, W, zb), s(L, W, zt), inside,
-                  kSleeperCol);
-        solidQuad(s(-L, -W, zt), s(-L, -W, zb), s(L, -W, zb), s(L, -W, zt), inside,
-                  kSleeperCol);
-    };
-
+    // --- Pass 2: where the sleepers go, grouped into distance-culled chunks -----
     for (const Run& run : near) {
         const TrackPath& path = *run.path;
         const float total = run.to;
-        std::uint32_t chunkFirst = static_cast<std::uint32_t>(indices_.size());
+        std::uint32_t chunkFirst = static_cast<std::uint32_t>(sleepers_.size());
         glm::vec3 accum(0.0f);
         int accumN = 0;
         auto flush = [&]() {
             if (accumN == 0) return;
             TrackDrawChunk ch;
             ch.firstIndex = chunkFirst;
-            ch.indexCount =
-                static_cast<std::uint32_t>(indices_.size()) - chunkFirst;
+            ch.indexCount = static_cast<std::uint32_t>(sleepers_.size()) - chunkFirst;
             ch.centroid = accum / static_cast<float>(accumN);
             chunks_.push_back(ch);
-            chunkFirst = static_cast<std::uint32_t>(indices_.size());
+            chunkFirst = static_cast<std::uint32_t>(sleepers_.size());
             accum = glm::vec3(0.0f);
             accumN = 0;
         };
 
         for (float dist = run.from; dist <= total + 1e-3f; dist += kSleeperSpacing) {
             const TrackPose p = path.poseAt(dist);
-            emitSleeper(p.pos, p.right, p.up, p.tangent);
+            sleepers_.push_back({p.pos, p.right, p.tangent, p.up});
             accum += p.pos;
             ++accumN;
             if (accumN >= kSleepersPerChunk) flush();
@@ -297,6 +308,16 @@ void TrackMesh::build(const std::vector<TrackPath>& paths, const glm::vec3& cent
     }
 
     std::printf(
-        "[TrackMesh] %zu track runs, %zu vertices, %zu triangles, %zu sleeper chunks\n",
-        near.size(), vertices_.size(), indices_.size() / 3, chunks_.size());
+        "[TrackMesh] %zu track runs, %zu vertices, %zu triangles, %zu sleepers in %zu "
+        "chunks\n",
+        near.size(), vertices_.size(), indices_.size() / 3, sleepers_.size(),
+        chunks_.size());
+}
+
+void TrackMesh::sleeperBox(std::vector<TrackVertex>& vertices,
+                           std::vector<std::uint32_t>& indices) {
+    vertices.clear();
+    indices.clear();
+    emitSleeperBox(vertices, indices, glm::vec3(0.0f), glm::vec3(1.0f, 0.0f, 0.0f),
+                   glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
 }

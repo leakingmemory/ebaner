@@ -16,6 +16,7 @@
 #include "TrackMesh.h" // TrackVertex (shared solid-lit vertex)
 
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 class TerrainData;
@@ -29,6 +30,10 @@ public:
 
     const std::vector<TrackVertex>& vertices() const { return vertices_; }
     const std::vector<std::uint32_t>& indices() const { return indices_; }
+    // The built mesh, handed over: for when it is only being passed on, so a world's worth
+    // of geometry is not held twice.
+    std::vector<TrackVertex> takeVertices() { return std::move(vertices_); }
+    std::vector<std::uint32_t> takeIndices() { return std::move(indices_); }
     // The buildings grouped by the draw cell they stand in (drawCell), so the ones the
     // camera is not looking at, or is too far from to make out, need not be drawn. A town
     // is tens of thousands of prisms and a view holds a wedge of it.

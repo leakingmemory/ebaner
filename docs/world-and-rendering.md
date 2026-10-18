@@ -24,7 +24,8 @@ the chosen station and **streams** as the camera moves, for 20 km around it.
 ## Track
 
 - A ballast bed, concrete sleepers and two rails (`src/TrackMesh.cpp`). Sleepers are
-  modelled near the camera and a texture further away.
+  modelled near the camera and a texture further away. Every sleeper is the same box, so
+  the graphics card holds the box once and a list of where each sleeper lies.
 - The export splits a line wherever it changes between surface, tunnel and bridge.
   `buildTrackPaths` (`src/TrackPath.cpp`) joins the pieces that meet end to end into
   continuous paths, so trains run straight through tunnel portals.

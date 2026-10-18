@@ -129,24 +129,25 @@ void WorldStreamer::run() {
 
         TrackMesh tracks;
         tracks.build(*paths_, centre, radius);
-        b.trackV = tracks.vertices();
-        b.trackI = tracks.indices();
+        b.trackV = tracks.takeVertices();
+        b.trackI = tracks.takeIndices();
         b.trackAlways = tracks.alwaysIndexCount();
+        b.sleepers = tracks.takeSleepers();
         b.sleeperChunks = tracks.sleeperChunks();
         b.trackAlwaysChunks = tracks.alwaysChunks();
 
         RoadMesh roads;
         roads.build(*data_);
-        b.roadV = roads.vertices();
-        b.roadI = roads.indices();
+        b.roadV = roads.takeVertices();
+        b.roadI = roads.takeIndices();
         b.roadChunks = roads.chunks();
 
         // The static bucket: buildings, platforms, speed signs and bores share one
         // buffer, in the same order main.cpp assembles them at startup.
         BuildingMesh buildings;
         buildings.build(*data_);
-        b.structV = buildings.vertices();
-        b.structI = buildings.indices();
+        b.structV = buildings.takeVertices();
+        b.structI = buildings.takeIndices();
         b.structChunks = buildings.chunks();
         b.structChunked = static_cast<std::uint32_t>(b.structI.size());
         auto merge = [&](const std::vector<TrackVertex>& v,

@@ -63,6 +63,7 @@ public:
         std::vector<std::uint32_t> trackI;
         std::uint32_t trackAlways = 0;
         std::vector<TrackDrawChunk> trackAlwaysChunks;
+        std::vector<SleeperInstance> sleepers;
         std::vector<TrackDrawChunk> sleeperChunks;
         std::vector<TrackVertex> roadV;
         std::vector<std::uint32_t> roadI;

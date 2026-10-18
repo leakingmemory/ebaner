@@ -305,7 +305,8 @@ int main(int argc, char** argv) {
     loading.stage(kStageUpload);
     renderer.updateTerrain(mesh.vertices(), mesh.indices());
     renderer.updateTracks(tracks.vertices(), tracks.indices(),
-                          tracks.alwaysIndexCount(), tracks.sleeperChunks());
+                          tracks.alwaysIndexCount(), tracks.sleepers(),
+                          tracks.sleeperChunks());
     renderer.updateRoads(roads.vertices(), roads.indices());
     renderer.updateStructs(structVerts, structIndices);
 
@@ -1441,7 +1442,8 @@ int main(int argc, char** argv) {
         merge(signals.vertices(), signals.indices());
         renderer.updateTerrain(mesh.vertices(), mesh.indices());
         renderer.updateTracks(tracks.vertices(), tracks.indices(),
-                              tracks.alwaysIndexCount(), tracks.sleeperChunks());
+                              tracks.alwaysIndexCount(), tracks.sleepers(),
+                              tracks.sleeperChunks());
         renderer.updateStructs(sv, si);
         std::printf("[trackedit] render preview refreshed (%.0f ms)\n",
                     (glfwGetTime() - t0) * 1000.0);
