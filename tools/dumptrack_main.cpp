@@ -47,7 +47,8 @@ void usage() {
     std::puts(
         "usage: ebaner-dumptrack [datasetRoot] [--near <x> <y> <radius>]\n"
         "                       [--switches <x> <y> <radius>] [--route <a> <b>]\n"
-        "                       [--gaps <x> <y> <radius>] [<trackIdHex> ...]\n"
+        "                       [--gaps <x> <y> <radius>] [--ground <file>]\n"
+        "                       [<trackIdHex> ...]\n"
         "\n"
         "  datasetRoot           the terrainmapper export. Optional: without one the\n"
         "                        standard places are searched, $EBANER_DATA first.\n"
@@ -76,6 +77,11 @@ void usage() {
         "                        switches it needs, the position each needs, and whether\n"
         "                        it is already there. A manual switch on the road only\n"
         "                        refuses the route if the route would have to move it.\n"
+        "  --ground file         the ground height under each point listed in file, one\n"
+        "                        \"x y\" per line, printed as \"GROUND <x> <y> <z>\" (nan\n"
+        "                        where no terrain covers it). The DTM as loaded, before\n"
+        "                        the line is cut into it - what a new road is graded\n"
+        "                        against.\n"
         "\n"
         "Heights are after track-edits.txt is applied, which is the only form worth\n"
         "deriving anything from.");
@@ -123,6 +129,7 @@ int main(int argc, char** argv) {
     double nx = 0.0, ny = 0.0, nr = 0.0;
     bool haveGaps = false;
     double gx = 0.0, gy = 0.0, gr = 0.0;
+    std::string groundFile;
     std::vector<std::uint32_t> ids;
     for (int i = firstQuery; i < argc; ++i) {
         if (std::strcmp(argv[i], "--near") == 0 && i + 3 < argc) {
@@ -137,6 +144,8 @@ int main(int argc, char** argv) {
             gx = std::atof(argv[++i]);
             gy = std::atof(argv[++i]);
             gr = std::atof(argv[++i]);
+        } else if (std::strcmp(argv[i], "--ground") == 0 && i + 1 < argc) {
+            groundFile = argv[++i];
         } else if (std::strcmp(argv[i], "--switches") == 0 && i + 3 < argc) {
             haveSw = true;
             sx = std::atof(argv[++i]);
@@ -161,9 +170,41 @@ int main(int argc, char** argv) {
             ids.push_back(static_cast<std::uint32_t>(std::strtoul(argv[i], nullptr, 16)));
         }
     }
-    if (!haveNear && ids.empty() && routeQs.empty() && !haveSw && !haveGaps) {
+    if (!haveNear && ids.empty() && routeQs.empty() && !haveSw && !haveGaps &&
+        groundFile.empty()) {
         usage();
         return 2;
+    }
+
+    // Ground heights. Terrain loads around a point on the railway, so the window is
+    // centred on the points asked about and made wide enough to hold all of them, on a
+    // load of its own: the rail queries below want their small window wherever it is.
+    if (!groundFile.empty()) {
+        std::vector<glm::dvec2> qs;
+        if (FILE* f = std::fopen(groundFile.c_str(), "r")) {
+            double x = 0.0, y = 0.0;
+            while (std::fscanf(f, "%lf %lf", &x, &y) == 2) qs.push_back({x, y});
+            std::fclose(f);
+        } else {
+            std::fprintf(stderr, "[dumptrack] cannot read %s\n", groundFile.c_str());
+            return 1;
+        }
+        if (!qs.empty()) {
+            glm::dvec2 lo = qs.front(), hi = qs.front();
+            for (const glm::dvec2& q : qs) { lo = glm::min(lo, q); hi = glm::max(hi, q); }
+            const glm::dvec2 mid = (lo + hi) * 0.5;
+            const double half = 0.5 * std::fmax(hi.x - lo.x, hi.y - lo.y) + 2000.0;
+            TerrainData ground;
+            ground.load(root, glm::dvec3(mid, 0.0), half);
+            for (const glm::dvec2& q : qs) {
+                float z = 0.0f;
+                if (ground.sampleGround(q.x, q.y, z))
+                    std::printf("GROUND %.3f %.3f %.3f\n", q.x, q.y, z);
+                else
+                    std::printf("GROUND %.3f %.3f nan\n", q.x, q.y);
+            }
+        }
+        if (!haveNear && ids.empty() && routeQs.empty() && !haveSw && !haveGaps) return 0;
     }
 
     // The terrain window is small on purpose: the rail network is read whole
