@@ -99,7 +99,20 @@ done once, when the train is attached (`attachVehicle`):
 - the **index buffer**;
 - which triangles are **glass**, drawn after the opaque ones.
 
-So a change of a train's make-up has to go through `attachVehicle`. `refresh()` must
+So a change of a train's make-up has to go through `attachVehicle`.
+
+What is built of each unit depends on how near the camera is to it:
+
+| Camera distance | Left out |
+|---|---|
+| beyond 40 m | the instruments on a cab desk: gauges, needles, screens, levers, the radio |
+| beyond 400 m | everything inside: saloons, seats, tables, cab rooms and desks |
+| beyond 1.5 km | the wheels and axles |
+| beyond 10 km | the whole unit |
+
+A part left out keeps its place in the buffer as one repeated point, the same as a unit
+outside the view, so the index buffer still fits. The code that builds the part is not
+run at all, which is where the time is saved. `refresh()` must
 produce exactly what `build()` would; it is checked bit for bit for every vehicle in the
 table, and warns if a refresh ever emits a different vertex count. The updated vertices
 are swapped in after the frame fence, not copied.

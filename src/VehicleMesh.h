@@ -33,6 +33,21 @@ constexpr float kWheelRadius = 0.46f; // 0.92 m wheel
 constexpr float kAxleCentreAboveBed = kRailTopZ + kWheelRadius;
 } // namespace wheelset
 
+// How much of a vehicle is built, finest last. Each level is dropped beyond its distance
+// from the camera: a gauge needle is a few pixels at 40 m, a seat behind a window is lost
+// in the window's reflection at 400 m, a wheel is lost under the body at 1.5 km, and at
+// 10 km a whole carriage is a pixel or two.
+enum class Detail : std::uint8_t {
+    Body,        // shell, roof, bogie frames, couplers, lamps: always, out to kTrainDrawDistance
+    Wheels,      // axles and wheels
+    Interior,    // saloons, seats, tables, cab rooms and their desks
+    Instruments, // what is on a desk: gauges, needles, screens, levers, the radio
+};
+constexpr float kInstrumentsDistance = 40.0f;  // metres from the camera to the vehicle
+constexpr float kInteriorDistance = 400.0f;
+constexpr float kWheelsDistance = 1500.0f;
+constexpr float kTrainDrawDistance = 10000.0f;
+
 // Builds the geometry for a rail vehicle: one wheelset (axle + two wheels) per
 // axle, plus a bogie frame box when the vehicle has a wheelbase. Emits TrackVertex
 // + indices in scene coords, drawn by the track pipeline.
@@ -64,11 +79,18 @@ public:
     // This is where the time is. On the 600 m freight the walks are 4% of the mesh and the
     // other 96% is emitting 83 388 vertices - so the only way to make it cheaper is to
     // emit fewer of them, and the ones behind the camera are free to lose.
-    void refresh(const std::deque<Consist>& trains, const glm::mat4& viewProj);
+    //
+    // And for those it builds, only as much as can be made out from `eye` (Detail): a
+    // part left out is filled with one point the same way, so it costs a fill and not
+    // its geometry.
+    void refresh(const std::deque<Consist>& trains, const glm::mat4& viewProj,
+                 const glm::vec3& eye);
     // How many units were built last refresh, and how many there were: what the culling
-    // actually saved, for the profile line to report.
+    // actually saved, for the profile line to report. And how many were built to each
+    // level of detail (indexed by Detail).
     int lastBuilt() const { return lastBuilt_; }
     int lastUnits() const { return lastUnits_; }
+    int lastBuiltAt(Detail d) const { return lastAtDetail_[static_cast<int>(d)]; }
 
     const std::vector<TrackVertex>& vertices() const { return vertices_; }
     // For the renderer to swap with rather than copy: 3 MB a frame is worth not copying,
@@ -82,6 +104,43 @@ public:
 private:
     // One set's geometry, appended to the buffer.
     void emitUnit(const Vehicle& vehicle);
+    // One part of a unit that is left out beyond some distance. Building, it runs `body`
+    // and records how many vertices it made and where the parts nested in it end. On a
+    // refresh it runs `body` if the unit is near enough for `d`, and otherwise puts that
+    // many copies of the dead point in its place, skipping the parts inside it too. Parts
+    // are met in the same order every time - the same rule the index buffer stands on -
+    // so the record is read back in step.
+    template <class F>
+    void section(Detail d, F&& body) {
+        if (wantIndices_) {
+            const std::size_t k = sections_.size();
+            sections_.push_back({});
+            const std::size_t at = vertices_.size();
+            body();
+            sections_[k] = {static_cast<std::uint32_t>(vertices_.size() - at),
+                            static_cast<std::uint32_t>(sections_.size())};
+            return;
+        }
+        if (sectionAt_ >= sections_.size()) { body(); return; } // never recorded
+        const Section s = sections_[sectionAt_];
+        if (d > detail_) {
+            vertices_.insert(vertices_.end(), s.vertexCount, dead_);
+            sectionAt_ = s.end;
+            return;
+        }
+        ++sectionAt_;
+        body();
+    }
+    struct Section {
+        std::uint32_t vertexCount = 0;
+        std::uint32_t end = 0; // the section after it and everything nested in it
+    };
+    std::vector<Section> sections_;
+    std::vector<std::uint32_t> unitSection_; // each unit's first section, as unitSpan_
+    std::size_t sectionAt_ = 0;
+    Detail detail_ = Detail::Instruments; // the unit being refreshed
+    TrackVertex dead_{};                  // and the point its left-out parts collapse to
+    int lastAtDetail_[4] = {0, 0, 0, 0};
     // Move the glazing to the back of the index buffer, over whatever has been emitted,
     // and record which vertices it stamped so refresh() can stamp them again without
     // having to work out which they are a second time.

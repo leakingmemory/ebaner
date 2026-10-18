@@ -5993,7 +5993,8 @@ int main(int argc, char** argv) {
                 // has not changed since the first ask.
                 const float asp =
                     fbh > 0 ? static_cast<float>(fbw) / static_cast<float>(fbh) : 1.0f;
-                vmesh.refresh(trains, g_camera.projMatrix(asp) * g_camera.viewMatrix());
+                vmesh.refresh(trains, g_camera.projMatrix(asp) * g_camera.viewMatrix(),
+                              g_camera.position());
             }
             if (profile) pVeh.add(now_ms() - tV);
             const double tVU = profile ? now_ms() : 0.0;
@@ -6400,8 +6401,13 @@ int main(int argc, char** argv) {
                 line("crossings", pCross);
                 line("vehicle mesh", pVeh);
                 if (vmesh.lastUnits() > 0)
-                    std::printf("  %-18s %d of %d units built\n", "  (culling)",
-                                vmesh.lastBuilt(), vmesh.lastUnits());
+                    std::printf("  %-18s %d of %d units built: %d whole, %d without "
+                                "instruments, %d without interiors, %d without wheels\n",
+                                "  (culling)", vmesh.lastBuilt(), vmesh.lastUnits(),
+                                vmesh.lastBuiltAt(Detail::Instruments),
+                                vmesh.lastBuiltAt(Detail::Interior),
+                                vmesh.lastBuiltAt(Detail::Wheels),
+                                vmesh.lastBuiltAt(Detail::Body));
                 line("vehicle upload", pVehUp);
                 line("hud text", pHud);
                 line("drawFrame", pDraw);

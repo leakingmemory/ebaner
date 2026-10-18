@@ -904,7 +904,9 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
         face(P(-1, -1, -1), P(1, -1, -1), P(1, 1, -1), P(-1, 1, -1), -Z);
     };
 
-    for (const VehicleFrame& fr : vehicle.axleFrames()) emitWheelset(fr);
+    section(Detail::Wheels, [&] {
+        for (const VehicleFrame& fr : vehicle.axleFrames()) emitWheelset(fr);
+    });
 
     // Height of a bogie frame box centre / its top above the pose bed.
     const float frameCentreZ = axleZ + wheelR;
@@ -1280,7 +1282,7 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
         // saloon floor sits between two raised end vestibules (over the bogies,
         // in front of the doors), joined by two-step risers; a partition wall
         // with a central aisle doorway closes off the driver's cab. ----
-        {
+        section(Detail::Interior, [&] {
             const float ihw = hw * 0.90f;             // interior half width
             const float zFl = z0 + 0.03f;             // saloon floor
             const float zSt = zFl + 0.19f;            // mid step
@@ -1605,7 +1607,7 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                 for (int i = 0; i < 4; ++i)
                     rectFace(C, u, v, n, -0.15f + 0.10f * i, -0.11f, 0.03f, 0.025f, 0.012f, c93::kButton);
             }
-        }
+        });
     };
 
     // Body per section. A Class 93 draws a liveried car body (cab at each outer
@@ -1696,7 +1698,7 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
         // the playroom and the wheelchair bays at the other. None of it can be walked into
         // - a carriage has no cab - but all of it is behind glass and can be seen through
         // the windows, which is the whole reason for drawing it.
-        {
+        section(Detail::Interior, [&] {
             const float ihw = hw - 0.06f;
             const float zCeil = z0 + 2.30f;
             const glm::vec3 in = P(0.0f, 0.0f, z0 + 1.0f);
@@ -1843,7 +1845,7 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                 emitBox(X, Y, Z, P(-0.80f, lay.serviceAt, z0 + 0.60f), 0.60f, 0.90f, 0.60f,
                         t5::kTable);
             }
-        }
+        });
         // Floor pan and the two ends. The ends are plain: they are only ever seen from
         // between two vehicles, or at the end of the train.
         quadN(P(-hw, -halfLen, z0), P(hw, -halfLen, z0), P(hw, halfLen, z0),
@@ -2136,166 +2138,182 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                         P(static_cast<float>(i) * 0.52f, yDB - so * 0.03f, zFl + 0.30f),
                         0.17f, 0.03f, 0.11f, di4::kButton);
 
-            // The console, standing on the desk in front of the driver with its face raked
-            // back at him. Its top rides just above the windscreen sill - which is why the
-            // sill had to be at the right height before any of this could be placed.
             const float cW = 0.60f;                   // face half width
             const float yCB = so * (halfLen - 0.92f); // face, bottom edge
-            const float yCF = so * (halfLen - 0.46f); // face, top edge
-            const float zCB = zD + 0.05f, zCT = zD + 0.30f; // top just under the sightline
-            const float xL = xD + dx(-cW), xR = xD + dx(cW);
-            const glm::vec3 BL = P(xL, yCB, zCB), BR = P(xR, yCB, zCB);
-            const glm::vec3 TR = P(xR, yCF, zCT), TL = P(xL, yCF, zCT);
-            const glm::vec3 FL = P(xL, yDF, zCT), FR = P(xR, yDF, zCT);
-            const glm::vec3 bBL = P(xL, yCB, zD), bBR = P(xR, yCB, zD);
-            const glm::vec3 bFL = P(xL, yDF, zD), bFR = P(xR, yDF, zD);
-            const glm::vec3 cC = 0.25f * (BL + BR + TR + TL);
-            const glm::vec3 hC = 0.125f * (BL + BR + TL + TR + bBL + bBR + FL + FR);
-            quadN(TL, TR, FR, FL, di4::kDash, hC);   // top
-            quadN(FL, FR, bFR, bFL, di4::kDash, hC); // front, toward the glass
-            quadN(bBL, bBR, BR, BL, di4::kDash, hC); // skirt under the face
-            quadN(bBL, BL, TL, FL, di4::kDash, hC);  // cheeks, each a pentagon in two
-            quadN(bBL, FL, bFL, bFL, di4::kDash, hC);
-            quadN(bBR, BR, TR, FR, di4::kDash, hC);
-            quadN(bBR, FR, bFR, bFR, di4::kDash, hC);
+            section(Detail::Instruments, [&] {
+                // The console, standing on the desk in front of the driver with its face
+                // raked back at him. Its top rides just above the windscreen sill - which
+                // is why the sill had to be at the right height before any of this could be
+                // placed.
+                const float yCF = so * (halfLen - 0.46f); // face, top edge
+                const float zCB = zD + 0.05f;
+                const float zCT = zD + 0.30f; // top just under the sightline
+                const float xL = xD + dx(-cW), xR = xD + dx(cW);
+                const glm::vec3 BL = P(xL, yCB, zCB), BR = P(xR, yCB, zCB);
+                const glm::vec3 TR = P(xR, yCF, zCT), TL = P(xL, yCF, zCT);
+                const glm::vec3 FL = P(xL, yDF, zCT), FR = P(xR, yDF, zCT);
+                const glm::vec3 bBL = P(xL, yCB, zD), bBR = P(xR, yCB, zD);
+                const glm::vec3 bFL = P(xL, yDF, zD), bFR = P(xR, yDF, zD);
+                const glm::vec3 cC = 0.25f * (BL + BR + TR + TL);
+                const glm::vec3 hC = 0.125f * (BL + BR + TL + TR + bBL + bBR + FL + FR);
+                quadN(TL, TR, FR, FL, di4::kDash, hC);   // top
+                quadN(FL, FR, bFR, bFL, di4::kDash, hC); // front, toward the glass
+                quadN(bBL, bBR, BR, BL, di4::kDash, hC); // skirt under the face
+                quadN(bBL, BL, TL, FL, di4::kDash, hC);  // cheeks, each a pentagon in two
+                quadN(bBL, FL, bFL, bFL, di4::kDash, hC);
+                quadN(bBR, BR, TR, FR, di4::kDash, hC);
+                quadN(bBR, FR, bFR, bFR, di4::kDash, hC);
 
-            // The eye this is all aimed at - and the same point drivercam::eyePose puts
-            // the camera, which is the only reason any of these offsets are what they are.
-            const glm::vec3 eye = P(xD, yCB - so * 0.95f, zFl + di4::kEyeAboveFloor);
-            const glm::vec3 u = glm::normalize(BR - BL);
-            const glm::vec3 v = glm::normalize(TL - BL);
-            glm::vec3 n = glm::normalize(glm::cross(u, v));
-            if (glm::dot(n, eye - cC) < 0.0f) n = -n;
-            quadN(BL, BR, TR, TL, di4::kDash, cC - n); // the face itself
+                // The eye this is all aimed at - and the same point drivercam::eyePose puts
+                // the camera, which is the only reason any of these offsets are what they
+                // are.
+                const glm::vec3 eye = P(xD, yCB - so * 0.95f, zFl + di4::kEyeAboveFloor);
+                const glm::vec3 u = glm::normalize(BR - BL);
+                const glm::vec3 v = glm::normalize(TL - BL);
+                glm::vec3 n = glm::normalize(glm::cross(u, v));
+                if (glm::dot(n, eye - cC) < 0.0f) n = -n;
+                quadN(BL, BR, TR, TL, di4::kDash, cC - n); // the face itself
 
-            // Live, off the locomotive.
-            const int cab = so < 0.0f ? 0 : 1;
-            const float spd = vehicle.speed();
-            // The load meter is an ammeter, and the drive itself knows what fraction of
-            // its current limit it is passing - better than dividing effort by a constant
-            // kept in this file that has to be remembered to match the vehicle table.
-            const float load = vehicle.tractionAmpsFrac();
-            const float rpm = vehicle.engineRpm(0) / di4::kRevFull;
-            const int power = vehicle.powerNotch(cab);
-            const int brake = vehicle.brakeNotch(cab);
-            const int ind = vehicle.independentNotch(cab);
-            const int rev = vehicle.reverser(cab);
+                // Live, off the locomotive.
+                const int cab = so < 0.0f ? 0 : 1;
+                const float spd = vehicle.speed();
+                // The load meter is an ammeter, and the drive itself knows what fraction of
+                // its current limit it is passing - better than dividing effort by a
+                // constant kept in this file that has to be remembered to match the vehicle
+                // table.
+                const float load = vehicle.tractionAmpsFrac();
+                const float rpm = vehicle.engineRpm(0) / di4::kRevFull;
+                const int power = vehicle.powerNotch(cab);
+                const int brake = vehicle.brakeNotch(cab);
+                const int ind = vehicle.independentNotch(cab);
+                const int rev = vehicle.reverser(cab);
 
-            // Across the face as the photographs have it: a plain dial, the rectangular
-            // display with its column of lamps, the speedometer, the load meter, and four
-            // small gauges in a row. Every one of these is emitted whatever it reads - a
-            // needle is a quad that turns, never a quad that appears - because the vehicle
-            // index buffer is fixed at attach time and a mesh that changes size is dropped.
-            discFace(cC, u, v, n, -0.47f, 0.03f, 0.046f, 0.012f, di4::kGaugeS);
-            rectFace(cC, u, v, n, -0.28f, 0.03f, 0.095f, 0.072f, 0.012f, di4::kButton);
-            rectFace(cC, u, v, n, -0.29f, 0.03f, 0.076f, 0.056f, 0.018f, di4::kScreen);
-            for (int i = 0; i < 6; ++i)
-                rectFace(cC, u, v, n, -0.180f, 0.085f - 0.024f * i, 0.009f, 0.009f, 0.016f,
-                         i == 0 ? di4::kRed : di4::kButton);
-            discFace(cC, u, v, n, -0.055f, 0.02f, 0.077f, 0.012f, di4::kGauge);
-            discFace(cC, u, v, n, 0.135f, 0.02f, 0.077f, 0.012f, di4::kGauge);
-            needle(cC, u, v, n, -0.055f, 0.02f, 0.065f, spd / 40.0f, di4::kNeedle);
-            needle(cC, u, v, n, 0.135f, 0.02f, 0.065f, load, di4::kRed);
-            for (const float gx : {-0.055f, 0.135f})
-                discFace(cC, u, v, n, gx, 0.02f, 0.012f, 0.020f, di4::kNeedle);
-            {
-                // Main reservoir, brake pipe, brake cylinder, and the engine's revs.
-                const std::pair<float, float> small[] = {{0.300f, vehicle.mrPressure() / 12.0f},
-                                                         {0.375f, vehicle.bpPressure() / 10.0f},
-                                                         {0.450f, vehicle.bcPressure() / 10.0f},
-                                                         {0.525f, rpm}};
-                for (const auto& g : small) {
-                    discFace(cC, u, v, n, g.first, 0.085f, 0.032f, 0.012f, di4::kGaugeS);
-                    needle(cC, u, v, n, g.first, 0.085f, 0.026f, g.second, di4::kNeedleL);
+                // Across the face as the photographs have it: a plain dial, the rectangular
+                // display with its column of lamps, the speedometer, the load meter, and
+                // four small gauges in a row. Every one of these is emitted whatever it
+                // reads - a needle is a quad that turns, never a quad that appears -
+                // because the vehicle index buffer is fixed at attach time and a mesh that
+                // changes size is dropped.
+                discFace(cC, u, v, n, -0.47f, 0.03f, 0.046f, 0.012f, di4::kGaugeS);
+                rectFace(cC, u, v, n, -0.28f, 0.03f, 0.095f, 0.072f, 0.012f, di4::kButton);
+                rectFace(cC, u, v, n, -0.29f, 0.03f, 0.076f, 0.056f, 0.018f, di4::kScreen);
+                for (int i = 0; i < 6; ++i)
+                    rectFace(cC, u, v, n, -0.180f, 0.085f - 0.024f * i, 0.009f, 0.009f,
+                             0.016f, i == 0 ? di4::kRed : di4::kButton);
+                discFace(cC, u, v, n, -0.055f, 0.02f, 0.077f, 0.012f, di4::kGauge);
+                discFace(cC, u, v, n, 0.135f, 0.02f, 0.077f, 0.012f, di4::kGauge);
+                needle(cC, u, v, n, -0.055f, 0.02f, 0.065f, spd / 40.0f, di4::kNeedle);
+                needle(cC, u, v, n, 0.135f, 0.02f, 0.065f, load, di4::kRed);
+                for (const float gx : {-0.055f, 0.135f})
+                    discFace(cC, u, v, n, gx, 0.02f, 0.012f, 0.020f, di4::kNeedle);
+                {
+                    // Main reservoir, brake pipe, brake cylinder, and the engine's revs.
+                    const std::pair<float, float> small[] = {{0.300f, vehicle.mrPressure() / 12.0f},
+                                                             {0.375f, vehicle.bpPressure() / 10.0f},
+                                                             {0.450f, vehicle.bcPressure() / 10.0f},
+                                                             {0.525f, rpm}};
+                    for (const auto& g : small) {
+                        discFace(cC, u, v, n, g.first, 0.085f, 0.032f, 0.012f,
+                                 di4::kGaugeS);
+                        needle(cC, u, v, n, g.first, 0.085f, 0.026f, g.second,
+                               di4::kNeedleL);
+                    }
                 }
-            }
-            for (int i = 0; i < 8; ++i) // switch rows, under the dials and along the top
-                rectFace(cC, u, v, n, -0.50f + 0.085f * i, -0.155f, 0.026f, 0.020f, 0.012f,
-                         di4::kButton);
-            for (int i = 0; i < 6; ++i)
-                rectFace(cC, u, v, n, 0.24f + 0.065f * i, 0.175f, 0.021f, 0.013f, 0.012f,
-                         di4::kButton);
+                // Switch rows, under the dials and along the top.
+                for (int i = 0; i < 8; ++i)
+                    rectFace(cC, u, v, n, -0.50f + 0.085f * i, -0.155f, 0.026f, 0.020f,
+                             0.012f, di4::kButton);
+                for (int i = 0; i < 6; ++i)
+                    rectFace(cC, u, v, n, 0.24f + 0.065f * i, 0.175f, 0.021f, 0.013f,
+                             0.012f, di4::kButton);
 
-            // The driving controls, and this machine has two of them rather than the
-            // railcar's one lever. The photographs are unambiguous: a short ball-topped
-            // controller on a gated base under the left hand, and under the right - set
-            // directly below the three air gauges, where a driver's eye goes when he is
-            // braking - a long lever swinging fore and aft in a curved quadrant. That
-            // quadrant plate is the signature of a driver's brake valve of the period,
-            // and German practice of these years puts the Fahrschalter left and the
-            // Führerbremsventil right, which is what a Henschel cab of 1981 would be.
-            //
-            // Where they stand is squeezed between two limits. A lever sits at a third of
-            // the console's distance, so the same sideways offset throws it three times as
-            // far out in the view: level with the console's edge in plan, and it lands at
-            // the edge of the windscreen. Pulling it back toward the driver instead runs
-            // into the camera's 0.5 m near plane, which clips it away silently - it is in
-            // the mesh, it is in front of the eye, and it is simply not drawn.
-            //
-            // One lever, given its pivot, length and lean off the sim.
-            auto lever = [&](float lx, float ly, float tilt, float L, float shaft,
-                             float knob, const glm::vec3& col, bool collar) {
-                const glm::vec3 pv = P(lx, ly, zD + 0.04f);
-                const glm::vec3 dir = Z * std::cos(tilt) + Y * (so * std::sin(tilt));
-                const glm::vec3 Yb = glm::normalize(glm::cross(dir, X));
-                emitBox(X, Yb, dir, pv + dir * (0.5f * L), shaft, shaft, 0.5f * L,
-                        di4::kDash);
-                if (collar) // the yellow collar, standing clear of the stick it rings
-                    emitBox(X, Yb, dir, pv + dir * (0.72f * L), 0.042f, 0.042f, 0.026f,
-                            di4::kPlough);
-                emitBox(X, Yb, dir, pv + dir * (L + knob * 0.8f), knob, knob, knob, col);
-            };
+                // The driving controls, and this machine has two of them rather than the
+                // railcar's one lever. The photographs are unambiguous: a short ball-topped
+                // controller on a gated base under the left hand, and under the right - set
+                // directly below the three air gauges, where a driver's eye goes when he is
+                // braking - a long lever swinging fore and aft in a curved quadrant. That
+                // quadrant plate is the signature of a driver's brake valve of the period,
+                // and German practice of these years puts the Fahrschalter left and the
+                // Führerbremsventil right, which is what a Henschel cab of 1981 would be.
+                //
+                // Where they stand is squeezed between two limits. A lever sits at a third
+                // of the console's distance, so the same sideways offset throws it three
+                // times as far out in the view: level with the console's edge in plan, and
+                // it lands at the edge of the windscreen. Pulling it back toward the driver
+                // instead runs into the camera's 0.5 m near plane, which clips it away
+                // silently - it is in the mesh, it is in front of the eye, and it is simply
+                // not drawn.
+                //
+                // One lever, given its pivot, length and lean off the sim.
+                auto lever = [&](float lx, float ly, float tilt, float L, float shaft,
+                                 float knob, const glm::vec3& col, bool collar) {
+                    const glm::vec3 pv = P(lx, ly, zD + 0.04f);
+                    const glm::vec3 dir = Z * std::cos(tilt) + Y * (so * std::sin(tilt));
+                    const glm::vec3 Yb = glm::normalize(glm::cross(dir, X));
+                    emitBox(X, Yb, dir, pv + dir * (0.5f * L), shaft, shaft, 0.5f * L,
+                            di4::kDash);
+                    if (collar) // the yellow collar, standing clear of the stick it rings
+                        emitBox(X, Yb, dir, pv + dir * (0.72f * L), 0.042f, 0.042f, 0.026f,
+                                di4::kPlough);
+                    emitBox(X, Yb, dir, pv + dir * (L + knob * 0.8f), knob, knob, knob,
+                            col);
+                };
 
-            // Power controller, left hand. Off is upright; notching up leans it forward,
-            // away from the driver, as the railcar's does on its power side.
-            {
-                const float lx = xD + dx(-0.38f), ly = yCB - so * 0.25f;
-                emitBox(X, Y, Z, P(lx, ly, zD + 0.02f), 0.075f, 0.075f, 0.02f, di4::kButton);
-                const float t = -0.42f * static_cast<float>(power) /
-                                static_cast<float>(Vehicle::kMaxPowerNotch);
-                lever(lx, ly, t, 0.20f, 0.022f, 0.040f, di4::kDash, true);
-            }
-            // Reverser, a short selector beside the controller: F away, R back, N upright.
-            {
-                const float lx = xD + dx(-0.20f), ly = yCB - so * 0.20f;
-                emitBox(X, Y, Z, P(lx, ly, zD + 0.02f), 0.05f, 0.05f, 0.02f, di4::kButton);
-                lever(lx, ly, -0.35f * static_cast<float>(rev), 0.11f, 0.015f, 0.028f,
-                      di4::kButton, false);
-            }
-            // Driver's brake valve, right hand, in its quadrant. Release stands forward
-            // and the handle comes back through the service range to emergency, so the
-            // lever leans toward the driver as the brake goes on.
-            {
-                const float lx = xD + dx(0.38f), ly = yCB - so * 0.25f;
-                const float t = -0.40f + 0.80f * static_cast<float>(brake) /
-                                             static_cast<float>(Vehicle::kEmergencyNotch);
-                const glm::vec3 pv = P(lx, ly, zD + 0.04f);
-                const float R = 0.24f;
-                for (int i = 0; i <= 7; ++i) { // the quadrant the handle swings in
-                    const float a = -0.46f + 0.92f * static_cast<float>(i) / 7.0f;
-                    emitBox(X, Y, Z,
-                            pv + Y * (so * R * std::sin(a)) + Z * (R * std::cos(a) - R),
-                            0.050f, 0.022f, 0.010f, di4::kFrame);
+                // Power controller, left hand. Off is upright; notching up leans it
+                // forward, away from the driver, as the railcar's does on its power side.
+                {
+                    const float lx = xD + dx(-0.38f), ly = yCB - so * 0.25f;
+                    emitBox(X, Y, Z, P(lx, ly, zD + 0.02f), 0.075f, 0.075f, 0.02f, di4::kButton);
+                    const float t = -0.42f * static_cast<float>(power) /
+                                    static_cast<float>(Vehicle::kMaxPowerNotch);
+                    lever(lx, ly, t, 0.20f, 0.022f, 0.040f, di4::kDash, true);
                 }
-                lever(lx, ly, t, 0.26f, 0.020f, 0.038f, di4::kDash, false);
-            }
-            // The independent brake - the Zusatzbremse - beside it and further out, a
-            // shorter handle with a shorter throw, which is where German practice puts one
-            // and where the photographs show a second handle next to the train brake.
-            if (vehicle.hasIndependentBrake()) {
-                const float lx = xD + dx(0.66f), ly = yCB - so * 0.20f;
-                emitBox(X, Y, Z, P(lx, ly, zD + 0.02f), 0.055f, 0.055f, 0.02f,
-                        di4::kButton);
-                const float t = -0.34f + 0.68f * static_cast<float>(ind) /
-                                             static_cast<float>(Vehicle::kMaxIndNotch);
-                lever(lx, ly, t, 0.15f, 0.016f, 0.030f, di4::kDash, false);
-            }
-            // The writing pad on the desk to the driver's right, and the handset on its
-            // cradle at the left of the console.
-            emitBox(X, Y, Z, P(xD + dx(0.62f), yDB + so * 0.26f, zD + 0.006f), 0.16f, 0.12f,
-                    0.006f, di4::kDash);
-            emitBox(X, Y, Z, P(xD + dx(-0.72f), yCB - so * 0.10f, zD + 0.05f), 0.05f, 0.13f,
-                    0.05f, di4::kDash);
+                // Reverser, a short selector beside the controller: F away, R back, N
+                // upright.
+                {
+                    const float lx = xD + dx(-0.20f), ly = yCB - so * 0.20f;
+                    emitBox(X, Y, Z, P(lx, ly, zD + 0.02f), 0.05f, 0.05f, 0.02f,
+                            di4::kButton);
+                    lever(lx, ly, -0.35f * static_cast<float>(rev), 0.11f, 0.015f, 0.028f,
+                          di4::kButton, false);
+                }
+                // Driver's brake valve, right hand, in its quadrant. Release stands forward
+                // and the handle comes back through the service range to emergency, so the
+                // lever leans toward the driver as the brake goes on.
+                {
+                    const float lx = xD + dx(0.38f), ly = yCB - so * 0.25f;
+                    const float t =
+                        -0.40f + 0.80f * static_cast<float>(brake) /
+                                     static_cast<float>(Vehicle::kEmergencyNotch);
+                    const glm::vec3 pv = P(lx, ly, zD + 0.04f);
+                    const float R = 0.24f;
+                    for (int i = 0; i <= 7; ++i) { // the quadrant the handle swings in
+                        const float a = -0.46f + 0.92f * static_cast<float>(i) / 7.0f;
+                        emitBox(X, Y, Z,
+                                pv + Y * (so * R * std::sin(a)) + Z * (R * std::cos(a) - R),
+                                0.050f, 0.022f, 0.010f, di4::kFrame);
+                    }
+                    lever(lx, ly, t, 0.26f, 0.020f, 0.038f, di4::kDash, false);
+                }
+                // The independent brake - the Zusatzbremse - beside it and further out, a
+                // shorter handle with a shorter throw, which is where German practice puts
+                // one and where the photographs show a second handle next to the train
+                // brake.
+                if (vehicle.hasIndependentBrake()) {
+                    const float lx = xD + dx(0.66f), ly = yCB - so * 0.20f;
+                    emitBox(X, Y, Z, P(lx, ly, zD + 0.02f), 0.055f, 0.055f, 0.02f,
+                            di4::kButton);
+                    const float t = -0.34f + 0.68f * static_cast<float>(ind) /
+                                                 static_cast<float>(Vehicle::kMaxIndNotch);
+                    lever(lx, ly, t, 0.15f, 0.016f, 0.030f, di4::kDash, false);
+                }
+                // The writing pad on the desk to the driver's right, and the handset on its
+                // cradle at the left of the console.
+                emitBox(X, Y, Z, P(xD + dx(0.62f), yDB + so * 0.26f, zD + 0.006f), 0.16f,
+                        0.12f, 0.006f, di4::kDash);
+                emitBox(X, Y, Z, P(xD + dx(-0.72f), yCB - so * 0.10f, zD + 0.05f), 0.05f,
+                        0.13f, 0.05f, di4::kDash);
+            });
 
             // Two seats: the driver's on the right, a second on the left, with the plain
             // flat table in front of it that the photographs show instead of a console.
@@ -2422,7 +2440,7 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
             emitBox(X, Y, Z, P(0.0f, so * (halfLen - 0.14f), frameTopZ - 0.44f), hw * 0.86f,
                     0.17f, 0.13f, di4::kPlough);
 
-            emitDi4Cab(so);
+            section(Detail::Interior, [&] { emitDi4Cab(so); });
         }
         // Fuel tank slung between the bogies: 5200 litres, and what makes a locomotive
         // read as heavy rather than as a coach.
@@ -2675,78 +2693,93 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                   pC - pn * 6.0f);
             emitBox(X, Y, Z, P(0.0f, yP1, zP1 + 0.05f), ihw, 0.10f, 0.05f, cd312::kCoaming);
 
-            // --- What is on the panel ---------------------------------------------------
-            // Left to right as the photograph has them. The gauge cluster is the middle
-            // third: a combined brake-power and ammeter dial, the speedometer, a red
-            // indicator, the twin-needle air gauge, and two small gauges under it.
-            const float g = 0.0f; // panel centre
-            discFace(pC, pu, pv, pn, dx(0.34f), g + 0.02f, 0.075f, 0.012f, cd312::kDialRim);
-            discFace(pC, pu, pv, pn, dx(0.34f), g + 0.02f, 0.066f, 0.014f, cd312::kDial);
-            needle(pC, pu, pv, pn, dx(0.34f), g + 0.02f, 0.056f, 0.12f, cd312::kNeedle);
-            discFace(pC, pu, pv, pn, dx(0.12f), g + 0.02f, 0.085f, 0.012f, cd312::kDialRim);
-            discFace(pC, pu, pv, pn, dx(0.12f), g + 0.02f, 0.076f, 0.014f, cd312::kDial);
-            needle(pC, pu, pv, pn, dx(0.12f), g + 0.02f, 0.064f, 0.0f, cd312::kNeedle);
-            discFace(pC, pu, pv, pn, dx(-0.02f), g + 0.08f, 0.018f, 0.014f, cd312::kRedBtn);
-            discFace(pC, pu, pv, pn, dx(-0.16f), g + 0.03f, 0.075f, 0.012f, cd312::kDialRim);
-            discFace(pC, pu, pv, pn, dx(-0.16f), g + 0.03f, 0.066f, 0.014f,
-                     cd312::kDialDark);
-            // Two needles on the one face: main reservoir and brake pipe, which is the
-            // gauge a driver actually watches.
-            needle(pC, pu, pv, pn, dx(-0.16f), g + 0.03f, 0.056f, 0.80f, cd312::kRedBtn);
-            needle(pC, pu, pv, pn, dx(-0.16f), g + 0.03f, 0.056f, 0.62f, cd312::kNeedleL);
-            for (const float sx : {-0.10f, -0.24f}) {
-                discFace(pC, pu, pv, pn, dx(sx), g - 0.06f, 0.042f, 0.012f, cd312::kDialRim);
-                discFace(pC, pu, pv, pn, dx(sx), g - 0.06f, 0.035f, 0.014f,
+            section(Detail::Instruments, [&] {
+                // --- What is on the panel
+                // --------------------------------------------------- Left to right as the
+                // photograph has them. The gauge cluster is the middle third: a combined
+                // brake-power and ammeter dial, the speedometer, a red indicator, the
+                // twin-needle air gauge, and two small gauges under it.
+                const float g = 0.0f; // panel centre
+                discFace(pC, pu, pv, pn, dx(0.34f), g + 0.02f, 0.075f, 0.012f,
+                         cd312::kDialRim);
+                discFace(pC, pu, pv, pn, dx(0.34f), g + 0.02f, 0.066f, 0.014f,
+                         cd312::kDial);
+                needle(pC, pu, pv, pn, dx(0.34f), g + 0.02f, 0.056f, 0.12f, cd312::kNeedle);
+                discFace(pC, pu, pv, pn, dx(0.12f), g + 0.02f, 0.085f, 0.012f,
+                         cd312::kDialRim);
+                discFace(pC, pu, pv, pn, dx(0.12f), g + 0.02f, 0.076f, 0.014f,
+                         cd312::kDial);
+                needle(pC, pu, pv, pn, dx(0.12f), g + 0.02f, 0.064f, 0.0f, cd312::kNeedle);
+                discFace(pC, pu, pv, pn, dx(-0.02f), g + 0.08f, 0.018f, 0.014f,
+                         cd312::kRedBtn);
+                discFace(pC, pu, pv, pn, dx(-0.16f), g + 0.03f, 0.075f, 0.012f, cd312::kDialRim);
+                discFace(pC, pu, pv, pn, dx(-0.16f), g + 0.03f, 0.066f, 0.014f,
                          cd312::kDialDark);
-                needle(pC, pu, pv, pn, dx(sx), g - 0.06f, 0.028f, 0.45f, cd312::kNeedleL);
-            }
-            // The fault panel on the left: rows of switches over a row of round buttons,
-            // in the colours the photograph shows - grey, amber, black, red.
-            rectFace(pC, pu, pv, pn, dx(0.62f), g + 0.02f, 0.17f, 0.11f, 0.010f,
-                     cd312::kPanel);
-            const glm::vec3 btn[4] = {cd312::kPaleBtn, cd312::kAmberBtn, cd312::kKnob,
-                                      cd312::kRedBtn};
-            for (int i = 0; i < 4; ++i)
-                discFace(pC, pu, pv, pn, dx(0.74f - 0.08f * static_cast<float>(i)),
-                         g - 0.06f, 0.019f, 0.013f, btn[i]);
-            for (int i = 0; i < 5; ++i)
-                rectFace(pC, pu, pv, pn, dx(0.74f - 0.06f * static_cast<float>(i)),
-                         g + 0.07f, 0.012f, 0.022f, 0.013f, cd312::kDialRim);
-            // The EMD screen and its keypad on the right, and the two displays outboard.
-            rectFace(pC, pu, pv, pn, dx(-0.46f), g + 0.05f, 0.11f, 0.055f, 0.012f,
-                     cd312::kScreenG);
-            for (int r = 0; r < 3; ++r)
-                for (int c = 0; c < 4; ++c)
-                    rectFace(pC, pu, pv, pn,
-                             dx(-0.38f + 0.05f * static_cast<float>(c)),
-                             g - 0.05f - 0.035f * static_cast<float>(r), 0.018f, 0.013f,
-                             0.012f, cd312::kDialRim);
-            rectFace(pC, pu, pv, pn, dx(-0.72f), g + 0.05f, 0.10f, 0.045f, 0.012f,
-                     cd312::kScreenG);
-            discFace(pC, pu, pv, pn, dx(-0.70f), g - 0.08f, 0.030f, 0.016f, cd312::kRedBtn);
-            discFace(pC, pu, pv, pn, dx(-0.58f), g - 0.08f, 0.022f, 0.014f, cd312::kGreenBtn);
+                // Two needles on the one face: main reservoir and brake pipe, which is the
+                // gauge a driver actually watches.
+                needle(pC, pu, pv, pn, dx(-0.16f), g + 0.03f, 0.056f, 0.80f,
+                       cd312::kRedBtn);
+                needle(pC, pu, pv, pn, dx(-0.16f), g + 0.03f, 0.056f, 0.62f,
+                       cd312::kNeedleL);
+                for (const float sx : {-0.10f, -0.24f}) {
+                    discFace(pC, pu, pv, pn, dx(sx), g - 0.06f, 0.042f, 0.012f, cd312::kDialRim);
+                    discFace(pC, pu, pv, pn, dx(sx), g - 0.06f, 0.035f, 0.014f,
+                             cd312::kDialDark);
+                    needle(pC, pu, pv, pn, dx(sx), g - 0.06f, 0.028f, 0.45f,
+                           cd312::kNeedleL);
+                }
+                // The fault panel on the left: rows of switches over a row of round
+                // buttons, in the colours the photograph shows - grey, amber, black, red.
+                rectFace(pC, pu, pv, pn, dx(0.62f), g + 0.02f, 0.17f, 0.11f, 0.010f,
+                         cd312::kPanel);
+                const glm::vec3 btn[4] = {cd312::kPaleBtn, cd312::kAmberBtn, cd312::kKnob,
+                                          cd312::kRedBtn};
+                for (int i = 0; i < 4; ++i)
+                    discFace(pC, pu, pv, pn, dx(0.74f - 0.08f * static_cast<float>(i)),
+                             g - 0.06f, 0.019f, 0.013f, btn[i]);
+                for (int i = 0; i < 5; ++i)
+                    rectFace(pC, pu, pv, pn, dx(0.74f - 0.06f * static_cast<float>(i)),
+                             g + 0.07f, 0.012f, 0.022f, 0.013f, cd312::kDialRim);
+                // The EMD screen and its keypad on the right, and the two displays
+                // outboard.
+                rectFace(pC, pu, pv, pn, dx(-0.46f), g + 0.05f, 0.11f, 0.055f, 0.012f,
+                         cd312::kScreenG);
+                for (int r = 0; r < 3; ++r)
+                    for (int c = 0; c < 4; ++c)
+                        rectFace(pC, pu, pv, pn,
+                                 dx(-0.38f + 0.05f * static_cast<float>(c)),
+                                 g - 0.05f - 0.035f * static_cast<float>(r), 0.018f, 0.013f,
+                                 0.012f, cd312::kDialRim);
+                rectFace(pC, pu, pv, pn, dx(-0.72f), g + 0.05f, 0.10f, 0.045f, 0.012f,
+                         cd312::kScreenG);
+                discFace(pC, pu, pv, pn, dx(-0.70f), g - 0.08f, 0.030f, 0.016f,
+                         cd312::kRedBtn);
+                discFace(pC, pu, pv, pn, dx(-0.58f), g - 0.08f, 0.022f, 0.014f, cd312::kGreenBtn);
 
-            // --- The handles ------------------------------------------------------------
-            // Power on the driver's left on its own raked sub-panel with a guard round it,
-            // the reverser below and inboard of it, and the brake handles to the right.
-            // Both power handles carry the big black ball knob the photograph shows.
-            auto lever = [&](float lx, float ly, float len, float tilt, float knobR) {
-                const glm::vec3 base = P(dx(lx), yDeskB + so * ly, zD + 0.02f);
-                const glm::vec3 dir = glm::normalize(Z + Y * (so * tilt));
-                emitBox(X, Y, Z, base + dir * (0.5f * len), 0.016f, 0.016f, 0.5f * len,
-                        cd312::kSeatFrame);
-                const glm::vec3 top = base + dir * len;
-                discFace(top, X, Y, Z, 0.0f, 0.0f, knobR, 0.0f, cd312::kKnob);
-                emitBox(X, Y, Z, top, knobR, knobR, knobR, cd312::kKnob);
-            };
-            emitBox(X, Y, Z, P(dx(0.30f), yDeskB + so * 0.22f, zD + 0.05f), 0.16f, 0.16f,
-                    0.05f, cd312::kPanel);                       // the power quadrant
-            lever(0.30f, 0.22f, 0.26f, -0.25f, 0.045f);           // power, ball knob
-            emitBox(X, Y, Z, P(dx(0.46f), yDeskB + so * 0.10f, zD + 0.04f), 0.09f, 0.07f,
-                    0.04f, cd312::kPanel);                        // reverser plate
-            lever(0.46f, 0.10f, 0.13f, -0.15f, 0.028f);           // reverser, smaller knob
-            for (int i = 0; i < 3; ++i)                           // the brake handles
-                lever(-0.10f - 0.11f * static_cast<float>(i), 0.20f, 0.19f, -0.10f, 0.022f);
+                // --- The handles
+                // ------------------------------------------------------------ Power on the
+                // driver's left on its own raked sub-panel with a guard round it, the
+                // reverser below and inboard of it, and the brake handles to the right.
+                // Both power handles carry the big black ball knob the photograph shows.
+                auto lever = [&](float lx, float ly, float len, float tilt, float knobR) {
+                    const glm::vec3 base = P(dx(lx), yDeskB + so * ly, zD + 0.02f);
+                    const glm::vec3 dir = glm::normalize(Z + Y * (so * tilt));
+                    emitBox(X, Y, Z, base + dir * (0.5f * len), 0.016f, 0.016f, 0.5f * len,
+                            cd312::kSeatFrame);
+                    const glm::vec3 top = base + dir * len;
+                    discFace(top, X, Y, Z, 0.0f, 0.0f, knobR, 0.0f, cd312::kKnob);
+                    emitBox(X, Y, Z, top, knobR, knobR, knobR, cd312::kKnob);
+                };
+                emitBox(X, Y, Z, P(dx(0.30f), yDeskB + so * 0.22f, zD + 0.05f), 0.16f,
+                        0.16f, 0.05f, cd312::kPanel);                 // the power quadrant
+                lever(0.30f, 0.22f, 0.26f, -0.25f, 0.045f);           // power, ball knob
+                emitBox(X, Y, Z, P(dx(0.46f), yDeskB + so * 0.10f, zD + 0.04f), 0.09f,
+                        0.07f, 0.04f, cd312::kPanel);       // reverser plate
+                lever(0.46f, 0.10f, 0.13f, -0.15f, 0.028f); // reverser, smaller knob
+                for (int i = 0; i < 3; ++i)                           // the brake handles
+                    lever(-0.10f - 0.11f * static_cast<float>(i), 0.20f, 0.19f, -0.10f,
+                          0.022f);
+            });
 
             // --- The seat ---------------------------------------------------------------
             // Inside the curve of the desk, which is what "central driving position" means
@@ -2764,7 +2797,8 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                 emitBox(X, Y, Z, P(dx(0.02f) + sx * 0.26f, ys, zFl + 0.82f), 0.04f, 0.18f,
                         0.03f, cd312::kSeatFrame);
         };
-        for (const float so : {-1.0f, 1.0f}) emitCabAt(so);
+        for (const float so : {-1.0f, 1.0f})
+            section(Detail::Interior, [&] { emitCabAt(so); });
 
         // Each end: the lights on the black panel, the buffer beam and the plough.
         for (const float so : {-1.0f, 1.0f}) {
@@ -3192,141 +3226,150 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
             const glm::vec3 cen = 0.25f * (a + b + c + d);
             quadN(a, b, c, d, col, 2.0f * cen - toward);
         };
-        if (C.power) {
-            // XDe: a corridor between the two power packs, on the high floor its
-            // neighbours' ends share.
-            const float half = 0.36f, zFl = zr(t76::kHighFloor), zTop = zRoof - 0.30f;
-            emitBox(X, Y, Z, P(0.0f, 0.5f * (yLo + yHi), zFl - 0.03f), ihw,
-                    0.5f * (yHi - yLo), 0.03f, t76::kFloorIn);
-            for (const float sx : {-1.0f, 1.0f})
-                emitBox(X, Y, Z, P(sx * 0.5f * (half + ihw), 0.5f * (yLo + yHi),
-                                   0.5f * (zFl + zTop)),
-                        0.5f * (ihw - half), 0.5f * (yHi - yLo), 0.5f * (zTop - zFl),
-                        t76::kModule);
-            emitBox(X, Y, Z, P(0.0f, 0.5f * (yLo + yHi), zTop + 0.02f), half,
-                    0.5f * (yHi - yLo), 0.02f, t76::kCeiling);
-            emitBox(X, Y, Z, P(0.0f, 0.5f * (yLo + yHi), zTop - 0.01f), 0.08f,
-                    0.5f * (yHi - yLo) - 0.3f, 0.01f, t76::kLamp);
-        } else {
-            const t76::Interior& I = t76::kInteriors[car];
-            const float yLowA = std::clamp(yAt(I.lowFrom), iLo, iHi);
-            const float yLowB = std::clamp(yAt(I.lowTo), iLo, iHi);
-            const float zLow = zr(t76::kFloor), zHigh = zr(t76::kHighFloor);
-            auto floorAt = [&](float y) { return (y > yLowA && y < yLowB) ? zLow : zHigh; };
-
-            // Floors: the low floor between the doors, the high floor over the bogies as a
-            // solid block so its edge is a riser, and a step down from each.
-            emitBox(X, Y, Z, P(0.0f, 0.5f * (yLowA + yLowB), zLow - 0.03f), ihw,
-                    0.5f * (yLowB - yLowA), 0.03f, t76::kFloorIn);
-            const float zMid = 0.5f * (zLow + zHigh);
-            for (const auto& [ya, yb, sgn] : {std::tuple{iLo, yLowA, 1.0f},
-                                              std::tuple{yLowB, iHi, -1.0f}}) {
-                if (yb - ya < 0.05f) continue;
-                emitBox(X, Y, Z, P(0.0f, 0.5f * (ya + yb), 0.5f * (zLow + zHigh)), ihw,
-                        0.5f * (yb - ya), 0.5f * (zHigh - zLow), t76::kFloorIn);
-                // The step, on the low side of the edge, and its yellow nosings.
-                const float edge = sgn > 0.0f ? yb : ya;
-                emitBox(X, Y, Z, P(0.0f, edge + sgn * 0.18f, 0.5f * (zLow + zMid)), ihw,
-                        0.18f, 0.5f * (zMid - zLow), t76::kFloorIn);
-                emitBox(X, Y, Z, P(0.0f, edge + sgn * 0.33f, zMid + 0.004f), ihw, 0.03f,
-                        0.006f, t76::kStepEdge);
-                emitBox(X, Y, Z, P(0.0f, edge - sgn * 0.03f, zHigh + 0.004f), ihw, 0.03f,
-                        0.006f, t76::kStepEdge);
-            }
-
-            // The lining: the same profile drawn in, with the windows and the doors' glazing
-            // where the outside has them, so the view out is the view through the glass.
-            auto liningRing = [&](float y) {
-                return ring(y, 0.955f, zRoof - 0.10f, floorAt(y));
-            };
-            for (const Panel& pn : panels) {
-                const float a = std::max(pn.a, iLo), b = std::min(pn.b, iHi);
-                if (b <= a + 0.01f) continue;
-                const bool glazed = pn.band == t76::kGlass;
-                std::vector<float> ys = {a, b};
-                for (const float e : {yLowA, yLowB})
-                    if (e > a + 0.02f && e < b - 0.02f) {
-                        ys.push_back(e - 0.01f);
-                        ys.push_back(e + 0.01f);
-                    }
-                std::sort(ys.begin(), ys.end());
-                for (std::size_t i = 0; i + 1 < ys.size(); ++i) {
-                    const std::vector<glm::vec3> A = liningRing(ys[i]);
-                    const std::vector<glm::vec3> B = liningRing(ys[i + 1]);
-                    for (std::size_t k = 0; k + 1 < A.size(); ++k) {
-                        const glm::vec3& col = (k == 1 || k == 13)
-                                                   ? (glazed ? t76::kGlass : t76::kLining)
-                                               : (k >= 3 && k <= 11) ? t76::kCeiling
-                                                                     : t76::kLining;
-                        const glm::vec3 cen = 0.25f * (A[k] + A[k + 1] + B[k + 1] + B[k]);
-                        quadIn(A[k], A[k + 1], B[k + 1], B[k], col,
-                               P(0.0f, glm::dot(cen - f.pos, Y), zr(2.0f)));
-                    }
-                }
-            }
-            // Light strips along the ceiling, and the luggage racks over the windows.
-            for (const float sx : {-0.48f, 0.48f})
-                emitBox(X, Y, Z, P(sx, 0.5f * (iLo + iHi), zRoof - 0.22f), 0.07f,
-                        0.5f * (iHi - iLo) - 0.4f, 0.012f, t76::kLamp);
-            for (const float sx : {-1.0f, 1.0f})
-                emitBox(X, Y, Z, P(sx * (ihw - 0.20f), 0.5f * (iLo + iHi),
-                                   zr(t76::kWinHigh + 0.22f)),
-                        0.20f, 0.5f * (iHi - iLo) - 0.3f, 0.015f, t76::kMetal);
-
-            // Seats: a pan, a backrest with its shell, and the pedestal under it.
-            for (int i = 0; i < I.seatCount; ++i) {
-                const t76::Seat& st = I.seats[i];
-                const float y = yAt(st.x), x = st.y, fc = static_cast<float>(st.face);
-                const float zf = floorAt(y);
-                const glm::vec3& col = st.kind == 1 ? t76::kSeatPri : t76::kSeat;
-                emitBox(X, Y, Z, P(x, y + fc * 0.03f, zf + 0.44f), 0.19f, 0.22f, 0.05f, col);
-                emitBox(X, Y, Z, P(x, y - fc * 0.21f, zf + 0.82f), 0.19f, 0.05f, 0.36f, col);
-                emitBox(X, Y, Z, P(x, y - fc * 0.27f, zf + 0.80f), 0.20f, 0.015f, 0.38f,
-                        t76::kSeatShell);
-                emitBox(X, Y, Z, P(x, y, zf + 0.20f), 0.05f, 0.08f, 0.20f, t76::kMetal);
-            }
-            // And the rest of the seat map.
-            for (int i = 0; i < I.fittingCount; ++i) {
-                const t76::Fitting& ft = I.fittings[i];
-                const float y0 = yAt(ft.x0), y1 = yAt(ft.x1);
-                const float yc = 0.5f * (y0 + y1), hy = 0.5f * (y1 - y0);
-                const float xc = 0.5f * (ft.y0 + ft.y1), hx = 0.5f * (ft.y1 - ft.y0);
-                const float zf = floorAt(yc);
-                switch (ft.kind) {
-                case t76::FitTable:
-                    emitBox(X, Y, Z, P(xc, yc, zf + 0.74f), hx, hy, 0.02f, t76::kTable);
-                    emitBox(X, Y, Z, P(xc, yc, zf + 0.37f), 0.04f, 0.04f, 0.37f, t76::kMetal);
-                    break;
-                case t76::FitRack: // a luggage stack, or the vending machine
-                    emitBox(X, Y, Z, P(xc, yc, zf + 0.78f), hx, hy, 0.78f, t76::kMetal);
-                    break;
-                case t76::FitModule: { // the WCs and the cab cars' cabinets, to the ceiling
-                    const float zTop = zRoof - 0.40f;
-                    emitBox(X, Y, Z, P(xc, yc, 0.5f * (zf + zTop)), hx, hy, 0.5f * (zTop - zf),
+        section(Detail::Interior, [&] {
+            if (C.power) {
+                // XDe: a corridor between the two power packs, on the high floor its
+                // neighbours' ends share.
+                const float half = 0.36f, zFl = zr(t76::kHighFloor), zTop = zRoof - 0.30f;
+                emitBox(X, Y, Z, P(0.0f, 0.5f * (yLo + yHi), zFl - 0.03f), ihw,
+                        0.5f * (yHi - yLo), 0.03f, t76::kFloorIn);
+                for (const float sx : {-1.0f, 1.0f})
+                    emitBox(X, Y, Z, P(sx * 0.5f * (half + ihw), 0.5f * (yLo + yHi),
+                                       0.5f * (zFl + zTop)),
+                            0.5f * (ihw - half), 0.5f * (yHi - yLo), 0.5f * (zTop - zFl),
                             t76::kModule);
-                    break;
+                emitBox(X, Y, Z, P(0.0f, 0.5f * (yLo + yHi), zTop + 0.02f), half,
+                        0.5f * (yHi - yLo), 0.02f, t76::kCeiling);
+                emitBox(X, Y, Z, P(0.0f, 0.5f * (yLo + yHi), zTop - 0.01f), 0.08f,
+                        0.5f * (yHi - yLo) - 0.3f, 0.01f, t76::kLamp);
+            } else {
+                const t76::Interior& I = t76::kInteriors[car];
+                const float yLowA = std::clamp(yAt(I.lowFrom), iLo, iHi);
+                const float yLowB = std::clamp(yAt(I.lowTo), iLo, iHi);
+                const float zLow = zr(t76::kFloor), zHigh = zr(t76::kHighFloor);
+                auto floorAt = [&](float y) {
+                    return (y > yLowA && y < yLowB) ? zLow : zHigh;
+                };
+
+                // Floors: the low floor between the doors, the high floor over the bogies
+                // as a solid block so its edge is a riser, and a step down from each.
+                emitBox(X, Y, Z, P(0.0f, 0.5f * (yLowA + yLowB), zLow - 0.03f), ihw,
+                        0.5f * (yLowB - yLowA), 0.03f, t76::kFloorIn);
+                const float zMid = 0.5f * (zLow + zHigh);
+                for (const auto& [ya, yb, sgn] : {std::tuple{iLo, yLowA, 1.0f},
+                                                  std::tuple{yLowB, iHi, -1.0f}}) {
+                    if (yb - ya < 0.05f) continue;
+                    emitBox(X, Y, Z, P(0.0f, 0.5f * (ya + yb), 0.5f * (zLow + zHigh)), ihw,
+                            0.5f * (yb - ya), 0.5f * (zHigh - zLow), t76::kFloorIn);
+                    // The step, on the low side of the edge, and its yellow nosings.
+                    const float edge = sgn > 0.0f ? yb : ya;
+                    emitBox(X, Y, Z, P(0.0f, edge + sgn * 0.18f, 0.5f * (zLow + zMid)), ihw,
+                            0.18f, 0.5f * (zMid - zLow), t76::kFloorIn);
+                    emitBox(X, Y, Z, P(0.0f, edge + sgn * 0.33f, zMid + 0.004f), ihw, 0.03f,
+                            0.006f, t76::kStepEdge);
+                    emitBox(X, Y, Z, P(0.0f, edge - sgn * 0.03f, zHigh + 0.004f), ihw,
+                            0.03f, 0.006f, t76::kStepEdge);
                 }
-                case t76::FitScreen: // a glazed draught screen at a door, and its pole
-                    emitBox(X, Y, Z, P(xc, yc, zf + 1.05f), hx, std::max(hy, 0.012f), 0.90f,
-                            t76::kGlass);
-                    emitBox(X, Y, Z, P(xc, yc, zf + 1.96f), hx, 0.025f, 0.02f, t76::kMetal);
-                    {
-                        const float xe = std::abs(ft.y0) < std::abs(ft.y1) ? ft.y0 : ft.y1;
-                        const float zTop = zRoof - 0.30f;
-                        emitBox(X, Y, Z, P(xe, yc, 0.5f * (zf + zTop)), 0.02f, 0.02f,
-                                0.5f * (zTop - zf), t76::kMetal);
+
+                // The lining: the same profile drawn in, with the windows and the doors'
+                // glazing where the outside has them, so the view out is the view through
+                // the glass.
+                auto liningRing = [&](float y) {
+                    return ring(y, 0.955f, zRoof - 0.10f, floorAt(y));
+                };
+                for (const Panel& pn : panels) {
+                    const float a = std::max(pn.a, iLo), b = std::min(pn.b, iHi);
+                    if (b <= a + 0.01f) continue;
+                    const bool glazed = pn.band == t76::kGlass;
+                    std::vector<float> ys = {a, b};
+                    for (const float e : {yLowA, yLowB})
+                        if (e > a + 0.02f && e < b - 0.02f) {
+                            ys.push_back(e - 0.01f);
+                            ys.push_back(e + 0.01f);
+                        }
+                    std::sort(ys.begin(), ys.end());
+                    for (std::size_t i = 0; i + 1 < ys.size(); ++i) {
+                        const std::vector<glm::vec3> A = liningRing(ys[i]);
+                        const std::vector<glm::vec3> B = liningRing(ys[i + 1]);
+                        for (std::size_t k = 0; k + 1 < A.size(); ++k) {
+                            const glm::vec3 &col =
+                                (k == 1 || k == 13) ? (glazed ? t76::kGlass : t76::kLining)
+                                : (k >= 3 && k <= 11) ? t76::kCeiling
+                                                      : t76::kLining;
+                            const glm::vec3 cen =
+                                0.25f * (A[k] + A[k + 1] + B[k + 1] + B[k]);
+                            quadIn(A[k], A[k + 1], B[k + 1], B[k], col,
+                                   P(0.0f, glm::dot(cen - f.pos, Y), zr(2.0f)));
+                        }
                     }
-                    break;
-                case t76::FitTipUp: // folded up against the screen behind it
-                case t76::FitFold:
-                    emitBox(X, Y, Z, P(xc, yc, zf + 0.72f), hx * 0.9f, 0.05f, 0.24f,
-                            ft.kind == t76::FitFold ? t76::kSeatPri : t76::kSeat);
-                    break;
-                default:
-                    break;
+                }
+                // Light strips along the ceiling, and the luggage racks over the windows.
+                for (const float sx : {-0.48f, 0.48f})
+                    emitBox(X, Y, Z, P(sx, 0.5f * (iLo + iHi), zRoof - 0.22f), 0.07f,
+                            0.5f * (iHi - iLo) - 0.4f, 0.012f, t76::kLamp);
+                for (const float sx : {-1.0f, 1.0f})
+                    emitBox(X, Y, Z, P(sx * (ihw - 0.20f), 0.5f * (iLo + iHi),
+                                       zr(t76::kWinHigh + 0.22f)),
+                            0.20f, 0.5f * (iHi - iLo) - 0.3f, 0.015f, t76::kMetal);
+
+                // Seats: a pan, a backrest with its shell, and the pedestal under it.
+                for (int i = 0; i < I.seatCount; ++i) {
+                    const t76::Seat& st = I.seats[i];
+                    const float y = yAt(st.x), x = st.y, fc = static_cast<float>(st.face);
+                    const float zf = floorAt(y);
+                    const glm::vec3& col = st.kind == 1 ? t76::kSeatPri : t76::kSeat;
+                    emitBox(X, Y, Z, P(x, y + fc * 0.03f, zf + 0.44f), 0.19f, 0.22f, 0.05f, col);
+                    emitBox(X, Y, Z, P(x, y - fc * 0.21f, zf + 0.82f), 0.19f, 0.05f, 0.36f, col);
+                    emitBox(X, Y, Z, P(x, y - fc * 0.27f, zf + 0.80f), 0.20f, 0.015f, 0.38f,
+                            t76::kSeatShell);
+                    emitBox(X, Y, Z, P(x, y, zf + 0.20f), 0.05f, 0.08f, 0.20f, t76::kMetal);
+                }
+                // And the rest of the seat map.
+                for (int i = 0; i < I.fittingCount; ++i) {
+                    const t76::Fitting& ft = I.fittings[i];
+                    const float y0 = yAt(ft.x0), y1 = yAt(ft.x1);
+                    const float yc = 0.5f * (y0 + y1), hy = 0.5f * (y1 - y0);
+                    const float xc = 0.5f * (ft.y0 + ft.y1), hx = 0.5f * (ft.y1 - ft.y0);
+                    const float zf = floorAt(yc);
+                    switch (ft.kind) {
+                    case t76::FitTable:
+                        emitBox(X, Y, Z, P(xc, yc, zf + 0.74f), hx, hy, 0.02f, t76::kTable);
+                        emitBox(X, Y, Z, P(xc, yc, zf + 0.37f), 0.04f, 0.04f, 0.37f, t76::kMetal);
+                        break;
+                    case t76::FitRack: // a luggage stack, or the vending machine
+                        emitBox(X, Y, Z, P(xc, yc, zf + 0.78f), hx, hy, 0.78f, t76::kMetal);
+                        break;
+                    case t76::FitModule: { // the WCs and the cab cars' cabinets, to the
+                                           // ceiling
+                        const float zTop = zRoof - 0.40f;
+                        emitBox(X, Y, Z, P(xc, yc, 0.5f * (zf + zTop)), hx, hy, 0.5f * (zTop - zf),
+                                t76::kModule);
+                        break;
+                    }
+                    case t76::FitScreen: // a glazed draught screen at a door, and its pole
+                        emitBox(X, Y, Z, P(xc, yc, zf + 1.05f), hx, std::max(hy, 0.012f),
+                                0.90f, t76::kGlass);
+                        emitBox(X, Y, Z, P(xc, yc, zf + 1.96f), hx, 0.025f, 0.02f,
+                                t76::kMetal);
+                        {
+                            const float xe =
+                                std::abs(ft.y0) < std::abs(ft.y1) ? ft.y0 : ft.y1;
+                            const float zTop = zRoof - 0.30f;
+                            emitBox(X, Y, Z, P(xe, yc, 0.5f * (zf + zTop)), 0.02f, 0.02f,
+                                    0.5f * (zTop - zf), t76::kMetal);
+                        }
+                        break;
+                    case t76::FitTipUp: // folded up against the screen behind it
+                    case t76::FitFold:
+                        emitBox(X, Y, Z, P(xc, yc, zf + 0.72f), hx * 0.9f, 0.05f, 0.24f,
+                                ft.kind == t76::FitFold ? t76::kSeatPri : t76::kSeat);
+                        break;
+                    default:
+                        break;
+                    }
                 }
             }
-        }
+        });
 
         // The cab: a long raked nose, the roof falling to a deep windscreen and the sides
         // drawing in a little toward a rounded front, with the small side window just
@@ -3410,7 +3453,7 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
             // emergency stop on the right, a writing surface between, and a sloping panel
             // over it all - gauges on the left, the big display on the right. Distances are
             // metres back from the nose tip, heights over the railhead. ----
-            {
+            section(Detail::Interior, [&] {
                 // The frame's X is to the LEFT of its tangent, so the driver's right is -X
                 // looking toward +y and +X looking toward -y.
                 auto D = [&](float d, float right, float z) {
@@ -3449,78 +3492,89 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                     glm::normalize(vu) * (glm::dot(vu, seatTo - pc) > 0.0f ? 1.0f : -1.0f);
                 const float hv = 0.5f * glm::length(pFront - pBack);
                 rectFace(pc, u, v, n, 0.0f, 0.0f, 1.20f, hv, 0.0f, t76::kDesk);
-                // Live readings.
-                const float spd = vehicle.speed();
-                const float bpP = vehicle.bpPressure();
-                const float bcP = vehicle.bcPressure();
-                // Left: two bar gauges, the speedometer, the clock, two air gauges, and the
-                // strip of switches over them with the red buttons under.
-                for (int i = 0; i < 2; ++i) {
-                    const float gx = -1.00f + 0.10f * i;
-                    const float frac = std::clamp((i == 0 ? bpP : bcP) / 10.0f, 0.0f, 1.0f);
-                    rectFace(pc, u, v, n, gx, 0.0f, 0.035f, 0.10f, 0.008f, t76::kGauge);
-                    rectFace(pc, u, v, n, gx, -0.09f + 0.09f * frac, 0.012f,
-                             0.09f * frac + 0.002f, 0.012f, t76::kBarFill);
-                }
-                discFace(pc, u, v, n, -0.66f, 0.0f, 0.105f, 0.006f, t76::kDialRim);
-                discFace(pc, u, v, n, -0.66f, 0.0f, 0.090f, 0.010f, t76::kDial);
-                needle(pc, u, v, n, -0.66f, 0.0f, 0.078f, spd / (200.0f / 3.6f), t76::kNeedle);
-                rectFace(pc, u, v, n, -0.42f, 0.06f, 0.06f, 0.035f, 0.010f, t76::kLcd);
-                for (const auto& [gy, val, col] : {std::tuple{0.09f, bpP, t76::kNeedleRed},
-                                                   std::tuple{-0.06f, bcP, t76::kNeedle}}) {
-                    discFace(pc, u, v, n, -0.24f, gy, 0.050f, 0.008f, t76::kDial);
-                    needle(pc, u, v, n, -0.24f, gy, 0.042f, val / 10.0f, col);
-                }
-                rectFace(pc, u, v, n, -0.62f, 0.19f, 0.40f, 0.025f, 0.008f, t76::kSwitches);
-                for (int i = 0; i < 6; ++i)
-                    rectFace(pc, u, v, n, -0.92f + 0.12f * i, -0.17f, 0.025f, 0.018f, 0.010f,
-                             t76::kRedButton);
-                // Right: the big display, a speed dial lit on it, and its keys.
-                rectFace(pc, u, v, n, 0.42f, 0.02f, 0.25f, 0.19f, 0.008f, t76::kBezel);
-                rectFace(pc, u, v, n, 0.42f, 0.02f, 0.22f, 0.16f, 0.012f, t76::kDisplay);
-                discFace(pc, u, v, n, 0.30f, 0.02f, 0.09f, 0.015f, t76::kDisplayDial);
-                needle(pc, u, v, n, 0.30f, 0.02f, 0.08f, spd / (200.0f / 3.6f),
-                       t76::kNeedleRed);
-                for (int i = 0; i < 5; ++i)
-                    rectFace(pc, u, v, n, 0.80f, 0.13f - 0.065f * i, 0.035f, 0.022f, 0.010f,
-                             t76::kKey);
-                for (int i = 0; i < 3; ++i)
-                    rectFace(pc, u, v, n, 0.95f, 0.10f - 0.08f * i, 0.025f, 0.025f, 0.010f,
-                             t76::kKey);
+                section(Detail::Instruments, [&] {
+                    // Live readings.
+                    const float spd = vehicle.speed();
+                    const float bpP = vehicle.bpPressure();
+                    const float bcP = vehicle.bcPressure();
+                    // Left: two bar gauges, the speedometer, the clock, two air gauges, and
+                    // the strip of switches over them with the red buttons under.
+                    for (int i = 0; i < 2; ++i) {
+                        const float gx = -1.00f + 0.10f * i;
+                        const float frac =
+                            std::clamp((i == 0 ? bpP : bcP) / 10.0f, 0.0f, 1.0f);
+                        rectFace(pc, u, v, n, gx, 0.0f, 0.035f, 0.10f, 0.008f, t76::kGauge);
+                        rectFace(pc, u, v, n, gx, -0.09f + 0.09f * frac, 0.012f,
+                                 0.09f * frac + 0.002f, 0.012f, t76::kBarFill);
+                    }
+                    discFace(pc, u, v, n, -0.66f, 0.0f, 0.105f, 0.006f, t76::kDialRim);
+                    discFace(pc, u, v, n, -0.66f, 0.0f, 0.090f, 0.010f, t76::kDial);
+                    needle(pc, u, v, n, -0.66f, 0.0f, 0.078f, spd / (200.0f / 3.6f), t76::kNeedle);
+                    rectFace(pc, u, v, n, -0.42f, 0.06f, 0.06f, 0.035f, 0.010f, t76::kLcd);
+                    for (const auto &[gy, val, col] :
+                         {std::tuple{0.09f, bpP, t76::kNeedleRed},
+                          std::tuple{-0.06f, bcP, t76::kNeedle}}) {
+                        discFace(pc, u, v, n, -0.24f, gy, 0.050f, 0.008f, t76::kDial);
+                        needle(pc, u, v, n, -0.24f, gy, 0.042f, val / 10.0f, col);
+                    }
+                    rectFace(pc, u, v, n, -0.62f, 0.19f, 0.40f, 0.025f, 0.008f,
+                             t76::kSwitches);
+                    for (int i = 0; i < 6; ++i)
+                        rectFace(pc, u, v, n, -0.92f + 0.12f * i, -0.17f, 0.025f, 0.018f, 0.010f,
+                                 t76::kRedButton);
+                    // Right: the big display, a speed dial lit on it, and its keys.
+                    rectFace(pc, u, v, n, 0.42f, 0.02f, 0.25f, 0.19f, 0.008f, t76::kBezel);
+                    rectFace(pc, u, v, n, 0.42f, 0.02f, 0.22f, 0.16f, 0.012f,
+                             t76::kDisplay);
+                    discFace(pc, u, v, n, 0.30f, 0.02f, 0.09f, 0.015f, t76::kDisplayDial);
+                    needle(pc, u, v, n, 0.30f, 0.02f, 0.08f, spd / (200.0f / 3.6f),
+                           t76::kNeedleRed);
+                    for (int i = 0; i < 5; ++i)
+                        rectFace(pc, u, v, n, 0.80f, 0.13f - 0.065f * i, 0.035f, 0.022f,
+                                 0.010f, t76::kKey);
+                    for (int i = 0; i < 3; ++i)
+                        rectFace(pc, u, v, n, 0.95f, 0.10f - 0.08f * i, 0.025f, 0.025f,
+                                 0.010f, t76::kKey);
 
-                // Left wing: the combined power/brake lever in its gate, swinging forward for
-                // power and back toward the driver for the brake, and the armrest beside it.
-                {
-                    const int cab = C.cab == -1 ? 0 : 1;
-                    const int handle = vehicle.handlePosition(cab); // +brake / 0 / -power
-                    boxD(1.58f, 1.92f, -0.66f, -0.58f, zDesk, zDesk + 0.01f, t76::kSlot);
-                    boxD(1.62f, 1.96f, -1.02f, -0.76f, zDesk, zDesk + 0.035f, t76::kRail);
-                    const float a = handle >= 0
-                                        ? 0.45f * static_cast<float>(handle) /
+                    // Left wing: the combined power/brake lever in its gate, swinging forward for
+                    // power and back toward the driver for the brake, and the armrest beside it.
+                    {
+                        const int cab = C.cab == -1 ? 0 : 1;
+                        const int handle =
+                            vehicle.handlePosition(cab); // +brake / 0 / -power
+                        boxD(1.58f, 1.92f, -0.66f, -0.58f, zDesk, zDesk + 0.01f,
+                             t76::kSlot);
+                        boxD(1.62f, 1.96f, -1.02f, -0.76f, zDesk, zDesk + 0.035f,
+                             t76::kRail);
+                        const float a =
+                            handle >= 0 ? 0.45f * static_cast<float>(handle) /
                                               static_cast<float>(Vehicle::kEmergencyNotch)
                                         : -0.40f * static_cast<float>(-handle) /
                                               static_cast<float>(Vehicle::kMaxPowerNotch);
-                    const glm::vec3 dir = glm::normalize(Z * std::cos(a) - F * std::sin(a));
-                    const glm::vec3 side = glm::normalize(glm::cross(dir, X));
-                    const glm::vec3 pivot = D(1.75f, -0.62f, zDesk + 0.01f);
-                    emitBox(X, side, dir, pivot + dir * 0.10f, 0.012f, 0.012f, 0.10f,
-                            t76::kMetalCab);
-                    emitBox(X, side, dir, pivot + dir * 0.21f, 0.026f, 0.026f, 0.030f,
-                            t76::kRail);
-                }
-                // Right wing: the brake valve's T-handle, the button strip, the emergency stop.
-                boxD(1.62f, 1.66f, 0.60f, 0.64f, zDesk, zDesk + 0.13f, t76::kMetalCab);
-                boxD(1.61f, 1.67f, 0.55f, 0.69f, zDesk + 0.13f, zDesk + 0.16f, t76::kRail);
-                for (int i = 0; i < 6; ++i)
-                    boxD(1.47f, 1.52f, 0.48f + 0.07f * i, 0.53f + 0.07f * i, zDesk,
-                         zDesk + 0.015f, i == 3 ? t76::kRedButton : t76::kKey);
-                boxD(1.76f, 1.88f, 0.92f, 1.04f, zDesk, zDesk + 0.012f, t76::kStepEdge);
-                boxD(1.79f, 1.85f, 0.95f, 1.01f, zDesk + 0.012f, zDesk + 0.06f,
-                     t76::kRedButton);
-                // Far left: the radio's screen and the handset.
-                boxD(1.15f, 1.30f, -1.30f, -1.12f, 2.08f, 2.30f, t76::kBezel);
-                boxD(1.14f, 1.16f, -1.28f, -1.14f, 2.12f, 2.26f, t76::kDisplay);
-                boxD(1.55f, 1.75f, -1.16f, -1.08f, zDesk, zDesk + 0.05f, t76::kRail);
+                        const glm::vec3 dir =
+                            glm::normalize(Z * std::cos(a) - F * std::sin(a));
+                        const glm::vec3 side = glm::normalize(glm::cross(dir, X));
+                        const glm::vec3 pivot = D(1.75f, -0.62f, zDesk + 0.01f);
+                        emitBox(X, side, dir, pivot + dir * 0.10f, 0.012f, 0.012f, 0.10f,
+                                t76::kMetalCab);
+                        emitBox(X, side, dir, pivot + dir * 0.21f, 0.026f, 0.026f, 0.030f,
+                                t76::kRail);
+                    }
+                    // Right wing: the brake valve's T-handle, the button strip, the emergency stop.
+                    boxD(1.62f, 1.66f, 0.60f, 0.64f, zDesk, zDesk + 0.13f, t76::kMetalCab);
+                    boxD(1.61f, 1.67f, 0.55f, 0.69f, zDesk + 0.13f, zDesk + 0.16f,
+                         t76::kRail);
+                    for (int i = 0; i < 6; ++i)
+                        boxD(1.47f, 1.52f, 0.48f + 0.07f * i, 0.53f + 0.07f * i, zDesk,
+                             zDesk + 0.015f, i == 3 ? t76::kRedButton : t76::kKey);
+                    boxD(1.76f, 1.88f, 0.92f, 1.04f, zDesk, zDesk + 0.012f, t76::kStepEdge);
+                    boxD(1.79f, 1.85f, 0.95f, 1.01f, zDesk + 0.012f, zDesk + 0.06f,
+                         t76::kRedButton);
+                    // Far left: the radio's screen and the handset.
+                    boxD(1.15f, 1.30f, -1.30f, -1.12f, 2.08f, 2.30f, t76::kBezel);
+                    boxD(1.14f, 1.16f, -1.28f, -1.14f, 2.12f, 2.26f, t76::kDisplay);
+                    boxD(1.55f, 1.75f, -1.16f, -1.08f, zDesk, zDesk + 0.05f, t76::kRail);
+                });
 
                 // The driver's seat, in the middle, purple as the photographs have it.
                 boxD(2.22f, 2.66f, -0.25f, 0.25f, zFl + 0.46f, zFl + 0.55f, t76::kDriverSeat);
@@ -3557,7 +3611,7 @@ void VehicleMesh::emitUnit(const Vehicle& vehicle) {
                 cap(lining(back), t76::kCabWall);
                 boxD(back - 0.02f, back - 0.01f, -0.40f, 0.40f, zFl, zFl + 1.95f,
                      t76::kCabDoor);
-            }
+            });
             // Lamps: two low in the front. A FLIRT's third sits over the windscreen, and this
             // nose is glazed up to its roof, so from the cab it would hang in the view.
             const float yl = tip - ts * 0.30f;
@@ -3746,6 +3800,8 @@ constexpr float kGlassLayer = -2.0f;
 void VehicleMesh::build(const Consist& consist) {
     vertices_.clear();
     indices_.clear();
+    sections_.clear();
+    unitSection_.clear();
     for (int i = 0; i < consist.unitCount(); ++i) emitUnit(consist.unit(i));
     sortGlass();
 }
@@ -3762,22 +3818,27 @@ void VehicleMesh::build(const std::deque<Consist>& trains) {
     vertices_.clear();
     indices_.clear();
     unitSpan_.clear();
+    sections_.clear();
+    unitSection_.clear();
     for (const Consist& t : trains)
         for (int i = 0; i < t.unitCount(); ++i) {
             const std::uint32_t at = static_cast<std::uint32_t>(vertices_.size());
+            unitSection_.push_back(static_cast<std::uint32_t>(sections_.size()));
             emitUnit(t.unit(i));
             unitSpan_.push_back({at, static_cast<std::uint32_t>(vertices_.size()) - at});
         }
     sortGlass();
 }
 
-void VehicleMesh::refresh(const std::deque<Consist>& trains, const glm::mat4& viewProj) {
+void VehicleMesh::refresh(const std::deque<Consist>& trains, const glm::mat4& viewProj,
+                          const glm::vec3& eye) {
     const Frustum fr(viewProj);
     wantIndices_ = false;
     const std::size_t was = vertices_.size();
     vertices_.clear();
     std::size_t k = 0;
     lastBuilt_ = lastUnits_ = 0;
+    for (int& n : lastAtDetail_) n = 0;
     for (const Consist& t : trains)
         for (int i = 0; i < t.unitCount(); ++i, ++k) {
             const Vehicle& u = t.unit(i);
@@ -3793,16 +3854,29 @@ void VehicleMesh::refresh(const std::deque<Consist>& trains, const glm::mat4& vi
             // of the sphere does not need that precision.
             const glm::vec3 centre = u.pose().pos;
             const float r = 0.5f * u.length() + u.height() + 2.0f;
-            const bool seen = fr.sees(centre, r);
-            if (seen || k >= unitSpan_.size()) {
+            const TrackVertex dead{centre, glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f),
+                                   glm::vec2(0.0f), -1.0f};
+            // How near the camera is to any of it, which is what decides what can be made
+            // out: a driver in the cab is inside the sphere, at nought.
+            const float near = std::max(0.0f, glm::distance(eye, centre) - r);
+            const bool known = k < unitSpan_.size();
+            const bool seen = fr.sees(centre, r) && near < kTrainDrawDistance;
+            if (seen || !known) {
+                detail_ = near < kInstrumentsDistance ? Detail::Instruments
+                          : near < kInteriorDistance  ? Detail::Interior
+                          : near < kWheelsDistance    ? Detail::Wheels
+                                                      : Detail::Body;
+                if (!known) detail_ = Detail::Instruments;
+                dead_ = dead;
+                sectionAt_ = k < unitSection_.size() ? unitSection_[k] : sections_.size();
                 emitUnit(u);
                 ++lastBuilt_;
+                ++lastAtDetail_[static_cast<int>(detail_)];
             } else {
-                // Out of sight: fill its slice with one repeated point. Every triangle in
-                // it is then degenerate - zero area, nothing rasterised - and the indices
-                // still address exactly the vertices they were built against.
-                const TrackVertex dead{centre, glm::vec3(0.0f, 0.0f, 1.0f),
-                                       glm::vec3(0.0f), glm::vec2(0.0f), -1.0f};
+                // Out of sight, or too far to be more than a pixel: fill its slice with
+                // one repeated point. Every triangle in it is then degenerate - zero area,
+                // nothing rasterised - and the indices still address exactly the vertices
+                // they were built against.
                 vertices_.insert(vertices_.end(), unitSpan_[k].second, dead);
             }
         }
@@ -3830,8 +3904,13 @@ void VehicleMesh::refresh(const std::deque<Consist>& trains) {
     wantIndices_ = false;
     const std::size_t was = vertices_.size();
     vertices_.clear();
+    detail_ = Detail::Instruments;
+    std::size_t k = 0;
     for (const Consist& t : trains)
-        for (int i = 0; i < t.unitCount(); ++i) emitUnit(t.unit(i));
+        for (int i = 0; i < t.unitCount(); ++i, ++k) {
+            sectionAt_ = k < unitSection_.size() ? unitSection_[k] : sections_.size();
+            emitUnit(t.unit(i));
+        }
     wantIndices_ = true;
     // The glazing sentinel lives on the vertices, which have just been thrown away and
     // made again, so it has to go back on. Which vertices carried it was worked out when

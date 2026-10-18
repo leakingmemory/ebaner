@@ -410,6 +410,15 @@ target_link_libraries(UncoupleTest PRIVATE ebaner_engine)
 target_include_directories(UncoupleTest PRIVATE src)
 add_test(NAME uncouple COMMAND UncoupleTest)
 
+# Vehicle detail by distance: from a cab a refresh is exactly the build, and further off
+# the same vertices with more of them collapsed. No dataset - a straight line of points.
+add_executable(VehicleLodTest tests/VehicleLodTest.cpp src/VehicleMesh.cpp src/Vehicle.cpp
+               src/Consist.cpp)
+add_dependencies(VehicleLodTest shaders)
+target_link_libraries(VehicleLodTest PRIVATE ebaner_engine)
+target_include_directories(VehicleLodTest PRIVATE src)
+add_test(NAME vehicle-lod COMMAND VehicleLodTest)
+
 # Arming routes: the order queued routes are handed to the interlocking in. No dataset -
 # it takes circuit ids and a blocked flag per queued route and answers with indices, so a
 # handful of small integers is the whole world it works in.
