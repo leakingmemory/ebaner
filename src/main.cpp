@@ -132,6 +132,16 @@ enum class DispatchStep { None, PickDest, PickType };
 DispatchStep g_dispatchStep = DispatchStep::None;
 int g_dispatchSel = 0;      // highlighted line within the current step
 std::string g_dispatchTo;   // the destination, held between the two steps
+// Everything the traffic manager has open over the map. Called whenever the map closes:
+// these draw only on the map, so one left open behind the cab view is invisible, and
+// Escape would spend a press closing each of them before it reached the menu.
+void closeMapPickers() {
+    g_routeStep = RoutePickStep::None;
+    g_signalPick = false;
+    g_linePick = false;
+    g_dispatchStep = DispatchStep::None;
+    g_dispatchTo.clear();
+}
 // Traffic manager: pending station changes, +1 for the next station and -1 for the
 // previous. An accumulator rather than an index because the key callback cannot see the
 // station list, which lives in main() with everything else the panel works from.
@@ -229,6 +239,7 @@ void keyCallback(GLFWwindow* win, int key, int, int action, int) {
     if (key == GLFW_KEY_O && action == GLFW_PRESS) {
         g_mapMode = !g_mapMode;
         g_mapDirty = g_mapMode;
+        if (!g_mapMode) closeMapPickers();
         if (g_mapMode) g_mapPan = glm::vec2(0.0f); // start centred on the throat
         // Free the cursor so switches can be clicked; restore mouselook on leaving.
         glfwSetInputMode(win, GLFW_CURSOR,
@@ -5284,6 +5295,7 @@ int main(int argc, char** argv) {
                     driveTrain(idx, cabToSitIn(trains[static_cast<std::size_t>(idx)]));
                     // Into the cab, which means out of the map if that is where you were.
                     g_mapMode = false;
+                    closeMapPickers();
                     g_menuOpen = false;
                     g_menuStep = MenuStep::Root;
                     glfwSetInputMode(window, GLFW_CURSOR,
