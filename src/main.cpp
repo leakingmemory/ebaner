@@ -911,6 +911,12 @@ int main(int argc, char** argv) {
         sp.paths.push_back(static_cast<int>(i));
         sigPlacements.push_back(std::move(sp));
     }
+    // The portals, and the heads that hang from them instead of standing on masts. Laid
+    // once the list is whole: only the drawing reads them, never the interlocking.
+    std::vector<std::string> portalNotes;
+    const std::vector<PortalPose> portalPoses = layPortals(
+        sigPlacements, loadSignalPortals(datasetRoot), polys, &portalNotes);
+    for (const std::string& n : portalNotes) std::printf("[Portal] %s\n", n.c_str());
     // Simple entry signals: red or green, no circuits, one green per station. Placed
     // like the distants - a plain point on a track - but they govern rather than repeat.
     const std::vector<SimpleEntrySignal> simpleEntries =
@@ -1600,7 +1606,7 @@ int main(int argc, char** argv) {
         bool built = false;
         if (parts & PartSignals) {
             const double t = tick();
-            signals.build(sigPlacements, data.sceneOrigin(), &tunnels);
+            signals.build(sigPlacements, data.sceneOrigin(), &tunnels, &portalPoses);
             mSignals += tick() - t;
             built = true;
         }

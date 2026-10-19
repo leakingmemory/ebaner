@@ -63,10 +63,15 @@ constexpr float kTunnelWallM = 3.4f;     // where the bracket meets rock: just i
                                          // already begun to turn in by the time it
                                          // reaches the wall and a bracket taken the
                                          // whole way would clip its own springing
+// A head hung from a portal: its centre this far under the beam, on a hanger. The default
+// beam (6.6 m) puts a three-lamp head's centre at 5.6 m, its housing clear of a train.
+constexpr float kHangBelowBeamM = 1.0f;
+constexpr float kPortalPostHalf = 0.12f; // a portal's posts are lattice-heavy, not a mast
+constexpr float kBeamHalfW = 0.15f;      // across the beam, and half its depth
 } // namespace
 
 void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 origin,
-                       const TunnelMesh* bores) {
+                       const TunnelMesh* bores, const std::vector<PortalPose>* portals) {
     vertices_.clear();
     indices_.clear();
 
@@ -140,6 +145,34 @@ void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 o
         else disc(face - UP * sp, n, R, UP, r, kGreenOff);
     };
 
+    // The portals: one or two posts and the beam between their tops. A cantilever's
+    // second point is the tip of its boom, with nothing under it.
+    if (portals != nullptr)
+        for (const PortalPose& pp : *portals) {
+            const glm::vec3 a(static_cast<float>(pp.postA.x - origin.x),
+                              static_cast<float>(pp.postA.y - origin.y),
+                              static_cast<float>(pp.postA.z - origin.z));
+            const glm::vec3 b(static_cast<float>(pp.postB.x - origin.x),
+                              static_cast<float>(pp.postB.y - origin.y),
+                              static_cast<float>(pp.postB.z - origin.z));
+            const float top = static_cast<float>(pp.beamZ - origin.z);
+            glm::vec3 along(b.x - a.x, b.y - a.y, 0.0f);
+            const float len = glm::length(along);
+            if (len < 1e-3f) continue;
+            along /= len;
+            const glm::vec3 across(-along.y, along.x, 0.0f);
+            auto post = [&](const glm::vec3& foot) {
+                const float h = top - foot.z + 2.0f * kBeamHalfW; // up through the beam
+                box(foot + UP * (h * 0.5f), along, across, UP, kPortalPostHalf,
+                    kPortalPostHalf, h * 0.5f, kBody);
+            };
+            post(a);
+            if (pp.twoPosts) post(b);
+            const glm::vec3 mid((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f, top + kBeamHalfW);
+            const float reach = len * 0.5f + (pp.twoPosts ? kPortalPostHalf : 0.0f);
+            box(mid, along, across, UP, reach, kBeamHalfW, kBeamHalfW, kBody);
+        }
+
     for (const SignalPlacement& logical : signals) {
         // Drawn as it is SHOWN, which differs from what the interlocking decided only while
         // the mast is held - for a level crossing not yet white, say. Every head below reads
@@ -162,6 +195,13 @@ void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 o
             bores->insideBore(glm::vec3(static_cast<float>(s.world.x - origin.x),
                                         static_cast<float>(s.world.y - origin.y),
                                         static_cast<float>(s.world.z - origin.z)));
+        // Hung from a portal, the head is over its own track: no post, no side offset. A
+        // bore still wins - there is no room for a beam in one.
+        const PortalPose* portal =
+            !inTunnel && portals != nullptr && s.portal >= 0 &&
+                    s.portal < static_cast<int>(portals->size())
+                ? &(*portals)[static_cast<std::size_t>(s.portal)]
+                : nullptr;
         const float off = (inTunnel ? kTunnelStandoffM : kStandoffM) * sgn;
         // A block signal steps half a metre back from the border it stands on, onto the
         // approach side. Every other kind is alone at its border, but a block signal has an
@@ -178,14 +218,28 @@ void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 o
         // before the joint, where the train can still stop at it.
         const glm::vec3 ahead = s.kind == SignalKind::Block ? -F * kBlockStandoffM
                                                             : glm::vec3(0.0f);
-        const glm::vec3 B(static_cast<float>(s.world.x - origin.x) + R.x * off + ahead.x,
-                          static_cast<float>(s.world.y - origin.y) + R.y * off + ahead.y,
-                          static_cast<float>(s.world.z - origin.z));
+        // Where a post would stand, and where the head's carrier starts: the same point
+        // unless the head hangs from a portal, when the dwarf alone keeps the post.
+        const glm::vec3 Bpost(static_cast<float>(s.world.x - origin.x) + R.x * off + ahead.x,
+                              static_cast<float>(s.world.y - origin.y) + R.y * off + ahead.y,
+                              static_cast<float>(s.world.z - origin.z));
+        const glm::vec3 B = portal ? glm::vec3(static_cast<float>(s.hangAt.x - origin.x),
+                                               static_cast<float>(s.hangAt.y - origin.y),
+                                               static_cast<float>(s.hangAt.z - origin.z))
+                                   : Bpost;
+        // A hung head's centre, measured up from the rail under it like every other headZ.
+        const float hungZ =
+            portal ? static_cast<float>(portal->beamZ - s.hangAt.z) - kHangBelowBeamM : 0.0f;
 
         // What holds a head up: the post under it, or - underground, where a post would
         // stand in the bore wall - the bracket that carries it in from that wall. The two
         // are never both there, so every head below asks for one and says where it sits.
         auto carry = [&](float mastH, float headZ, float postHalf) {
+            if (portal) { // a hanger from the head up to the beam
+                const float h = hungZ + kHangBelowBeamM - headZ;
+                box(B + UP * (headZ + h * 0.5f), R, F, UP, 0.04f, 0.04f, h * 0.5f, kBody);
+                return;
+            }
             if (!inTunnel) {
                 box(B + UP * (mastH * 0.5f), R, F, UP, postHalf, postHalf, mastH * 0.5f,
                     kBody);
@@ -198,7 +252,7 @@ void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 o
         // A distant signal on its own post out on the line: a short mast under the head.
         if (s.kind == SignalKind::Distant) {
             const float mastH = 3.5f;
-            const float headZ = inTunnel ? kTunnelHeadZ : mastH + 0.48f;
+            const float headZ = portal ? hungZ : inTunnel ? kTunnelHeadZ : mastH + 0.48f;
             carry(mastH, headZ, 0.06f);
             distantHead(B + UP * headZ, R, F, s.aspect);
             continue;
@@ -209,7 +263,7 @@ void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 o
         // for a flash to distinguish it from. Dark (an unmanned station) lights neither.
         if (s.kind == SignalKind::StationEntry) {
             const float mastH = 4.5f;
-            const float headZ = inTunnel ? kTunnelHeadZ : mastH + kTwoLampHalfH;
+            const float headZ = portal ? hungZ : inTunnel ? kTunnelHeadZ : mastH + kTwoLampHalfH;
             carry(mastH, headZ, 0.07f);
             twoLampHead(B + UP * headZ, R, F, s.aspect, false);
             continue;
@@ -231,7 +285,7 @@ void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 o
             const float mastH = 4.5f;
             const float hd = 0.15f;
             const float hh = s.twoLamp ? kTwoLampHalfH : kThreeLampHalfH;
-            const float headZ = inTunnel ? kTunnelHeadZ : mastH + hh;
+            const float headZ = portal ? hungZ : inTunnel ? kTunnelHeadZ : mastH + hh;
             carry(mastH, headZ, 0.07f);
             const glm::vec3 C = B + UP * headZ;
             // An entry signal and a block signal show their danger as a flashing red; an
@@ -288,14 +342,17 @@ void SignalMesh::build(const std::vector<SignalPlacement>& signals, glm::dvec3 o
         if (drawDwarf) {
             // Dwarf: its own short post when alone; when sharing the exit's mast it just
             // hangs low on that mast, so only the housing is drawn.
-            // Its own post when alone - and in a tunnel even when shared, because the
-            // mast it would otherwise hang on is not there to hang on.
-            if (!isExit || inTunnel)
-                box(B + UP * (dwarfH * 0.5f), R, F, UP, 0.035f, 0.035f, dwarfH * 0.5f, kBody);
+            // Its own post when alone - and in a tunnel or under a portal even when shared,
+            // because the mast it would otherwise hang on is not there to hang on. Under a
+            // portal that post stands where the mast would have, beside the track.
+            const bool ownPost = !isExit || inTunnel || portal;
+            const glm::vec3 D = portal ? Bpost : B;
+            if (ownPost)
+                box(D + UP * (dwarfH * 0.5f), R, F, UP, 0.035f, 0.035f, dwarfH * 0.5f, kBody);
             const float hw = 0.30f, hd = 0.16f, hh = 0.28f; // half extents (across/along/up)
-            const glm::vec3 C = B + UP * (dwarfH + hh);
+            const glm::vec3 C = D + UP * (dwarfH + hh);
             // Offset a shared dwarf clear of the mast so both heads are visible.
-            const glm::vec3 Cd = isExit ? C + R * 0.30f : C;
+            const glm::vec3 Cd = isExit && !portal ? C + R * 0.30f : C;
             box(Cd, R, F, UP, hw, hd, hh, kBody);
 
             // Lamp face toward the approaching driver (normal -F, just proud of the housing).

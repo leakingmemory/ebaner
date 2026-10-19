@@ -70,6 +70,10 @@ struct SignalPath {
     // line block is claimed and the signal is cleared exactly as it would be without it;
     // only what the mast displays waits for the crossing. See SignalPlacement::held.
     bool crossing = false;
+    // The head hangs from a portal over the track rather than standing on a mast of its
+    // own: the id of a `portal` in signal-portals.txt, 0 for none. A fact about the mast,
+    // settled between records sharing a border as `distant` is.
+    int portal = 0;
     // --- anything that stands beside a track (mini paths and main signals alike) ---
     // Which side of the track the mast stands on: +1 to the right of the direction the
     // signal is read from, -1 to the left. Right is the Norwegian convention and the
@@ -174,6 +178,31 @@ std::vector<DistantSignal> loadDistantSignals(const std::string& datasetRoot);
 bool writeDistantSignals(const std::string& datasetRoot,
                          const std::vector<DistantSignal>& ds);
 
+// A signal portal: a beam over the line that signal heads hang from, where there is no
+// room between the tracks for a mast. Stored in `overlay/signal-portals.txt`:
+//   portal <id> "<name>" <trackHex>:<frac> [<trackHex>:<frac>] [height <m>]
+// With two anchors it spans the tracks between them, a post standing outside each anchor
+// track. With one it is a cantilever: a single post beside the anchor track and a boom
+// reaching across it, over the heads hung on it. `height` is the beam above the rail.
+// A main signal joins one with `portal <id>` on its own line.
+struct SignalPortal {
+    int id = 0;
+    std::string name;
+    std::vector<Border> anchors; // one or two
+    double height = 6.6;
+};
+std::vector<SignalPortal> loadSignalPortals(const std::string& datasetRoot);
+
+// Where a portal stands, in world coordinates: `postA` is the foot of the (first) post.
+// With two posts `postB` is the foot of the second; a cantilever's `postB` is the tip of
+// its boom, at the same height as postA, with nothing under it.
+struct PortalPose {
+    glm::dvec3 postA{0.0};
+    glm::dvec3 postB{0.0};
+    double beamZ = 0.0; // world height of the beam's underside
+    bool twoPosts = true;
+};
+
 // A block signal (blokksignal): a main signal standing out on the plain line between two
 // stations, where a track-circuit border cuts the line into block sections. Nobody works
 // it - it follows the interlocking on its own, clearing when a movement has been
@@ -265,6 +294,13 @@ struct SignalPlacement {
     bool twoLamp = false;
     // The mast guards a level crossing on its road (SignalPath::crossing).
     bool crossing = false;
+    // Hung from a portal: the id its routes named (SignalPath::portal), and once
+    // layPortals has found that portal, its index into the poses and the point on the beam
+    // line over this signal's own track where the head hangs. `portal` stays -1 - the
+    // signal on its post - when the portal is missing or does not reach the signal.
+    int portalId = 0;
+    int portal = -1;
+    glm::dvec3 hangAt{0.0};
 
     // --- What is DISPLAYED, as against what the interlocking has decided ---
     // Everything above is the signal's logical state, and everything that decides anything
@@ -359,6 +395,16 @@ int routeTargetSignal(const SignalPath& route, const std::vector<SignalPath>& si
 // the two heads share one pole. `mains` is the already-tagged exit and entry placements.
 std::vector<SignalPlacement> mergeSignals(const std::vector<SignalPlacement>& dwarfs,
                                           const std::vector<SignalPlacement>& mains);
+
+// Stand the portals and hang the signals that named one on it. Returns one pose per portal
+// that resolved, in file order; each placement hung sets `portal` to its pose and `hangAt`.
+// Anything that does not fit - an anchor on a missing track, a signal naming a portal that
+// is not there or stands nowhere near it - is said in `notes` and leaves the signal on its
+// post.
+std::vector<PortalPose> layPortals(std::vector<SignalPlacement>& placements,
+                                   const std::vector<SignalPortal>& portals,
+                                   const std::vector<TrackPoly>& polys,
+                                   std::vector<std::string>* notes = nullptr);
 
 // A turnout the path traverses and the position it needs there: straight where the path
 // runs through the turnout, diverging where it crosses to or from the branch.

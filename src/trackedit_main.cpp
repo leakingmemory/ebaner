@@ -438,6 +438,10 @@ int main(int argc, char** argv) {
     // Distant signals: a plain point along a track with a facing, repeating the first main
     // signal ahead. Not a route, so none of the route-mode bindings apply to them.
     std::vector<DistantSignal> distantSignals = loadDistantSignals(datasetRoot);
+    // Hand-authored: the editor draws the portals and hangs heads on them, but does not edit
+    // them. `portalPoses` is refreshed by every allPlacements(), which is what hangs them.
+    const std::vector<SignalPortal> signalPortals = loadSignalPortals(datasetRoot);
+    std::vector<PortalPose> portalPoses;
     bool distantDirty = false;       // unsaved distant-signal changes
     int selDistant = -1;             // selected distant (index into distantSignals)
     int nextDistantId = 1;           // auto-increment distant id
@@ -661,6 +665,7 @@ int main(int argc, char** argv) {
             sp.paths.push_back(static_cast<int>(i));
             out.push_back(std::move(sp));
         }
+        portalPoses = layPortals(out, signalPortals, polys);
         return out;
     };
 
@@ -1439,7 +1444,7 @@ int main(int argc, char** argv) {
         merge(speedSignMesh.vertices(), speedSignMesh.indices());
         merge(tunnels.vertices(), tunnels.indices());
         merge(switches.vertices(), switches.indices());
-        signals.build(allPlacements(), data.sceneOrigin(), &tunnels);
+        signals.build(allPlacements(), data.sceneOrigin(), &tunnels, &portalPoses);
         merge(signals.vertices(), signals.indices());
         renderer.updateTerrain(mesh.vertices(), mesh.indices());
         renderer.updateTracks(tracks.vertices(), tracks.indices(),
@@ -1454,7 +1459,7 @@ int main(int argc, char** argv) {
     // terrain recarve — so a switch-type change or a signal-path edit updates cheaply.
     auto rebuildStructs = [&]() {
         switches.build(switchNet, glm::vec3(0.0f), data.loadedRadius());
-        signals.build(allPlacements(), data.sceneOrigin(), &tunnels);
+        signals.build(allPlacements(), data.sceneOrigin(), &tunnels, &portalPoses);
         std::vector<TrackVertex> sv = buildings.vertices();
         std::vector<std::uint32_t> si = buildings.indices();
         auto merge = [&](const std::vector<TrackVertex>& v,
@@ -5370,6 +5375,7 @@ int main(int argc, char** argv) {
             auto mastBuild = [](const SignalPath& p) {
                 return std::string(p.twoLamp ? "2-lamp" : "3-lamp") +
                        (p.distant ? " +distant" : "") + (p.crossing ? " +crossing" : "") +
+                       (p.portal != 0 ? " +portal " + std::to_string(p.portal) : "") +
                        (p.side < 0 ? " left" : "");
             };
             // Exit mode says what the selection *is*, since a signal and a route look alike

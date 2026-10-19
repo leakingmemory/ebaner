@@ -210,6 +210,22 @@ worked is in [Using the traffic manager](traffic-manager.md).
 - **A two-lamp head** (`2`, in either mode): red over green, for a siding's signal. It
   shows its green for any clearance, C1 or C2, and doesn't change what the route
   authorises. It is written as a `twolamp` keyword.
+- **A head hung from a portal**, where there is no room between the tracks for a mast. A
+  portal is a beam over the line, set up by hand in `overlay/signal-portals.txt`:
+
+  ```
+  portal 1 "HEL S" 715:0.159893 4c0:0.345583
+  ```
+
+  With two anchors it spans the tracks between them, with a post 3.5 m outside each
+  anchor track. With one anchor it is a cantilever: a single post beside that track, and
+  a boom reaching across it to 1 m past the farthest head hung on it. `height <m>` sets
+  the beam above the rail; the default is 6.6 m.
+
+  A main signal joins a portal with `portal <id>` on its own line. Its head then hangs
+  over its own track, where the track passes under the beam, and a dwarf sharing the
+  mast gets a short post of its own beside the track. The panel shows `+portal N`. The
+  editor draws portals but doesn't edit them.
 
 ## Block signals
 

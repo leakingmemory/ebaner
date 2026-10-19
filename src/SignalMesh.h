@@ -58,8 +58,12 @@ public:
     // `bores`, when given, is what tells a signal it is underground: there is no room
     // for a mast in a tunnel, so one inside a bore is carried on the wall instead. Null
     // builds every signal the surface way, which is what it was before bores existed.
+    //
+    // `portals` are the beams that signals with `portal >= 0` hang from (layPortals). The
+    // portals themselves are drawn here too, so a signal and what carries it never part.
     void build(const std::vector<SignalPlacement>& signals, glm::dvec3 sceneOrigin,
-               const TunnelMesh* bores = nullptr);
+               const TunnelMesh* bores = nullptr,
+               const std::vector<PortalPose>* portals = nullptr);
 
     const std::vector<TrackVertex>& vertices() const { return vertices_; }
     const std::vector<std::uint32_t>& indices() const { return indices_; }

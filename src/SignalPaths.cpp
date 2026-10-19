@@ -48,6 +48,10 @@ std::string distantsFile(const std::string& root) {
     return root + "/overlay/distant-signals.txt";
 }
 
+std::string portalsFile(const std::string& root) {
+    return root + "/overlay/signal-portals.txt";
+}
+
 std::string blocksFile(const std::string& root) {
     return root + "/overlay/block-signals.txt";
 }
@@ -163,6 +167,10 @@ std::vector<SignalPath> loadRoutes(const std::string& file, const char* keyword)
                 p.crossing = true;
                 continue;
             }
+            if (tok == "portal") { // main signals: the head hangs from this portal
+                is >> p.portal;
+                continue;
+            }
             if (tok == "left") { // the mast stands left of the way it is read from
                 p.side = -1;
                 continue;
@@ -221,7 +229,7 @@ bool writeRoutes(const std::string& datasetRoot, const std::string& file,
       << " <id> \"<name>\" <startTrackHex>:<frac> <endTrackHex>:<frac> "
          "[signal <exitId> type <C1|C2>] "
       << (withType && !withMastFlags ? "[onward <C1|C2>]... " : "")
-      << (withMastFlags ? "[distant] [twolamp] [crossing] "
+      << (withMastFlags ? "[distant] [twolamp] [crossing] [portal <id>] "
                         : withCrossing ? "[crossing] " : "")
       << (withSide ? "[left] " : "")
       << "[station \"<name>\"] [via <trackHex>:<frac>]... "
@@ -239,6 +247,7 @@ bool writeRoutes(const std::string& datasetRoot, const std::string& file,
         if (withMastFlags && p.distant) f << " distant";
         if (withMastFlags && p.twoLamp) f << " twolamp";
         if ((withMastFlags || withCrossing) && p.crossing) f << " crossing";
+        if (withMastFlags && p.portal != 0) f << " portal " << p.portal;
         if (withSide && p.side < 0) f << " left";
         if (!p.station.empty()) f << " station " << quoteName(p.station);
         for (const Border& v : p.vias)
@@ -416,6 +425,32 @@ std::vector<DistantSignal> loadDistantSignals(const std::string& datasetRoot) {
     return out;
 }
 
+std::vector<SignalPortal> loadSignalPortals(const std::string& datasetRoot) {
+    std::vector<SignalPortal> out;
+    std::ifstream f(portalsFile(datasetRoot));
+    if (!f) return out;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        std::istringstream is(line);
+        std::string kind, tok;
+        SignalPortal p;
+        is >> kind >> p.id;
+        if (kind != "portal") continue;
+        readName(is, p.name);
+        while (is >> tok) {
+            if (tok == "height") {
+                is >> p.height;
+                continue;
+            }
+            Border b;
+            if (parseBorder(tok, b) && p.anchors.size() < 2) p.anchors.push_back(b);
+        }
+        if (!p.anchors.empty()) out.push_back(std::move(p));
+    }
+    return out;
+}
+
 bool writeDistantSignals(const std::string& datasetRoot,
                          const std::vector<DistantSignal>& ds) {
     std::error_code ec;
@@ -574,6 +609,7 @@ std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& pat
             if (p.distant) out[it->second].withDistant = true;
             if (p.twoLamp) out[it->second].twoLamp = true;
             if (p.crossing) out[it->second].crossing = true;
+            if (p.portal != 0) out[it->second].portalId = p.portal;
             if (p.side < 0) out[it->second].side = -1;
             continue;
         }
@@ -586,6 +622,7 @@ std::vector<SignalPlacement> signalPlacements(const std::vector<SignalPath>& pat
         sp.withDistant = p.distant;
         sp.twoLamp = p.twoLamp;
         sp.crossing = p.crossing;
+        sp.portalId = p.portal;
         sp.side = p.side;
         sp.paths.push_back(static_cast<int>(pi));
         out.push_back(std::move(sp));
@@ -616,6 +653,119 @@ std::vector<SignalPlacement> mergeSignals(const std::vector<SignalPlacement>& dw
     for (std::size_t i = 0; i < dwarfs.size(); ++i)
         if (!used[i]) out.push_back(dwarfs[i]); // a dwarf on its own post
     return out;
+}
+
+namespace {
+// How far a portal's post stands from the centre of the track it is anchored to: the same
+// clearance a signal mast keeps (SignalMesh's kStandoffM).
+constexpr double kPortalPostM = 3.5;
+// How far a cantilever's boom reaches past the farthest head hung on it.
+constexpr double kBoomPastM = 1.0;
+// How far a signal may stand from the beam line and still hang on it. The head is drawn
+// where its own track crosses the beam, so this is how far it may be drawn from where the
+// interlocking has it; more than this and the portal was put in the wrong place.
+constexpr double kHangReachM = 5.0;
+} // namespace
+
+std::vector<PortalPose> layPortals(std::vector<SignalPlacement>& placements,
+                                   const std::vector<SignalPortal>& portals,
+                                   const std::vector<TrackPoly>& polys,
+                                   std::vector<std::string>* notes) {
+    auto note = [&](const std::string& s) {
+        if (notes) notes->push_back(s);
+    };
+    std::vector<PortalPose> poses;
+    for (const SignalPortal& P : portals) {
+        std::vector<glm::dvec3> w;
+        for (const Border& b : P.anchors) {
+            const glm::dvec3 a = fracToWorld(polys, b.trackId, b.frac);
+            if (a.x == 0.0 && a.y == 0.0) break;
+            w.push_back(a);
+        }
+        if (w.size() != P.anchors.size()) {
+            note("portal " + std::to_string(P.id) + " \"" + P.name +
+                 "\": an anchor is on a track that is not there - not built");
+            continue;
+        }
+        // The beam line: through both anchors, or across the one anchor track.
+        const glm::dvec3 o = w[0];
+        glm::dvec2 u(0.0);
+        if (w.size() == 2) {
+            const glm::dvec2 d(w[1].x - o.x, w[1].y - o.y);
+            if (glm::length(d) < 1.0) {
+                note("portal " + std::to_string(P.id) + " \"" + P.name +
+                     "\": its two anchors are the same place - not built");
+                continue;
+            }
+            u = glm::normalize(d);
+        } else {
+            const glm::dvec2 t = trackTangent(polys, P.anchors[0].trackId,
+                                              P.anchors[0].frac, 1);
+            u = glm::dvec2(-t.y, t.x);
+        }
+        // Hang every signal that named this portal where its own track crosses the beam.
+        const int pose = static_cast<int>(poses.size());
+        std::vector<int> hung;
+        for (std::size_t i = 0; i < placements.size(); ++i) {
+            SignalPlacement& sp = placements[i];
+            if (sp.portalId != P.id) continue;
+            const glm::dvec2 r(sp.world.x - o.x, sp.world.y - o.y);
+            const double s = glm::dot(r, u);
+            const double off = std::abs(r.x * u.y - r.y * u.x);
+            if (off > kHangReachM) {
+                note("portal " + std::to_string(P.id) + " \"" + P.name + "\": a signal stands " +
+                     std::to_string(static_cast<int>(std::lround(off))) +
+                     " m from the beam - left on its post");
+                continue;
+            }
+            sp.portal = pose;
+            sp.hangAt = glm::dvec3(o.x + u.x * s, o.y + u.y * s, sp.world.z);
+            hung.push_back(static_cast<int>(i));
+        }
+        PortalPose pp;
+        if (w.size() == 2) {
+            // Each post outside its own anchor, away from the other.
+            pp.postA = glm::dvec3(o.x - u.x * kPortalPostM, o.y - u.y * kPortalPostM, o.z);
+            pp.postB = glm::dvec3(w[1].x + u.x * kPortalPostM, w[1].y + u.y * kPortalPostM,
+                                  w[1].z);
+            pp.beamZ = std::max(o.z, w[1].z) + P.height;
+        } else {
+            // A cantilever is sized by what hangs on it: the post on the far side of the
+            // anchor track from the heads, the boom reaching just past the farthest one.
+            if (hung.empty()) {
+                note("portal " + std::to_string(P.id) + " \"" + P.name +
+                     "\": a cantilever with nothing hung on it - not built");
+                continue;
+            }
+            double lo = 0.0, hi = 0.0;
+            for (const int i : hung) {
+                const glm::dvec3& h = placements[i].hangAt;
+                const double s = glm::dot(glm::dvec2(h.x - o.x, h.y - o.y), u);
+                lo = std::min(lo, s);
+                hi = std::max(hi, s);
+            }
+            if (lo < -0.5 && hi > 0.5)
+                note("portal " + std::to_string(P.id) + " \"" + P.name +
+                     "\": heads on both sides of its anchor track - the boom crosses its "
+                     "own post");
+            const double side = hi > -lo ? 1.0 : -1.0; // where the heads are
+            const double tip = (side > 0.0 ? hi : lo) + side * kBoomPastM;
+            pp.postA = glm::dvec3(o.x - u.x * side * kPortalPostM,
+                                  o.y - u.y * side * kPortalPostM, o.z);
+            pp.postB = glm::dvec3(o.x + u.x * tip, o.y + u.y * tip, o.z);
+            pp.beamZ = o.z + P.height;
+            pp.twoPosts = false;
+        }
+        poses.push_back(pp);
+    }
+    // A signal naming a portal that was never built stays on its post, and says so.
+    for (const SignalPlacement& sp : placements)
+        if (sp.portalId != 0 && sp.portal < 0 &&
+            std::none_of(portals.begin(), portals.end(),
+                         [&](const SignalPortal& P) { return P.id == sp.portalId; }))
+            note("a signal names portal " + std::to_string(sp.portalId) +
+                 ", which is not in signal-portals.txt - left on its post");
+    return poses;
 }
 
 // ------------------------------------------------------------ aspect evaluation

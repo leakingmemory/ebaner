@@ -2136,6 +2136,68 @@ int main(int argc, char** argv) {
             std::filesystem::remove(root + "/overlay/entry-approaches.txt", ec);
         }
 
+        // Signal portals: a head hung from a beam over the line instead of standing on a
+        // mast. The mast names its portal by id; the portal is anchored on the outer tracks.
+        {
+            std::vector<SignalPath> rs{route(1, 0.1, 0.5)};
+            rs[0].portal = 3;
+            rs[0].twoLamp = true;
+            check(writeExitSignals(root, rs) && loadExitSignals(root)[0].portal == 3 &&
+                      loadExitSignals(root)[0].twoLamp,
+                  "`portal <id>` survives a write and read, beside the other mast keywords");
+            std::filesystem::remove(root + "/overlay/exit-signals.txt", ec);
+            {
+                std::ofstream f(root + "/overlay/signal-portals.txt", std::ios::trunc);
+                f << "# a comment\n"
+                  << "portal 1 \"TWO POSTS\" 11:0.5 13:0.5\n"
+                  << "portal 2 \"BOOM\" 11:0.3 height 7.5\n";
+            }
+            const std::vector<SignalPortal> ps = loadSignalPortals(root);
+            check(ps.size() == 2 && ps[0].anchors.size() == 2 && ps[0].height == 6.6 &&
+                      ps[1].anchors.size() == 1 && ps[1].height == 7.5 &&
+                      ps[0].name == "TWO POSTS",
+                  "portals load with one or two anchors, and an optional height");
+            std::filesystem::remove(root + "/overlay/signal-portals.txt", ec);
+
+            // Three straight tracks 4.4 m and 4.5 m apart, as at Hell's south end.
+            auto straight = [](std::uint32_t id, double y) {
+                return TrackPoly{id, {glm::dvec3(0.0, y, 0.0), glm::dvec3(100.0, y, 0.0)}};
+            };
+            const std::vector<TrackPoly> tp{straight(0x11, 0.0), straight(0x12, 4.4),
+                                            straight(0x13, 8.9)};
+            auto mast = [](double x, double y, int portal) {
+                SignalPlacement sp;
+                sp.kind = SignalKind::Exit;
+                sp.world = glm::dvec3(x, y, 0.0);
+                sp.forward = glm::dvec2(-1.0, 0.0);
+                sp.portalId = portal;
+                return sp;
+            };
+            std::vector<SignalPlacement> pl{mast(50.0, 0.0, 1), mast(50.4, 4.4, 1),
+                                            mast(30.2, 4.4, 2), mast(70.0, 0.0, 9),
+                                            mast(80.0, 0.0, 0)};
+            std::vector<std::string> notes;
+            const std::vector<PortalPose> pose = layPortals(pl, ps, tp, &notes);
+            auto near = [](const glm::dvec3& a, double x, double y) {
+                return std::hypot(a.x - x, a.y - y) < 1e-6;
+            };
+            check(pose.size() == 2, "both portals stand");
+            if (pose.size() == 2) {
+                check(pose[0].twoPosts && near(pose[0].postA, 50.0, -3.5) &&
+                          near(pose[0].postB, 50.0, 12.4) &&
+                          std::abs(pose[0].beamZ - 6.6) < 1e-9,
+                      "two anchors: a post 3.5 m outside each outer track, the beam 6.6 m up");
+                check(pl[0].portal == 0 && pl[1].portal == 0 && near(pl[0].hangAt, 50.0, 0.0) &&
+                          near(pl[1].hangAt, 50.0, 4.4),
+                      "each head hangs over its own track, where the track crosses the beam");
+                check(!pose[1].twoPosts && near(pose[1].postA, 30.0, -3.5) &&
+                          near(pose[1].postB, 30.0, 5.4) && pl[2].portal == 1,
+                      "one anchor: a single post on the far side, the boom 1 m past the head");
+            }
+            check(pl[3].portal == -1 && pl[4].portal == -1 && notes.size() == 1,
+                  "a mast naming a portal that is not there stays on its post, and says so");
+        }
+
         // A file written before the keywords existed has to go on loading unchanged.
         {
             std::ofstream f(root + "/overlay/entry-signals.txt", std::ios::trunc);
