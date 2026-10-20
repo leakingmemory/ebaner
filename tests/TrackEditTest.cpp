@@ -480,10 +480,19 @@ int main(int argc, char** argv) {
         // So measure the deficit directly, in metres, in three dimensions: walk the
         // window and sum the chords, against the arc length it claims to be. A window
         // that loses a millimetre over 300 m cannot lose 50 mm over any 13 m of it.
+        //
+        // And only where a distance along the path still means something. The path
+        // measures itself in floats, and linking the gap between Leangen and Ranheim
+        // took it to 725 km: 689 km out, near Fauske, one step of a float is 62 mm.
+        // There the chords round away a 1.3 km curve and read it as dead straight, and
+        // the bodies, placed by that same arc length, came up 56 mm short - one step,
+        // against a 50 mm bound. Below 64 km a step is under 8 mm.
         const float kSite = 300.0f; // longer than any consist built below
-        float startS = 0.5f * run->length();
+        const float kPreciseS = 65536.0f;
+        const float searchTo = std::min(run->length(), kPreciseS);
+        float startS = 0.5f * searchTo;
         float bestShort = std::numeric_limits<float>::max();
-        for (float s = 0.0f; s + kSite < run->length(); s += 10.0f) {
+        for (float s = 0.0f; s + kSite < searchTo; s += 10.0f) {
             float chord = 0.0f;
             glm::vec3 prev = run->poseAt(s).pos;
             for (float o = 5.0f; o <= kSite; o += 5.0f) {
