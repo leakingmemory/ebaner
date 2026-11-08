@@ -581,16 +581,22 @@ std::vector<TrackPath> buildTrackPaths(const TerrainData& data) {
         }
         // Multi-way: chain the straightest same-type pair (dirOut nearly opposite, so
         // the track runs through). Require it to be reasonably straight so a sharp branch
-        // is never taken for the through route.
+        // is never taken for the through route. Where no two of one type run through, the
+        // straightest pair of any type does: a station track running on into one classed
+        // as yard is still one road, and leaving every end at the node stopped trains dead
+        // at the points (Leangen T3).
         int ba = -1, bb = -1;
-        float best = -0.7f;                            // <= this => through (<~45 deg bend)
-        for (std::size_t p = 0; p < ends.size(); ++p)
-            for (std::size_t q = p + 1; q < ends.size(); ++q) {
-                const int a = ends[p], b = ends[q];
-                if (!joinable(a, b)) continue;
-                const float d = glm::dot(dirOut(a), dirOut(b));
-                if (d < best) { best = d; ba = a; bb = b; }
-            }
+        for (const bool sameType : {true, false}) {
+            float best = -0.7f;                        // <= this => through (<~45 deg bend)
+            for (std::size_t p = 0; p < ends.size(); ++p)
+                for (std::size_t q = p + 1; q < ends.size(); ++q) {
+                    const int a = ends[p], b = ends[q];
+                    if ((a >> 1) == (b >> 1) || (sameType && !joinable(a, b))) continue;
+                    const float d = glm::dot(dirOut(a), dirOut(b));
+                    if (d < best) { best = d; ba = a; bb = b; }
+                }
+            if (ba >= 0) break;
+        }
         if (ba >= 0) { partner[ba] = bb; partner[bb] = ba; }
     }
 
