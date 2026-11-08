@@ -71,6 +71,9 @@ constexpr std::uint32_t kNewTrackIdBase = 0xD0000000;
 //   medium <trackid> <tunnel|surface|bridge> ax ay bx by
 //                            - what the track between two of its own vertices runs in,
 //                              the vertices named by position (the nearest within 2 m).
+//                              A position between two vertices puts a new one in there,
+//                              on the chord, so a medium can change where the survey
+//                              has no point - a river bank partway along a span.
 //                              A tunnel through a hill on a track drawn here, which
 //                              otherwise has to be surface from end to end. The id is
 //                              decimal, as the other vertex edits name theirs.

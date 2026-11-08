@@ -90,6 +90,41 @@ bool nearestVertex(const std::vector<TrackSegment>& segs, double qx, double qy,
     }
     return found;
 }
+
+// A vertex of `trackId` at (qx, qy): the one already there within tol, or else a new one
+// put in on the nearest span within tol. The new point lies on the span's chord, so the
+// track's planar length does not change, and neither does any `<trackHex>:<frac>`
+// authored on it. It takes the speed and medium of the span it splits. For a `medium`
+// edit whose end falls between two of an exported track's vertices - a river bank the
+// survey did not put a point on.
+bool vertexAt(std::vector<TrackSegment>& segs, double qx, double qy, double tol,
+              std::uint32_t trackId) {
+    int si = 0, vi = 0;
+    if (nearestVertex(segs, qx, qy, tol, si, vi, trackId)) return true;
+    double best = tol, bu = 0.0;
+    int bs = -1, bk = -1;
+    for (int s = 0; s < static_cast<int>(segs.size()); ++s) {
+        if (segs[s].trackId != trackId) continue;
+        const std::vector<glm::dvec3>& p = segs[s].pts;
+        for (int k = 0; k + 1 < static_cast<int>(p.size()); ++k) {
+            const double ex = p[k + 1].x - p[k].x, ey = p[k + 1].y - p[k].y;
+            const double l2 = ex * ex + ey * ey;
+            if (l2 < 1e-9) continue;
+            const double u = std::clamp(((qx - p[k].x) * ex + (qy - p[k].y) * ey) / l2, 0.0, 1.0);
+            const double d = std::hypot(p[k].x + u * ex - qx, p[k].y + u * ey - qy);
+            if (d < best) { best = d; bs = s; bk = k; bu = u; }
+        }
+    }
+    if (bs < 0) return false;
+    TrackSegment& t = segs[bs];
+    const glm::dvec3 q = t.pts[bk] + bu * (t.pts[bk + 1] - t.pts[bk]);
+    t.pts.insert(t.pts.begin() + bk + 1, q);
+    if (static_cast<int>(t.speed.size()) > bk)
+        t.speed.insert(t.speed.begin() + bk + 1, t.speed[bk]);
+    if (static_cast<int>(t.spanMedium.size()) > bk)
+        t.spanMedium.insert(t.spanMedium.begin() + bk + 1, t.spanMedium[bk]);
+    return true;
+}
 } // namespace
 
 std::vector<TrackEdit> loadTrackOverlay(const std::string& datasetRoot) {
@@ -290,7 +325,9 @@ void applyTrackOverlay(std::vector<TrackSegment>& segs,
             // In the same pass, so its two positions are looked up where the edits above
             // it have left the vertices - which is where the editor saw them.
             int sb = 0, vb = 0;
-            if (!nearestVertex(segs, e.a.x, e.a.y, kVertexTol, si, vi, e.track) ||
+            if (!vertexAt(segs, e.a.x, e.a.y, kVertexTol, e.track) ||
+                !vertexAt(segs, e.b.x, e.b.y, kVertexTol, e.track) ||
+                !nearestVertex(segs, e.a.x, e.a.y, kVertexTol, si, vi, e.track) ||
                 !nearestVertex(segs, e.b.x, e.b.y, kVertexTol, sb, vb, e.track) ||
                 sb != si || vb == vi)
                 continue;
