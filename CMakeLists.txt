@@ -161,6 +161,7 @@ add_custom_target(shaders DEPENDS ${SHADER_SPV})
 add_library(ebaner_engine STATIC
     src/TerrainData.cpp
     src/TerrainCarve.cpp
+    src/WaterAreas.cpp
     src/TerrainMesh.cpp
     src/Camera.cpp
     src/Textures.cpp
@@ -334,6 +335,13 @@ target_link_libraries(LineBlockTest PRIVATE ebaner_engine)
 target_include_directories(LineBlockTest PRIVATE src)
 add_test(NAME line-block COMMAND LineBlockTest "${EBANER_TEST_DATASET}")
 set_tests_properties(line-block PROPERTIES SKIP_RETURN_CODE 77)
+
+# Water areas: the overlay's shores put water back at its level. Synthetic, no dataset.
+add_executable(WaterAreaTest tests/WaterAreaTest.cpp)
+add_dependencies(WaterAreaTest shaders)
+target_link_libraries(WaterAreaTest PRIVATE ebaner_engine)
+target_include_directories(WaterAreaTest PRIVATE src)
+add_test(NAME water-area COMMAND WaterAreaTest)
 
 # The track/fraction bridge: authored (track, frac) <-> path arc length, both ways, at every
 # border in the dataset. Needs the real geometry, so it skips without it.

@@ -148,6 +148,10 @@ bool TerrainData::loadTile(int lod, int col, int row) {
     parseBuildingsBin(dir + "/buildings.bin", t->buildings);
     parsePlatformsBin(dir + "/platforms.bin", t->platforms);
 
+    // Water whose surface the survey could not see, put back at its level. It is part of
+    // the ground as found, so a re-carve keeps it.
+    applyWaterAreas(*t, water_);
+
     // The ground as found, to re-carve from after an edit.
     t->pristine = t->heights;
 
@@ -266,8 +270,10 @@ void TerrainData::load(const std::string& datasetRoot, const glm::dvec3& startSe
     // since a station can stand on track that only the overlay draws - Stod's main line
     // was missing from the export for 9 km.
     report(load_step::kEdits, 0.0);
-    if (std::getenv("EBANER_NOOVERLAY") == nullptr)
+    if (std::getenv("EBANER_NOOVERLAY") == nullptr) {
         applyTrackEdits(loadTrackOverlay(datasetRoot));
+        water_ = loadWaterAreas(datasetRoot);
+    }
     resolveStartPoint(startSeed);
     halfWindow_ = halfWindow;
     sceneOrigin_ = startWorld_;

@@ -48,6 +48,20 @@ shows how many there are. `EBANER_NOOVERLAY=1` loads without the overlay.
 | `flag-posts.txt` | Flag posts |
 | `txp-positions.txt` | TXP positions |
 | `avalanche-signals.txt` | Avalanche signals |
+| `water-areas.txt` | By hand; no editor mode (see below) |
+
+`water-areas.txt` holds open water whose surface the survey could not see. A laser scan
+gets no return off water, so the terrain model fills a river mouth or a harbour basin in
+from its quays and from the deck of any bridge across it, sometimes metres above the real
+surface. Each line is the shore of one stretch of water and its level:
+
+```
+water <sea|lake> <level> <x> <y> <x> <y> <x> <y> ...
+```
+
+Every terrain cell whose centre lies inside the shore becomes water (sea or fresh), flat at
+`<level>` metres. The points are EPSG:25833, in order around the shore, and the ring closes
+by itself.
 
 Track positions in these files are written `<trackHex>:<frac>`: a track id and a fraction
 along it.

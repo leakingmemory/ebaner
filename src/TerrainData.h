@@ -13,6 +13,8 @@
 
 #pragma once
 
+#include "WaterAreas.h"
+
 #include <glm/glm.hpp>
 #include <cstdint>
 #include <functional>
@@ -270,6 +272,7 @@ private:
 
     TileMap tiles_;
     std::vector<TrackSegment> networkTracks_;
+    std::vector<WaterArea> water_; // overlay/water-areas.txt, applied as each tile loads
     std::string root_;          // dataset root, for reading tiles after load()
     glm::dvec2 windowCentre_{0.0};
     glm::dvec3 sceneOrigin_{0.0};
