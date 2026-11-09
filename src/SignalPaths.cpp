@@ -950,7 +950,11 @@ bool routeContains(const SignalPath& whole, const SignalPath& part) {
             if (w.trackId != p.trackId) continue;
             if ((w.to - w.from) * (p.to - p.from) <= 0.0) continue; // runs the other way
             const double wlo = std::min(w.from, w.to), whi = std::max(w.from, w.to);
-            const double tol = 1e-9;
+            // Fractions are written to six decimals, and a border reached by another
+            // record may carry one more digit: an entry ending 0.00154069 where its dwarf's
+            // path ends 0.001541 is the same point, and missing it left Ranheim's INFS T2
+            // dwarf at danger in front of the train it had let in.
+            const double tol = 1e-6;
             if (lo >= wlo - tol && hi <= whi + tol) { inside = true; break; }
         }
         if (!inside) return false;
